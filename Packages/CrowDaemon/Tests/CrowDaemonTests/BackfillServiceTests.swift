@@ -126,12 +126,14 @@ private struct StubRunner: ShellRunner {
         #expect(BackfillService.uploadFormat(for: .cursor) == .sqlite)
         #expect(BackfillService.uploadFormat(for: .opencode) == .openCodeStore)
         #expect(BackfillService.uploadFormat(for: .antigravity) == .jsonl) // single NDJSON transcript
+        #expect(BackfillService.uploadFormat(for: .muse) == .logDir) // matches the live .logDir stamp
         #expect(BackfillService.agentKindRawValue(for: .claude) == AgentKind.claudeCode.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .codex) == AgentKind.codex.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .grok) == AgentKind.grok.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .cursor) == AgentKind.cursor.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .opencode) == AgentKind.openCode.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .antigravity) == AgentKind.antigravity.rawValue)
+        #expect(BackfillService.agentKindRawValue(for: .muse) == AgentKind.muse.rawValue)
     }
 
     @Test func codexSessionUploadsUnderCodexHarnessSlot() async throws {
@@ -225,4 +227,35 @@ private struct StubRunner: ShellRunner {
         #expect(again.result == .alreadyUploaded)
     }
 #endif
+
+    // MARK: Muse harness (CROW-1106)
+
+    @Test func museSessionUploadsUnderMuseHarnessSlot() async throws {
+        let devRoot = try tempDevRoot()
+        let path = try writeTranscript(devRoot, uid: "MUSE-1")
+        let svc = service(devRoot, status: 201, ticket: .success(#"{"number":12}"#))
+        var s = session(devRoot, uid: "MUSE-1", path: path)
+        s.harness = .muse
+
+        let outcome = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(outcome.result == .uploaded)
+        #expect(outcome.harness == .muse) // the outcome carries its harness for UI keying
+
+        // Idempotent within the muse slot: a re-run is a no-op...
+        let again = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(again.result == .alreadyUploaded)
+
+        // ...but the SAME uid under the Grok harness is a distinct slot — the
+        // harness disambiguates the ledger.
+        var grokTwin = s
+        grokTwin.harness = .grok
+        let twin = await svc.upload(
+            session: grokTwin, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(twin.result == .uploaded)
+    }
 }

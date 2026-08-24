@@ -500,6 +500,133 @@ import Testing
         #expect(s.confidence == .low)
     }
 
+    // MARK: Muse harness (CROW-1106)
+
+    /// Write a Muse journal — `<YYYY>/<MM>/<DD>/<id>/session.jsonl`, whose line-1
+    /// `runtime.session.metadata` record carries the cwd at
+    /// `payload.record.workspace_root` — plus a nested `subagent/` child journal
+    /// that the scanner must NOT pick up (a different session).
+    private func writeMuseJournal(
+        in museSessions: URL, uid: String, cwd: String, childUID: String? = nil
+    ) throws {
+        let sessionDir = museSessions
+            .appendingPathComponent("2026/08/24", isDirectory: true)
+            .appendingPathComponent(uid, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let body = """
+        {"type":"runtime.session.metadata","payload":{"record":{"session_id":"\(uid)","workspace_root":"\(cwd)"}}}
+        {"type":"runtime.event","payload":{"event":{"kind":"message"}}}
+        """
+        try body.write(
+            to: sessionDir.appendingPathComponent("session.jsonl"),
+            atomically: true, encoding: .utf8)
+        // A nested subagent child session — skipped for v1 (its cwd is the parent's).
+        if let childUID {
+            let childDir = sessionDir
+                .appendingPathComponent("subagent", isDirectory: true)
+                .appendingPathComponent(childUID, isDirectory: true)
+            try FileManager.default.createDirectory(at: childDir, withIntermediateDirectories: true)
+            try body.write(
+                to: childDir.appendingPathComponent("session.jsonl"),
+                atomically: true, encoding: .utf8)
+        }
+    }
+
+    @Test func reconstructsMuseHighConfidenceSession() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let muse = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("muse-sessions", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: muse) }
+
+        // A live clone so the repo → owner/repo resolves.
+        let clone = URL(fileURLWithPath: devRoot)
+            .appendingPathComponent("RadiusMethod/crow", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: clone.appendingPathComponent(".git"), withIntermediateDirectories: true)
+
+        let cwd = "\(devRoot)/RadiusMethod/crow-1106-wire-muse-collector"
+        // Include a subagent child that must be excluded.
+        try writeMuseJournal(in: muse, uid: "MUSE-UID-1", cwd: cwd, childUID: "CHILD-1")
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, museSessionsDir: muse,
+            gitRemote: { path in
+                path.hasSuffix("/RadiusMethod/crow") ? "https://github.com/corveil/crow.git" : nil
+            })
+
+        let sessions = await scanner.scan(ledger: LogSyncLedger())
+        // Only the top-level session.jsonl — the subagent child is skipped.
+        #expect(sessions.count == 1)
+        let s = try #require(sessions.first { $0.claudeSessionUID == "MUSE-UID-1" })
+        #expect(s.harness == .muse)
+        #expect(s.cwd == cwd) // recovered from the line-1 metadata record
+        #expect(s.workspace == "RadiusMethod")
+        #expect(s.worktreeName == "crow-1106-wire-muse-collector")
+        #expect(s.repoName == "crow")
+        #expect(s.ownerRepo == "corveil/crow")
+        #expect(s.ticketNumber == 1106)
+        #expect(s.confidence == .high)
+        // The subagent child never reconstructs as its own row.
+        #expect(sessions.allSatisfy { $0.claudeSessionUID != "CHILD-1" })
+    }
+
+    @Test func museLedgerStatusKeyedByMuseHarness() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let muse = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("muse-sessions2", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: muse) }
+        try writeMuseJournal(in: muse, uid: "MUSE-UID-2", cwd: "\(devRoot)/RadiusMethod/crow-9-x")
+
+        // A Claude ledger entry for the SAME uid must NOT mark the Muse row
+        // uploaded — the harness slot distinguishes them.
+        var ledger = LogSyncLedger()
+        ledger.record(
+            key: LogSyncLedger.key(sessionUID: "MUSE-UID-2", harness: .claude, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, museSessionsDir: muse, gitRemote: { _ in nil })
+        let s = try #require(await scanner.scan(ledger: ledger).first { $0.claudeSessionUID == "MUSE-UID-2" })
+        #expect(s.uploadStatus == .new) // the Claude-harness entry does not apply
+
+        // Now record it under the MUSE harness — it reconciles.
+        var ledger2 = LogSyncLedger()
+        ledger2.record(
+            key: LogSyncLedger.key(sessionUID: "MUSE-UID-2", harness: .muse, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+        let s2 = try #require(await scanner.scan(ledger: ledger2).first { $0.claudeSessionUID == "MUSE-UID-2" })
+        #expect(s2.uploadStatus == .uploaded)
+    }
+
+    /// A Muse journal whose head carries no readable `workspace_root` reconstructs
+    /// as a low-confidence orphan — never guessed, never a misattributed link (the
+    /// unverified-key fail-safe, CROW-1106).
+    @Test func museJournalWithoutWorkspaceRootIsLowConfidence() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let muse = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("muse-sessions3", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: muse) }
+
+        let sessionDir = muse.appendingPathComponent("2026/08/24/MUSE-UID-3", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        // No workspace_root anywhere (e.g. the real Muse key differs from our guess).
+        try "{\"type\":\"runtime.session.metadata\",\"payload\":{\"record\":{}}}\n"
+            .write(to: sessionDir.appendingPathComponent("session.jsonl"),
+                   atomically: true, encoding: .utf8)
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, museSessionsDir: muse, gitRemote: { _ in nil })
+        let s = try #require(await scanner.scan(ledger: LogSyncLedger()).first { $0.claudeSessionUID == "MUSE-UID-3" })
+        #expect(s.harness == .muse)
+        #expect(s.cwd == nil)
+        #expect(s.workspace == nil)
+        #expect(s.repoName == nil)
+        #expect(s.confidence == .low) // attributed but unlinked — never guessed
+    }
+
     @Test func summaryCountsByTier() {
         let sessions = [
             BackfillSession(claudeSessionUID: "a", filePath: "", slug: "", confidence: .high, uploadStatus: .uploaded),

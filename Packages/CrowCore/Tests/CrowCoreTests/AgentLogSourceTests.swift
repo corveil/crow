@@ -44,6 +44,19 @@ import CrowCore
         #expect(s.fileNamePrefix == "rollout-")
         #expect(s.recursive == true)
         #expect(s.cwdFilter == "/dev/ws/repo-1")
+        #expect(s.excludePathComponents.isEmpty) // default: no exclusions
+    }
+
+    @Test func directoryFactoryCarriesExcludePathComponents() {
+        // The Muse shape (CROW-1106): recursive, cwd-filtered, `session`-prefixed,
+        // with the `subagent` child-session directory excluded.
+        let s = AgentLogSource.directory(
+            "/home/.local/share/muse/sessions", format: .logDir, fileExtension: "jsonl",
+            fileNamePrefix: "session", recursive: true,
+            excludePathComponents: ["subagent"], cwdFilter: "/dev/ws/repo-1106")
+        #expect(s.fileNamePrefix == "session")
+        #expect(s.excludePathComponents == ["subagent"])
+        #expect(s.cwdFilter == "/dev/ws/repo-1106")
     }
 }
 
@@ -53,14 +66,17 @@ import CrowCore
         #expect(LogSyncHarness(agentKind: .cursor) == .cursor)
         #expect(LogSyncHarness(agentKind: .codex) == .codex)
         #expect(LogSyncHarness(agentKind: .openCode) == .opencode)
-        // Grok (CROW-1098) and Antigravity (CROW-1107) are internally first-class,
-        // even though they collapse to `unknown` on the wire.
+        // Grok (CROW-1098), Antigravity (CROW-1107), and Muse (CROW-1106) are
+        // internally first-class, even though they collapse to `unknown` on the wire.
         #expect(LogSyncHarness(agentKind: .grok) == .grok)
         #expect(LogSyncHarness(agentKind: .antigravity) == .antigravity)
+        #expect(LogSyncHarness(agentKind: .muse) == .muse)
     }
 
     @Test func mapsEverythingElseToUnknown() {
-        #expect(LogSyncHarness(agentKind: .muse) == .unknown)
+        // Every registered AgentKind now maps to a first-class harness; a future /
+        // unrecognized kind falls through to `.unknown` (the `default:` branch).
+        #expect(LogSyncHarness(agentKind: AgentKind(rawValue: "future-harness")) == .unknown)
     }
 
     @Test func rawValuesMatchServerContract() {
@@ -75,14 +91,16 @@ import CrowCore
     }
 
     @Test func internalHarnessesCollapseToUnknownOnTheWire() {
-        // Internally distinct (drives the ledger slot / backfill display /
-        // format+agentKind), but the server doesn't enumerate `grok` or
-        // `antigravity`, so the wire value is `unknown` — the upload is accepted,
-        // just not harness-typed.
+        // Internally distinct (each drives its ledger slot / backfill display /
+        // format+agentKind), but the server doesn't enumerate `grok`, `antigravity`,
+        // or `muse`, so the wire value is `unknown` — the upload is accepted, just not
+        // harness-typed.
         #expect(LogSyncHarness.grok.rawValue == "grok")
         #expect(LogSyncHarness.grok.wireValue == "unknown")
         #expect(LogSyncHarness.antigravity.rawValue == "antigravity")
         #expect(LogSyncHarness.antigravity.wireValue == "unknown")
+        #expect(LogSyncHarness.muse.rawValue == "muse")
+        #expect(LogSyncHarness.muse.wireValue == "unknown")
     }
 
     @Test func serverEnumeratedHarnessesWireAsThemselves() {

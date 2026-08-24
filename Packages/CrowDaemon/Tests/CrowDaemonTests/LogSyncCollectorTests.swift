@@ -350,6 +350,48 @@ import CrowCore
     }
 #endif
 
+    // MARK: Muse shape — session-prefix + subagent exclusion + cwd filter (CROW-1106)
+
+    /// The Muse source (recursive, `session`-prefixed, `subagent`-excluded,
+    /// cwd-filtered) keeps only the top-level `session.jsonl` whose recorded
+    /// `workspace_root` matches — dropping the nested subagent child (a different
+    /// session) and a non-matching sibling.
+    @Test func resolveFilesForMuseExcludesSubagentAndFiltersByWorkspaceRoot() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let want = "/dev/ws/crow-1106"
+
+        func journal(_ relPath: String, workspaceRoot: String?) throws -> URL {
+            let url = dir.appendingPathComponent(relPath)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let head = workspaceRoot.map {
+                "{\"type\":\"runtime.session.metadata\",\"payload\":{\"record\":{\"workspace_root\":\"\($0)\"}}}\n"
+            } ?? "{\"type\":\"runtime.session.metadata\",\"payload\":{\"record\":{}}}\n"
+            try head.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        }
+
+        _ = try journal("2026/08/24/ID-1/session.jsonl", workspaceRoot: want)
+        // Nested subagent child — matching cwd, but excluded by path component.
+        _ = try journal("2026/08/24/ID-1/subagent/CHILD/session.jsonl", workspaceRoot: want)
+        // A different worktree's session — dropped by the cwd filter.
+        _ = try journal("2026/08/24/ID-2/session.jsonl", workspaceRoot: "/dev/ws/other")
+
+        let source = AgentLogSource.directory(
+            dir.path, format: .logDir, fileExtension: "jsonl",
+            fileNamePrefix: "session", recursive: true,
+            excludePathComponents: ["subagent"], cwdFilter: want)
+        let files = LogSyncCollector.resolveFiles(source)
+        // Only the top-level, cwd-matching journal — asserted by path suffix so the
+        // macOS `/var` → `/private/var` symlink doesn't fail a raw-URL compare.
+        #expect(files.count == 1)
+        let got = files.first?.path ?? ""
+        #expect(got.hasSuffix("/ID-1/session.jsonl"), "got: \(got)")
+        #expect(!got.contains("subagent")) // child session excluded
+        #expect(!got.contains("ID-2"))     // non-matching cwd dropped
+    }
+
     // MARK: Result → ledger mapping
 
     @Test func ledgerEntryMapping() {

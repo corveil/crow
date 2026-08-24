@@ -238,45 +238,45 @@ public struct MuseAgent: CodingAgent {
             runner: probeRunner)
     }
 
-    // `logSources` is intentionally NOT overridden (CROW-1099 research spike):
-    // Muse Code writes a durable session log, but Crow can't yet attribute it to
-    // a worktree with confidence, so it stays on the `[]` default.
-    //
-    // What's confirmed — Meta's dev cookbook
-    // (developer.meta.com/ai/resources/blog/build-with-muse-code/, read
-    // 2026-08-24): every run appends a replay-exact, restart-safe event journal
-    // to a global, date-partitioned store —
-    //
-    //   ~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<session-id>/session.jsonl
-    //
-    // plain JSONL (greppable, `jq`-parseable), so it would fit the existing
-    // `.logDir` normalizer with zero new parsing — the same shape Codex uses.
-    //
-    // The open question is attribution, not format. The store is global (the
-    // on-disk path can't attribute a session to a worktree the way Claude's
-    // per-cwd slug dirs do), so attribution must come from a recorded `cwd`
-    // inside `session.jsonl`. The cookbook does NOT publish a field inventory —
-    // its jq example prints only `.payload.event.kind` event records, whose
-    // worktree-lifecycle entries carry just git refs (`base_commit`,
-    // `base_ref: HEAD`); those collide across sibling worktrees, so they can't
-    // attribute. But absence of a cwd is NOT established: a first-hand
-    // third-party parser of Muse 0.1.0 logs (superbasedapp/observer,
-    // `internal/adapter/muse/doc.go`, 2026-08-06) reports the authoritative
-    // absolute cwd at `runtime.session.metadata` → `payload.record.workspace_root`
-    // on line 1 of every session log — a metadata record type the cookbook's jq
-    // never printed. So a usable cwd very likely EXISTS, which would make Muse
-    // content-filtered (Codex-style), not unattributable.
-    //
-    // Why still `[]`: CROW-1089 requires verifying attribution against a REAL
-    // install before wiring (never guess / never upload misattributed bytes),
-    // and Muse is Meta-auth-gated (browser sign-in / `META_API_KEY`) and not
-    // installable on this dev machine (`crow agents list` → available:false), so
-    // `workspace_root` is unverified by us — wiring from the third-party parser
-    // alone would risk the exact misattribution the collector forbids.
-    //
-    // ⚠️ Re-check target (version-pinned): on a real install, confirm
-    // `workspace_root` on the `runtime.session.metadata` record (line 1) of a
-    // real `session.jsonl`. If present, teach `TranscriptHeadReader.absorb` that
-    // key and return a recursive `.logDir` `cwdFilter` source over the sessions
-    // dir (the Codex shape) — no new normalizer needed.
+    /// Muse Code writes one NDJSON session journal per run under a global,
+    /// date-partitioned tree — `<museHome>/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`
+    /// — where `museHome` is `${XDG_DATA_HOME:-~/.local/share}/muse` (`MuseHome`,
+    /// the same resolution the backfill reads). Already NDJSON, so it needs no new
+    /// normalizer — the same shape Codex uses.
+    ///
+    /// Like Codex (and unlike Claude/Grok), the journals are NOT partitioned by
+    /// working directory — they pool under the date tree regardless of cwd — so a
+    /// worktree path can't be turned into a directory path. Attribution is instead
+    /// by **content**: the source scans the whole `sessions` tree recursively but
+    /// carries a `cwdFilter`, and the collector keeps only the journals whose
+    /// recorded cwd equals this worktree (`AgentLogCwdReader`). Muse records that
+    /// cwd on its line-1 `runtime.session.metadata` record at
+    /// `payload.record.workspace_root` (taught to `TranscriptHeadReader.absorb`).
+    /// A journal with no readable cwd is dropped, never guessed (CROW-1089).
+    ///
+    /// `fileNamePrefix: "session"` selects `session.jsonl` (and any `session*.jsonl`
+    /// variant) while excluding unknown sibling `.jsonl` — slightly stricter than
+    /// the ticket's `nil`, and in exact lockstep with the backfill enumerator.
+    /// `excludePathComponents: ["subagent"]` skips Muse's nested child-agent runs
+    /// (`<id>/subagent/<child-id>/session.jsonl`): each is a different session, and
+    /// its cwd is the parent's, so skipping is the safe v1 choice (CROW-1106).
+    /// `.logDir` because a Crow session may span several `muse`/`muse resume`
+    /// invocations in the same worktree, each its own journal; the collector
+    /// concatenates all cwd-matches chronologically. `harnessSessionID` is unused —
+    /// cwd-matching is the selector, so it can't name the file.
+    ///
+    /// ⚠️ **Unverified against a live install** (CROW-1099 / #1106). Both the
+    /// `workspace_root` key and the `~/.local/share/muse` location are from Meta's
+    /// dev cookbook + the `superbasedapp/observer` third-party parse — the operator
+    /// explicitly opted to wire against that evidence rather than wait for a real
+    /// `session.jsonl`. It fails safe: if the real key or path differs, the cwd
+    /// filter matches nothing and Muse silently collects zero transcripts (never a
+    /// misattributed upload). Version-pinned re-check target: confirm both against
+    /// a real journal when Muse becomes installable.
+    public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
+        return [.directory(
+            MuseHome.sessionsDir(), format: .logDir, fileExtension: "jsonl",
+            fileNamePrefix: "session", recursive: true,
+            excludePathComponents: ["subagent"], cwdFilter: worktreePath)]
+    }
 }

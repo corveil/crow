@@ -8,11 +8,14 @@ import Foundation
 // fully-linked Corveil session artifacts, reconstructing the workspace / repo /
 // ticket a live run would have carried.
 //
-// Claude Code, Codex, Grok Build, and Cursor in v1 (CROW-1089 / CROW-1098 /
-// CROW-1095): Claude and Grok partition their logs by working directory (Grok
-// URL-encodes the cwd into its ~/.grok/sessions directory name), Codex records the
-// real cwd in each ~/.codex/sessions rollout, and Cursor records it in the sibling
-// meta.json of each ~/.cursor/chats store, so all reconstruct reliably. The upload is
+// Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code in v1 (CROW-1089 /
+// CROW-1098 / CROW-1095 / CROW-1096 / CROW-1106): Claude and Grok partition their logs
+// by working directory (Grok URL-encodes the cwd into its ~/.grok/sessions directory
+// name), Codex records the real cwd in each ~/.codex/sessions rollout, Cursor records
+// it in the sibling meta.json of each ~/.cursor/chats store, OpenCode records the
+// directory on each session row of ~/.local/share/opencode/opencode.db, and Muse
+// records it on each ~/.local/share/muse/sessions journal's line-1
+// runtime.session.metadata record, so all reconstruct reliably. The upload is
 // idempotent (a local ledger + the server's write-once 409), throttled, and
 // always user-initiated — never automatic or unbounded.
 
@@ -24,7 +27,9 @@ public struct Backfill: ParsableCommand {
         discussion: """
         Scans the coding-session transcripts already on disk (Claude Code under \
         ~/.claude/projects, Codex under ~/.codex/sessions, Grok Build under \
-        ~/.grok/sessions, and Cursor under ~/.cursor/chats), reconstructs each \
+        ~/.grok/sessions, Cursor under ~/.cursor/chats, OpenCode in \
+        ~/.local/share/opencode/opencode.db, and Muse Code under \
+        ~/.local/share/muse/sessions), reconstructs each \
         one's workspace, repo, and ticket/PR, \
         and uploads the ones you choose to Corveil as session artifacts — so a \
         backfilled session lands in the ontology indistinguishable from a \
@@ -84,7 +89,7 @@ public struct BackfillUpload: ParsableCommand {
 
     @Option(
         name: .customLong("session"),
-        help: "A session UID to upload (repeatable; Claude Code, Codex, Grok Build, or Cursor — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence.")
+        help: "A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence.")
     var sessions: [String] = []
 
     @Flag(name: .customLong("all-high-confidence"), help: "Upload every not-yet-uploaded high-confidence session in this workspace")
