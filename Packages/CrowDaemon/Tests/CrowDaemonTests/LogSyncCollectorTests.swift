@@ -211,6 +211,95 @@ import CrowCore
         #expect(LogSyncCollector.applyingCwdFilter([a, b], "   ").isEmpty)
     }
 
+    // MARK: cwd-filtered resolution — Cursor sqlite store (CROW-1095)
+
+    /// A Cursor `.sqlite` source reads the cwd from the **sibling `meta.json`**
+    /// (via `CursorStore.recordedCwd`), not the transcript head, so the filter and
+    /// `resolveFiles` both keep only the store.db whose chat ran in this worktree,
+    /// and the `-wal`/`-shm` siblings never leak in.
+    @Test func resolveFilesSqliteKeepsCwdMatchingStoreDBs() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        func chat(_ name: String, cwd: String?) throws -> URL {
+            let sub = dir.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            let db = sub.appendingPathComponent("store.db")
+            try Data("x".utf8).write(to: db)
+            // Siblings that must be excluded by the `db` extension filter.
+            try Data("w".utf8).write(to: sub.appendingPathComponent("store.db-wal"))
+            try Data("s".utf8).write(to: sub.appendingPathComponent("store.db-shm"))
+            if let cwd {
+                try #"{"cwd":"\#(cwd)"}"#.write(
+                    to: sub.appendingPathComponent("meta.json"), atomically: true, encoding: .utf8)
+            }
+            return db
+        }
+        let mine = try chat("chatA/s1", cwd: "/dev/ws/repo-1095")
+        _ = try chat("chatB/s2", cwd: "/dev/ws/repo-999")   // other worktree
+        _ = try chat("chatC/s3", cwd: nil)                  // no cwd → unattributable
+
+        let source = AgentLogSource.directory(
+            dir.path, format: .sqlite, fileExtension: "db",
+            recursive: true, cwdFilter: "/dev/ws/repo-1095")
+        // Exactly the one matching store.db — the -wal/-shm siblings, the other
+        // worktree's chat, and the unattributable chat are all excluded. Compare by
+        // suffix so the enumerator's `/private/var` symlink resolution doesn't
+        // spuriously differ from `mine`'s `/var` path.
+        let resolved = LogSyncCollector.resolveFiles(source)
+        #expect(resolved.count == 1)
+        #expect(resolved.first?.lastPathComponent == "store.db")
+        #expect(resolved.first?.path.hasSuffix("chatA/s1/store.db") == true)
+        #expect(mine.lastPathComponent == "store.db")
+
+        // recordedCwd dispatches on format: `.sqlite` → sibling meta.json.
+        #expect(LogSyncCollector.recordedCwd(of: mine, format: .sqlite) == "/dev/ws/repo-1095")
+        let noMeta = dir.appendingPathComponent("chatC/s3/store.db")
+        #expect(LogSyncCollector.recordedCwd(of: noMeta, format: .sqlite) == nil)
+    }
+
+    /// `agentSessionID` for a single Cursor store is the parent `<subId>` dir (the
+    /// chat's agentId), since the file stem "store" identifies nothing.
+    @Test func agentSessionIDForCursorStoreIsParentDir() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sub = dir.appendingPathComponent("chatA/SUBID-9", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let db = sub.appendingPathComponent("store.db")
+        try Data("x".utf8).write(to: db)
+        #expect(LogSyncCollector.agentSessionID(from: [db]) == "SUBID-9")
+    }
+
+    /// The quiet-period `newestModification` must see a SQLite `-wal`/`-shm`
+    /// sibling's mtime, so a Cursor chat still committing to its WAL (while the
+    /// main `store.db` mtime is stale) is not read as quiescent and uploaded
+    /// partial (CROW-1095). A non-SQLite file with no siblings is unaffected.
+    @Test func newestModificationIncludesWalShmSiblings() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("store.db")
+        try Data("x".utf8).write(to: db)
+        let wal = dir.appendingPathComponent("store.db-wal")
+        try Data("w".utf8).write(to: wal)
+
+        // store.db is old; the WAL is fresh (an active commit).
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1000)], ofItemAtPath: db.path)
+        let walTime = Date(timeIntervalSince1970: 9000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: walTime], ofItemAtPath: wal.path)
+
+        // The newest reflects the WAL, not the stale main file.
+        #expect(LogSyncCollector.newestModification([db]) == walTime)
+
+        // A plain file with no WAL/SHM siblings is just its own mtime.
+        let plain = dir.appendingPathComponent("a.jsonl")
+        try Data("j".utf8).write(to: plain)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1000)], ofItemAtPath: plain.path)
+        #expect(LogSyncCollector.newestModification([plain]) == Date(timeIntervalSince1970: 1000))
+    }
+
     // MARK: Result → ledger mapping
 
     @Test func ledgerEntryMapping() {

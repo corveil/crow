@@ -306,11 +306,38 @@ public struct CursorAgent: CodingAgent {
             runner: probeRunner)
     }
 
-    // `logSources` is intentionally NOT overridden (CROW-1089): the `cursor-agent`
-    // CLI stores each chat's conversation as opaque blobs in a per-chat SQLite
-    // `store.db` (`~/.cursor/chats/<id>/<sub>/store.db`) — the cwd is recoverable
-    // from the sibling `meta.json`, but the transcript needs a `store.db` blob
-    // extractor (a `.sqlite` normalizer) that isn't built yet, so it stays on the
-    // `[]` default rather than upload the wrong bytes. (This is the CLI's store,
-    // not the Cursor IDE's `state.vscdb`.)
+    /// The `cursor-agent` CLI writes each chat to a content-addressed SQLite store
+    /// under a global tree — `<cursorHome>/chats/<chatId>/<subId>/store.db` — with
+    /// the working directory it ran in recorded in the **sibling `meta.json`**
+    /// (verified against `cursor-agent 2026.08.04`). `cursorHome` honors
+    /// `$CURSOR_CONFIG_DIR` (`CursorHome`), the same tree the MCP-bridge path uses.
+    ///
+    /// Like Codex — and unlike Claude — the stores are NOT partitioned by working
+    /// directory, so a worktree path can't be turned into a directory path.
+    /// Attribution is by **content**: the source scans the whole `chats` tree
+    /// recursively for `store.db` files but carries a `cwdFilter`, and the
+    /// collector keeps only the chats whose recorded `cwd` equals this worktree.
+    /// Because Cursor records the cwd in the sibling `meta.json` (not the
+    /// transcript), the collector reads it via `CursorStore.recordedCwd` rather
+    /// than `AgentLogCwdReader`; a chat with no readable cwd is dropped rather than
+    /// guessed — an unattributable transcript is worse than a missing one
+    /// (CROW-1095).
+    ///
+    /// `harnessSessionID` is unused: the store is named by a content hash tree, not
+    /// a session id, and cwd-matching is the reliable selector regardless. The
+    /// format is `.sqlite` (`CursorStore` extracts the ordered messages at upload
+    /// time); a Crow session may span several `<subId>` chats in the same worktree,
+    /// each its own `store.db`, so the collector concatenates all cwd-matches
+    /// chronologically. `fileNamePrefix: "store"` + `fileExtension: "db"` selects
+    /// exactly `store.db` — in lockstep with the backfill scanner's exact
+    /// `store.db` name match (`BackfillScanner.cursorStoreFiles`), so a stray
+    /// `*.db` a tool might drop under `<CursorHome>/chats` can't slip into the live
+    /// path even with a matching cwd (the same lockstep CROW-1089 added
+    /// `fileNamePrefix` for Codex's `rollout-`). The `-wal`/`-shm` siblings are
+    /// already excluded by the `db` extension (`db-wal`/`db-shm`).
+    public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
+        return [.directory(
+            CursorHome.chatsDir(), format: .sqlite, fileExtension: "db",
+            fileNamePrefix: "store", recursive: true, cwdFilter: worktreePath)]
+    }
 }

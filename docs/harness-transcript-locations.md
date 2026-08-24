@@ -33,8 +33,10 @@ opt-in). Two attribution modes exist today:
   non-alphanumeric → `-`). `cwdFilter` is `nil`.
 - **Content-filtered** — the store pools transcripts globally, so the collector
   scans the tree and keeps only files whose *recorded* `cwd` equals the worktree
-  (`AgentLogSource.cwdFilter` + `AgentLogCwdReader`). A file with no readable cwd
-  is dropped, never guessed. Codex is the reference.
+  (`AgentLogSource.cwdFilter`). The cwd is read from the transcript head
+  (`AgentLogCwdReader`, Codex) or from a sibling metadata file
+  (`CursorStore.recordedCwd` reads Cursor's `meta.json`). A file with no readable
+  cwd is dropped, never guessed. Codex is the reference.
 
 A store that is neither (no per-worktree layout **and** no recoverable cwd inside
 each transcript) cannot be attributed and stays on the `[]` default.
@@ -48,7 +50,7 @@ CROW-1090. "cwd-attributable?" is the wiring test above.
 |---|---|---|---|---|---|---|---|
 | Claude Code | `claude` | ✅ | `~/.claude/projects/<slug>/` (slug = worktree path, non-alnum → `-`) | `<uuid>.jsonl` | NDJSON | ✅ path-partitioned | **Wired** (CROW-1089) |
 | Codex | `codex` | ✅ | `~/.codex/sessions/<YYYY>/<MM>/<DD>/` | `rollout-<ts>-<uuid>.jsonl` | NDJSON | ✅ content-filtered (`session_meta.payload.cwd`) | **Wired** (CROW-1092) |
-| Cursor | `cursor-agent` | ✅ | `~/.cursor/chats/<id>/<sub>/` | `store.db` (+ sibling `meta.json`) | SQLite (opaque blobs) | ✅ cwd in `meta.json` | Deferred — needs blob extractor · [#1095](https://github.com/corveil/crow/issues/1095) |
+| Cursor | `cursor-agent` | ✅ | `~/.cursor/chats/<chatId>/<subId>/` | `store.db` (+ sibling `meta.json`) | SQLite (content-addressed blobs, ordered by a root protobuf) | ✅ content-filtered (cwd in sibling `meta.json`) | **Wired** (CROW-1095) |
 | OpenCode | `opencode` | ✅ | `~/.local/share/opencode/storage/{project,session,message,part}/` | scattered `message`/`part` records | multi-file object store | ✅ cwd in `project/<id>.json.worktree` | Deferred — needs reassembler · [#1096](https://github.com/corveil/crow/issues/1096) |
 | Grok Build | `grok` | ✅ | `<$GROK_HOME or ~/.grok>/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Wired** (CROW-1098) |
 | Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ❌ no cwd in transcript (only off-transcript: per-conv SQLite DB / hooks / latest-only `cache/last_conversations.json`) | Deferred — durable log confirmed, **not** cwd-attributable · [#1097](https://github.com/corveil/crow/issues/1097) |

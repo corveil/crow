@@ -201,6 +201,8 @@ import Testing
         #expect(s2.uploadStatus == .uploaded)
     }
 
+    // MARK: Grok harness (CROW-1098)
+
     @Test func reconstructsGrokHighConfidenceSession() async throws {
         let (devRoot, projects, cleanup) = try makeTree()
         defer { cleanup() }
@@ -264,6 +266,70 @@ import Testing
             entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
         let s2 = try #require(await scanner.scan(ledger: ledger2).first { $0.claudeSessionUID == "GROK-UID-2" })
         #expect(s2.uploadStatus == .uploaded)
+    }
+
+    // MARK: Cursor harness (CROW-1095)
+
+    @Test func reconstructsCursorHighConfidenceSession() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let cursorChats = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("cursor-chats", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cursorChats) }
+
+        // A live clone so the repo → owner/repo resolves.
+        let clone = URL(fileURLWithPath: devRoot)
+            .appendingPathComponent("RadiusMethod/crow", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: clone.appendingPathComponent(".git"), withIntermediateDirectories: true)
+
+        // The cwd lives in the sibling meta.json; the uid is the `<subId>` dir.
+        let cwd = "\(devRoot)/RadiusMethod/crow-1095-wire-cursor-logs"
+        _ = try CursorStoreFixture.write(
+            dir: cursorChats.appendingPathComponent("chatA/SUBID-1", isDirectory: true),
+            agentID: "SUBID-1", cwd: cwd, messages: [#"{"role":"user","content":"hi"}"#])
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, cursorChatsDir: cursorChats,
+            gitRemote: { path in
+                path.hasSuffix("/RadiusMethod/crow") ? "https://github.com/corveil/crow.git" : nil
+            })
+
+        let sessions = await scanner.scan(ledger: LogSyncLedger())
+        // Only the Cursor chat — the (empty) Claude/Codex dirs contribute none.
+        let s = try #require(sessions.first { $0.claudeSessionUID == "SUBID-1" })
+        #expect(s.harness == .cursor)
+        #expect(s.workspace == "RadiusMethod")
+        #expect(s.worktreeName == "crow-1095-wire-cursor-logs")
+        #expect(s.repoName == "crow")
+        #expect(s.ownerRepo == "corveil/crow")
+        #expect(s.ticketNumber == 1095)
+        #expect(s.confidence == .high)
+        // The scan is disk-only: the filePath points at the store.db, but cwd/uid
+        // came from the dir name + meta.json, never from opening the database.
+        #expect(s.filePath.hasSuffix("SUBID-1/store.db"))
+    }
+
+    @Test func cursorChatWithoutCwdIsDroppedToLowConfidence() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let cursorChats = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("cursor-chats-2", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cursorChats) }
+
+        // No cwd in meta.json → unattributable → orphan (low), never misfiled.
+        _ = try CursorStoreFixture.write(
+            dir: cursorChats.appendingPathComponent("chatB/SUBID-2", isDirectory: true),
+            agentID: "SUBID-2", cwd: nil, messages: [#"{"role":"user"}"#])
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, cursorChatsDir: cursorChats, gitRemote: { _ in nil })
+        let s = try #require(await scanner.scan(ledger: LogSyncLedger())
+            .first { $0.claudeSessionUID == "SUBID-2" })
+        #expect(s.harness == .cursor)
+        #expect(s.cwd == nil)
+        #expect(s.workspace == nil)
+        #expect(s.confidence == .low)
     }
 
     @Test func summaryCountsByTier() {

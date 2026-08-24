@@ -8,10 +8,11 @@ import Foundation
 // fully-linked Corveil session artifacts, reconstructing the workspace / repo /
 // ticket a live run would have carried.
 //
-// Claude Code, Codex, and Grok Build in v1 (CROW-1089, CROW-1098): Claude and
-// Grok partition their logs by working directory (Grok URL-encodes the cwd into
-// its ~/.grok/sessions directory name), and Codex records the real cwd in each
-// ~/.codex/sessions rollout, so all three reconstruct reliably. The upload is
+// Claude Code, Codex, Grok Build, and Cursor in v1 (CROW-1089 / CROW-1098 /
+// CROW-1095): Claude and Grok partition their logs by working directory (Grok
+// URL-encodes the cwd into its ~/.grok/sessions directory name), Codex records the
+// real cwd in each ~/.codex/sessions rollout, and Cursor records it in the sibling
+// meta.json of each ~/.cursor/chats store, so all reconstruct reliably. The upload is
 // idempotent (a local ledger + the server's write-once 409), throttled, and
 // always user-initiated — never automatic or unbounded.
 
@@ -22,8 +23,9 @@ public struct Backfill: ParsableCommand {
         abstract: "Reconcile and upload historical on-disk session transcripts",
         discussion: """
         Scans the coding-session transcripts already on disk (Claude Code under \
-        ~/.claude/projects, Codex under ~/.codex/sessions, and Grok Build under \
-        ~/.grok/sessions), reconstructs each one's workspace, repo, and ticket/PR, \
+        ~/.claude/projects, Codex under ~/.codex/sessions, Grok Build under \
+        ~/.grok/sessions, and Cursor under ~/.cursor/chats), reconstructs each \
+        one's workspace, repo, and ticket/PR, \
         and uploads the ones you choose to Corveil as session artifacts — so a \
         backfilled session lands in the ontology indistinguishable from a \
         live-captured one.
@@ -82,7 +84,7 @@ public struct BackfillUpload: ParsableCommand {
 
     @Option(
         name: .customLong("session"),
-        help: "A session UID to upload (repeatable; Claude Code, Codex, or Grok Build — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence.")
+        help: "A session UID to upload (repeatable; Claude Code, Codex, Grok Build, or Cursor — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence.")
     var sessions: [String] = []
 
     @Flag(name: .customLong("all-high-confidence"), help: "Upload every not-yet-uploaded high-confidence session in this workspace")

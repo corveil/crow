@@ -31,8 +31,8 @@ public enum TranscriptNormalizer {
     /// order they should be concatenated) into a single NDJSON body.
     ///
     /// Returns `nil` when there is nothing to upload (no files, all empty) or the
-    /// format cannot be normalized yet (`.sqlite` — Cursor row extraction is not
-    /// wired).
+    /// format yields no plaintext transcript (`.sqlite` — a Cursor store that is
+    /// unreadable, empty, or whose blobs aren't plaintext JSON).
     public static func normalize(
         files: [URL],
         format: AgentLogFormat,
@@ -42,10 +42,12 @@ public enum TranscriptNormalizer {
         case .jsonl, .logDir:
             return concatenateNDJSON(files: files, maxBytes: maxBytes)
         case .sqlite:
-            // Chat-row extraction out of Cursor's state.vscdb is not implemented
-            // yet; declaring the source without a normalizer would upload the raw
-            // database, which is the wrong shape. Skip until extraction lands.
-            return nil
+            // Cursor's `store.db` keeps the conversation as content-addressed
+            // blobs, not NDJSON on disk; `CursorStore` extracts the ordered
+            // message lines (an unreadable or encrypted store yields none), which
+            // are then concatenated into the same NDJSON artifact as every other
+            // harness (CROW-1095).
+            return concatenateCursorStores(files: files, maxBytes: maxBytes)
         }
     }
 
@@ -94,6 +96,35 @@ public enum TranscriptNormalizer {
         }
         guard !out.isEmpty else { return nil }
 
+        let (events, toolCalls) = countEvents(out)
+        return NormalizedTranscript(
+            data: out, eventCount: events, toolCallCount: toolCalls, truncated: truncated)
+    }
+
+    /// Extract each Cursor `store.db`'s ordered message lines (`CursorStore`) and
+    /// concatenate them into one NDJSON body, bounded by `maxBytes` and marked
+    /// truncated if the cap is hit. A store that yields no plaintext messages
+    /// contributes nothing; if none do, the result is `nil` (upload nothing).
+    /// Each line is appended whole — a line that would cross the cap ends the
+    /// concatenation, so the body is always valid NDJSON, never a partial object.
+    private static func concatenateCursorStores(files: [URL], maxBytes: Int) -> NormalizedTranscript? {
+        guard maxBytes > 0 else { return nil }
+        let newline: UInt8 = 0x0A
+        var out = Data()
+        out.reserveCapacity(min(maxBytes, 1 << 20))
+        var truncated = false
+
+        outer: for url in files {
+            guard let lines = CursorStore.messageLines(fromStoreDB: url) else { continue }
+            for line in lines {
+                // +1 for the separating newline after this line.
+                if out.count + line.count + 1 > maxBytes { truncated = true; break outer }
+                out.append(line)
+                out.append(newline)
+            }
+        }
+
+        guard !out.isEmpty else { return nil }
         let (events, toolCalls) = countEvents(out)
         return NormalizedTranscript(
             data: out, eventCount: events, toolCallCount: toolCalls, truncated: truncated)
