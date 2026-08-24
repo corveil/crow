@@ -1763,13 +1763,13 @@ crow logsync set --quiet-period-minutes 15 --max-upload-bytes 4000000
 | `--quiet-period-minutes N` | Wait this long after a session's last activity before uploading (default 30) |
 | `--max-upload-bytes N` | Per-transcript upload cap (default 8000000) |
 
-Claude Code and Codex transcripts are collected today (CROW-1089): Claude's logs are partitioned by working directory, and Codex's globally-stored `~/.codex/sessions` rollouts are attributed by the `cwd` each records. Other harnesses are wired as their on-disk log locations are confirmed. Changes are live — the collector re-reads config each tick, so they apply within a few minutes with no restart.
+Claude Code, Codex, and Grok Build transcripts are collected today (CROW-1089, CROW-1098): Claude's and Grok's logs are partitioned by working directory (Grok URL-encodes the cwd into its `~/.grok/sessions` directory name), and Codex's globally-stored `~/.codex/sessions` rollouts are attributed by the `cwd` each records. Other harnesses are wired as their on-disk log locations are confirmed. Changes are live — the collector re-reads config each tick, so they apply within a few minutes with no restart.
 
 ---
 
 ## Session Backfill Commands
 
-The **historical session backfill** (CROW-1075) captures the coding-session transcripts already on disk — sessions that predate the live upload path or were reaped from Crow's store — and uploads them as **real, fully-linked** Corveil session artifacts, reconstructing the workspace / repo / ticket a live run would have carried. The live collector is session-centric (it walks Crow's store); this is the one-time reconciliation of the on-disk backlog. Claude Code and Codex are wired (CROW-1089): Claude's logs are partitioned by working directory, and Codex records the real `cwd` in each `~/.codex/sessions` rollout, so both reconstruct reliably.
+The **historical session backfill** (CROW-1075) captures the coding-session transcripts already on disk — sessions that predate the live upload path or were reaped from Crow's store — and uploads them as **real, fully-linked** Corveil session artifacts, reconstructing the workspace / repo / ticket a live run would have carried. The live collector is session-centric (it walks Crow's store); this is the one-time reconciliation of the on-disk backlog. Claude Code, Codex, and Grok Build are wired (CROW-1089, CROW-1098): Claude's and Grok's logs are partitioned by working directory (Grok decodes the cwd from its URL-encoded `~/.grok/sessions` directory name), and Codex records the real `cwd` in each `~/.codex/sessions` rollout, so all three reconstruct reliably.
 
 It reuses the live upload path, so it inherits its guarantees: the destination + credential come only from the named workspace's **local-only** AI gateway (never a browser-writable field), no AWS credentials touch this machine, and every upload is **idempotent** (a local ledger + the server's write-once 409). It is always **user-initiated** — never automatic or unbounded.
 
@@ -1801,7 +1801,7 @@ Uploads a chosen set through the live path, idempotently and serially. `--worksp
 
 | Flag | Description |
 | --- | --- |
-| `--session <uid>` | A session UID to upload (repeatable; Claude or Codex — UIDs come from `crow backfill scan`) |
+| `--session <uid>` | A session UID to upload (repeatable; Claude Code, Codex, or Grok Build — UIDs come from `crow backfill scan`) |
 | `--all-high-confidence` | Every not-yet-uploaded **high-confidence** session in this workspace |
 | `--all` | Every not-yet-uploaded session in this workspace |
 

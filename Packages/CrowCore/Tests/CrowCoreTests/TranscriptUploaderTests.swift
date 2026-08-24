@@ -96,6 +96,20 @@ final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable 
             metadata: meta(), agentSessionID: nil) == nil)
     }
 
+    @Test func grokHarnessCollapsesToUnknownOnTheWire() throws {
+        // The server's CHECK doesn't accept `grok`, so the internal `.grok` harness
+        // must send `unknown` on the wire (CROW-1098). The sidecar `agent_kind`
+        // still carries the true kind for attribution.
+        let req = TranscriptUploader.makeRequest(
+            baseURL: "https://api.x", apiKey: "k", sessionUID: "S", harness: .grok,
+            kind: .sessionTranscript, format: .jsonl, transcript: transcript,
+            metadata: LogSyncSessionMetadata(agentKind: "grok"), agentSessionID: nil)!
+        let comps = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        let items = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value) })
+        #expect(items["harness"] == "unknown")
+        #expect(items["agent_kind"] == "grok")
+    }
+
     @Test func classifyMapsStatuses() {
         #expect(TranscriptUploader.classify(status: 201) == .created)
         #expect(TranscriptUploader.classify(status: 200) == .created)

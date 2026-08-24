@@ -108,9 +108,10 @@ struct LogSyncCollector {
             guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
 
             // Where does this harness write its logs? Empty for harnesses whose
-            // on-disk logs are not yet wired (everything but Claude and Codex
-            // today — CROW-1089). A Codex source carries a `cwdFilter` that
-            // `resolveFiles` applies to attribute a global rollout to this worktree.
+            // on-disk logs are not yet wired (everything but Claude, Codex, and
+            // Grok today — CROW-1089, CROW-1098). A Codex source carries a
+            // `cwdFilter` that `resolveFiles` applies to attribute a global rollout
+            // to this worktree; Claude and Grok partition by worktree directly.
             guard let agent = AgentRegistry.shared.agent(for: session.agentKind) else { continue }
             let sources = agent.logSources(worktreePath: worktree.worktreePath, harnessSessionID: nil)
             guard !sources.isEmpty else { continue }
@@ -126,10 +127,10 @@ struct LogSyncCollector {
                 if let newest, nowDate.timeIntervalSince(newest) < quietPeriod { continue }
             }
 
-            // Pick the single format for the artifact stamp. Claude sources are
-            // `.jsonl`; Codex sources are `.logDir` (a set of per-session rollouts
-            // concatenated). A mixed set would be unusual — take the first source's
-            // format.
+            // Pick the single format for the artifact stamp. Claude and Grok
+            // sources are `.jsonl`; Codex sources are `.logDir` (a set of
+            // per-session rollouts concatenated). A mixed set would be unusual —
+            // take the first source's format.
             let format = sources.first?.format ?? .jsonl
             guard let transcript = TranscriptNormalizer.normalize(
                 files: files, format: format, maxBytes: max(1, config.maxUploadBytes))

@@ -42,6 +42,34 @@ import Testing
             atomically: true, encoding: .utf8)
     }
 
+    /// Write a Grok transcript — `<enc-cwd>/<session-uuid>/chat_history.jsonl`,
+    /// where the directory name is the URL-encoded cwd — plus sibling files that
+    /// must be ignored.
+    private func writeGrokTranscript(
+        in grokSessions: URL, uid: String, cwd: String
+    ) throws {
+        let sessionDir = grokSessions
+            .appendingPathComponent(GrokSessionDir.encode(cwd), isDirectory: true)
+            .appendingPathComponent(uid, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let body = """
+        {"role":"system","content":"You are Grok"}
+        {"role":"user","content":"hi"}
+        """
+        try body.write(
+            to: sessionDir.appendingPathComponent("chat_history.jsonl"),
+            atomically: true, encoding: .utf8)
+        // Siblings the scanner must NOT pick up.
+        try "{}".write(to: sessionDir.appendingPathComponent("events.jsonl"),
+                       atomically: true, encoding: .utf8)
+        try "{}".write(to: sessionDir.appendingPathComponent("hunk_records.jsonl"),
+                       atomically: true, encoding: .utf8)
+        try "{}".write(
+            to: grokSessions.appendingPathComponent(GrokSessionDir.encode(cwd), isDirectory: true)
+                .appendingPathComponent("prompt_history.jsonl"),
+            atomically: true, encoding: .utf8)
+    }
+
     @Test func reconstructsHighConfidenceSession() async throws {
         let (devRoot, projects, cleanup) = try makeTree()
         defer { cleanup() }
@@ -170,6 +198,71 @@ import Testing
             key: LogSyncLedger.key(sessionUID: "CODEX-UID-2", harness: .codex, kind: .sessionTranscript),
             entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
         let s2 = try #require(await scanner.scan(ledger: ledger2).first { $0.claudeSessionUID == "CODEX-UID-2" })
+        #expect(s2.uploadStatus == .uploaded)
+    }
+
+    @Test func reconstructsGrokHighConfidenceSession() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let grok = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("grok-sessions", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: grok) }
+
+        // A live clone so the repo → owner/repo resolves.
+        let clone = URL(fileURLWithPath: devRoot)
+            .appendingPathComponent("RadiusMethod/crow", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: clone.appendingPathComponent(".git"), withIntermediateDirectories: true)
+
+        let cwd = "\(devRoot)/RadiusMethod/crow-1098-wire-grok-logs"
+        try writeGrokTranscript(in: grok, uid: "GROK-UID-1", cwd: cwd)
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, grokSessionsDir: grok,
+            gitRemote: { path in
+                path.hasSuffix("/RadiusMethod/crow") ? "https://github.com/corveil/crow.git" : nil
+            })
+
+        let sessions = await scanner.scan(ledger: LogSyncLedger())
+        // Only the one chat_history.jsonl — siblings and prompt_history are ignored.
+        #expect(sessions.count == 1)
+        let s = try #require(sessions.first { $0.claudeSessionUID == "GROK-UID-1" })
+        #expect(s.harness == .grok)
+        #expect(s.cwd == cwd) // recovered by decoding the directory name
+        #expect(s.workspace == "RadiusMethod")
+        #expect(s.worktreeName == "crow-1098-wire-grok-logs")
+        #expect(s.repoName == "crow")
+        #expect(s.ownerRepo == "corveil/crow")
+        #expect(s.ticketNumber == 1098)
+        #expect(s.confidence == .high)
+    }
+
+    @Test func grokLedgerStatusKeyedByGrokHarness() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let grok = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("grok-sessions2", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: grok) }
+        try writeGrokTranscript(in: grok, uid: "GROK-UID-2", cwd: "\(devRoot)/RadiusMethod/crow-9-x")
+
+        // A Claude ledger entry for the SAME uid must NOT mark the Grok row
+        // uploaded — the harness slot distinguishes them.
+        var ledger = LogSyncLedger()
+        ledger.record(
+            key: LogSyncLedger.key(sessionUID: "GROK-UID-2", harness: .claude, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, grokSessionsDir: grok, gitRemote: { _ in nil })
+        let s = try #require(await scanner.scan(ledger: ledger).first { $0.claudeSessionUID == "GROK-UID-2" })
+        #expect(s.uploadStatus == .new) // the Claude-harness entry does not apply
+
+        // Now record it under the GROK harness — it reconciles.
+        var ledger2 = LogSyncLedger()
+        ledger2.record(
+            key: LogSyncLedger.key(sessionUID: "GROK-UID-2", harness: .grok, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+        let s2 = try #require(await scanner.scan(ledger: ledger2).first { $0.claudeSessionUID == "GROK-UID-2" })
         #expect(s2.uploadStatus == .uploaded)
     }
 

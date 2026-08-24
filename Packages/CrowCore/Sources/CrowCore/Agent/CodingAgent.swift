@@ -331,12 +331,13 @@ public protocol CodingAgent: Sendable {
     ///
     /// Opt-in: the protocol default returns `[]`, so a harness whose on-disk log
     /// location is unconfirmed contributes nothing rather than uploading the
-    /// wrong bytes. `ClaudeCodeAgent` and `OpenAICodexAgent` are wired today
-    /// (CROW-1089): Claude's logs are partitioned by working directory, and Codex's
-    /// globally-stored rollouts carry a `cwdFilter` so the collector attributes
-    /// them by their recorded `cwd`. Cursor (SQLite blob store) and OpenCode
-    /// (multi-file object store) still return `[]` pending a normalizer for their
-    /// on-disk shapes; see each adapter for the specific blocker.
+    /// wrong bytes. `ClaudeCodeAgent`, `OpenAICodexAgent`, and `GrokAgent` are
+    /// wired today (CROW-1089, CROW-1098): Claude and Grok partition their logs by
+    /// working directory (Grok by URL-encoding the cwd into the directory name),
+    /// and Codex's globally-stored rollouts carry a `cwdFilter` so the collector
+    /// attributes them by their recorded `cwd`. Cursor (SQLite blob store) and
+    /// OpenCode (multi-file object store) still return `[]` pending a normalizer
+    /// for their on-disk shapes; see each adapter for the specific blocker.
     func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource]
 }
 
@@ -501,7 +502,8 @@ public extension CodingAgent {
     /// durable-log location is unconfirmed — or whose logs are not partitioned
     /// by working directory *and* have no cwd-attribution wired — contributes
     /// nothing until its adapter overrides this. `ClaudeCodeAgent` (per-worktree
-    /// slug directory) and `OpenAICodexAgent` (cwd-filtered global rollouts)
-    /// override it today (CROW-1089).
+    /// slug directory), `OpenAICodexAgent` (cwd-filtered global rollouts), and
+    /// `GrokAgent` (per-worktree URL-encoded directory) override it today
+    /// (CROW-1089, CROW-1098).
     func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] { [] }
 }

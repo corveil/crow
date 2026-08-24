@@ -1,6 +1,7 @@
 import Foundation
 import CrowCore
 import CrowCodex
+import CrowGrok
 
 /// The daemon-side orchestration behind `backfill-scan` / `backfill-upload`
 /// (CROW-1075). It composes the CrowCore pieces — the disk scanner, the ticket
@@ -41,13 +42,15 @@ struct BackfillService: Sendable {
     func scan(scanner: BackfillScanner? = nil) async -> [BackfillSession] {
         let store = LogSyncLedgerStore.shared(devRoot: devRoot)
         let ledger = await store.snapshot()
-        // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`),
-        // the same tree the live collector and the launch path read — CrowCore's
-        // `BackfillScanner` can't import CrowCodex, so the daemon injects it
-        // (CROW-1089).
+        // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`)
+        // and the Grok sessions tree through `GrokHome` (honors `$GROK_HOME`) — the
+        // same trees the live collector and the launch paths read. CrowCore's
+        // `BackfillScanner` can't import CrowCodex/CrowGrok, so the daemon injects
+        // both (CROW-1089, CROW-1098).
         let s = scanner ?? BackfillScanner(
             devRoot: devRoot,
             codexSessionsDir: URL(fileURLWithPath: CodexHome.sessionsDir()),
+            grokSessionsDir: URL(fileURLWithPath: GrokHome.sessionsDir()),
             now: now)
         return await s.scan(ledger: ledger)
     }
@@ -129,20 +132,21 @@ struct BackfillService: Sendable {
 
     // MARK: - Helpers
 
-    /// The upload `format` stamp for a harness's on-disk transcript. Both wired
-    /// harnesses normalize through `concatenateNDJSON`, but the stamp is honest:
-    /// Claude writes a single NDJSON transcript (`.jsonl`); a Codex rollout is one
-    /// of a set of per-session files the collector concatenates (`.logDir`).
+    /// The upload `format` stamp for a harness's on-disk transcript. Claude and
+    /// Grok each write a single NDJSON transcript (`.jsonl`); a Codex rollout is one
+    /// of a set of per-session files the collector concatenates (`.logDir`). All
+    /// three normalize through `concatenateNDJSON`, but the stamp is honest.
     static func uploadFormat(for harness: LogSyncHarness) -> AgentLogFormat {
         harness == .codex ? .logDir : .jsonl
     }
 
-    /// The `agentKind` sidecar hint for a harness. Only the two wired harnesses
-    /// reach here; any other maps to Claude's kind as a harmless default (it never
-    /// occurs — the scanner only emits `.claude`/`.codex`).
+    /// The `agentKind` sidecar hint for a harness. Only the wired harnesses reach
+    /// here; any other maps to Claude's kind as a harmless default (it never
+    /// occurs — the scanner only emits `.claude`/`.codex`/`.grok`).
     static func agentKindRawValue(for harness: LogSyncHarness) -> String {
         switch harness {
         case .codex: return AgentKind.codex.rawValue
+        case .grok: return AgentKind.grok.rawValue
         default: return AgentKind.claudeCode.rawValue
         }
     }

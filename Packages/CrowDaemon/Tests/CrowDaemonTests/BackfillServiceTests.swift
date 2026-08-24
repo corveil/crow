@@ -122,8 +122,10 @@ private struct StubRunner: ShellRunner {
     @Test func harnessMappingHelpers() {
         #expect(BackfillService.uploadFormat(for: .claude) == .jsonl)
         #expect(BackfillService.uploadFormat(for: .codex) == .logDir)
+        #expect(BackfillService.uploadFormat(for: .grok) == .jsonl) // single NDJSON transcript
         #expect(BackfillService.agentKindRawValue(for: .claude) == AgentKind.claudeCode.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .codex) == AgentKind.codex.rawValue)
+        #expect(BackfillService.agentKindRawValue(for: .grok) == AgentKind.grok.rawValue)
     }
 
     @Test func codexSessionUploadsUnderCodexHarnessSlot() async throws {
@@ -153,5 +155,27 @@ private struct StubRunner: ShellRunner {
             session: claudeTwin, upload: (baseURL: "https://corveil.io", apiKey: "k"),
             maxUploadBytes: 8_000_000)
         #expect(twin.result == .uploaded)
+    }
+
+    // MARK: Grok harness (CROW-1098)
+
+    @Test func grokSessionUploadsUnderGrokHarnessSlot() async throws {
+        let devRoot = try tempDevRoot()
+        let path = try writeTranscript(devRoot, uid: "GRK-1")
+        let svc = service(devRoot, status: 201, ticket: .success(#"{"number":12}"#))
+        var s = session(devRoot, uid: "GRK-1", path: path)
+        s.harness = .grok
+
+        let outcome = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(outcome.result == .uploaded)
+        #expect(outcome.harness == .grok) // the outcome carries its harness for UI keying
+
+        // Idempotent within the grok slot.
+        let again = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(again.result == .alreadyUploaded)
     }
 }

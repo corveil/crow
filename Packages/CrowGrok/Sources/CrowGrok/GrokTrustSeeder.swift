@@ -104,17 +104,12 @@ public enum GrokTrustSeeder {
     // MARK: - Store path
 
     /// `$GROK_HOME/trusted_folders.toml` when `GROK_HOME` is set and non-empty,
-    /// otherwise `~/.grok/trusted_folders.toml`. The empty-var-is-unset guard
-    /// mirrors `CodexTrustSeeder` so an empty `GROK_HOME=` never yields a
-    /// CWD-relative path.
+    /// otherwise `~/.grok/trusted_folders.toml`. Resolved through `GrokHome` — the
+    /// one source of truth shared with the session-log collector (CROW-1098) — so
+    /// the trust-seed and log paths never drift; the empty-var-is-unset guard lives
+    /// there and mirrors `CodexTrustSeeder`.
     static func defaultStorePath() -> String {
-        let grokHome: String
-        if let env = ProcessInfo.processInfo.environment["GROK_HOME"], !env.isEmpty {
-            grokHome = env
-        } else {
-            grokHome = NSString(string: "~/.grok").expandingTildeInPath
-        }
-        return (grokHome as NSString).appendingPathComponent("trusted_folders.toml")
+        (GrokHome.path() as NSString).appendingPathComponent("trusted_folders.toml")
     }
 
     // MARK: - Minimal TOML editing

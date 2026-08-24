@@ -101,13 +101,16 @@ unbounded.
 
 ## Scope
 
-- **Claude Code and Codex** — the two harnesses whose transcripts can be reliably
-  attributed to a worktree (CROW-1089). Claude partitions its logs by working
-  directory; Codex pools its `~/.codex/sessions/**/rollout-*.jsonl` globally but
-  records the real `cwd` in each rollout's first-line `session_meta`, so the scan
-  reconstructs it the same way. Both make historical reconstruction reliable
-  because every transcript records the authoritative `cwd`/`gitBranch`, not a
-  lossy directory name. Other harnesses follow as their `logSources` land (see
+- **Claude Code, Codex, and Grok Build** — the harnesses whose transcripts can be
+  reliably attributed to a worktree (CROW-1089, CROW-1098). Claude and Grok
+  partition their logs by working directory (Claude slugifies the path; Grok
+  URL-encodes it into the directory name, `~/.grok/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`,
+  so the scan recovers the cwd by decoding the directory name). Codex pools its
+  `~/.codex/sessions/**/rollout-*.jsonl` globally but records the real `cwd` in
+  each rollout's first-line `session_meta`, so the scan reconstructs it that way.
+  All three make historical reconstruction reliable because the authoritative
+  `cwd` is recoverable, not a lossy directory name. Other harnesses follow as
+  their `logSources` land (see
   [session-log-collector.md](session-log-collector.md), and
   [harness-transcript-locations.md](harness-transcript-locations.md) for the
   verified per-harness on-disk locations).

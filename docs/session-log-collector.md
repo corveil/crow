@@ -25,20 +25,22 @@ contributes nothing rather than uploading the wrong bytes.
 
 ## Harness coverage
 
-**Claude Code** and **Codex** are wired (CROW-1089). Claude partitions its logs
-by working directory, so a Crow worktree maps straight to that session's
-transcripts. Codex pools its rollouts globally, so it's attributed by **content**
-instead: the source scans the whole `sessions` tree but carries a `cwdFilter`, and
-the collector keeps only the rollouts whose recorded `cwd` matches the worktree
-(`AgentLogCwdReader`). A rollout with no readable cwd is dropped, never guessed.
+**Claude Code**, **Codex**, and **Grok Build** are wired (CROW-1089, CROW-1098).
+Claude and Grok partition their logs by working directory, so a Crow worktree maps
+straight to that session's transcripts — Claude by slugifying the path, Grok by
+URL-encoding it into the directory name. Codex pools its rollouts globally, so it's
+attributed by **content** instead: the source scans the whole `sessions` tree but
+carries a `cwdFilter`, and the collector keeps only the rollouts whose recorded
+`cwd` matches the worktree (`AgentLogCwdReader`). A rollout with no readable cwd is
+dropped, never guessed.
 
 | Harness | On-disk location | Status |
 |---|---|---|
 | `claude-code` | `~/.claude/projects/<slug>/<uuid>.jsonl` (slug = worktree path, every non-alphanumeric → `-`) | **Wired.** One artifact per session; multiple `.jsonl` under the slug dir are concatenated. |
 | `codex` | `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl` (already NDJSON; cwd in the first-line `session_meta.payload.cwd`) | **Wired.** Recursive `.logDir` source with a `cwdFilter`; the collector keeps only cwd-matching rollouts and concatenates them (`~/.codex/archived_sessions` and `.../log` are not scanned). |
+| `grok` | `<$GROK_HOME or ~/.grok>/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl` (already NDJSON; directory name is the cwd URL-encoded, `/`→`%2F`) | **Wired.** Recursive `.jsonl` source pointed at the encoded worktree directory, filtered to `chat_history.jsonl`; attribution is exact by construction (no `cwdFilter`), so sibling `events.jsonl` / `prompt_history.jsonl` are left out. |
 | `opencode` | `~/.local/share/opencode/storage/{project,session,message,part}` | Deferred — a `project/<id>.json`'s `worktree` maps to the cwd, but a session's `message`/`part` records must be reassembled into ordered NDJSON first. |
 | `cursor` | `~/.cursor/chats/<id>/<sub>/store.db` (CLI store; cwd in the sibling `meta.json`) | Deferred — the conversation is opaque blobs in a per-chat **SQLite** `store.db`; needs a blob extractor (a `.sqlite` normalizer). Not the Cursor IDE's `state.vscdb`. |
-| `grok` | `~/.grok/sessions/<urlencoded-abs-cwd>/<uuid>/chat_history.jsonl` (NDJSON, path-partitioned) | Deferred — a **lead**, not yet wired (CROW-1090). Already NDJSON needing no transform, but the `grok` binary collides with the community `grok-cli`, so [#1098](https://github.com/corveil/crow/issues/1098) must confirm the store is xAI's grok-build's before wiring. See [harness-transcript-locations.md](harness-transcript-locations.md). |
 | `antigravity` | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/transcript_full.jsonl` (JSONL; pooled globally, keyed by id) | Deferred — the transcript records **no cwd** at all (step records are `step_index`/`type`/`source`/`status`/`created_at`), so a `cwdFilter` source would drop every file. The cwd lives only off-transcript (a conditional protobuf-in-SQLite per-conversation DB, the ephemeral hook / status-line payloads, or the latest-only `cache/last_conversations.json` pointer), which the current reader can't consume (CROW-1097). |
 | `muse` | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl` (durable, already JSONL) | Deferred — durable global JSONL store **confirmed** (Meta dev cookbook, CROW-1099). The cookbook documents no cwd field (its jq prints only event records, whose git refs `base_commit`/`base_ref` collide across worktrees), but a first-hand third-party parser reports the cwd at `runtime.session.metadata.workspace_root` (line 1), so attribution is **likely** possible (content-filtered, Codex-style). Format fits `.logDir` as-is; verify `workspace_root` on a real `session.jsonl` (Meta-auth-gated), then wire. |
 
@@ -46,11 +48,17 @@ The framework (collector, normalizer, uploader, ledger, config, CLI) is
 harness-general; wiring a deferred harness is implementing its `logSources`
 override — plus, for `.sqlite`/multi-file stores, a normalizer for that on-disk
 shape. A globally-stored harness attributes by `cwdFilter` rather than a
-per-worktree path (Codex is the reference).
+per-worktree path (Codex is the reference); a directory-partitioned one maps the
+worktree path straight to its directory (Claude and Grok).
 
 Harnesses map to the artifact contract's `harness` value via
-`LogSyncHarness(agentKind:)` — the four the server enumerates map directly, every
-other kind maps to `unknown`.
+`LogSyncHarness(agentKind:)`. The four the server enumerates
+(`claude`/`cursor`/`codex`/`opencode`) map directly. Grok maps to an internal
+`.grok` that drives the local ledger slot and the backfill display, but its
+`wireValue` collapses to `unknown` on the wire because the server's CHECK does not
+(yet) accept `grok` — the upload is still accepted and attributed (the true kind
+rides along in the `agent_kind` sidecar hint), just not harness-typed. Every other
+kind maps to `unknown`.
 
 ## Pipeline
 

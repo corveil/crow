@@ -4,12 +4,15 @@ import Foundation
 /// been uploaded, reconstructing each one's workspace / repo / ticket so the
 /// Settings "Backfill history" dialog can show a reviewable list (CROW-1075).
 ///
-/// Two harnesses are wired (CROW-1089): **Claude**, whose logs are partitioned by
-/// working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`), and **Codex**,
+/// Three harnesses are wired: **Claude**, whose logs are partitioned by
+/// working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`); **Codex**,
 /// whose rollouts pool globally under `~/.codex/sessions/<date>/…` but each record
-/// their own `cwd` in a first-line `session_meta` event. Both make historical
-/// reconstruction reliable because every transcript records the real
-/// `cwd`/`gitBranch` — the authoritative signal, not a lossy directory name. The
+/// their own `cwd` in a first-line `session_meta` event (CROW-1089); and **Grok**,
+/// which partitions by working directory too, encoding the cwd into the directory
+/// name (`~/.grok/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`, CROW-1098).
+/// All three make historical reconstruction reliable because the real `cwd` is
+/// recoverable — Claude/Codex record it in the transcript, Grok encodes it in the
+/// path — the authoritative signal, not a lossy directory name. The
 /// scan is disk- and git-only — it never touches the provider or the network, so
 /// it stays fast over hundreds of sessions; ticket *validation* is deferred to
 /// upload, where a link is actually asserted.
@@ -28,6 +31,12 @@ public struct BackfillScanner: Sendable {
     /// injects the `$CODEX_HOME`-resolved tree (via `CodexHome`, which CrowCore
     /// can't import); this literal default is the fallback for a direct caller.
     let codexSessionsDir: URL
+    /// `~/.grok/sessions` by default — where Grok Build writes its per-worktree
+    /// `<url-encoded-cwd>/<session-uuid>/chat_history.jsonl` transcripts (CROW-1098).
+    /// The daemon injects the `$GROK_HOME`-resolved tree (via `GrokHome`, which
+    /// CrowCore can't import); this literal default is the fallback for a direct
+    /// caller.
+    let grokSessionsDir: URL
     /// Resolve a directory's `origin` remote URL (default: `git -C <dir> remote
     /// get-url origin`). Injected so tests need no real repos.
     let gitRemote: @Sendable (String) async -> String?
@@ -37,6 +46,7 @@ public struct BackfillScanner: Sendable {
         devRoot: String,
         projectsDir: URL? = nil,
         codexSessionsDir: URL? = nil,
+        grokSessionsDir: URL? = nil,
         runner: any ShellRunner = ProcessShellRunner(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -45,6 +55,8 @@ public struct BackfillScanner: Sendable {
             .appendingPathComponent(".claude/projects", isDirectory: true)
         self.codexSessionsDir = codexSessionsDir ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
+        self.grokSessionsDir = grokSessionsDir ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".grok/sessions", isDirectory: true)
         self.gitRemote = { dir in
             (try? await runner.run(args: ["git", "-C", dir, "remote", "get-url", "origin"],
                                    env: [:], cwd: nil))?
@@ -53,14 +65,16 @@ public struct BackfillScanner: Sendable {
         self.now = now
     }
 
-    /// Test seam: inject the git-remote reader directly. `codexSessionsDir`
-    /// defaults to a nonexistent path so a test that only stages Claude
-    /// transcripts stays hermetic (it never accidentally scans a dev machine's
-    /// real `~/.codex/sessions`); a Codex test passes an explicit temp dir.
+    /// Test seam: inject the git-remote reader directly. `codexSessionsDir` /
+    /// `grokSessionsDir` default to nonexistent paths so a test that only stages
+    /// Claude transcripts stays hermetic (it never accidentally scans a dev
+    /// machine's real `~/.codex/sessions` or `~/.grok/sessions`); a Codex or Grok
+    /// test passes an explicit temp dir.
     init(
         devRoot: String,
         projectsDir: URL,
         codexSessionsDir: URL? = nil,
+        grokSessionsDir: URL? = nil,
         gitRemote: @escaping @Sendable (String) async -> String?,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -68,12 +82,14 @@ public struct BackfillScanner: Sendable {
         self.projectsDir = projectsDir
         self.codexSessionsDir = codexSessionsDir
             ?? projectsDir.appendingPathComponent("__no_codex_sessions__", isDirectory: true)
+        self.grokSessionsDir = grokSessionsDir
+            ?? projectsDir.appendingPathComponent("__no_grok_sessions__", isDirectory: true)
         self.gitRemote = gitRemote
         self.now = now
     }
 
-    /// Reconcile every on-disk transcript (Claude + Codex) against the ledger and
-    /// return the reconstructed rows, newest first.
+    /// Reconcile every on-disk transcript (Claude + Codex + Grok) against the
+    /// ledger and return the reconstructed rows, newest first.
     public func scan(ledger: LogSyncLedger) async -> [BackfillSession] {
         let remotes = await resolveRemotes()
         let knownRepoNames = Array(Set(remotes.values.map { $0.repo }))
@@ -88,6 +104,13 @@ public struct BackfillScanner: Sendable {
         }
         for file in codexRolloutFiles() {
             guard let s = reconstructCodex(
+                file: file, remotesByRepo: remotes,
+                knownRepoNames: knownRepoNames, ledger: ledger)
+            else { continue }
+            sessions.append(s)
+        }
+        for file in grokChatHistoryFiles() {
+            guard let s = reconstructGrok(
                 file: file, remotesByRepo: remotes,
                 knownRepoNames: knownRepoNames, ledger: ledger)
             else { continue }
@@ -131,6 +154,28 @@ public struct BackfillScanner: Sendable {
         return assemble(
             uid: uid, file: file, slug: file.deletingPathExtension().lastPathComponent,
             harness: .codex, cwd: head.cwd, gitBranch: head.gitBranch,
+            remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
+    }
+
+    /// Reconstruct one Grok Build transcript (CROW-1098). Unlike Codex, nothing is
+    /// read from the file: the session UUID is the transcript's parent directory,
+    /// and the `cwd` is its **grandparent** directory name URL-decoded — Grok stores
+    /// each session at `<sessions>/<url-encoded-cwd>/<session-uuid>/chat_history.jsonl`,
+    /// so the directory name is the authoritative cwd (`GrokSessionDir.decode`).
+    /// Grok records no git branch, so `gitBranch` stays `nil`; the ticket comes from
+    /// the worktree name the cwd resolves to, exactly like Claude.
+    func reconstructGrok(
+        file: URL, remotesByRepo: [String: RepoRemote],
+        knownRepoNames: [String], ledger: LogSyncLedger
+    ) -> BackfillSession? {
+        let sessionDir = file.deletingLastPathComponent()
+        let uid = sessionDir.lastPathComponent
+        guard !uid.isEmpty else { return nil }
+        let encodedCwd = sessionDir.deletingLastPathComponent().lastPathComponent
+        let cwd = GrokSessionDir.decode(encodedCwd)
+        return assemble(
+            uid: uid, file: file, slug: encodedCwd, harness: .grok,
+            cwd: cwd, gitBranch: nil,
             remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
     }
 
@@ -240,6 +285,26 @@ public struct BackfillScanner: Sendable {
         var out: [URL] = []
         for case let url as URL in en where url.pathExtension == "jsonl"
             && url.lastPathComponent.hasPrefix("rollout-") {
+            if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                out.append(url)
+            }
+        }
+        return out
+    }
+
+    /// Every `chat_history.jsonl` under `<grokSessionsDir>` (recursively). Grok
+    /// nests them two levels deep — `<url-encoded-cwd>/<session-uuid>/chat_history.jsonl`
+    /// — so the enumerator descends into both; the `chat_history` prefix filter
+    /// leaves out the cwd-level `prompt_history.jsonl` and the per-session
+    /// `events.jsonl` / `hunk_records.jsonl`, keeping this in lockstep with the live
+    /// collector's `logSources` selector (CROW-1098).
+    func grokChatHistoryFiles() -> [URL] {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: grokSessionsDir, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        var out: [URL] = []
+        for case let url as URL in en where url.pathExtension == "jsonl"
+            && url.lastPathComponent.hasPrefix("chat_history") {
             if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
                 out.append(url)
             }
