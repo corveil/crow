@@ -108,6 +108,8 @@ unbounded.
   reconstructs it the same way. Both make historical reconstruction reliable
   because every transcript records the authoritative `cwd`/`gitBranch`, not a
   lossy directory name. Other harnesses follow as their `logSources` land (see
-  [session-log-collector.md](session-log-collector.md)).
+  [session-log-collector.md](session-log-collector.md), and
+  [harness-transcript-locations.md](harness-transcript-locations.md) for the
+  verified per-harness on-disk locations).
 - Cursor (SQLite blob store) and OpenCode (multi-file object store) need a
   normalizer for their on-disk shapes before their transcripts can be backfilled.
