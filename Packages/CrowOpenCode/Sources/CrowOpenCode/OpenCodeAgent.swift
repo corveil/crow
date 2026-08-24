@@ -179,11 +179,32 @@ public struct OpenCodeAgent: CodingAgent {
         "/rename \(newName)\n"
     }
 
-    // `logSources` is intentionally NOT overridden (CROW-1089): OpenCode keeps a
-    // multi-file object store (`~/.local/share/opencode/storage/{project,session,
-    // message,part}/`) rather than one transcript per session. A
-    // `project/<id>.json`'s `worktree` field maps a project to its cwd, but
-    // reassembling a session's scattered `message`/`part` records into ordered
-    // NDJSON is a normalizer that isn't built yet, so it stays on the `[]`
-    // default rather than upload a malformed transcript.
+    /// Since OpenCode 1.17 a session is a row in the `opencode.db` SQLite store
+    /// (`<dataDir>/opencode.db`, `dataDir` honoring `$XDG_DATA_HOME` via
+    /// `OpenCodeHome`), with its content in relational `session` / `message` / `part`
+    /// tables and the working directory on `session.directory` (CROW-1096). The
+    /// pre-1.17 JSON object store under `<dataDir>/storage/` is legacy that upstream
+    /// migrates into the database on upgrade, so the collector reads only the
+    /// database.
+    ///
+    /// One database holds every session across every worktree, so — like Codex — the
+    /// source is attributed by **content**, not partitioned by path: a single
+    /// `.openCodeStore` **file** source at `opencode.db`, carrying a `cwdFilter`. The
+    /// collector hands the database and the worktree cwd to `OpenCodeStore`, which
+    /// selects the top-level sessions whose recorded `directory` matches (dropping
+    /// child/subagent sessions, per Claude's `subagents/` rule) and reassembles each
+    /// into ordered NDJSON from its `message`/`part` rows. A session with no recorded
+    /// directory is dropped, never guessed.
+    ///
+    /// `harnessSessionID` is unused: cwd-matching is the selector, and a Crow session
+    /// may span several `opencode` / `opencode --continue` invocations in the same
+    /// worktree, each its own OpenCode session — the collector concatenates all
+    /// cwd-matched sessions chronologically. The `.openCodeStore` format is an
+    /// internal normalization discriminator; the reassembled artifact uploads stamped
+    /// as `.logDir` (see `AgentLogFormat.artifactStamp`).
+    public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
+        return [AgentLogSource(
+            path: OpenCodeHome.databasePath(), selector: .file,
+            format: .openCodeStore, cwdFilter: worktreePath)]
+    }
 }

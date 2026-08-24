@@ -331,14 +331,15 @@ public protocol CodingAgent: Sendable {
     ///
     /// Opt-in: the protocol default returns `[]`, so a harness whose on-disk log
     /// location is unconfirmed contributes nothing rather than uploading the
-    /// wrong bytes. `ClaudeCodeAgent`, `OpenAICodexAgent`, `GrokAgent`, and
-    /// `CursorAgent` are wired today (CROW-1089 / CROW-1098 / CROW-1095): Claude and
-    /// Grok partition their logs by working directory (Grok by URL-encoding the cwd
-    /// into the directory name), while Codex's and Cursor's globally-stored sessions
-    /// carry a `cwdFilter` so the collector attributes them by their recorded `cwd`
-    /// (Codex in the rollout head, Cursor in the sibling `meta.json`). OpenCode
-    /// (multi-file object store) still returns `[]` pending a normalizer for its
-    /// on-disk shape; see the adapter for the specific blocker.
+    /// wrong bytes. `ClaudeCodeAgent`, `OpenAICodexAgent`, `GrokAgent`,
+    /// `CursorAgent`, and `OpenCodeAgent` are wired today (CROW-1089 / CROW-1098 /
+    /// CROW-1095 / CROW-1096): Claude and Grok partition their logs by working
+    /// directory (Grok by URL-encoding the cwd into the directory name); Codex's and
+    /// Cursor's globally-stored sessions carry a `cwdFilter` so the collector
+    /// attributes them by their recorded `cwd` (Codex in the rollout head, Cursor in
+    /// the sibling `meta.json`); and OpenCode's `opencode.db` SQLite store is a single
+    /// `.openCodeStore` file whose rows are selected by the `session.directory`
+    /// column.
     func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource]
 }
 
@@ -504,8 +505,9 @@ public extension CodingAgent {
     /// by working directory *and* have no cwd-attribution wired — contributes
     /// nothing until its adapter overrides this. `ClaudeCodeAgent` (per-worktree
     /// slug directory), `OpenAICodexAgent` (cwd-filtered global rollouts),
-    /// `GrokAgent` (per-worktree URL-encoded directory), and `CursorAgent`
-    /// (cwd-filtered global `.sqlite` stores) override it today
-    /// (CROW-1089 / CROW-1098 / CROW-1095).
+    /// `GrokAgent` (per-worktree URL-encoded directory), `CursorAgent` (cwd-filtered
+    /// global `.sqlite` stores), and `OpenCodeAgent` (cwd-selected SQLite
+    /// `opencode.db`) override it today (CROW-1089 / CROW-1098 / CROW-1095 /
+    /// CROW-1096).
     func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] { [] }
 }

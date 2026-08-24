@@ -4,24 +4,28 @@ import Foundation
 /// been uploaded, reconstructing each one's workspace / repo / ticket so the
 /// Settings "Backfill history" dialog can show a reviewable list (CROW-1075).
 ///
-/// Four harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
+/// Five harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
 /// by working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`); **Codex**
 /// (CROW-1089), whose rollouts pool globally under `~/.codex/sessions/<date>/…`
 /// but each record their own `cwd` in a first-line `session_meta` event; **Grok**
 /// (CROW-1098), which partitions by working directory too, encoding the cwd into
 /// the directory name (`~/.grok/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`);
-/// and **Cursor** (CROW-1095), whose per-chat `~/.cursor/chats/<id>/<sub>/store.db`
-/// records its `cwd` in the sibling `meta.json`. All make historical
+/// **Cursor** (CROW-1095), whose per-chat `~/.cursor/chats/<id>/<sub>/store.db`
+/// records its `cwd` in the sibling `meta.json`; and **OpenCode** (CROW-1096), whose
+/// sessions live in the `~/.local/share/opencode/opencode.db` SQLite store, each row
+/// recording the `directory` it ran in (`session.directory`). All make historical
 /// reconstruction reliable because the real `cwd` is recoverable — Claude/Codex
 /// record it in the transcript, Grok encodes it in the path, Cursor in a sibling
-/// file — the authoritative signal, not a lossy directory name. The scan is disk-
-/// and git-only — it never touches the provider or the network, so it stays fast
-/// over hundreds of sessions (it never opens a `store.db`; the Cursor uid is the
-/// `<sub>` directory name and the cwd a tiny sibling JSON read); ticket
-/// *validation* is deferred to upload, where a link is actually asserted.
+/// file, OpenCode in a column — the authoritative signal, not a lossy directory
+/// name. The scan is disk- and git-only — it never touches the provider or the
+/// network, so it stays fast over hundreds of sessions (it never opens a Cursor
+/// `store.db`; the Cursor uid is the `<sub>` directory name and the cwd a tiny
+/// sibling JSON read); ticket *validation* is deferred to upload, where a link is
+/// actually asserted.
 ///
 /// Everything effectful is injected (the projects directory, the Codex sessions
-/// directory, the Grok sessions directory, the Cursor chats directory, the
+/// directory, the Grok sessions directory, the Cursor chats directory, the OpenCode
+/// database path, the
 /// git-remote reader, the clock), so the reconciliation logic is unit-testable
 /// against a temporary tree.
 public struct BackfillScanner: Sendable {
@@ -47,6 +51,11 @@ public struct BackfillScanner: Sendable {
     /// which CrowCore can't import); this literal default is the fallback for a
     /// direct caller.
     let cursorChatsDir: URL
+    /// `~/.local/share/opencode/opencode.db` by default — the OpenCode SQLite store
+    /// (CROW-1096). The daemon injects the `$XDG_DATA_HOME`-resolved path (via
+    /// `OpenCodeHome`, which CrowCore can't import); this literal default is the
+    /// fallback for a direct caller.
+    let openCodeDatabaseURL: URL
     /// Resolve a directory's `origin` remote URL (default: `git -C <dir> remote
     /// get-url origin`). Injected so tests need no real repos.
     let gitRemote: @Sendable (String) async -> String?
@@ -58,6 +67,7 @@ public struct BackfillScanner: Sendable {
         codexSessionsDir: URL? = nil,
         grokSessionsDir: URL? = nil,
         cursorChatsDir: URL? = nil,
+        openCodeDatabaseURL: URL? = nil,
         runner: any ShellRunner = ProcessShellRunner(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -70,6 +80,8 @@ public struct BackfillScanner: Sendable {
             .appendingPathComponent(".grok/sessions", isDirectory: true)
         self.cursorChatsDir = cursorChatsDir ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cursor/chats", isDirectory: true)
+        self.openCodeDatabaseURL = openCodeDatabaseURL ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/opencode/opencode.db")
         self.gitRemote = { dir in
             (try? await runner.run(args: ["git", "-C", dir, "remote", "get-url", "origin"],
                                    env: [:], cwd: nil))?
@@ -79,16 +91,18 @@ public struct BackfillScanner: Sendable {
     }
 
     /// Test seam: inject the git-remote reader directly. `codexSessionsDir` /
-    /// `grokSessionsDir` / `cursorChatsDir` default to nonexistent paths so a test
-    /// that only stages Claude transcripts stays hermetic (it never accidentally
-    /// scans a dev machine's real `~/.codex/sessions`, `~/.grok/sessions`, or
-    /// `~/.cursor/chats`); a Codex/Grok/Cursor test passes an explicit temp dir.
+    /// `grokSessionsDir` / `cursorChatsDir` / `openCodeDatabaseURL` default to
+    /// nonexistent paths so a test that only stages Claude transcripts stays hermetic
+    /// (it never accidentally scans a dev machine's real `~/.codex/sessions`,
+    /// `~/.grok/sessions`, `~/.cursor/chats`, or `~/.local/share/opencode/opencode.db`);
+    /// a Codex/Grok/Cursor/OpenCode test passes an explicit temp path.
     init(
         devRoot: String,
         projectsDir: URL,
         codexSessionsDir: URL? = nil,
         grokSessionsDir: URL? = nil,
         cursorChatsDir: URL? = nil,
+        openCodeDatabaseURL: URL? = nil,
         gitRemote: @escaping @Sendable (String) async -> String?,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -100,11 +114,14 @@ public struct BackfillScanner: Sendable {
             ?? projectsDir.appendingPathComponent("__no_grok_sessions__", isDirectory: true)
         self.cursorChatsDir = cursorChatsDir
             ?? projectsDir.appendingPathComponent("__no_cursor_chats__", isDirectory: true)
+        self.openCodeDatabaseURL = openCodeDatabaseURL
+            ?? projectsDir.appendingPathComponent("__no_opencode_db__/opencode.db")
         self.gitRemote = gitRemote
         self.now = now
     }
 
-    /// Reconcile every on-disk transcript (Claude + Codex + Grok + Cursor) against
+    /// Reconcile every on-disk transcript (Claude + Codex + Grok + Cursor + OpenCode)
+    /// against
     /// the ledger and return the reconstructed rows, newest first.
     public func scan(ledger: LogSyncLedger) async -> [BackfillSession] {
         let remotes = await resolveRemotes()
@@ -135,6 +152,13 @@ public struct BackfillScanner: Sendable {
         for file in cursorStoreFiles() {
             guard let s = reconstructCursor(
                 file: file, remotesByRepo: remotes,
+                knownRepoNames: knownRepoNames, ledger: ledger)
+            else { continue }
+            sessions.append(s)
+        }
+        for session in openCodeSessions() {
+            guard let s = reconstructOpenCode(
+                session: session, remotesByRepo: remotes,
                 knownRepoNames: knownRepoNames, ledger: ledger)
             else { continue }
             sessions.append(s)
@@ -221,18 +245,45 @@ public struct BackfillScanner: Sendable {
             remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
     }
 
+    /// Reconstruct one OpenCode session from its `opencode.db` row (CROW-1096). The
+    /// cwd is the session's recorded `directory` and the uid is the session id;
+    /// OpenCode records no git branch, so `gitBranch` is `nil` and the ticket is
+    /// parsed from the worktree name alone. Child/subagent sessions (`parentID`) are
+    /// skipped by the enumerator, so every row reaching here is top-level. The shared
+    /// `filePath` is the database itself, and the row's own `time_updated` /
+    /// `time_created` supplies the modified date (the whole-DB mtime would be wrong
+    /// per session).
+    func reconstructOpenCode(
+        session: OpenCodeStoreSession, remotesByRepo: [String: RepoRemote],
+        knownRepoNames: [String], ledger: LogSyncLedger
+    ) -> BackfillSession? {
+        guard !session.id.isEmpty else { return nil }
+        let mtime = ((session.updatedMs ?? session.createdMs) ?? 0) / 1000
+        return assemble(
+            uid: session.id, file: openCodeDatabaseURL,
+            slug: session.title ?? session.id,
+            harness: .opencode, cwd: session.cwd, gitBranch: nil,
+            remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger,
+            mtimeOverride: mtime, sizeOverride: 0)
+    }
+
     /// Shared reconstruction: given a harness's already-extracted
     /// `(uid, cwd, gitBranch)`, fill in the workspace/repo/ticket the same way for
     /// every harness (the derivation is pure `cwd`/branch math — see
     /// `BackfillReconstructor`).
+    ///
+    /// `mtimeOverride` / `sizeOverride` let a harness whose sessions share one file
+    /// (OpenCode's `opencode.db`) supply per-session values instead of the file's own
+    /// mtime/size, which would be identical across every session in the database.
     func assemble(
         uid: String, file: URL, slug: String, harness: LogSyncHarness,
         cwd: String?, gitBranch: String?,
-        remotesByRepo: [String: RepoRemote], knownRepoNames: [String], ledger: LogSyncLedger
+        remotesByRepo: [String: RepoRemote], knownRepoNames: [String], ledger: LogSyncLedger,
+        mtimeOverride: Double? = nil, sizeOverride: Int? = nil
     ) -> BackfillSession? {
         let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let mtime = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
-        let size = values?.fileSize ?? 0
+        let mtime = mtimeOverride ?? values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let size = sizeOverride ?? values?.fileSize ?? 0
 
         var session = BackfillSession(
             claudeSessionUID: uid, filePath: file.path, slug: slug, harness: harness,
@@ -369,6 +420,14 @@ public struct BackfillScanner: Sendable {
             }
         }
         return out
+    }
+
+    /// The OpenCode session rows in `opencode.db`, minus child/subagent sessions —
+    /// the same set the live collector reassembles, so scan and collector agree
+    /// (CROW-1096). Empty when the database is absent (e.g. no OpenCode installed, or
+    /// on Linux where `OpenCodeStore` has no SQLite backing).
+    func openCodeSessions() -> [OpenCodeStoreSession] {
+        OpenCodeStore.sessions(databasePath: openCodeDatabaseURL.path).filter { !$0.isChild }
     }
 
     /// Build a `repoName → RepoRemote` map from the live clones under the dev

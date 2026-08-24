@@ -101,23 +101,26 @@ unbounded.
 
 ## Scope
 
-- **Claude Code, Codex, Grok Build, and Cursor** — the harnesses whose transcripts
-  can be reliably attributed to a worktree (CROW-1089 / CROW-1098 / CROW-1095).
-  Claude and Grok partition their logs by working directory (Claude slugifies the
-  path; Grok URL-encodes it into the directory name,
+- **Claude Code, Codex, Grok Build, Cursor, and OpenCode** — the harnesses whose
+  transcripts can be reliably attributed to a worktree (CROW-1089 / CROW-1098 /
+  CROW-1095 / CROW-1096). Claude and Grok partition their logs by working directory
+  (Claude slugifies the path; Grok URL-encodes it into the directory name,
   `~/.grok/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`, so the scan
   recovers the cwd by decoding the directory name). Codex pools its
   `~/.codex/sessions/**/rollout-*.jsonl` globally but records the real `cwd` in
   each rollout's first-line `session_meta`; Cursor pools its
   `~/.cursor/chats/<id>/<sub>/store.db` globally but records the `cwd` in the
-  sibling `meta.json`. All make historical reconstruction reliable because the
+  sibling `meta.json`; OpenCode (1.17.10+) keeps every session in the
+  `~/.local/share/opencode/opencode.db` SQLite store, each `session` row recording
+  the `directory` it ran in. All make historical reconstruction reliable because the
   authoritative `cwd` is recoverable, not a lossy directory name. The scan stays
   disk- and git-only — for Cursor the uid is the `<subId>` directory name and the
   cwd a tiny sibling JSON read, so the `store.db` is opened only at upload time
-  (where `CursorStore` extracts the ordered messages). Other harnesses follow as
-  their `logSources` land (see
+  (where `CursorStore` extracts the ordered messages); OpenCode records no git
+  branch, so its ticket is parsed from the worktree name alone, its shared
+  `filePath` is the database (one session reassembled by id at upload), and
+  child/subagent OpenCode sessions are excluded (they belong to a parent). Other
+  harnesses follow as their `logSources` land (see
   [session-log-collector.md](session-log-collector.md), and
   [harness-transcript-locations.md](harness-transcript-locations.md) for the
   verified per-harness on-disk locations).
-- OpenCode (multi-file object store) still needs a normalizer for its on-disk
-  shape before its transcripts can be backfilled.

@@ -51,7 +51,7 @@ CROW-1090. "cwd-attributable?" is the wiring test above.
 | Claude Code | `claude` | ✅ | `~/.claude/projects/<slug>/` (slug = worktree path, non-alnum → `-`) | `<uuid>.jsonl` | NDJSON | ✅ path-partitioned | **Wired** (CROW-1089) |
 | Codex | `codex` | ✅ | `~/.codex/sessions/<YYYY>/<MM>/<DD>/` | `rollout-<ts>-<uuid>.jsonl` | NDJSON | ✅ content-filtered (`session_meta.payload.cwd`) | **Wired** (CROW-1092) |
 | Cursor | `cursor-agent` | ✅ | `~/.cursor/chats/<chatId>/<subId>/` | `store.db` (+ sibling `meta.json`) | SQLite (content-addressed blobs, ordered by a root protobuf) | ✅ content-filtered (cwd in sibling `meta.json`) | **Wired** (CROW-1095) |
-| OpenCode | `opencode` | ✅ | `~/.local/share/opencode/storage/{project,session,message,part}/` | scattered `message`/`part` records | multi-file object store | ✅ cwd in `project/<id>.json.worktree` | Deferred — needs reassembler · [#1096](https://github.com/corveil/crow/issues/1096) |
+| OpenCode | `opencode` | ✅ | `~/.local/share/opencode/opencode.db` (SQLite; 1.17+ — the pre-1.17 `storage/{project,session,message,part}/` JSON tree is legacy, migrated in on upgrade) | relational `session`/`message`/`part` rows | SQLite | ✅ content-filtered (`session.directory` column) | **Wired** (CROW-1096) |
 | Grok Build | `grok` | ✅ | `<$GROK_HOME or ~/.grok>/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Wired** (CROW-1098) |
 | Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ❌ no cwd in transcript (only off-transcript: per-conv SQLite DB / hooks / latest-only `cache/last_conversations.json`) | Deferred — durable log confirmed, **not** cwd-attributable · [#1097](https://github.com/corveil/crow/issues/1097) |
 | Muse Code | `muse` | ✅ | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/` | `session.jsonl` | NDJSON | ⚠️ likely content-filtered — cwd reported at `runtime.session.metadata.workspace_root` (line 1, 3rd-party parse), unverified live | Deferred — durable store found (Meta docs); verify `workspace_root`, then wire · [#1099](https://github.com/corveil/crow/issues/1099) |
@@ -181,10 +181,16 @@ not blocked on discovery.
   on the 2026-08-21 capture — the encode is a version-pinned re-check target (see
   [agent-harness-matrix.md](agent-harness-matrix.md)); a drifted encoding silently
   collects nothing rather than misattributing.
-- **[#1095](https://github.com/corveil/crow/issues/1095) (Cursor)** /
-  **[#1096](https://github.com/corveil/crow/issues/1096) (OpenCode)** — storage
-  already known (table above); these are "build the normalizer" tickets, not
+- **[#1095](https://github.com/corveil/crow/issues/1095) (Cursor)** — storage
+  already known (table above); this is a "build the normalizer" ticket, not
   research.
+- **[#1096](https://github.com/corveil/crow/issues/1096) (OpenCode)** — **wired.**
+  The JSON `storage/{project,session,message,part}/` object store first recorded
+  here was pre-1.17 OpenCode; 1.17+ (Crow's documented `1.17.10+` window) keeps every
+  session in the `~/.local/share/opencode/opencode.db` SQLite store (relational
+  `session`/`message`/`part`, cwd in `session.directory`), migrating the old JSON
+  tree in on upgrade. The collector/backfill read the database (`OpenCodeStore`),
+  selecting cwd-matched top-level sessions and reassembling their rows into NDJSON.
 - **[#1097](https://github.com/corveil/crow/issues/1097) (Antigravity)** —
   **resolved.** The `agy` CLI *does* write a durable NDJSON transcript at
   `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/transcript_full.jsonl`,

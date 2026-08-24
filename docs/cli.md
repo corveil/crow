@@ -1116,7 +1116,7 @@ crow logsync <get|set>
 
 The session-log collector uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, reusing that workspace's AI gateway for the destination and credential (no AWS credentials are stored on this machine). Opt a workspace in with `crow workspace edit --workspace NAME --upload-session-logs true` (or the Settings → Workspaces checkbox); it uploads once it also has a gateway.
 
-These verbs tune only global behavior — ledger retention, the quiet period before a transcript is captured, and the per-upload size cap. Uploads are best-effort and never block or fail a session. Claude Code, Codex, Grok Build, and Cursor transcripts are collected today (CROW-1089 / CROW-1098 / CROW-1095); other harnesses are wired as their on-disk log locations are confirmed.
+These verbs tune only global behavior — ledger retention, the quiet period before a transcript is captured, and the per-upload size cap. Uploads are best-effort and never block or fail a session. Claude Code, Codex, Grok Build, Cursor, and OpenCode transcripts are collected today (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096); other harnesses are wired as their on-disk log locations are confirmed.
 
 Subcommands: [`get`](#crow-logsync-get), [`set`](#crow-logsync-set).
 

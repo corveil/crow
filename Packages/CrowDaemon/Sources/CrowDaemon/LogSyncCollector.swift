@@ -108,12 +108,15 @@ struct LogSyncCollector {
             guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
 
             // Where does this harness write its logs? Empty for harnesses whose
+            // Where does this harness write its logs? Empty for harnesses whose
             // on-disk logs are not yet wired (everything but Claude, Codex, Grok,
-            // and Cursor today — CROW-1089 / CROW-1098 / CROW-1095). A
-            // globally-stored harness's source carries a `cwdFilter` that
-            // `resolveFiles` applies to attribute one worktree's sessions out of the
-            // shared tree (Codex/Cursor); Claude and Grok partition by worktree
-            // directly.
+            // Cursor, and OpenCode today — CROW-1089 / CROW-1098 / CROW-1095 /
+            // CROW-1096). A globally-stored NDJSON/blob harness's source carries a
+            // `cwdFilter` that `resolveFiles` applies to attribute one worktree's
+            // sessions out of the shared tree (Codex/Cursor); Claude and Grok
+            // partition by worktree directly; an OpenCode source (`.openCodeStore`) is
+            // the single `opencode.db` file, cwd-attributed by row inside
+            // `OpenCodeStore` rather than by dropping files.
             guard let agent = AgentRegistry.shared.agent(for: session.agentKind) else { continue }
             let sources = agent.logSources(worktreePath: worktree.worktreePath, harnessSessionID: nil)
             guard !sources.isEmpty else { continue }
@@ -121,26 +124,49 @@ struct LogSyncCollector {
             let files = sources.flatMap { Self.resolveFiles($0) }
             guard !files.isEmpty else { continue }
 
+            // The source format and (for OpenCode) the worktree cwd drive both the
+            // quiescence signal and the transcript build below.
+            let format = sources.first?.format ?? .jsonl
+            let openCodeCwd = sources.first?.cwdFilter ?? worktree.worktreePath
+
             // Only upload a quiescent transcript: a session still being written
             // to can grow, and the server's write-once 409 forbids replacing it.
-            let newest = Self.newestModification(files)
+            // File-per-session harnesses (Claude/Codex/Grok) use the newest file
+            // mtime. OpenCode's one shared WAL database is different: a WAL commit
+            // doesn't bump the main `.db` file's mtime, and that mtime reflects every
+            // worktree's activity — so key on the newest write time of *this*
+            // worktree's own top-level sessions instead (`OpenCodeStore.newestActivity`,
+            // which a SQLite read sees even from the WAL).
+            let newest = format == .openCodeStore
+                ? OpenCodeStore.newestActivity(databaseFiles: files, cwd: openCodeCwd)
+                : Self.newestModification(files)
             let terminal = session.status == .completed || session.status == .archived
             if !terminal {
                 if let newest, nowDate.timeIntervalSince(newest) < quietPeriod { continue }
             }
 
-            // Pick the single format for the artifact stamp. Claude and Grok
-            // sources are `.jsonl`; Codex sources are `.logDir` (per-session
-            // rollouts concatenated); Cursor sources are `.sqlite` (`CursorStore`
-            // extracts the messages). A mixed set would be unusual — take the first
-            // source's format.
-            let format = sources.first?.format ?? .jsonl
-            guard let transcript = TranscriptNormalizer.normalize(
-                files: files, format: format, maxBytes: max(1, config.maxUploadBytes))
-            else { continue }
+            // Produce the NDJSON transcript. Claude and Grok sources are `.jsonl`;
+            // Codex sources are `.logDir` (per-session rollouts concatenated); Cursor
+            // sources are `.sqlite` (`CursorStore` extracts the messages) — all go
+            // through the shared file-concatenation normalizer. OpenCode's
+            // `.openCodeStore` is `opencode.db` (SQLite): its rows are selected by the
+            // worktree cwd and reassembled by `OpenCodeStore` (stamped `.logDir` on
+            // upload — see `artifactStamp`), a selector `normalize(files:)` can't
+            // express.
+            let cap = max(1, config.maxUploadBytes)
+            let transcript: NormalizedTranscript?
+            if format == .openCodeStore {
+                transcript = OpenCodeStore.normalizeSessions(databaseFiles: files, cwd: openCodeCwd, maxBytes: cap)
+            } else {
+                transcript = TranscriptNormalizer.normalize(files: files, format: format, maxBytes: cap)
+            }
+            guard let transcript else { continue }
 
             let sha = Self.sha256Hex(transcript.data)
-            let agentSessionID = Self.agentSessionID(from: files)
+            // OpenCode's single `opencode.db` backs many sessions, so its filename
+            // stem is not a harness session id — pass nil (the transcript may hold
+            // several cwd-matched sessions anyway).
+            let agentSessionID = format == .openCodeStore ? nil : Self.agentSessionID(from: files)
             let metadata = LogSyncSessionMetadata(
                 name: session.name,
                 status: session.status.rawValue,
@@ -153,7 +179,7 @@ struct LogSyncCollector {
             let result = await uploader.upload(
                 baseURL: baseURL, apiKey: apiKey,
                 sessionUID: session.id.uuidString,
-                harness: harness, kind: kind, format: format,
+                harness: harness, kind: kind, format: format.artifactStamp,
                 transcript: transcript, metadata: metadata, agentSessionID: agentSessionID)
 
             let entry = Self.ledgerEntry(for: result, sha: sha, size: transcript.data.count, at: nowEpoch)
@@ -291,9 +317,11 @@ struct LogSyncCollector {
     /// Keep only files whose recorded `cwd` (read from the head for NDJSON via
     /// `AgentLogCwdReader`, or the sibling `meta.json` for a Cursor `.sqlite` store
     /// via `CursorStore`) equals `cwdFilter`, path-standardized on both sides.
-    /// `nil` filter is a no-op (Claude, whose slug directory is already the
-    /// filter). A file with no readable cwd never matches — an unattributable
-    /// transcript is dropped, not guessed (CROW-1089 / CROW-1095).
+    /// `nil` filter is a no-op (Claude, whose slug directory is already the filter;
+    /// and OpenCode, whose single `opencode.db` is a `.file` source cwd-attributed by
+    /// row inside `OpenCodeStore`, so it never reaches this directory-only path). A
+    /// file with no readable cwd never matches — an unattributable transcript is
+    /// dropped, not guessed (CROW-1089 / CROW-1095).
     static func applyingCwdFilter(
         _ files: [URL], _ cwdFilter: String?, format: AgentLogFormat = .logDir
     ) -> [URL] {
@@ -314,6 +342,9 @@ struct LogSyncCollector {
         switch format {
         case .sqlite: return CursorStore.recordedCwd(forStoreDB: url)
         case .jsonl, .logDir: return AgentLogCwdReader.read(url)
+        // OpenCode's `.openCodeStore` is a `.file` source cwd-attributed by row
+        // inside `OpenCodeStore`, so it never reaches this directory-file probe.
+        case .openCodeStore: return nil
         }
     }
 

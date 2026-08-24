@@ -332,6 +332,91 @@ import Testing
         #expect(s.confidence == .low)
     }
 
+    // MARK: OpenCode harness (CROW-1096)
+
+#if canImport(SQLite3)
+    /// Build an `opencode.db` with one session row (`directory` = cwd; `parentID`
+    /// makes it a child) at `dbURL`.
+    private func writeOpenCodeSession(
+        at dbURL: URL, id: String, cwd: String, parentID: String? = nil
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: dbURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try OpenCodeDBFixture.write(at: dbURL.path, sessions: [(id: id, cwd: cwd, parentID: parentID)])
+    }
+
+    @Test func reconstructsOpenCodeHighConfidenceSession() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let dbURL = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("oc/opencode.db")
+        defer { try? FileManager.default.removeItem(at: dbURL.deletingLastPathComponent()) }
+
+        // A live clone so the repo → owner/repo resolves.
+        let clone = URL(fileURLWithPath: devRoot)
+            .appendingPathComponent("RadiusMethod/crow", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: clone.appendingPathComponent(".git"), withIntermediateDirectories: true)
+
+        let cwd = "\(devRoot)/RadiusMethod/crow-1096-wire-opencode-logs"
+        try FileManager.default.createDirectory(
+            at: dbURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try OpenCodeDBFixture.write(at: dbURL.path, sessions: [
+            (id: "ses_OC1", cwd: cwd, parentID: nil),
+            // A child session in the same worktree must be excluded (belongs to a parent).
+            (id: "ses_OCchild", cwd: cwd, parentID: "ses_OC1"),
+        ])
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, openCodeDatabaseURL: dbURL,
+            gitRemote: { path in
+                path.hasSuffix("/RadiusMethod/crow") ? "https://github.com/corveil/crow.git" : nil
+            })
+
+        let sessions = await scanner.scan(ledger: LogSyncLedger())
+        // Only the top-level session — the child is dropped.
+        #expect(sessions.contains { $0.claudeSessionUID == "ses_OCchild" } == false)
+        let s = try #require(sessions.first { $0.claudeSessionUID == "ses_OC1" })
+        #expect(s.harness == .opencode)
+        #expect(s.workspace == "RadiusMethod")
+        #expect(s.worktreeName == "crow-1096-wire-opencode-logs")
+        #expect(s.repoName == "crow")
+        #expect(s.ownerRepo == "corveil/crow")
+        #expect(s.ticketNumber == 1096)
+        #expect(s.confidence == .high)
+        // filePath is the shared database (every OpenCode row points at it).
+        #expect(s.filePath == dbURL.path)
+    }
+
+    @Test func openCodeLedgerStatusKeyedByOpenCodeHarness() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let dbURL = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("oc2/opencode.db")
+        defer { try? FileManager.default.removeItem(at: dbURL.deletingLastPathComponent()) }
+        try writeOpenCodeSession(at: dbURL, id: "ses_OC2", cwd: "\(devRoot)/RadiusMethod/crow-9-x")
+
+        // A Codex ledger entry for the SAME uid must NOT mark the OpenCode row
+        // uploaded — the harness slot distinguishes them.
+        var ledger = LogSyncLedger()
+        ledger.record(
+            key: LogSyncLedger.key(sessionUID: "ses_OC2", harness: .codex, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, openCodeDatabaseURL: dbURL, gitRemote: { _ in nil })
+        let s = try #require(await scanner.scan(ledger: ledger).first { $0.claudeSessionUID == "ses_OC2" })
+        #expect(s.uploadStatus == .new) // the Codex-harness entry does not apply
+
+        var ledger2 = LogSyncLedger()
+        ledger2.record(
+            key: LogSyncLedger.key(sessionUID: "ses_OC2", harness: .opencode, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+        let s2 = try #require(await scanner.scan(ledger: ledger2).first { $0.claudeSessionUID == "ses_OC2" })
+        #expect(s2.uploadStatus == .uploaded)
+    }
+#endif
+
     @Test func summaryCountsByTier() {
         let sessions = [
             BackfillSession(claudeSessionUID: "a", filePath: "", slug: "", confidence: .high, uploadStatus: .uploaded),

@@ -299,6 +299,56 @@ import CrowCore
             [.modificationDate: Date(timeIntervalSince1970: 1000)], ofItemAtPath: plain.path)
         #expect(LogSyncCollector.newestModification([plain]) == Date(timeIntervalSince1970: 1000))
     }
+    // MARK: OpenCode SQLite store (CROW-1096)
+
+    /// An `.openCodeStore` source is the single `opencode.db` file; it resolves to
+    /// that file (existence check), and cwd attribution happens by row inside
+    /// `OpenCodeStore`, not by dropping files. The `cwdFilter` is carried but not
+    /// applied at the file level.
+    @Test func resolveFilesReturnsTheOpenCodeDatabaseFile() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("opencode.db")
+        try Data([0x1, 0x2]).write(to: db)
+        let source = AgentLogSource(
+            path: db.path, selector: .file, format: .openCodeStore, cwdFilter: "/w/r-1")
+        #expect(LogSyncCollector.resolveFiles(source).map(\.lastPathComponent) == ["opencode.db"])
+        // A missing database resolves to nothing.
+        let missing = AgentLogSource(
+            path: dir.appendingPathComponent("nope.db").path, selector: .file,
+            format: .openCodeStore, cwdFilter: "/w/r-1")
+        #expect(LogSyncCollector.resolveFiles(missing).isEmpty)
+    }
+
+#if canImport(SQLite3)
+    /// End-to-end of the OpenCode read path the collector uses: build a real
+    /// `opencode.db`, then normalize by cwd exactly as `sweep` does — only the
+    /// top-level, cwd-matching session's rows appear.
+    @Test func openCodeNormalizeByCwdSelectsTopLevelMatches() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("opencode.db")
+        try OpenCodeDBFixture.write(
+            at: db.path,
+            sessions: [
+                (id: "ses_mine", cwd: "/w/repo-1096", parentID: nil),
+                (id: "ses_other", cwd: "/w/repo-999", parentID: nil),
+                (id: "ses_kid", cwd: "/w/repo-1096", parentID: "ses_mine"),
+            ],
+            messages: [
+                (id: "msg_a", sessionID: "ses_mine", created: 1, data: #"{"role":"user"}"#),
+                (id: "msg_b", sessionID: "ses_other", created: 1, data: #"{"role":"user"}"#),
+                (id: "msg_c", sessionID: "ses_kid", created: 1, data: #"{"role":"user"}"#),
+            ])
+
+        let t = try #require(OpenCodeStore.normalizeSessions(
+            databaseFiles: [db], cwd: "/w/repo-1096", maxBytes: 1 << 20))
+        let text = String(data: t.data, encoding: .utf8)!
+        #expect(text.contains("ses_mine"))
+        #expect(!text.contains("ses_other")) // different cwd
+        #expect(!text.contains("ses_kid"))   // child excluded
+    }
+#endif
 
     // MARK: Result → ledger mapping
 
