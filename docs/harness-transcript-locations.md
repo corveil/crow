@@ -52,7 +52,7 @@ CROW-1090. "cwd-attributable?" is the wiring test above.
 | OpenCode | `opencode` | ✅ | `~/.local/share/opencode/storage/{project,session,message,part}/` | scattered `message`/`part` records | multi-file object store | ✅ cwd in `project/<id>.json.worktree` | Deferred — needs reassembler · [#1096](https://github.com/corveil/crow/issues/1096) |
 | Grok Build | `grok` | ✅ | `~/.grok/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Lead found** — verify identity, then wire · [#1098](https://github.com/corveil/crow/issues/1098) |
 | Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ❌ no cwd in transcript (only off-transcript: per-conv SQLite DB / hooks / latest-only `cache/last_conversations.json`) | Deferred — durable log confirmed, **not** cwd-attributable · [#1097](https://github.com/corveil/crow/issues/1097) |
-| Muse Code | `muse` | ✅ | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/` | `session.jsonl` | NDJSON | ❌ global store, no recorded cwd (only git refs `base_commit`/`base_ref`) | Deferred — durable store found (Meta docs), not cwd-attributable · [#1099](https://github.com/corveil/crow/issues/1099) |
+| Muse Code | `muse` | ✅ | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/` | `session.jsonl` | NDJSON | ⚠️ likely content-filtered — cwd reported at `runtime.session.metadata.workspace_root` (line 1, 3rd-party parse), unverified live | Deferred — durable store found (Meta docs); verify `workspace_root`, then wire · [#1099](https://github.com/corveil/crow/issues/1099) |
 | Cowork (Claude desktop, local-agent mode) | — (desktop app) | ❌ | `~/Library/Application Support/Claude/local-agent-mode-sessions/<acct>/<install>/local_<uuid>/` | `audit.jsonl` | NDJSON | ⚠️ cwd inside JSON, no path shortcut | Out of harness scope — see below |
 | Grok Bot | — (Electron app) | ❌ | `~/Library/Application Support/Grok Bot/` | — (leveldb / server-side) | — | ❌ no durable local transcript | No collectable log — skip |
 
@@ -183,14 +183,19 @@ not blocked on discovery.
   Verified from Antigravity CLI docs + community tooling, not a live `agy` (not
   installed; Google-Sign-In/GCP-gated). Full rationale in `AntigravityAgent.logSources`.
 - **[#1099](https://github.com/corveil/crow/issues/1099) (Muse Code)** —
-  **answered (docs, not on-disk).** Muse writes a durable, global JSONL log at
+  **location answered (docs, not on-disk); attribution likely but unverified.**
+  Muse writes a durable, global JSONL log at
   `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl` (Meta dev
-  cookbook, read 2026-08-24). The format needs no transform, but the record
-  carries **no cwd** — only git refs (`base_commit`/`base_ref`), which collide
-  across sibling worktrees branched from the same commit — so a globally-pooled
-  session can't be attributed to a worktree without guessing. Stays on the `[]`
-  default. Not captured live: Muse is Meta-auth-gated and wasn't installable
-  during the spike, so re-confirm a recorded cwd on a real install before wiring.
+  cookbook, read 2026-08-24) — no transform needed. The cookbook documents no
+  cwd field (its jq prints only event records, whose git refs
+  `base_commit`/`base_ref` collide across worktrees), but a first-hand
+  third-party parser of Muse 0.1.0 logs (superbasedapp/observer,
+  `internal/adapter/muse/doc.go`, 2026-08-06) reports the absolute cwd at
+  `runtime.session.metadata` → `payload.record.workspace_root` on line 1 — a
+  metadata record the cookbook never printed. So a usable cwd very likely
+  exists, making Muse content-filtered (Codex-style). Stays on the `[]` default
+  only until verified: Muse is Meta-auth-gated and wasn't installable during the
+  spike, so confirm `workspace_root` against a real `session.jsonl`, then wire.
 
 ## Caveats
 

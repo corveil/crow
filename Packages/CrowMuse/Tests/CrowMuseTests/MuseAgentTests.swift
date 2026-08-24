@@ -207,12 +207,13 @@ struct MuseAgentTests {
 
     @Test func logSourcesStayEmptyUntilCwdIsAttributable() {
         // Muse writes a durable, global JSONL session log
-        // (`~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`),
-        // but the record carries no working-directory field — only git refs — so
-        // a globally-pooled session can't be attributed to a worktree without
-        // guessing. Per the collector's no-guess rule it stays on the `[]`
-        // default (see the note in MuseAgent). Pin that until a cwd is verified,
-        // for both the broad (nil) and known-session-id shapes.
+        // (`~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`).
+        // The cookbook documents no cwd field and its lifecycle events carry only
+        // git refs (insufficient), but a first-hand third-party parser reports a
+        // likely cwd at `runtime.session.metadata.workspace_root` — unverified by
+        // us on a real install (Meta-auth-gated). Until that's confirmed,
+        // attribution can't be trusted, so it stays on the `[]` default (see the
+        // note in MuseAgent). Pin both the broad (nil) and known-session-id shapes.
         #expect(agent.logSources(worktreePath: "/tmp/wt", harnessSessionID: nil).isEmpty)
         #expect(agent.logSources(worktreePath: "/tmp/wt", harnessSessionID: "abc-123").isEmpty)
     }
