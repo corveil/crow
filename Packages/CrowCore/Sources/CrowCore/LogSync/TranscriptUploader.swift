@@ -94,7 +94,9 @@ public struct TranscriptUploader: Sendable {
         }
 
         var items: [URLQueryItem] = [
-            URLQueryItem(name: "harness", value: harness.rawValue),
+            // `wireValue`, not `rawValue`: an internal-only harness (`.grok`) sends
+            // `unknown` so the server's CHECK accepts it (corveil#2426).
+            URLQueryItem(name: "harness", value: harness.wireValue),
             URLQueryItem(name: "kind", value: kind.rawValue),
             URLQueryItem(name: "format", value: format.rawValue),
             URLQueryItem(name: "truncated", value: transcript.truncated ? "true" : "false"),

@@ -50,7 +50,7 @@ CROW-1090. "cwd-attributable?" is the wiring test above.
 | Codex | `codex` | ✅ | `~/.codex/sessions/<YYYY>/<MM>/<DD>/` | `rollout-<ts>-<uuid>.jsonl` | NDJSON | ✅ content-filtered (`session_meta.payload.cwd`) | **Wired** (CROW-1092) |
 | Cursor | `cursor-agent` | ✅ | `~/.cursor/chats/<id>/<sub>/` | `store.db` (+ sibling `meta.json`) | SQLite (opaque blobs) | ✅ cwd in `meta.json` | Deferred — needs blob extractor · [#1095](https://github.com/corveil/crow/issues/1095) |
 | OpenCode | `opencode` | ✅ | `~/.local/share/opencode/storage/{project,session,message,part}/` | scattered `message`/`part` records | multi-file object store | ✅ cwd in `project/<id>.json.worktree` | Deferred — needs reassembler · [#1096](https://github.com/corveil/crow/issues/1096) |
-| Grok Build | `grok` | ✅ | `~/.grok/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Lead found** — verify identity, then wire · [#1098](https://github.com/corveil/crow/issues/1098) |
+| Grok Build | `grok` | ✅ | `<$GROK_HOME or ~/.grok>/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Wired** (CROW-1098) |
 | Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ❌ no cwd in transcript (only off-transcript: per-conv SQLite DB / hooks / latest-only `cache/last_conversations.json`) | Deferred — durable log confirmed, **not** cwd-attributable · [#1097](https://github.com/corveil/crow/issues/1097) |
 | Muse Code | `muse` | ✅ | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/` | `session.jsonl` | NDJSON | ⚠️ likely content-filtered — cwd reported at `runtime.session.metadata.workspace_root` (line 1, 3rd-party parse), unverified live | Deferred — durable store found (Meta docs); verify `workspace_root`, then wire · [#1099](https://github.com/corveil/crow/issues/1099) |
 | Cowork (Claude desktop, local-agent mode) | — (desktop app) | ❌ | `~/Library/Application Support/Claude/local-agent-mode-sessions/<acct>/<install>/local_<uuid>/` | `audit.jsonl` | NDJSON | ⚠️ cwd inside JSON, no path shortcut | Out of harness scope — see below |
@@ -69,7 +69,7 @@ Captured live on **2026-08-21** (macOS, a single dev machine — the URL-encoded
 Grok paths were rooted at `/Users/danny/…`) and **re-verified 2026-08-24** on a
 second machine. Drift from the re-verification is called out per entry.
 
-### 1. Grok Build (`grok`) — path-partitioned, low-friction, wire first
+### 1. Grok Build (`grok`) — path-partitioned, low-friction (wired, CROW-1098)
 
 - **Store:** `~/.grok/sessions/<url-encoded-absolute-cwd>/`
   - The directory name is the absolute worktree path URL-encoded — `/` → `%2F`
@@ -84,26 +84,33 @@ second machine. Drift from the re-verification is called out per entry.
   - siblings: `events.jsonl`, `hunk_records.jsonl`, `prompt_context.json`.
   - global/index: `~/.grok/logs/unified.jsonl`, `~/.grok/sessions/session_search.sqlite`.
   - **62** `chat_history.jsonl` files across worktrees on the capture machine.
-- **Attribution:** direct (path-partitioned). `logSources` would URL-encode the
-  worktree path and point at `~/.grok/sessions/<enc>/*/chat_history.jsonl`.
+- **Attribution:** direct (path-partitioned). `logSources` URL-encodes the
+  worktree path (`GrokSessionDir.encode`, `/`→`%2F` over the RFC 3986 unreserved
+  set) and points a recursive `.jsonl` source at
+  `<$GROK_HOME or ~/.grok>/sessions/<enc>/` filtered to `chat_history.jsonl`.
   Already NDJSON → `AgentLogFormat.jsonl`, **no transform** — the single easiest
-  non-Claude harness to add.
-- ⚠️ **Identity caveat — confirm before wiring.** `~/.grok/` is grok-build's own
-  config home (Crow already treats `~/.grok/bin/agent` and
+  non-Claude harness to add. `$GROK_HOME` is honored via `GrokHome` (shared with
+  the trust-seed path), and the backfill scanner reverses the encode
+  (`GrokSessionDir.decode`) to recover each session's cwd.
+- ✅ **Identity caveat — resolved by the launch-time probe.** `~/.grok/` is
+  grok-build's own config home (Crow already treats `~/.grok/bin/agent` and
   `~/.grok/trusted_folders.toml` as grok-build's — see
   [agent-harness-matrix.md](agent-harness-matrix.md)), so `~/.grok/sessions/` is
-  almost certainly grok-build's store. But the `grok` binary **collides** with
-  the community `superagent-ai/grok-cli`, which also installs `grok`
-  (`GrokAgent.verifyBinaryIdentity`, CROW-911). #1098's spike must confirm the
-  store is written by xAI's grok-build — not the community CLI — before wiring, so
-  the collector never uploads a foreign tool's transcript under the `grok`
-  harness.
+  grok-build's store. The `grok` binary **collides** with the community
+  `superagent-ai/grok-cli`, but Crow only registers (and so only launches, and
+  only assigns `agentKind == .grok` to) a `grok` that passes
+  `GrokAgent.verifyBinaryIdentity` (CROW-911) — a foreign `grok` is shown
+  disabled. The collector runs `logSources` only for `.grok` sessions, so it
+  never uploads a community-CLI transcript under the `grok` harness.
 - ⚠️ **Not re-verified on the second machine (2026-08-24):** grok-build is not
   installed there, so `~/.grok/` is absent. The layout above stands on the
   2026-08-21 capture only; #1098 re-confirms it live.
-- **Adapter state:** `logSources` intentionally not overridden —
-  `Packages/CrowGrok/Sources/CrowGrok/GrokAgent.swift` (the recorded note). This
-  finding is the lead that retires that note once #1098 verifies it.
+- **Adapter state:** `logSources` overridden in
+  `Packages/CrowGrok/Sources/CrowGrok/GrokAgent.swift` (CROW-1098) — this finding
+  was the lead that retired the earlier "not overridden" note. The dir-name
+  encode/decode lives in `GrokSessionDir` (CrowCore), the `$GROK_HOME` resolution
+  in `GrokHome` (CrowGrok), and the backfill reconstruction in
+  `BackfillScanner.reconstructGrok`.
 
 ### 2. Cowork (Claude desktop app, local-agent mode) — real transcripts, ⚠️ not cwd-partitioned
 
@@ -162,12 +169,16 @@ not blocked on discovery.
 
 ## Per-ticket disposition
 
-- **[#1098](https://github.com/corveil/crow/issues/1098) (Grok Build)** — the
-  `~/.grok/sessions/<urlenc-cwd>/<uuid>/chat_history.jsonl` lead above is the path
-  its spike went looking for. Confirm binary identity (grok-build, not the
-  colliding community `grok-cli`) and re-confirm the layout on a machine with
-  grok-build installed, then wire it as a path-partitioned `.jsonl` source with a
-  URL-encode path helper. No new normalizer needed.
+- **[#1098](https://github.com/corveil/crow/issues/1098) (Grok Build)** —
+  **done.** Wired as a path-partitioned `.jsonl` source over
+  `<$GROK_HOME or ~/.grok>/sessions/<urlenc-cwd>/<uuid>/chat_history.jsonl` with a
+  dedicated URL-encode helper (`GrokSessionDir`), live + backfill; no new
+  normalizer. Binary identity is guaranteed by the launch-time probe (only a
+  verified grok-build gets `agentKind == .grok`). Grok's layout could not be
+  re-confirmed on the wiring machine (grok-build not installed there), so it rests
+  on the 2026-08-21 capture — the encode is a version-pinned re-check target (see
+  [agent-harness-matrix.md](agent-harness-matrix.md)); a drifted encoding silently
+  collects nothing rather than misattributing.
 - **[#1095](https://github.com/corveil/crow/issues/1095) (Cursor)** /
   **[#1096](https://github.com/corveil/crow/issues/1096) (OpenCode)** — storage
   already known (table above); these are "build the normalizer" tickets, not

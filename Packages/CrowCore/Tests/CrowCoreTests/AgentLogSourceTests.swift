@@ -53,21 +53,38 @@ import CrowCore
         #expect(LogSyncHarness(agentKind: .cursor) == .cursor)
         #expect(LogSyncHarness(agentKind: .codex) == .codex)
         #expect(LogSyncHarness(agentKind: .openCode) == .opencode)
+        // Grok is internally first-class (CROW-1098), even though it collapses to
+        // `unknown` on the wire.
+        #expect(LogSyncHarness(agentKind: .grok) == .grok)
     }
 
     @Test func mapsEverythingElseToUnknown() {
-        #expect(LogSyncHarness(agentKind: .grok) == .unknown)
         #expect(LogSyncHarness(agentKind: .antigravity) == .unknown)
         #expect(LogSyncHarness(agentKind: .muse) == .unknown)
     }
 
     @Test func rawValuesMatchServerContract() {
-        // These strings are the DB CHECK on crow_session_artifacts.harness.
+        // The server-enumerated harnesses: rawValue == wireValue (the DB CHECK on
+        // crow_session_artifacts.harness).
         #expect(LogSyncHarness.claude.rawValue == "claude")
         #expect(LogSyncHarness.cursor.rawValue == "cursor")
         #expect(LogSyncHarness.codex.rawValue == "codex")
         #expect(LogSyncHarness.opencode.rawValue == "opencode")
         #expect(LogSyncHarness.unknown.rawValue == "unknown")
         #expect(LogSyncArtifactKind.sessionTranscript.rawValue == "session_transcript")
+    }
+
+    @Test func grokIsInternalButCollapsesToUnknownOnTheWire() {
+        // Internally distinct (drives the ledger slot / backfill display /
+        // format+agentKind), but the server doesn't enumerate `grok`, so the wire
+        // value is `unknown` — the upload is accepted, just not harness-typed.
+        #expect(LogSyncHarness.grok.rawValue == "grok")
+        #expect(LogSyncHarness.grok.wireValue == "unknown")
+    }
+
+    @Test func serverEnumeratedHarnessesWireAsThemselves() {
+        for h in [LogSyncHarness.claude, .cursor, .codex, .opencode, .unknown] {
+            #expect(h.wireValue == h.rawValue)
+        }
     }
 }

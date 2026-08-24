@@ -235,7 +235,37 @@ public struct GrokAgent: CodingAgent {
             runner: probeRunner)
     }
 
-    // `logSources` is intentionally NOT overridden (CROW-1089): Grok Build has no
-    // confirmed durable, cwd-attributable session-log location on disk, so it
-    // inherits the `[]` default. Wire it once a transcript path is verified.
+    /// Grok Build writes one NDJSON transcript per session under a per-worktree
+    /// directory named by URL-encoding the working directory:
+    /// `<grokHome>/sessions/<url-encoded-cwd>/<session-uuid>/chat_history.jsonl`,
+    /// where `grokHome` honors `$GROK_HOME` (`GrokHome`, the same tree the
+    /// trust-seed path reads) and the directory name percent-encodes the absolute
+    /// worktree path — `/` → `%2F`, dashes preserved (`GrokSessionDir`, verified
+    /// against a live tree in #1090).
+    ///
+    /// That encoded directory makes Grok — like Claude — a harness whose durable
+    /// logs are **partitioned by working directory**, so a worktree path maps
+    /// directly to its transcripts with no per-file `cwd` head-read: attribution is
+    /// exact by construction, and a directory that doesn't decode to this worktree
+    /// simply isn't looked at. The source is therefore a plain `.jsonl` directory
+    /// (no `cwdFilter`), recursive to reach the `<session-uuid>/` subdirectories,
+    /// and filtered to `chat_history.jsonl` so the sibling `events.jsonl` /
+    /// `hunk_records.jsonl` / cwd-level `prompt_history.jsonl` are left out. Grok
+    /// already writes NDJSON, so no transform is needed.
+    ///
+    /// `harnessSessionID` is unused: the Grok session UUID names a *subdirectory*,
+    /// not the file (the filename is always `chat_history.jsonl`), and the
+    /// `chat_history` prefix already selects exactly this worktree's transcripts —
+    /// so the source is the same whether or not an id is known, mirroring Codex.
+    /// (Consequence: when a worktree holds a single Grok session, the live
+    /// collector's `agent_session_id` sidecar hint is the filename stem
+    /// `chat_history`; the backfill path, which needs the real UUID for
+    /// idempotency, recovers it from the parent directory instead.)
+    public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
+        let sessionDir = (GrokHome.sessionsDir() as NSString)
+            .appendingPathComponent(GrokSessionDir.encode(worktreePath))
+        return [.directory(
+            sessionDir, format: .jsonl,
+            fileExtension: "jsonl", fileNamePrefix: "chat_history", recursive: true)]
+    }
 }
