@@ -88,8 +88,8 @@ public struct BackfillScanner: Sendable {
         self.now = now
     }
 
-    /// Reconcile every on-disk transcript (Claude + Codex) against the ledger and
-    /// return the reconstructed rows, newest first.
+    /// Reconcile every on-disk transcript (Claude + Codex + Grok) against the
+    /// ledger and return the reconstructed rows, newest first.
     public func scan(ledger: LogSyncLedger) async -> [BackfillSession] {
         let remotes = await resolveRemotes()
         let knownRepoNames = Array(Set(remotes.values.map { $0.repo }))

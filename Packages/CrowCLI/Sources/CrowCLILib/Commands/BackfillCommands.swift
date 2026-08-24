@@ -82,7 +82,7 @@ public struct BackfillUpload: ParsableCommand {
 
     @Option(
         name: .customLong("session"),
-        help: "A session UID to upload (repeatable; Claude or Codex — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence.")
+        help: "A session UID to upload (repeatable; Claude Code, Codex, or Grok Build — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence.")
     var sessions: [String] = []
 
     @Flag(name: .customLong("all-high-confidence"), help: "Upload every not-yet-uploaded high-confidence session in this workspace")
