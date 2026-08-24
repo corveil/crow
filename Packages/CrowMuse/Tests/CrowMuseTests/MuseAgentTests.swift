@@ -203,6 +203,21 @@ struct MuseAgentTests {
         _ = agent.findBinary()
     }
 
+    // MARK: - logSources (CROW-1099)
+
+    @Test func logSourcesStayEmptyUntilCwdIsAttributable() {
+        // Muse writes a durable, global JSONL session log
+        // (`~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`).
+        // The cookbook documents no cwd field and its lifecycle events carry only
+        // git refs (insufficient), but a first-hand third-party parser reports a
+        // likely cwd at `runtime.session.metadata.workspace_root` — unverified by
+        // us on a real install (Meta-auth-gated). Until that's confirmed,
+        // attribution can't be trusted, so it stays on the `[]` default (see the
+        // note in MuseAgent). Pin both the broad (nil) and known-session-id shapes.
+        #expect(agent.logSources(worktreePath: "/tmp/wt", harnessSessionID: nil).isEmpty)
+        #expect(agent.logSources(worktreePath: "/tmp/wt", harnessSessionID: "abc-123").isEmpty)
+    }
+
     // MARK: - Identity probe
 
     @Test func identityProbeAcceptsMuseCodeFlags() async {

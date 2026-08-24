@@ -238,7 +238,45 @@ public struct MuseAgent: CodingAgent {
             runner: probeRunner)
     }
 
-    // `logSources` is intentionally NOT overridden (CROW-1089): Muse Code has no
-    // confirmed durable, cwd-attributable session-log location on disk, so it
-    // inherits the `[]` default. Wire it once a transcript path is verified.
+    // `logSources` is intentionally NOT overridden (CROW-1099 research spike):
+    // Muse Code writes a durable session log, but Crow can't yet attribute it to
+    // a worktree with confidence, so it stays on the `[]` default.
+    //
+    // What's confirmed — Meta's dev cookbook
+    // (developer.meta.com/ai/resources/blog/build-with-muse-code/, read
+    // 2026-08-24): every run appends a replay-exact, restart-safe event journal
+    // to a global, date-partitioned store —
+    //
+    //   ~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<session-id>/session.jsonl
+    //
+    // plain JSONL (greppable, `jq`-parseable), so it would fit the existing
+    // `.logDir` normalizer with zero new parsing — the same shape Codex uses.
+    //
+    // The open question is attribution, not format. The store is global (the
+    // on-disk path can't attribute a session to a worktree the way Claude's
+    // per-cwd slug dirs do), so attribution must come from a recorded `cwd`
+    // inside `session.jsonl`. The cookbook does NOT publish a field inventory —
+    // its jq example prints only `.payload.event.kind` event records, whose
+    // worktree-lifecycle entries carry just git refs (`base_commit`,
+    // `base_ref: HEAD`); those collide across sibling worktrees, so they can't
+    // attribute. But absence of a cwd is NOT established: a first-hand
+    // third-party parser of Muse 0.1.0 logs (superbasedapp/observer,
+    // `internal/adapter/muse/doc.go`, 2026-08-06) reports the authoritative
+    // absolute cwd at `runtime.session.metadata` → `payload.record.workspace_root`
+    // on line 1 of every session log — a metadata record type the cookbook's jq
+    // never printed. So a usable cwd very likely EXISTS, which would make Muse
+    // content-filtered (Codex-style), not unattributable.
+    //
+    // Why still `[]`: CROW-1089 requires verifying attribution against a REAL
+    // install before wiring (never guess / never upload misattributed bytes),
+    // and Muse is Meta-auth-gated (browser sign-in / `META_API_KEY`) and not
+    // installable on this dev machine (`crow agents list` → available:false), so
+    // `workspace_root` is unverified by us — wiring from the third-party parser
+    // alone would risk the exact misattribution the collector forbids.
+    //
+    // ⚠️ Re-check target (version-pinned): on a real install, confirm
+    // `workspace_root` on the `runtime.session.metadata` record (line 1) of a
+    // real `session.jsonl`. If present, teach `TranscriptHeadReader.absorb` that
+    // key and return a recursive `.logDir` `cwdFilter` source over the sessions
+    // dir (the Codex shape) — no new normalizer needed.
 }
