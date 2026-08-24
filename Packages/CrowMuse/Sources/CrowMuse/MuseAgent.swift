@@ -238,7 +238,36 @@ public struct MuseAgent: CodingAgent {
             runner: probeRunner)
     }
 
-    // `logSources` is intentionally NOT overridden (CROW-1089): Muse Code has no
-    // confirmed durable, cwd-attributable session-log location on disk, so it
-    // inherits the `[]` default. Wire it once a transcript path is verified.
+    // `logSources` is intentionally NOT overridden (CROW-1099 research spike):
+    // Muse Code DOES write a durable session log — the earlier "no durable
+    // location" note was wrong. Per Meta's dev cookbook
+    // (developer.meta.com/ai/resources/blog/build-with-muse-code/, read
+    // 2026-08-24) every run appends a replay-exact, restart-safe event journal
+    // to a global, date-partitioned store:
+    //
+    //   ~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<session-id>/session.jsonl
+    //
+    // It's plain JSONL (greppable, `jq`-parseable), so it would fit the existing
+    // `.logDir` normalizer with zero new parsing — the same shape Codex uses.
+    //
+    // The blocker is **attribution**, not format. Like Codex, the store is
+    // global (the on-disk path can't attribute a session to a worktree the way
+    // Claude's per-cwd slug dirs do), so attribution would have to come from a
+    // recorded `cwd` inside `session.jsonl` — and it isn't there. No documented
+    // field records the working directory / project / repo path; the only
+    // location-ish fields are git refs (`base_commit`, `base_ref: HEAD`), which
+    // collide across sibling Crow worktrees branched from the same commit. The
+    // collector drops a file with no readable cwd rather than guess
+    // (`LogSyncCollector.applyingCwdFilter`), so a Codex-style `cwdFilter`
+    // source would match ZERO files today while forcing a guessed cwd key into
+    // `TranscriptHeadReader.absorb` — the "upload the wrong bytes / misattribute"
+    // anti-pattern CROW-1089 forbids. So it stays on the `[]` default.
+    //
+    // ⚠️ Version-pinned re-check target — unverified firsthand: Muse is
+    // Meta-auth-gated (browser sign-in / `META_API_KEY`) and not installable on
+    // the dev machine (`crow agents list` → available:false), so this rests on
+    // the cookbook, not `session.jsonl` on disk. Wire it Codex-style if a real
+    // install shows the record carries a `cwd` (extend `absorb` with Muse's key,
+    // return a recursive `.logDir` `cwdFilter` source over the sessions dir), or
+    // if the per-worktree `.muse/` reliably maps a worktree to its session-ids.
 }
