@@ -37,9 +37,17 @@ opt-in). Two attribution modes exist today:
   (`AgentLogCwdReader`, Codex) or from a sibling metadata file
   (`CursorStore.recordedCwd` reads Cursor's `meta.json`). A file with no readable
   cwd is dropped, never guessed. Codex is the reference.
+- **Runtime-map** — the store pools transcripts globally **and** records no cwd, so
+  neither of the above works — but Crow launched the harness in a known worktree and
+  its hooks fire with the session's identity, so Crow captures the harness's own
+  `conversationId → worktree` pairing as it runs and reads it back at collection
+  time. Antigravity is the reference (`AntigravityConversationMap`, CROW-1107); the
+  worktree comes from Crow's own session ownership, never the payload, so a
+  transcript with no map entry is dropped, never guessed.
 
-A store that is neither (no per-worktree layout **and** no recoverable cwd inside
-each transcript) cannot be attributed and stays on the `[]` default.
+A store that is none of these (no per-worktree layout, no recoverable cwd inside
+each transcript, **and** no runtime pairing Crow can capture) cannot be attributed
+and stays on the `[]` default.
 
 ## Reference table
 
@@ -53,7 +61,7 @@ CROW-1090. "cwd-attributable?" is the wiring test above.
 | Cursor | `cursor-agent` | ✅ | `~/.cursor/chats/<chatId>/<subId>/` | `store.db` (+ sibling `meta.json`) | SQLite (content-addressed blobs, ordered by a root protobuf) | ✅ content-filtered (cwd in sibling `meta.json`) | **Wired** (CROW-1095) |
 | OpenCode | `opencode` | ✅ | `~/.local/share/opencode/opencode.db` (SQLite; 1.17+ — the pre-1.17 `storage/{project,session,message,part}/` JSON tree is legacy, migrated in on upgrade) | relational `session`/`message`/`part` rows | SQLite | ✅ content-filtered (`session.directory` column) | **Wired** (CROW-1096) |
 | Grok Build | `grok` | ✅ | `<$GROK_HOME or ~/.grok>/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Wired** (CROW-1098) |
-| Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ❌ no cwd in transcript (only off-transcript: per-conv SQLite DB / hooks / latest-only `cache/last_conversations.json`) | Deferred — durable log confirmed, **not** cwd-attributable · [#1097](https://github.com/corveil/crow/issues/1097) |
+| Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ✅ runtime-map (`conversationId → worktree`, from Crow's hooks) | **Wired** (CROW-1107) — ⚠️ payload fields docs-derived, pending live-verify |
 | Muse Code | `muse` | ✅ | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/` | `session.jsonl` | NDJSON | ⚠️ likely content-filtered — cwd reported at `runtime.session.metadata.workspace_root` (line 1, 3rd-party parse), unverified live | Deferred — durable store found (Meta docs); verify `workspace_root`, then wire · [#1099](https://github.com/corveil/crow/issues/1099) |
 | Cowork (Claude desktop, local-agent mode) | — (desktop app) | ❌ | `~/Library/Application Support/Claude/local-agent-mode-sessions/<acct>/<install>/local_<uuid>/` | `audit.jsonl` | NDJSON | ⚠️ cwd inside JSON, no path shortcut | Out of harness scope — see below |
 | Grok Bot | — (Electron app) | ❌ | `~/Library/Application Support/Grok Bot/` | — (leveldb / server-side) | — | ❌ no durable local transcript | No collectable log — skip |
@@ -192,15 +200,23 @@ not blocked on discovery.
   tree in on upgrade. The collector/backfill read the database (`OpenCodeStore`),
   selecting cwd-matched top-level sessions and reassembling their rows into NDJSON.
 - **[#1097](https://github.com/corveil/crow/issues/1097) (Antigravity)** —
-  **resolved.** The `agy` CLI *does* write a durable NDJSON transcript at
+  **research resolved; wired by [#1107](https://github.com/corveil/crow/issues/1107).**
+  The `agy` CLI writes a durable NDJSON transcript at
   `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/transcript_full.jsonl`,
-  but pooled globally by conversation id with **no cwd on any line** — so it is
-  neither path-partitioned nor content-filterable, and stays on `[]`. The cwd
-  lives only off-transcript (a conditional protobuf-in-SQLite per-conversation DB,
-  the ephemeral hook / status-line payloads, or the latest-only
-  `cache/last_conversations.json` pointer).
-  Verified from Antigravity CLI docs + community tooling, not a live `agy` (not
-  installed; Google-Sign-In/GCP-gated). Full rationale in `AntigravityAgent.logSources`.
+  pooled globally by conversation id with **no cwd on any line** — so it is neither
+  path-partitioned nor content-filterable. #1097 deferred it on those grounds; #1107
+  wires it via the **runtime-map** mode instead: Crow launched `agy` in a known
+  worktree, and its Antigravity hooks fire with the session's `--session <uuid>`, so
+  the `hook-event` handler records `conversationId → worktree`
+  (`AntigravityConversationMap`) as hooks arrive, and `logSources` reads it back. The
+  worktree is taken from Crow's own session ownership, **never** the hook payload, so
+  a transcript with no map entry is dropped, never guessed. Backfill reuses the same
+  map (a conversation with no entry → `low`/orphan). ⚠️ **Docs-derived, pending
+  live-verify:** `agy` isn't installable on the dev machines (Google-Sign-In/GCP-
+  gated), so the hook payload field name (`conversationId`) and the brain-dir template
+  are from Antigravity CLI docs + community tooling, not first-party capture — confirm
+  against a live `agy` before promoting Antigravity out of Tier-2. Full rationale in
+  `AntigravityAgent.logSources` and `AntigravityConversationMap`.
 - **[#1099](https://github.com/corveil/crow/issues/1099) (Muse Code)** —
   **location answered (docs, not on-disk); attribution likely but unverified.**
   Muse writes a durable, global JSONL log at

@@ -4,28 +4,31 @@ import Foundation
 /// been uploaded, reconstructing each one's workspace / repo / ticket so the
 /// Settings "Backfill history" dialog can show a reviewable list (CROW-1075).
 ///
-/// Five harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
+/// Six harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
 /// by working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`); **Codex**
 /// (CROW-1089), whose rollouts pool globally under `~/.codex/sessions/<date>/…`
 /// but each record their own `cwd` in a first-line `session_meta` event; **Grok**
 /// (CROW-1098), which partitions by working directory too, encoding the cwd into
 /// the directory name (`~/.grok/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`);
 /// **Cursor** (CROW-1095), whose per-chat `~/.cursor/chats/<id>/<sub>/store.db`
-/// records its `cwd` in the sibling `meta.json`; and **OpenCode** (CROW-1096), whose
+/// records its `cwd` in the sibling `meta.json`; **OpenCode** (CROW-1096), whose
 /// sessions live in the `~/.local/share/opencode/opencode.db` SQLite store, each row
-/// recording the `directory` it ran in (`session.directory`). All make historical
-/// reconstruction reliable because the real `cwd` is recoverable — Claude/Codex
-/// record it in the transcript, Grok encodes it in the path, Cursor in a sibling
-/// file, OpenCode in a column — the authoritative signal, not a lossy directory
-/// name. The scan is disk- and git-only — it never touches the provider or the
-/// network, so it stays fast over hundreds of sessions (it never opens a Cursor
-/// `store.db`; the Cursor uid is the `<sub>` directory name and the cwd a tiny
-/// sibling JSON read); ticket *validation* is deferred to upload, where a link is
-/// actually asserted.
+/// recording the `directory` it ran in (`session.directory`); and **Antigravity**
+/// (CROW-1107), whose transcript records **no** cwd — its cwd is instead recovered
+/// from the runtime conversation→worktree map the live collector builds. The first
+/// five make historical reconstruction reliable because the real `cwd` is
+/// recoverable — Claude/Codex record it in the transcript, Grok encodes it in the
+/// path, Cursor in a sibling file, OpenCode in a column — the authoritative signal,
+/// not a lossy directory name; Antigravity relies on the map (a conversation with no
+/// map entry → `low`/orphan, never guessed). The scan is disk- and git-only — it
+/// never touches the provider or the network, so it stays fast over hundreds of
+/// sessions (it never opens a Cursor `store.db`; the Cursor uid is the `<sub>`
+/// directory name and the cwd a tiny sibling JSON read); ticket *validation* is
+/// deferred to upload, where a link is actually asserted.
 ///
 /// Everything effectful is injected (the projects directory, the Codex sessions
 /// directory, the Grok sessions directory, the Cursor chats directory, the OpenCode
-/// database path, the
+/// database path, the Antigravity brain directory + its conversation map, the
 /// git-remote reader, the clock), so the reconciliation logic is unit-testable
 /// against a temporary tree.
 public struct BackfillScanner: Sendable {
@@ -56,6 +59,14 @@ public struct BackfillScanner: Sendable {
     /// `OpenCodeHome`, which CrowCore can't import); this literal default is the
     /// fallback for a direct caller.
     let openCodeDatabaseURL: URL
+    /// The Antigravity brain dir (`AntigravityHome.brainDir()` by default) — where
+    /// `agy` pools each conversation's `.../logs/transcript_full.jsonl` (CROW-1107).
+    let antigravityBrainDir: URL
+    /// The runtime conversation→worktree map (`.load()` by default) — the only
+    /// attribution Antigravity has, since its transcript records no cwd (CROW-1107,
+    /// CROW-1097). A historical transcript whose conversation id isn't in the map
+    /// reconstructs to `cwd == nil` ⇒ `low`/orphan (never guessed).
+    let antigravityMap: AntigravityConversationMap
     /// Resolve a directory's `origin` remote URL (default: `git -C <dir> remote
     /// get-url origin`). Injected so tests need no real repos.
     let gitRemote: @Sendable (String) async -> String?
@@ -68,6 +79,8 @@ public struct BackfillScanner: Sendable {
         grokSessionsDir: URL? = nil,
         cursorChatsDir: URL? = nil,
         openCodeDatabaseURL: URL? = nil,
+        antigravityBrainDir: URL? = nil,
+        antigravityMap: AntigravityConversationMap? = nil,
         runner: any ShellRunner = ProcessShellRunner(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -82,6 +95,9 @@ public struct BackfillScanner: Sendable {
             .appendingPathComponent(".cursor/chats", isDirectory: true)
         self.openCodeDatabaseURL = openCodeDatabaseURL ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/share/opencode/opencode.db")
+        self.antigravityBrainDir = antigravityBrainDir
+            ?? URL(fileURLWithPath: AntigravityHome.brainDir(), isDirectory: true)
+        self.antigravityMap = antigravityMap ?? AntigravityConversationMap.load()
         self.gitRemote = { dir in
             (try? await runner.run(args: ["git", "-C", dir, "remote", "get-url", "origin"],
                                    env: [:], cwd: nil))?
@@ -91,11 +107,13 @@ public struct BackfillScanner: Sendable {
     }
 
     /// Test seam: inject the git-remote reader directly. `codexSessionsDir` /
-    /// `grokSessionsDir` / `cursorChatsDir` / `openCodeDatabaseURL` default to
-    /// nonexistent paths so a test that only stages Claude transcripts stays hermetic
-    /// (it never accidentally scans a dev machine's real `~/.codex/sessions`,
-    /// `~/.grok/sessions`, `~/.cursor/chats`, or `~/.local/share/opencode/opencode.db`);
-    /// a Codex/Grok/Cursor/OpenCode test passes an explicit temp path.
+    /// `grokSessionsDir` / `cursorChatsDir` / `openCodeDatabaseURL` /
+    /// `antigravityBrainDir` default to nonexistent paths so a test that only stages
+    /// Claude transcripts stays hermetic (it never accidentally scans a dev machine's
+    /// real `~/.codex/sessions`, `~/.grok/sessions`, `~/.cursor/chats`,
+    /// `~/.local/share/opencode/opencode.db`, or `~/.gemini/antigravity-cli/brain`);
+    /// a Codex/Grok/Cursor/OpenCode/Antigravity test passes an explicit temp path.
+    /// `antigravityMap` defaults to empty for the same reason.
     init(
         devRoot: String,
         projectsDir: URL,
@@ -103,6 +121,8 @@ public struct BackfillScanner: Sendable {
         grokSessionsDir: URL? = nil,
         cursorChatsDir: URL? = nil,
         openCodeDatabaseURL: URL? = nil,
+        antigravityBrainDir: URL? = nil,
+        antigravityMap: AntigravityConversationMap = AntigravityConversationMap(),
         gitRemote: @escaping @Sendable (String) async -> String?,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -116,13 +136,16 @@ public struct BackfillScanner: Sendable {
             ?? projectsDir.appendingPathComponent("__no_cursor_chats__", isDirectory: true)
         self.openCodeDatabaseURL = openCodeDatabaseURL
             ?? projectsDir.appendingPathComponent("__no_opencode_db__/opencode.db")
+        self.antigravityBrainDir = antigravityBrainDir
+            ?? projectsDir.appendingPathComponent("__no_antigravity_brain__", isDirectory: true)
+        self.antigravityMap = antigravityMap
         self.gitRemote = gitRemote
         self.now = now
     }
 
-    /// Reconcile every on-disk transcript (Claude + Codex + Grok + Cursor + OpenCode)
-    /// against
-    /// the ledger and return the reconstructed rows, newest first.
+    /// Reconcile every on-disk transcript (Claude + Codex + Grok + Cursor +
+    /// OpenCode + Antigravity) against the ledger and return the reconstructed rows,
+    /// newest first.
     public func scan(ledger: LogSyncLedger) async -> [BackfillSession] {
         let remotes = await resolveRemotes()
         let knownRepoNames = Array(Set(remotes.values.map { $0.repo }))
@@ -159,6 +182,13 @@ public struct BackfillScanner: Sendable {
         for session in openCodeSessions() {
             guard let s = reconstructOpenCode(
                 session: session, remotesByRepo: remotes,
+                knownRepoNames: knownRepoNames, ledger: ledger)
+            else { continue }
+            sessions.append(s)
+        }
+        for file in antigravityTranscriptFiles() {
+            guard let s = reconstructAntigravity(
+                file: file, remotesByRepo: remotes,
                 knownRepoNames: knownRepoNames, ledger: ledger)
             else { continue }
             sessions.append(s)
@@ -265,6 +295,27 @@ public struct BackfillScanner: Sendable {
             harness: .opencode, cwd: session.cwd, gitBranch: nil,
             remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger,
             mtimeOverride: mtime, sizeOverride: 0)
+    }
+
+    /// Reconstruct one Antigravity transcript (CROW-1107). The transcript records
+    /// no cwd, so — unlike every other harness — the `cwd` is recovered not from
+    /// the file or its path but from the **runtime conversation→worktree map** the
+    /// live collector builds (`antigravityMap`): the conversation id is the brain
+    /// sub-directory the file lives under (`brain/<id>/…`), and its map entry names
+    /// the worktree Crow launched `agy` in. A conversation with no map entry — a
+    /// session that predates the map, or one Crow never launched — reconstructs to
+    /// `cwd == nil` ⇒ `low`/orphan via `assemble`, never guessed. `uid` is the
+    /// conversation id; Antigravity records no git branch.
+    func reconstructAntigravity(
+        file: URL, remotesByRepo: [String: RepoRemote],
+        knownRepoNames: [String], ledger: LogSyncLedger
+    ) -> BackfillSession? {
+        guard let conversationID = AntigravityHome.conversationID(forTranscript: file) else { return nil }
+        let cwd = antigravityMap.conversations[conversationID]?.worktreePath
+        return assemble(
+            uid: conversationID, file: file, slug: conversationID, harness: .antigravity,
+            cwd: cwd, gitBranch: nil,
+            remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
     }
 
     /// Shared reconstruction: given a harness's already-extracted
@@ -428,6 +479,24 @@ public struct BackfillScanner: Sendable {
     /// on Linux where `OpenCodeStore` has no SQLite backing).
     func openCodeSessions() -> [OpenCodeStoreSession] {
         OpenCodeStore.sessions(databasePath: openCodeDatabaseURL.path).filter { !$0.isChild }
+    }
+
+    /// Every `transcript_full.jsonl` under `<antigravityBrainDir>` (recursively).
+    /// Antigravity nests them as `<brain>/<conv-id>/.system_generated/logs/transcript_full.jsonl`,
+    /// so the enumerator descends; the exact-name filter leaves out the truncated
+    /// sibling `transcript.jsonl`, keeping this in lockstep with the live collector
+    /// (which returns `transcript_full.jsonl` per map entry — CROW-1107).
+    func antigravityTranscriptFiles() -> [URL] {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: antigravityBrainDir, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        var out: [URL] = []
+        for case let url as URL in en where url.lastPathComponent == "transcript_full.jsonl" {
+            if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                out.append(url)
+            }
+        }
+        return out
     }
 
     /// Build a `repoName → RepoRemote` map from the live clones under the dev

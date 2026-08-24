@@ -51,13 +51,17 @@ struct BackfillService: Sendable {
         // trees the live collector and the launch paths read. CrowCore's
         // `BackfillScanner` can't import CrowCodex / CrowGrok / CrowCursor /
         // CrowOpenCode, so the daemon injects them all (CROW-1089, CROW-1098,
-        // CROW-1095, CROW-1096).
+        // CROW-1095, CROW-1096). Antigravity's brain dir is resolved by
+        // `AntigravityHome` inside CrowCore and its conversation→worktree map defaults
+        // to `.load()` inside the scanner — so neither is strictly injected, but the
+        // brain dir is passed explicitly for symmetry (CROW-1107).
         let s = scanner ?? BackfillScanner(
             devRoot: devRoot,
             codexSessionsDir: URL(fileURLWithPath: CodexHome.sessionsDir()),
             grokSessionsDir: URL(fileURLWithPath: GrokHome.sessionsDir()),
             cursorChatsDir: URL(fileURLWithPath: CursorHome.chatsDir()),
             openCodeDatabaseURL: URL(fileURLWithPath: OpenCodeHome.databasePath()),
+            antigravityBrainDir: URL(fileURLWithPath: AntigravityHome.brainDir()),
             now: now)
         return await s.scan(ledger: ledger)
     }
@@ -168,13 +172,14 @@ struct BackfillService: Sendable {
 
     /// The `agentKind` sidecar hint for a harness. Only the wired harnesses reach
     /// here; any other maps to Claude's kind as a harmless default (it never occurs
-    /// — the scanner only emits `.claude`/`.codex`/`.grok`/`.cursor`/`.opencode`).
+    /// — the scanner only emits `.claude`/`.codex`/`.grok`/`.cursor`/`.opencode`/`.antigravity`).
     static func agentKindRawValue(for harness: LogSyncHarness) -> String {
         switch harness {
         case .codex: return AgentKind.codex.rawValue
         case .grok: return AgentKind.grok.rawValue
         case .cursor: return AgentKind.cursor.rawValue
         case .opencode: return AgentKind.openCode.rawValue
+        case .antigravity: return AgentKind.antigravity.rawValue
         default: return AgentKind.claudeCode.rawValue
         }
     }

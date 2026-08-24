@@ -125,11 +125,13 @@ private struct StubRunner: ShellRunner {
         #expect(BackfillService.uploadFormat(for: .grok) == .jsonl) // single NDJSON transcript
         #expect(BackfillService.uploadFormat(for: .cursor) == .sqlite)
         #expect(BackfillService.uploadFormat(for: .opencode) == .openCodeStore)
+        #expect(BackfillService.uploadFormat(for: .antigravity) == .jsonl) // single NDJSON transcript
         #expect(BackfillService.agentKindRawValue(for: .claude) == AgentKind.claudeCode.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .codex) == AgentKind.codex.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .grok) == AgentKind.grok.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .cursor) == AgentKind.cursor.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .opencode) == AgentKind.openCode.rawValue)
+        #expect(BackfillService.agentKindRawValue(for: .antigravity) == AgentKind.antigravity.rawValue)
     }
 
     @Test func codexSessionUploadsUnderCodexHarnessSlot() async throws {
