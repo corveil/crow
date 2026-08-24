@@ -108,15 +108,14 @@ struct LogSyncCollector {
             guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
 
             // Where does this harness write its logs? Empty for harnesses whose
-            // Where does this harness write its logs? Empty for harnesses whose
             // on-disk logs are not yet wired (everything but Claude, Codex, Grok,
-            // Cursor, and OpenCode today — CROW-1089 / CROW-1098 / CROW-1095 /
-            // CROW-1096). A globally-stored NDJSON/blob harness's source carries a
-            // `cwdFilter` that `resolveFiles` applies to attribute one worktree's
-            // sessions out of the shared tree (Codex/Cursor); Claude and Grok
-            // partition by worktree directly; an OpenCode source (`.openCodeStore`) is
-            // the single `opencode.db` file, cwd-attributed by row inside
-            // `OpenCodeStore` rather than by dropping files.
+            // Cursor, OpenCode, and Muse today — CROW-1089 / CROW-1098 / CROW-1095 /
+            // CROW-1096 / CROW-1106). A globally-stored NDJSON/blob harness's source
+            // carries a `cwdFilter` that `resolveFiles` applies to attribute one
+            // worktree's sessions out of the shared tree (Codex/Cursor/Muse); Claude
+            // and Grok partition by worktree directly; an OpenCode source
+            // (`.openCodeStore`) is the single `opencode.db` file, cwd-attributed by
+            // row inside `OpenCodeStore` rather than by dropping files.
             guard let agent = AgentRegistry.shared.agent(for: session.agentKind) else { continue }
             let sources = agent.logSources(worktreePath: worktree.worktreePath, harnessSessionID: nil)
             guard !sources.isEmpty else { continue }
@@ -305,6 +304,12 @@ struct LogSyncCollector {
                 else { return false }
                 if let ext = source.fileExtension, url.pathExtension != ext { return false }
                 if let prefix = source.fileNamePrefix, !url.lastPathComponent.hasPrefix(prefix) { return false }
+                // Skip transcripts under an excluded directory component (Muse's
+                // `subagent/` child sessions), in lockstep with the backfill scanner.
+                if !source.excludePathComponents.isEmpty,
+                   url.pathComponents.contains(where: { source.excludePathComponents.contains($0) }) {
+                    return false
+                }
                 return true
             }
             filtered = applyingCwdFilter(filtered, source.cwdFilter, format: source.format)

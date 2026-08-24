@@ -39,16 +39,24 @@ public enum TranscriptHeadReader {
     /// of interest are decoded; everything else is ignored. A non-JSON or
     /// unrelated line leaves the head unchanged.
     ///
-    /// Two harness shapes are recognized, so one reader serves both the Claude
-    /// backfill and the Codex one (CROW-1089):
+    /// Three harness shapes are recognized, so one reader serves the Claude, Codex,
+    /// and Muse backfills (CROW-1089, CROW-1106):
     ///  - **Claude** records `cwd` / `gitBranch` / `sessionId` / `timestamp` as
     ///    top-level keys on its event lines.
     ///  - **Codex** records them on its first `session_meta` line under a nested
     ///    `payload` object (`payload.cwd`, `payload.id`, `payload.timestamp`);
     ///    Codex writes no git branch, so `gitBranch` simply stays `nil`.
-    /// The two never collide — Claude transcripts carry no `payload` key — so the
-    /// nested lookup is a harmless fallback for Claude and the whole source for
-    /// Codex.
+    ///  - **Muse Code** records the absolute cwd one level deeper, on its line-1
+    ///    `runtime.session.metadata` record: `payload.record.workspace_root`
+    ///    (CROW-1106). Muse writes no git branch either, so `gitBranch` stays `nil`.
+    ///    ⚠️ This key is from a first-hand third-party parser of Muse 0.1.0 logs
+    ///    (`superbasedapp/observer`), **not yet verified against a live install**
+    ///    (Muse is Meta-auth-gated). It fails safe: if the real key differs, `cwd`
+    ///    stays `nil` and the file is dropped by the cwd filter — never guessed,
+    ///    never misattributed (CROW-1099 / #1106).
+    /// The three never collide — Claude transcripts carry no `payload`, and neither
+    /// Codex nor Claude nests a `payload.record` — so each nested lookup is a
+    /// harmless fallback for the others.
     public static func absorb(_ line: String, into head: inout TranscriptHead) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
@@ -60,11 +68,15 @@ public enum TranscriptHeadReader {
             return t.isEmpty ? nil : t
         }
         let payload = obj["payload"] as? [String: Any]
+        // Muse's line-1 metadata record nests the cwd under `payload.record`.
+        let record = payload?["record"] as? [String: Any]
         if head.sessionID == nil {
             head.sessionID = str(obj, "sessionId") ?? payload.flatMap { str($0, "id") }
         }
         if head.cwd == nil {
-            head.cwd = str(obj, "cwd") ?? payload.flatMap { str($0, "cwd") }
+            head.cwd = str(obj, "cwd")
+                ?? payload.flatMap { str($0, "cwd") }
+                ?? record.flatMap { str($0, "workspace_root") }
         }
         if head.gitBranch == nil { head.gitBranch = str(obj, "gitBranch") }
         if head.firstTimestamp == nil {
@@ -130,8 +142,9 @@ public enum TranscriptHeadReader {
 /// budget is slack for a harness that emits a preamble line first.
 public enum AgentLogCwdReader {
     /// The recorded `cwd` from the head of `url`, or `nil` if none is found within
-    /// `maxLines`. Uses `TranscriptHeadReader.absorb`, so it recognizes both the
-    /// Claude (top-level `cwd`) and Codex (`payload.cwd`) shapes.
+    /// `maxLines`. Uses `TranscriptHeadReader.absorb`, so it recognizes the Claude
+    /// (top-level `cwd`), Codex (`payload.cwd`), and Muse
+    /// (`payload.record.workspace_root`) shapes.
     public static func read(_ url: URL, maxLines: Int = 8) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }

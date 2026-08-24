@@ -9,7 +9,7 @@ import Foundation
 /// The **wire** value sent to the server (`wireValue`) is a strict subset — the
 /// server-side DB CHECK on `crow_session_artifacts.harness`
 /// (`claude`/`cursor`/`codex`/`opencode`/`unknown`). A harness the server does
-/// not yet enumerate (`.grok`, `.antigravity`) carries its own rawValue
+/// not yet enumerate (`.grok`, `.antigravity`, `.muse`) carries its own rawValue
 /// internally but sends `unknown` on the wire, so the upload is still accepted and
 /// attributed, just not harness-typed. Every other case's `wireValue` equals its
 /// `rawValue`.
@@ -26,22 +26,27 @@ public enum LogSyncHarness: String, Sendable, Equatable, Codable, CaseIterable {
     /// `antigravity` (corveil#2426). Carrying the real case internally still lets
     /// it drive a distinct ledger slot and backfill-row display.
     case antigravity
+    /// Muse Code (CROW-1106). Internal-only, like `.grok`: `wireValue` collapses
+    /// it to `unknown` because the server's CHECK does not (yet) accept `muse`
+    /// (coordinate corveil#2426 to add it, then drop it from the collapse list).
+    case muse
     case unknown
 
     /// The value accepted by the server's `harness` CHECK (corveil#2426). Cases
     /// the server enumerates pass through their rawValue; a not-yet-recognized
-    /// harness (`.grok`, `.antigravity`) collapses to `unknown`. Keep this in sync
-    /// with the DB CHECK: when the server adds one, drop it from the collapse list.
+    /// harness (`.grok`, `.antigravity`, `.muse`) collapses to `unknown`. Keep this
+    /// in sync with the DB CHECK: when the server adds one, drop it from the collapse
+    /// list.
     public var wireValue: String {
         switch self {
-        case .grok, .antigravity: return LogSyncHarness.unknown.rawValue
+        case .grok, .antigravity, .muse: return LogSyncHarness.unknown.rawValue
         case .claude, .cursor, .codex, .opencode, .unknown: return rawValue
         }
     }
 
     /// Map a Crow `AgentKind` to its harness identifier. The four harnesses the
-    /// server enumerates map directly; Grok and Antigravity map to their internal
-    /// cases (wire-collapsed to `unknown`); every other kind (Muse, or a future
+    /// server enumerates map directly; Grok, Antigravity, and Muse map to their
+    /// internal cases (all wire-collapsed to `unknown`); every other kind (a future
     /// one) maps to `.unknown` so the upload is still accepted and attributed, just
     /// not harness-typed.
     public init(agentKind: AgentKind) {
@@ -52,6 +57,7 @@ public enum LogSyncHarness: String, Sendable, Equatable, Codable, CaseIterable {
         case .openCode: self = .opencode
         case .grok: self = .grok
         case .antigravity: self = .antigravity
+        case .muse: self = .muse
         default: self = .unknown
         }
     }

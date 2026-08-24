@@ -66,6 +66,48 @@ import Testing
         #expect(head.gitBranch == nil) // Codex records no branch
     }
 
+    // MARK: Muse metadata-record shape (CROW-1106)
+
+    /// A Muse Code journal's line-1 `runtime.session.metadata` record nests the
+    /// absolute cwd one level deeper than Codex: `payload.record.workspace_root`.
+    /// (Shape from the `superbasedapp/observer` third-party parse — unverified
+    /// against a live install; it fails safe if wrong.)
+    private let museSample = """
+    {"type":"runtime.session.metadata","payload":{"record":{"session_id":"muse-abc-123","workspace_root":"/Users/j/Dev2/RadiusMethod/crow-1106-wire-muse-collector"}}}
+    {"type":"runtime.event","payload":{"event":{"kind":"message"}}}
+    """
+
+    @Test func parsesMuseWorkspaceRootAsCwd() {
+        let head = TranscriptHeadReader.parse(museSample)
+        #expect(head.cwd == "/Users/j/Dev2/RadiusMethod/crow-1106-wire-muse-collector")
+        #expect(head.gitBranch == nil) // Muse records no branch
+    }
+
+    /// `superbasedapp/observer` shows the real line-1 record wrapped in a fuller
+    /// envelope (`schema_version` / `payload_type`) than Crow's minimal fixtures.
+    /// `absorb` is key-tolerant — it reaches `payload.record.workspace_root`
+    /// regardless of the surrounding discriminator keys — so the real envelope still
+    /// parses. Pins that so a future live re-check (CROW-1099) has a fixture matching
+    /// observer's shape.
+    @Test func parsesMuseWorkspaceRootFromRealEnvelope() {
+        let real = """
+        {"schema_version":"0.1.0","payload_type":"runtime.session.metadata","payload":{"record":{"session_id":"muse-abc-123","workspace_root":"/Users/j/Dev2/RadiusMethod/crow-1106-wire-muse-collector","base_commit":"deadbeef"}}}
+        {"schema_version":"0.1.0","payload_type":"runtime.event","payload":{"event":{"kind":"message"}}}
+        """
+        let head = TranscriptHeadReader.parse(real)
+        #expect(head.cwd == "/Users/j/Dev2/RadiusMethod/crow-1106-wire-muse-collector")
+        #expect(head.gitBranch == nil)
+    }
+
+    @Test func museWorkspaceRootDoesNotCollideWithCodexOrClaude() {
+        // Claude (top-level cwd) still wins where present, and a Codex payload.cwd
+        // is unaffected by the new record lookup — the three shapes are disjoint.
+        #expect(TranscriptHeadReader.parse(sample).cwd
+            == "/Users/j/Dev2/RadiusMethod/crow-1075-session-backfill")
+        #expect(TranscriptHeadReader.parse(codexSample).cwd
+            == "/Users/j/Dev2/RadiusMethod/corveil-ecs")
+    }
+
     @Test func agentLogCwdReaderReadsClaudeAndCodexHeads() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("cwdreader-\(UUID().uuidString)", isDirectory: true)
@@ -83,6 +125,12 @@ import Testing
         body += String(repeating: "{\"type\":\"noise\",\"payload\":{}}\n", count: 100_000)
         try body.write(to: codex, atomically: true, encoding: .utf8)
         #expect(AgentLogCwdReader.read(codex) == "/Users/j/Dev2/RadiusMethod/corveil-ecs")
+
+        // Muse cwd on line 1 (`payload.record.workspace_root`), same early-stop.
+        let muse = dir.appendingPathComponent("session.jsonl")
+        try (museSample + "\n").write(to: muse, atomically: true, encoding: .utf8)
+        #expect(AgentLogCwdReader.read(muse)
+            == "/Users/j/Dev2/RadiusMethod/crow-1106-wire-muse-collector")
 
         // A file whose head carries no cwd yields nil (never guessed).
         let noCwd = dir.appendingPathComponent("nocwd.jsonl")

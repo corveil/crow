@@ -314,11 +314,11 @@ crow logsync set [--retention-days N] [--quiet-period-minutes N] [--max-upload-b
 - **Opt a workspace in elsewhere**: `crow workspace edit --workspace NAME --upload-session-logs true` (or the checkbox) + a gateway via `crow gateway set`. There is no `crow logsync` flag that opts a workspace in — CROW-1070 dropped the global master switch, base URL, API key and `enabledWorkspaces` list.
 - **Security invariant**: the upload destination + credential come only from the workspace's **local-only** gateway (`{gateway.baseURL}/api/crow-sessions/{id}/artifacts` + `x-citadel-api-key`), never `--corveil-host` or any browser-writable field. A workspace with no gateway uploads nothing.
 - `set` is a PATCH (only the flags you pass change; at least one required). Live within ~1 collector tick (~5 min); no restart.
-- **Migration**: a legacy `crow logsync set --add-workspace` opt-in is carried over to `--upload-session-logs` on first boot (only when the old master switch was on). Claude Code, Codex, Grok Build, Cursor, and OpenCode transcripts are collected today (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096); other harnesses are wired as their log paths are confirmed.
+- **Migration**: a legacy `crow logsync set --add-workspace` opt-in is carried over to `--upload-session-logs` on first boot (only when the old master switch was on). Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code transcripts are collected today (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096 / CROW-1106); other harnesses are wired as their log paths are confirmed.
 
 ### Session Backfill
 
-The historical session backfill (CROW-1075) — reconcile the coding-session transcripts already on disk (predating the live path, or reaped from Crow's store) and upload the ones you choose as real, fully-linked Corveil session artifacts. Claude Code, Codex, Grok Build, Cursor, and OpenCode for v1 (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096).
+The historical session backfill (CROW-1075) — reconcile the coding-session transcripts already on disk (predating the live path, or reaped from Crow's store) and upload the ones you choose as real, fully-linked Corveil session artifacts. Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code for v1 (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096 / CROW-1106).
 
 ```
 crow backfill scan                                                      → {"sessions":[{uid,harness,workspace,repo_name,owner_repo,ticket_number,confidence,upload_status,...}],"summary":{total,uploaded,linkable,repo_only,orphan}}

@@ -203,19 +203,34 @@ struct MuseAgentTests {
         _ = agent.findBinary()
     }
 
-    // MARK: - logSources (CROW-1099)
+    // MARK: - logSources (CROW-1106)
 
-    @Test func logSourcesStayEmptyUntilCwdIsAttributable() {
-        // Muse writes a durable, global JSONL session log
-        // (`~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`).
-        // The cookbook documents no cwd field and its lifecycle events carry only
-        // git refs (insufficient), but a first-hand third-party parser reports a
-        // likely cwd at `runtime.session.metadata.workspace_root` — unverified by
-        // us on a real install (Meta-auth-gated). Until that's confirmed,
-        // attribution can't be trusted, so it stays on the `[]` default (see the
-        // note in MuseAgent). Pin both the broad (nil) and known-session-id shapes.
-        #expect(agent.logSources(worktreePath: "/tmp/wt", harnessSessionID: nil).isEmpty)
-        #expect(agent.logSources(worktreePath: "/tmp/wt", harnessSessionID: "abc-123").isEmpty)
+    @Test func cwdFilteredRecursiveSessionsSource() {
+        let sources = MuseAgent().logSources(
+            worktreePath: "/Users/j/Dev/acme-1", harnessSessionID: nil)
+        #expect(sources.count == 1)
+        let s = sources[0]
+        // Globally stored (pooled under the date tree), so a directory (not a file)
+        // — recursive, filtered to `session*.jsonl`, attributed by the worktree it
+        // ran in (content-filtered, Codex-style).
+        #expect(s.selector == .directory)
+        #expect(s.format == .logDir)
+        #expect(s.fileExtension == "jsonl")
+        #expect(s.fileNamePrefix == "session") // session.jsonl, not unknown siblings
+        #expect(s.recursive == true)
+        #expect(s.excludePathComponents == ["subagent"]) // skip nested child sessions
+        #expect(s.cwdFilter == "/Users/j/Dev/acme-1")
+        // Points at the resolved Muse sessions tree (honors $XDG_DATA_HOME).
+        #expect(s.path == MuseHome.sessionsDir())
+    }
+
+    @Test func harnessSessionIDIsIgnoredForAttribution() {
+        // Like Codex, a known session id does not name the file (cwd-matching is the
+        // selector), so the source is identical whether or not an id is passed.
+        let withID = MuseAgent().logSources(worktreePath: "/a/b", harnessSessionID: "UUID-1")
+        let withoutID = MuseAgent().logSources(worktreePath: "/a/b", harnessSessionID: nil)
+        #expect(withID == withoutID)
+        #expect(withID[0].cwdFilter == "/a/b")
     }
 
     // MARK: - Identity probe

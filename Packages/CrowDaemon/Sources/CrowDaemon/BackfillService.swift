@@ -4,6 +4,7 @@ import CrowCodex
 import CrowGrok
 import CrowCursor
 import CrowOpenCode
+import CrowMuse
 
 /// The daemon-side orchestration behind `backfill-scan` / `backfill-upload`
 /// (CROW-1075). It composes the CrowCore pieces — the disk scanner, the ticket
@@ -46,15 +47,16 @@ struct BackfillService: Sendable {
         let ledger = await store.snapshot()
         // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`),
         // the Grok sessions tree through `GrokHome` (honors `$GROK_HOME`), the Cursor
-        // chats tree through `CursorHome` (honors `$CURSOR_CONFIG_DIR`), and the
-        // OpenCode store through `OpenCodeHome` (honors `$XDG_DATA_HOME`) — the same
-        // trees the live collector and the launch paths read. CrowCore's
-        // `BackfillScanner` can't import CrowCodex / CrowGrok / CrowCursor /
-        // CrowOpenCode, so the daemon injects them all (CROW-1089, CROW-1098,
-        // CROW-1095, CROW-1096). Antigravity's brain dir is resolved by
-        // `AntigravityHome` inside CrowCore and its conversation→worktree map defaults
-        // to `.load()` inside the scanner — so neither is strictly injected, but the
-        // brain dir is passed explicitly for symmetry (CROW-1107).
+        // chats tree through `CursorHome` (honors `$CURSOR_CONFIG_DIR`), the OpenCode
+        // store through `OpenCodeHome` (honors `$XDG_DATA_HOME`), and the Muse sessions
+        // tree through `MuseHome` (honors `$XDG_DATA_HOME`) — the same trees the live
+        // collector and the launch paths read. CrowCore's `BackfillScanner` can't
+        // import CrowCodex / CrowGrok / CrowCursor / CrowOpenCode / CrowMuse, so the
+        // daemon injects them all (CROW-1089, CROW-1098, CROW-1095, CROW-1096, CROW-1106).
+        // Antigravity's brain dir is resolved by `AntigravityHome` inside CrowCore and
+        // its conversation→worktree map defaults to `.load()` inside the scanner — so
+        // neither is strictly injected, but the brain dir is passed explicitly for
+        // symmetry (CROW-1107).
         let s = scanner ?? BackfillScanner(
             devRoot: devRoot,
             codexSessionsDir: URL(fileURLWithPath: CodexHome.sessionsDir()),
@@ -62,6 +64,7 @@ struct BackfillService: Sendable {
             cursorChatsDir: URL(fileURLWithPath: CursorHome.chatsDir()),
             openCodeDatabaseURL: URL(fileURLWithPath: OpenCodeHome.databasePath()),
             antigravityBrainDir: URL(fileURLWithPath: AntigravityHome.brainDir()),
+            museSessionsDir: URL(fileURLWithPath: MuseHome.sessionsDir()),
             now: now)
         return await s.scan(ledger: ledger)
     }
@@ -156,14 +159,16 @@ struct BackfillService: Sendable {
 
     /// The upload `format` stamp for a harness's on-disk transcript, honest about
     /// its on-disk shape so the normalizer reads it correctly: Claude and Grok each
-    /// write a single NDJSON transcript (`.jsonl`); a Codex rollout is one of a set of
+    /// write a single NDJSON transcript (`.jsonl`); Codex and Muse each pool
     /// per-session NDJSON files the collector concatenates (`.logDir`); a Cursor chat
     /// is a content-addressed SQLite `store.db` (`.sqlite`) whose messages
     /// `CursorStore` extracts; OpenCode keeps a SQLite store (`.openCodeStore`,
-    /// reassembled to NDJSON — stamped `.logDir` at upload via `artifactStamp`).
+    /// reassembled to NDJSON — stamped `.logDir` at upload via `artifactStamp`). The
+    /// stamp matches what the live collector stamps for the same harness, so a
+    /// backfilled and a live-captured artifact of one session carry the same `format`.
     static func uploadFormat(for harness: LogSyncHarness) -> AgentLogFormat {
         switch harness {
-        case .codex: return .logDir
+        case .codex, .muse: return .logDir
         case .cursor: return .sqlite
         case .opencode: return .openCodeStore
         default: return .jsonl
@@ -172,7 +177,8 @@ struct BackfillService: Sendable {
 
     /// The `agentKind` sidecar hint for a harness. Only the wired harnesses reach
     /// here; any other maps to Claude's kind as a harmless default (it never occurs
-    /// — the scanner only emits `.claude`/`.codex`/`.grok`/`.cursor`/`.opencode`/`.antigravity`).
+    /// — the scanner only emits
+    /// `.claude`/`.codex`/`.grok`/`.cursor`/`.opencode`/`.antigravity`/`.muse`).
     static func agentKindRawValue(for harness: LogSyncHarness) -> String {
         switch harness {
         case .codex: return AgentKind.codex.rawValue
@@ -180,6 +186,7 @@ struct BackfillService: Sendable {
         case .cursor: return AgentKind.cursor.rawValue
         case .opencode: return AgentKind.openCode.rawValue
         case .antigravity: return AgentKind.antigravity.rawValue
+        case .muse: return AgentKind.muse.rawValue
         default: return AgentKind.claudeCode.rawValue
         }
     }

@@ -62,7 +62,7 @@ CROW-1090. "cwd-attributable?" is the wiring test above.
 | OpenCode | `opencode` | ✅ | `~/.local/share/opencode/opencode.db` (SQLite; 1.17+ — the pre-1.17 `storage/{project,session,message,part}/` JSON tree is legacy, migrated in on upgrade) | relational `session`/`message`/`part` rows | SQLite | ✅ content-filtered (`session.directory` column) | **Wired** (CROW-1096) |
 | Grok Build | `grok` | ✅ | `<$GROK_HOME or ~/.grok>/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Wired** (CROW-1098) |
 | Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ✅ runtime-map (`conversationId → worktree`, from Crow's hooks) | **Wired** (CROW-1107) — ⚠️ payload fields docs-derived, pending live-verify |
-| Muse Code | `muse` | ✅ | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/` | `session.jsonl` | NDJSON | ⚠️ likely content-filtered — cwd reported at `runtime.session.metadata.workspace_root` (line 1, 3rd-party parse), unverified live | Deferred — durable store found (Meta docs); verify `workspace_root`, then wire · [#1099](https://github.com/corveil/crow/issues/1099) |
+| Muse Code | `muse` | ✅ | `<${XDG_DATA_HOME:-~/.local/share}/muse>/sessions/<YYYY>/<MM>/<DD>/<id>/` (pooled globally, date-partitioned) | `session.jsonl` | NDJSON | ✅ content-filtered (`runtime.session.metadata` → `payload.record.workspace_root`, line 1) | **Wired** (CROW-1106) ⚠️ `workspace_root` unverified live |
 | Cowork (Claude desktop, local-agent mode) | — (desktop app) | ❌ | `~/Library/Application Support/Claude/local-agent-mode-sessions/<acct>/<install>/local_<uuid>/` | `audit.jsonl` | NDJSON | ⚠️ cwd inside JSON, no path shortcut | Out of harness scope — see below |
 | Grok Bot | — (Electron app) | ❌ | `~/Library/Application Support/Grok Bot/` | — (leveldb / server-side) | — | ❌ no durable local transcript | No collectable log — skip |
 
@@ -218,19 +218,29 @@ not blocked on discovery.
   against a live `agy` before promoting Antigravity out of Tier-2. Full rationale in
   `AntigravityAgent.logSources` and `AntigravityConversationMap`.
 - **[#1099](https://github.com/corveil/crow/issues/1099) (Muse Code)** —
-  **location answered (docs, not on-disk); attribution likely but unverified.**
+  **research done; wired under [#1106](https://github.com/corveil/crow/issues/1106).**
   Muse writes a durable, global JSONL log at
-  `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl` (Meta dev
-  cookbook, read 2026-08-24) — no transform needed. The cookbook documents no
-  cwd field (its jq prints only event records, whose git refs
-  `base_commit`/`base_ref` collide across worktrees), but a first-hand
-  third-party parser of Muse 0.1.0 logs (superbasedapp/observer,
+  `<${XDG_DATA_HOME:-~/.local/share}/muse>/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`
+  (Meta dev cookbook, read 2026-08-24) — no transform needed. The cookbook
+  documents no cwd field (its jq prints only event records, whose git refs
+  `base_commit`/`base_ref` collide across worktrees), but a first-hand third-party
+  parser of Muse 0.1.0 logs (superbasedapp/observer,
   `internal/adapter/muse/doc.go`, 2026-08-06) reports the absolute cwd at
   `runtime.session.metadata` → `payload.record.workspace_root` on line 1 — a
-  metadata record the cookbook never printed. So a usable cwd very likely
-  exists, making Muse content-filtered (Codex-style). Stays on the `[]` default
-  only until verified: Muse is Meta-auth-gated and wasn't installable during the
-  spike, so confirm `workspace_root` against a real `session.jsonl`, then wire.
+  metadata record the cookbook never printed. That makes Muse content-filtered
+  (Codex-style), so #1106 wired it: `TranscriptHeadReader.absorb` learns
+  `workspace_root`, `MuseAgent.logSources` returns a recursive cwd-filtered
+  `.logDir` source over the sessions dir (`session`-prefixed, `subagent/` children
+  excluded), `MuseHome` resolves `${XDG_DATA_HOME:-~/.local/share}/muse`, and the
+  backfill reconstructs each session from `<id>/session.jsonl`.
+  ⚠️ **Gate not passed live.** #1099 required verifying `workspace_root` on a real
+  `session.jsonl` before wiring (Muse is Meta-auth-gated and was not installable on
+  the dev machine — `crow agents list` → available:false). The operator explicitly
+  chose to wire against the third-party evidence rather than wait. It fails safe:
+  if the real key or path differs, the cwd filter matches nothing and Muse silently
+  collects zero transcripts — never a misattributed upload (the never-guess
+  posture CROW-1089 requires). Confirming `workspace_root` against a real journal
+  remains a version-pinned re-check target.
 
 ## Caveats
 

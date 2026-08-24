@@ -96,6 +96,16 @@ public struct AgentLogSource: Sendable, Equatable {
     /// When `selector == .directory`, whether to descend into subdirectories.
     /// Defaults to `false` (Claude's slug directory is flat).
     public let recursive: Bool
+    /// When `selector == .directory` and `recursive`, drop any file whose path
+    /// contains one of these directory-name components. Used to skip transcripts
+    /// that a recursive scan would otherwise pick up but that don't belong to this
+    /// session — Muse nests child-agent runs at
+    /// `<id>/subagent/<child-id>/session.jsonl`, and each is a *different* session
+    /// (its own uid), so `["subagent"]` keeps them out (CROW-1106). Empty (the
+    /// default) means no exclusion. Applied identically by the live collector
+    /// (`LogSyncCollector.resolveFiles`) and the backfill scanner, so both stay in
+    /// lockstep.
+    public let excludePathComponents: [String]
     /// When set, keep only the resolved files whose *recorded* working directory
     /// equals this path — the attribution mechanism for a harness whose logs are
     /// **globally stored** rather than partitioned into a per-worktree directory.
@@ -116,6 +126,7 @@ public struct AgentLogSource: Sendable, Equatable {
         fileExtension: String? = nil,
         fileNamePrefix: String? = nil,
         recursive: Bool = false,
+        excludePathComponents: [String] = [],
         cwdFilter: String? = nil
     ) {
         self.path = path
@@ -124,6 +135,7 @@ public struct AgentLogSource: Sendable, Equatable {
         self.fileExtension = fileExtension
         self.fileNamePrefix = fileNamePrefix
         self.recursive = recursive
+        self.excludePathComponents = excludePathComponents
         self.cwdFilter = cwdFilter
     }
 
@@ -132,21 +144,23 @@ public struct AgentLogSource: Sendable, Equatable {
         AgentLogSource(path: path, selector: .file, format: format)
     }
 
-    /// A directory source, optionally filtered by file extension / name prefix
-    /// and — for a globally-stored harness — by the working directory each file
-    /// recorded (`cwdFilter`).
+    /// A directory source, optionally filtered by file extension / name prefix,
+    /// excluded path components, and — for a globally-stored harness — by the
+    /// working directory each file recorded (`cwdFilter`).
     public static func directory(
         _ path: String,
         format: AgentLogFormat,
         fileExtension: String? = nil,
         fileNamePrefix: String? = nil,
         recursive: Bool = false,
+        excludePathComponents: [String] = [],
         cwdFilter: String? = nil
     ) -> AgentLogSource {
         AgentLogSource(
             path: path, selector: .directory, format: format,
             fileExtension: fileExtension, fileNamePrefix: fileNamePrefix,
-            recursive: recursive, cwdFilter: cwdFilter)
+            recursive: recursive, excludePathComponents: excludePathComponents,
+            cwdFilter: cwdFilter)
     }
 
     /// Slugify a POSIX path the way Claude Code names its per-project log

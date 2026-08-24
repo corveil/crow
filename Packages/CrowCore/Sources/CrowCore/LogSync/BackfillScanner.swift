@@ -4,7 +4,7 @@ import Foundation
 /// been uploaded, reconstructing each one's workspace / repo / ticket so the
 /// Settings "Backfill history" dialog can show a reviewable list (CROW-1075).
 ///
-/// Six harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
+/// Seven harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
 /// by working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`); **Codex**
 /// (CROW-1089), whose rollouts pool globally under `~/.codex/sessions/<date>/…`
 /// but each record their own `cwd` in a first-line `session_meta` event; **Grok**
@@ -13,22 +13,26 @@ import Foundation
 /// **Cursor** (CROW-1095), whose per-chat `~/.cursor/chats/<id>/<sub>/store.db`
 /// records its `cwd` in the sibling `meta.json`; **OpenCode** (CROW-1096), whose
 /// sessions live in the `~/.local/share/opencode/opencode.db` SQLite store, each row
-/// recording the `directory` it ran in (`session.directory`); and **Antigravity**
+/// recording the `directory` it ran in (`session.directory`); **Antigravity**
 /// (CROW-1107), whose transcript records **no** cwd — its cwd is instead recovered
-/// from the runtime conversation→worktree map the live collector builds. The first
-/// five make historical reconstruction reliable because the real `cwd` is
-/// recoverable — Claude/Codex record it in the transcript, Grok encodes it in the
-/// path, Cursor in a sibling file, OpenCode in a column — the authoritative signal,
-/// not a lossy directory name; Antigravity relies on the map (a conversation with no
-/// map entry → `low`/orphan, never guessed). The scan is disk- and git-only — it
-/// never touches the provider or the network, so it stays fast over hundreds of
-/// sessions (it never opens a Cursor `store.db`; the Cursor uid is the `<sub>`
-/// directory name and the cwd a tiny sibling JSON read); ticket *validation* is
-/// deferred to upload, where a link is actually asserted.
+/// from the runtime conversation→worktree map the live collector builds; and
+/// **Muse** (CROW-1106), whose journals pool globally under
+/// `~/.local/share/muse/sessions/<date>/<id>/session.jsonl`, each recording its cwd
+/// on a line-1 `runtime.session.metadata` record (`payload.record.workspace_root`).
+/// All but Antigravity make historical reconstruction reliable because the real
+/// `cwd` is recoverable — Claude/Codex/Muse record it in the transcript, Grok
+/// encodes it in the path, Cursor in a sibling file, OpenCode in a column — the
+/// authoritative signal, not a lossy directory name; Antigravity relies on the map
+/// (a conversation with no map entry → `low`/orphan, never guessed). The scan is
+/// disk- and git-only — it never touches the provider or the network, so it stays
+/// fast over hundreds of sessions (it never opens a Cursor `store.db`; the Cursor
+/// uid is the `<sub>` directory name and the cwd a tiny sibling JSON read); ticket
+/// *validation* is deferred to upload, where a link is actually asserted.
 ///
 /// Everything effectful is injected (the projects directory, the Codex sessions
 /// directory, the Grok sessions directory, the Cursor chats directory, the OpenCode
-/// database path, the Antigravity brain directory + its conversation map, the
+/// database path, the Antigravity brain directory + its conversation map, the Muse
+/// sessions directory, the
 /// git-remote reader, the clock), so the reconciliation logic is unit-testable
 /// against a temporary tree.
 public struct BackfillScanner: Sendable {
@@ -67,6 +71,11 @@ public struct BackfillScanner: Sendable {
     /// CROW-1097). A historical transcript whose conversation id isn't in the map
     /// reconstructs to `cwd == nil` ⇒ `low`/orphan (never guessed).
     let antigravityMap: AntigravityConversationMap
+    /// `~/.local/share/muse/sessions` by default — where Muse Code writes its
+    /// date-partitioned `<id>/session.jsonl` journals (CROW-1106). The daemon
+    /// injects the `$XDG_DATA_HOME`-resolved tree (via `MuseHome`, which CrowCore
+    /// can't import); this literal default is the fallback for a direct caller.
+    let museSessionsDir: URL
     /// Resolve a directory's `origin` remote URL (default: `git -C <dir> remote
     /// get-url origin`). Injected so tests need no real repos.
     let gitRemote: @Sendable (String) async -> String?
@@ -81,6 +90,7 @@ public struct BackfillScanner: Sendable {
         openCodeDatabaseURL: URL? = nil,
         antigravityBrainDir: URL? = nil,
         antigravityMap: AntigravityConversationMap? = nil,
+        museSessionsDir: URL? = nil,
         runner: any ShellRunner = ProcessShellRunner(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -98,6 +108,8 @@ public struct BackfillScanner: Sendable {
         self.antigravityBrainDir = antigravityBrainDir
             ?? URL(fileURLWithPath: AntigravityHome.brainDir(), isDirectory: true)
         self.antigravityMap = antigravityMap ?? AntigravityConversationMap.load()
+        self.museSessionsDir = museSessionsDir ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/muse/sessions", isDirectory: true)
         self.gitRemote = { dir in
             (try? await runner.run(args: ["git", "-C", dir, "remote", "get-url", "origin"],
                                    env: [:], cwd: nil))?
@@ -108,11 +120,12 @@ public struct BackfillScanner: Sendable {
 
     /// Test seam: inject the git-remote reader directly. `codexSessionsDir` /
     /// `grokSessionsDir` / `cursorChatsDir` / `openCodeDatabaseURL` /
-    /// `antigravityBrainDir` default to nonexistent paths so a test that only stages
-    /// Claude transcripts stays hermetic (it never accidentally scans a dev machine's
-    /// real `~/.codex/sessions`, `~/.grok/sessions`, `~/.cursor/chats`,
-    /// `~/.local/share/opencode/opencode.db`, or `~/.gemini/antigravity-cli/brain`);
-    /// a Codex/Grok/Cursor/OpenCode/Antigravity test passes an explicit temp path.
+    /// `antigravityBrainDir` / `museSessionsDir` default to nonexistent paths so a
+    /// test that only stages Claude transcripts stays hermetic (it never accidentally
+    /// scans a dev machine's real `~/.codex/sessions`, `~/.grok/sessions`,
+    /// `~/.cursor/chats`, `~/.local/share/opencode/opencode.db`,
+    /// `~/.gemini/antigravity-cli/brain`, or `~/.local/share/muse/sessions`); a
+    /// Codex/Grok/Cursor/OpenCode/Antigravity/Muse test passes an explicit temp path.
     /// `antigravityMap` defaults to empty for the same reason.
     init(
         devRoot: String,
@@ -123,6 +136,7 @@ public struct BackfillScanner: Sendable {
         openCodeDatabaseURL: URL? = nil,
         antigravityBrainDir: URL? = nil,
         antigravityMap: AntigravityConversationMap = AntigravityConversationMap(),
+        museSessionsDir: URL? = nil,
         gitRemote: @escaping @Sendable (String) async -> String?,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -139,13 +153,15 @@ public struct BackfillScanner: Sendable {
         self.antigravityBrainDir = antigravityBrainDir
             ?? projectsDir.appendingPathComponent("__no_antigravity_brain__", isDirectory: true)
         self.antigravityMap = antigravityMap
+        self.museSessionsDir = museSessionsDir
+            ?? projectsDir.appendingPathComponent("__no_muse_sessions__", isDirectory: true)
         self.gitRemote = gitRemote
         self.now = now
     }
 
     /// Reconcile every on-disk transcript (Claude + Codex + Grok + Cursor +
-    /// OpenCode + Antigravity) against the ledger and return the reconstructed rows,
-    /// newest first.
+    /// OpenCode + Antigravity + Muse) against the ledger and return the reconstructed
+    /// rows, newest first.
     public func scan(ledger: LogSyncLedger) async -> [BackfillSession] {
         let remotes = await resolveRemotes()
         let knownRepoNames = Array(Set(remotes.values.map { $0.repo }))
@@ -188,6 +204,13 @@ public struct BackfillScanner: Sendable {
         }
         for file in antigravityTranscriptFiles() {
             guard let s = reconstructAntigravity(
+                file: file, remotesByRepo: remotes,
+                knownRepoNames: knownRepoNames, ledger: ledger)
+            else { continue }
+            sessions.append(s)
+        }
+        for file in museSessionFiles() {
+            guard let s = reconstructMuse(
                 file: file, remotesByRepo: remotes,
                 knownRepoNames: knownRepoNames, ledger: ledger)
             else { continue }
@@ -315,6 +338,36 @@ public struct BackfillScanner: Sendable {
         return assemble(
             uid: conversationID, file: file, slug: conversationID, harness: .antigravity,
             cwd: cwd, gitBranch: nil,
+            remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
+    }
+
+    /// Reconstruct one Muse Code journal (CROW-1106). Like Codex, the cwd is read
+    /// from the file — Muse records its absolute working directory on the line-1
+    /// `runtime.session.metadata` record at `payload.record.workspace_root`
+    /// (`TranscriptHeadReader`, small line budget: Muse writes no git branch, so the
+    /// general reader would otherwise scan to its cap). Like Grok, the uid is the
+    /// transcript's parent directory — Muse stores each session at
+    /// `<sessions>/<YYYY>/<MM>/<DD>/<id>/session.jsonl`, so `<id>` is the authoritative
+    /// session id. `gitBranch` stays `nil`; the ticket comes from the worktree the
+    /// cwd resolves to, like every other harness.
+    ///
+    /// ⚠️ `workspace_root` is unverified against a live Muse install (Meta-auth-gated,
+    /// CROW-1099). If the real key differs, the head read returns no cwd and the
+    /// session reconstructs as a low-confidence orphan (never a misattributed link) —
+    /// the same never-guess posture as the live collector's cwd filter.
+    func reconstructMuse(
+        file: URL, remotesByRepo: [String: RepoRemote],
+        knownRepoNames: [String], ledger: LogSyncLedger
+    ) -> BackfillSession? {
+        let sessionDir = file.deletingLastPathComponent()
+        let uid = sessionDir.lastPathComponent
+        guard !uid.isEmpty else { return nil }
+        // cwd is on the line-1 metadata record; a tiny budget suffices (Muse never
+        // fills gitBranch, so the general reader would otherwise scan to its cap).
+        let head = TranscriptHeadReader.read(file, maxLines: 4)
+        return assemble(
+            uid: uid, file: file, slug: uid, harness: .muse,
+            cwd: head.cwd, gitBranch: nil,
             remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
     }
 
@@ -492,6 +545,30 @@ public struct BackfillScanner: Sendable {
             at: antigravityBrainDir, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
         var out: [URL] = []
         for case let url as URL in en where url.lastPathComponent == "transcript_full.jsonl" {
+            if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                out.append(url)
+            }
+        }
+        return out
+    }
+
+    /// Every `session*.jsonl` under `<museSessionsDir>` (recursively, across the
+    /// `<YYYY>/<MM>/<DD>/<id>` date tree). Muse pools its journals globally, so
+    /// attribution is by recorded cwd (see `reconstructMuse`), not by path. A
+    /// `subagent` path component is excluded: Muse nests child-agent runs at
+    /// `<id>/subagent/<child-id>/session.jsonl`, and each is a *different* session
+    /// (its own uid, its cwd inherited from the parent), so including them would
+    /// mint spurious backfill rows — skip is safe for v1 (CROW-1106). Kept in
+    /// lockstep with the live collector's `logSources` selector (same `session`
+    /// prefix + `subagent` exclusion).
+    func museSessionFiles() -> [URL] {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: museSessionsDir, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        var out: [URL] = []
+        for case let url as URL in en where url.pathExtension == "jsonl"
+            && url.lastPathComponent.hasPrefix("session")
+            && !url.pathComponents.contains("subagent") {
             if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
                 out.append(url)
             }
