@@ -2,6 +2,7 @@ import Foundation
 import CrowCore
 import CrowCodex
 import CrowGrok
+import CrowCursor
 
 /// The daemon-side orchestration behind `backfill-scan` / `backfill-upload`
 /// (CROW-1075). It composes the CrowCore pieces — the disk scanner, the ticket
@@ -42,15 +43,17 @@ struct BackfillService: Sendable {
     func scan(scanner: BackfillScanner? = nil) async -> [BackfillSession] {
         let store = LogSyncLedgerStore.shared(devRoot: devRoot)
         let ledger = await store.snapshot()
-        // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`)
-        // and the Grok sessions tree through `GrokHome` (honors `$GROK_HOME`) — the
+        // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`),
+        // the Grok sessions tree through `GrokHome` (honors `$GROK_HOME`), and the
+        // Cursor chats tree through `CursorHome` (honors `$CURSOR_CONFIG_DIR`) — the
         // same trees the live collector and the launch paths read. CrowCore's
-        // `BackfillScanner` can't import CrowCodex/CrowGrok, so the daemon injects
-        // both (CROW-1089, CROW-1098).
+        // `BackfillScanner` can't import CrowCodex/CrowGrok/CrowCursor, so the daemon
+        // injects all three (CROW-1089, CROW-1098, CROW-1095).
         let s = scanner ?? BackfillScanner(
             devRoot: devRoot,
             codexSessionsDir: URL(fileURLWithPath: CodexHome.sessionsDir()),
             grokSessionsDir: URL(fileURLWithPath: GrokHome.sessionsDir()),
+            cursorChatsDir: URL(fileURLWithPath: CursorHome.chatsDir()),
             now: now)
         return await s.scan(ledger: ledger)
     }
@@ -132,21 +135,28 @@ struct BackfillService: Sendable {
 
     // MARK: - Helpers
 
-    /// The upload `format` stamp for a harness's on-disk transcript. Claude and
+    /// The upload `format` stamp for a harness's on-disk transcript, honest about
+    /// its on-disk shape so `TranscriptNormalizer` reads it correctly: Claude and
     /// Grok each write a single NDJSON transcript (`.jsonl`); a Codex rollout is one
-    /// of a set of per-session files the collector concatenates (`.logDir`). All
-    /// three normalize through `concatenateNDJSON`, but the stamp is honest.
+    /// of a set of per-session NDJSON files the collector concatenates (`.logDir`);
+    /// a Cursor chat is a content-addressed SQLite `store.db` (`.sqlite`) whose
+    /// messages `CursorStore` extracts.
     static func uploadFormat(for harness: LogSyncHarness) -> AgentLogFormat {
-        harness == .codex ? .logDir : .jsonl
+        switch harness {
+        case .codex: return .logDir
+        case .cursor: return .sqlite
+        default: return .jsonl
+        }
     }
 
     /// The `agentKind` sidecar hint for a harness. Only the wired harnesses reach
     /// here; any other maps to Claude's kind as a harmless default (it never
-    /// occurs — the scanner only emits `.claude`/`.codex`/`.grok`).
+    /// occurs — the scanner only emits `.claude`/`.codex`/`.grok`/`.cursor`).
     static func agentKindRawValue(for harness: LogSyncHarness) -> String {
         switch harness {
         case .codex: return AgentKind.codex.rawValue
         case .grok: return AgentKind.grok.rawValue
+        case .cursor: return AgentKind.cursor.rawValue
         default: return AgentKind.claudeCode.rawValue
         }
     }

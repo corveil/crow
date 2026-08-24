@@ -4,22 +4,26 @@ import Foundation
 /// been uploaded, reconstructing each one's workspace / repo / ticket so the
 /// Settings "Backfill history" dialog can show a reviewable list (CROW-1075).
 ///
-/// Three harnesses are wired: **Claude**, whose logs are partitioned by
-/// working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`); **Codex**,
-/// whose rollouts pool globally under `~/.codex/sessions/<date>/…` but each record
-/// their own `cwd` in a first-line `session_meta` event (CROW-1089); and **Grok**,
-/// which partitions by working directory too, encoding the cwd into the directory
-/// name (`~/.grok/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`, CROW-1098).
-/// All three make historical reconstruction reliable because the real `cwd` is
-/// recoverable — Claude/Codex record it in the transcript, Grok encodes it in the
-/// path — the authoritative signal, not a lossy directory name. The
-/// scan is disk- and git-only — it never touches the provider or the network, so
-/// it stays fast over hundreds of sessions; ticket *validation* is deferred to
-/// upload, where a link is actually asserted.
+/// Four harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
+/// by working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`); **Codex**
+/// (CROW-1089), whose rollouts pool globally under `~/.codex/sessions/<date>/…`
+/// but each record their own `cwd` in a first-line `session_meta` event; **Grok**
+/// (CROW-1098), which partitions by working directory too, encoding the cwd into
+/// the directory name (`~/.grok/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`);
+/// and **Cursor** (CROW-1095), whose per-chat `~/.cursor/chats/<id>/<sub>/store.db`
+/// records its `cwd` in the sibling `meta.json`. All make historical
+/// reconstruction reliable because the real `cwd` is recoverable — Claude/Codex
+/// record it in the transcript, Grok encodes it in the path, Cursor in a sibling
+/// file — the authoritative signal, not a lossy directory name. The scan is disk-
+/// and git-only — it never touches the provider or the network, so it stays fast
+/// over hundreds of sessions (it never opens a `store.db`; the Cursor uid is the
+/// `<sub>` directory name and the cwd a tiny sibling JSON read); ticket
+/// *validation* is deferred to upload, where a link is actually asserted.
 ///
 /// Everything effectful is injected (the projects directory, the Codex sessions
-/// directory, the git-remote reader, the clock), so the reconciliation logic is
-/// unit-testable against a temporary tree.
+/// directory, the Grok sessions directory, the Cursor chats directory, the
+/// git-remote reader, the clock), so the reconciliation logic is unit-testable
+/// against a temporary tree.
 public struct BackfillScanner: Sendable {
     let devRoot: String
     /// `~/.claude/projects` by default — where Claude writes per-project slug
@@ -37,6 +41,12 @@ public struct BackfillScanner: Sendable {
     /// CrowCore can't import); this literal default is the fallback for a direct
     /// caller.
     let grokSessionsDir: URL
+    /// `~/.cursor/chats` by default — where the `cursor-agent` CLI writes each
+    /// chat's `<chatId>/<subId>/store.db` + sibling `meta.json` (CROW-1095). The
+    /// daemon injects the `$CURSOR_CONFIG_DIR`-resolved tree (via `CursorHome`,
+    /// which CrowCore can't import); this literal default is the fallback for a
+    /// direct caller.
+    let cursorChatsDir: URL
     /// Resolve a directory's `origin` remote URL (default: `git -C <dir> remote
     /// get-url origin`). Injected so tests need no real repos.
     let gitRemote: @Sendable (String) async -> String?
@@ -47,6 +57,7 @@ public struct BackfillScanner: Sendable {
         projectsDir: URL? = nil,
         codexSessionsDir: URL? = nil,
         grokSessionsDir: URL? = nil,
+        cursorChatsDir: URL? = nil,
         runner: any ShellRunner = ProcessShellRunner(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -57,6 +68,8 @@ public struct BackfillScanner: Sendable {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
         self.grokSessionsDir = grokSessionsDir ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".grok/sessions", isDirectory: true)
+        self.cursorChatsDir = cursorChatsDir ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cursor/chats", isDirectory: true)
         self.gitRemote = { dir in
             (try? await runner.run(args: ["git", "-C", dir, "remote", "get-url", "origin"],
                                    env: [:], cwd: nil))?
@@ -66,15 +79,16 @@ public struct BackfillScanner: Sendable {
     }
 
     /// Test seam: inject the git-remote reader directly. `codexSessionsDir` /
-    /// `grokSessionsDir` default to nonexistent paths so a test that only stages
-    /// Claude transcripts stays hermetic (it never accidentally scans a dev
-    /// machine's real `~/.codex/sessions` or `~/.grok/sessions`); a Codex or Grok
-    /// test passes an explicit temp dir.
+    /// `grokSessionsDir` / `cursorChatsDir` default to nonexistent paths so a test
+    /// that only stages Claude transcripts stays hermetic (it never accidentally
+    /// scans a dev machine's real `~/.codex/sessions`, `~/.grok/sessions`, or
+    /// `~/.cursor/chats`); a Codex/Grok/Cursor test passes an explicit temp dir.
     init(
         devRoot: String,
         projectsDir: URL,
         codexSessionsDir: URL? = nil,
         grokSessionsDir: URL? = nil,
+        cursorChatsDir: URL? = nil,
         gitRemote: @escaping @Sendable (String) async -> String?,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -84,12 +98,14 @@ public struct BackfillScanner: Sendable {
             ?? projectsDir.appendingPathComponent("__no_codex_sessions__", isDirectory: true)
         self.grokSessionsDir = grokSessionsDir
             ?? projectsDir.appendingPathComponent("__no_grok_sessions__", isDirectory: true)
+        self.cursorChatsDir = cursorChatsDir
+            ?? projectsDir.appendingPathComponent("__no_cursor_chats__", isDirectory: true)
         self.gitRemote = gitRemote
         self.now = now
     }
 
-    /// Reconcile every on-disk transcript (Claude + Codex + Grok) against the
-    /// ledger and return the reconstructed rows, newest first.
+    /// Reconcile every on-disk transcript (Claude + Codex + Grok + Cursor) against
+    /// the ledger and return the reconstructed rows, newest first.
     public func scan(ledger: LogSyncLedger) async -> [BackfillSession] {
         let remotes = await resolveRemotes()
         let knownRepoNames = Array(Set(remotes.values.map { $0.repo }))
@@ -111,6 +127,13 @@ public struct BackfillScanner: Sendable {
         }
         for file in grokChatHistoryFiles() {
             guard let s = reconstructGrok(
+                file: file, remotesByRepo: remotes,
+                knownRepoNames: knownRepoNames, ledger: ledger)
+            else { continue }
+            sessions.append(s)
+        }
+        for file in cursorStoreFiles() {
+            guard let s = reconstructCursor(
                 file: file, remotesByRepo: remotes,
                 knownRepoNames: knownRepoNames, ledger: ledger)
             else { continue }
@@ -176,6 +199,25 @@ public struct BackfillScanner: Sendable {
         return assemble(
             uid: uid, file: file, slug: encodedCwd, harness: .grok,
             cwd: cwd, gitBranch: nil,
+            remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
+    }
+
+    /// Reconstruct one Cursor chat from its `store.db`. The scan never opens the
+    /// database: the uid is the `<subId>` directory name (== `meta['0'].agentId`,
+    /// verified) and the cwd is read from the tiny sibling `meta.json`
+    /// (`CursorStore.recordedCwd`) — keeping the scan disk-only and fast even over
+    /// hundreds of chats. Cursor records no git branch, so `gitBranch` stays `nil`;
+    /// the message extraction is deferred to upload. A chat with no recoverable cwd
+    /// is dropped, never guessed (CROW-1095).
+    func reconstructCursor(
+        file: URL, remotesByRepo: [String: RepoRemote],
+        knownRepoNames: [String], ledger: LogSyncLedger
+    ) -> BackfillSession? {
+        let subID = file.deletingLastPathComponent().lastPathComponent
+        guard !subID.isEmpty else { return nil }
+        return assemble(
+            uid: subID, file: file, slug: subID, harness: .cursor,
+            cwd: CursorStore.recordedCwd(forStoreDB: file), gitBranch: nil,
             remotesByRepo: remotesByRepo, knownRepoNames: knownRepoNames, ledger: ledger)
     }
 
@@ -305,6 +347,23 @@ public struct BackfillScanner: Sendable {
         var out: [URL] = []
         for case let url as URL in en where url.pathExtension == "jsonl"
             && url.lastPathComponent.hasPrefix("chat_history") {
+            if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                out.append(url)
+            }
+        }
+        return out
+    }
+
+    /// Every `store.db` under `~/.cursor/chats` (recursively across the
+    /// `<chatId>/<subId>/` tree). The sibling `store.db-wal` / `store.db-shm` /
+    /// `meta.json` / `prompt_history.json` are excluded by the exact `store.db`
+    /// filename, so only the one database per chat is enumerated.
+    func cursorStoreFiles() -> [URL] {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: cursorChatsDir, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        var out: [URL] = []
+        for case let url as URL in en where url.lastPathComponent == "store.db" {
             if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
                 out.append(url)
             }

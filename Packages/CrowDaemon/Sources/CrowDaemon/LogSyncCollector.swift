@@ -108,10 +108,12 @@ struct LogSyncCollector {
             guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
 
             // Where does this harness write its logs? Empty for harnesses whose
-            // on-disk logs are not yet wired (everything but Claude, Codex, and
-            // Grok today — CROW-1089, CROW-1098). A Codex source carries a
-            // `cwdFilter` that `resolveFiles` applies to attribute a global rollout
-            // to this worktree; Claude and Grok partition by worktree directly.
+            // on-disk logs are not yet wired (everything but Claude, Codex, Grok,
+            // and Cursor today — CROW-1089 / CROW-1098 / CROW-1095). A
+            // globally-stored harness's source carries a `cwdFilter` that
+            // `resolveFiles` applies to attribute one worktree's sessions out of the
+            // shared tree (Codex/Cursor); Claude and Grok partition by worktree
+            // directly.
             guard let agent = AgentRegistry.shared.agent(for: session.agentKind) else { continue }
             let sources = agent.logSources(worktreePath: worktree.worktreePath, harnessSessionID: nil)
             guard !sources.isEmpty else { continue }
@@ -128,9 +130,10 @@ struct LogSyncCollector {
             }
 
             // Pick the single format for the artifact stamp. Claude and Grok
-            // sources are `.jsonl`; Codex sources are `.logDir` (a set of
-            // per-session rollouts concatenated). A mixed set would be unusual —
-            // take the first source's format.
+            // sources are `.jsonl`; Codex sources are `.logDir` (per-session
+            // rollouts concatenated); Cursor sources are `.sqlite` (`CursorStore`
+            // extracts the messages). A mixed set would be unusual — take the first
+            // source's format.
             let format = sources.first?.format ?? .jsonl
             guard let transcript = TranscriptNormalizer.normalize(
                 files: files, format: format, maxBytes: max(1, config.maxUploadBytes))
@@ -278,25 +281,39 @@ struct LogSyncCollector {
                 if let prefix = source.fileNamePrefix, !url.lastPathComponent.hasPrefix(prefix) { return false }
                 return true
             }
-            filtered = applyingCwdFilter(filtered, source.cwdFilter)
+            filtered = applyingCwdFilter(filtered, source.cwdFilter, format: source.format)
             return filtered.sorted { a, b in
                 (Self.modificationDate(a) ?? .distantPast) < (Self.modificationDate(b) ?? .distantPast)
             }
         }
     }
 
-    /// Keep only files whose recorded `cwd` (read cheaply from the head via
-    /// `AgentLogCwdReader`) equals `cwdFilter`, path-standardized on both sides.
+    /// Keep only files whose recorded `cwd` (read from the head for NDJSON via
+    /// `AgentLogCwdReader`, or the sibling `meta.json` for a Cursor `.sqlite` store
+    /// via `CursorStore`) equals `cwdFilter`, path-standardized on both sides.
     /// `nil` filter is a no-op (Claude, whose slug directory is already the
     /// filter). A file with no readable cwd never matches — an unattributable
-    /// transcript is dropped, not guessed (CROW-1089).
-    static func applyingCwdFilter(_ files: [URL], _ cwdFilter: String?) -> [URL] {
+    /// transcript is dropped, not guessed (CROW-1089 / CROW-1095).
+    static func applyingCwdFilter(
+        _ files: [URL], _ cwdFilter: String?, format: AgentLogFormat = .logDir
+    ) -> [URL] {
         guard let cwdFilter else { return files }
         let want = (cwdFilter as NSString).standardizingPath
         guard !want.isEmpty else { return [] }
         return files.filter { url in
-            guard let cwd = AgentLogCwdReader.read(url) else { return false }
+            guard let cwd = recordedCwd(of: url, format: format) else { return false }
             return (cwd as NSString).standardizingPath == want
+        }
+    }
+
+    /// The working directory a resolved log file recorded, choosing the reader by
+    /// on-disk shape: a Cursor `.sqlite` store keeps its cwd in the sibling
+    /// `meta.json` (`CursorStore.recordedCwd`), while Claude/Codex NDJSON records
+    /// it in the transcript head (`AgentLogCwdReader`).
+    static func recordedCwd(of url: URL, format: AgentLogFormat) -> String? {
+        switch format {
+        case .sqlite: return CursorStore.recordedCwd(forStoreDB: url)
+        case .jsonl, .logDir: return AgentLogCwdReader.read(url)
         }
     }
 
@@ -304,16 +321,40 @@ struct LogSyncCollector {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
+    /// The newest mtime across `files` **and their SQLite `-wal`/`-shm`
+    /// siblings**, so the quiet-period check sees a still-active store as active.
+    /// A Cursor `store.db` in WAL mode commits to `store.db-wal`, not the main
+    /// file, so checking only the resolved `store.db` could read a chat as
+    /// quiescent while `cursor-agent` is still writing — and the server's
+    /// write-once 409 would then freeze that partial transcript. Probing the
+    /// siblings is a no-op for a harness (Claude/Codex) whose resolved files have
+    /// none (CROW-1095).
     static func newestModification(_ files: [URL]) -> Date? {
-        files.compactMap { modificationDate($0) }.max()
+        var newest: Date?
+        for url in files {
+            for candidate in [url,
+                              URL(fileURLWithPath: url.path + "-wal"),
+                              URL(fileURLWithPath: url.path + "-shm")] {
+                if let d = modificationDate(candidate), d > (newest ?? .distantPast) {
+                    newest = d
+                }
+            }
+        }
+        return newest
     }
 
-    /// The harness's own session id when exactly one file backs the transcript
-    /// (its filename stem, e.g. the Claude `.jsonl` UUID); nil when several files
-    /// were concatenated.
+    /// The harness's own session id when exactly one file backs the transcript;
+    /// nil when several files were concatenated. For Claude/Codex it is the file's
+    /// stem (the `.jsonl` UUID); for a Cursor `store.db` — always that literal name
+    /// — it is the parent `<subId>` directory (the chat's agentId), since the stem
+    /// "store" identifies nothing.
     static func agentSessionID(from files: [URL]) -> String? {
         guard files.count == 1 else { return nil }
-        return files[0].deletingPathExtension().lastPathComponent
+        let file = files[0]
+        if file.lastPathComponent == "store.db" {
+            return file.deletingLastPathComponent().lastPathComponent
+        }
+        return file.deletingPathExtension().lastPathComponent
     }
 
     static func sha256Hex(_ data: Data) -> String {

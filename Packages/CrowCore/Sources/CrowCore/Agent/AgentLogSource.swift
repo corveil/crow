@@ -10,10 +10,14 @@ public enum AgentLogFormat: String, Sendable, Codable, Equatable, CaseIterable {
     /// transformation before upload.
     case jsonl
     /// A SQLite database. The Cursor CLI (`cursor-agent`) stores each chat's
-    /// conversation as opaque blobs inside a per-chat `store.db`
-    /// (`~/.cursor/chats/<id>/<sub>/store.db`, tables `blobs`/`meta`). Requires
-    /// blob extraction before it becomes NDJSON — not yet wired (see
-    /// `CursorAgent`). Note this is the *CLI's* store, not the Cursor IDE's
+    /// conversation as content-addressed blobs inside a per-chat `store.db`
+    /// (`~/.cursor/chats/<id>/<sub>/store.db`, tables `blobs`/`meta`). **Wired**
+    /// (CROW-1095): `CursorStore` follows the `meta['0'].latestRootBlobId` root
+    /// blob's ordered message-blob refs and emits each message's JSON as one NDJSON
+    /// line; `TranscriptNormalizer` concatenates the resulting lines. The cwd for
+    /// attribution comes from the sibling `meta.json`, not the transcript, so the
+    /// collector reads it via `CursorStore.recordedCwd` rather than
+    /// `AgentLogCwdReader`. Note this is the *CLI's* store, not the Cursor IDE's
     /// `state.vscdb`.
     case sqlite
     /// A directory (or set) of per-session log files the collector concatenates

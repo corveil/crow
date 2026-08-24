@@ -42,9 +42,10 @@ public enum CursorMCPConfigWriter {
     /// a possibly-large `~/.claude.json`); the write is global and self-heals on
     /// the next launch, so fire-and-forget is fine.
     public static func bridgeJiraMCPDefault() {
-        let cursorHome = ProcessInfo.processInfo.environment["CURSOR_CONFIG_DIR"]
-            .flatMap { $0.isEmpty ? nil : $0 }
-            ?? NSString(string: "~/.cursor").expandingTildeInPath
+        // Resolve the Cursor home through the shared `CursorHome` resolver (honors
+        // `$CURSOR_CONFIG_DIR`, empty-is-unset) — one source of truth with the
+        // session-log collector's chats path (CROW-1095).
+        let cursorHome = CursorHome.path()
         bridgeJiraMCP(cursorMCPPath: (cursorHome as NSString).appendingPathComponent("mcp.json"))
     }
 

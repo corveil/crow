@@ -1734,7 +1734,7 @@
     modal.appendChild(head);
 
     const body = el('div', 'settings-body');
-    const summary = el('div', 'backfill-summary', 'Scanning ~/.claude/projects and ~/.codex/sessions…');
+    const summary = el('div', 'backfill-summary', 'Scanning ~/.claude/projects, ~/.codex/sessions and ~/.cursor/chats…');
     body.appendChild(summary);
 
     const filterRow = el('div', 'backfill-filters');
@@ -1879,7 +1879,7 @@
     }
 
     async function scan() {
-      summary.textContent = 'Scanning ~/.claude/projects and ~/.codex/sessions…';
+      summary.textContent = 'Scanning ~/.claude/projects, ~/.codex/sessions and ~/.cursor/chats…';
       try {
         const res = await rpc('backfill-scan', {});
         sessions = res.sessions || [];
