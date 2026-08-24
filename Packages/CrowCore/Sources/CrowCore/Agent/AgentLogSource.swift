@@ -27,6 +27,30 @@ public enum AgentLogFormat: String, Sendable, Codable, Equatable, CaseIterable {
     /// to attribute a globally-stored rollout to a worktree (see the `cwdFilter`
     /// field and `OpenAICodexAgent.logSources`).
     case logDir
+    /// OpenCode's `opencode.db` SQLite store (`<dataDir>/opencode.db`). Unlike
+    /// `.logDir`, a session is a set of rows across relational `session` / `message`
+    /// / `part` tables that must be reassembled — and one database holds every
+    /// session across every worktree, so attribution is by the `session.directory`
+    /// column, not a per-file path. `OpenCodeStore` reads the database, selects the
+    /// cwd-matched top-level sessions, and rebuilds an ordered NDJSON transcript from
+    /// their `message`/`part` rows (CROW-1096).
+    ///
+    /// This value is an *internal normalization discriminator* only: because the
+    /// selector is a cwd (live collector) or a session id (backfill), an OpenCode
+    /// source is normalized through `OpenCodeStore` directly rather than the shared
+    /// `TranscriptNormalizer.normalize(files:…)`. The reassembled artifact is NDJSON,
+    /// so it is uploaded stamped as `.logDir` — see `artifactStamp`, which every
+    /// upload path applies. The server's `format` column never sees `openCodeStore`.
+    case openCodeStore
+}
+
+public extension AgentLogFormat {
+    /// The value stamped onto the uploaded artifact's `format` column. Every format
+    /// is itself except `.openCodeStore`, whose reassembled output is NDJSON and so
+    /// is stamped `.logDir` — the server enumerates a small closed set and has no
+    /// `openCodeStore` reader; the SQLite store is a Crow-internal concern that never
+    /// leaves the collector (CROW-1096).
+    var artifactStamp: AgentLogFormat { self == .openCodeStore ? .logDir : self }
 }
 
 /// Where a single coding-agent harness writes a durable session log on disk, and

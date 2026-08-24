@@ -124,10 +124,12 @@ private struct StubRunner: ShellRunner {
         #expect(BackfillService.uploadFormat(for: .codex) == .logDir)
         #expect(BackfillService.uploadFormat(for: .grok) == .jsonl) // single NDJSON transcript
         #expect(BackfillService.uploadFormat(for: .cursor) == .sqlite)
+        #expect(BackfillService.uploadFormat(for: .opencode) == .openCodeStore)
         #expect(BackfillService.agentKindRawValue(for: .claude) == AgentKind.claudeCode.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .codex) == AgentKind.codex.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .grok) == AgentKind.grok.rawValue)
         #expect(BackfillService.agentKindRawValue(for: .cursor) == AgentKind.cursor.rawValue)
+        #expect(BackfillService.agentKindRawValue(for: .opencode) == AgentKind.openCode.rawValue)
     }
 
     @Test func codexSessionUploadsUnderCodexHarnessSlot() async throws {
@@ -180,4 +182,45 @@ private struct StubRunner: ShellRunner {
             maxUploadBytes: 8_000_000)
         #expect(again.result == .alreadyUploaded)
     }
+
+    // MARK: OpenCode harness (CROW-1096)
+
+#if canImport(SQLite3)
+    /// Build a minimal `opencode.db` with one session (+ message + part) at
+    /// `devRoot/oc/opencode.db` and return its path — the shared `filePath` an
+    /// OpenCode backfill row carries.
+    private func writeOpenCodeDatabase(_ devRoot: String, uid: String) throws -> String {
+        let db = URL(fileURLWithPath: devRoot).appendingPathComponent("oc/opencode.db")
+        try FileManager.default.createDirectory(
+            at: db.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try OpenCodeDBFixture.write(
+            at: db.path,
+            sessions: [(id: uid, cwd: "/dev/ws/repo-1", parentID: nil)],
+            messages: [(id: "msg_1", sessionID: uid, created: 1, data: #"{"role":"user"}"#)],
+            parts: [(id: "prt_1", messageID: "msg_1", sessionID: uid, data: #"{"type":"text"}"#)])
+        return db.path
+    }
+
+    @Test func openCodeSessionUploadsUnderOpenCodeHarness() async throws {
+        let devRoot = try tempDevRoot()
+        let path = try writeOpenCodeDatabase(devRoot, uid: "ses_OC")
+        let svc = service(devRoot, status: 201, ticket: .success(#"{"number":12}"#))
+        var s = session(devRoot, uid: "ses_OC", path: path)
+        s.harness = .opencode
+
+        // The session is reassembled from `opencode.db` (by id) and uploaded — proves
+        // the OpenCode SQLite normalization path is wired through BackfillService.
+        let outcome = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(outcome.result == .uploaded)
+        #expect(outcome.harness == .opencode)
+
+        // Idempotent within the opencode slot.
+        let again = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(again.result == .alreadyUploaded)
+    }
+#endif
 }

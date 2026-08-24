@@ -65,4 +65,36 @@ import CrowCore
     @Test func emptyInputsYieldNil() {
         #expect(TranscriptNormalizer.normalize(files: [], format: .jsonl, maxBytes: 10_000) == nil)
     }
+
+    // MARK: OpenCode SQLite store (CROW-1096)
+
+    @Test func openCodeStoreFormatIsNotNormalizedViaFileList() throws {
+        // OpenCode's `opencode.db` selects rows by cwd/session-id — a selector the
+        // file-list `normalize` can't express — so it returns nil here and is
+        // normalized through `OpenCodeStore` directly by the collector/backfill.
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let f = dir.appendingPathComponent("opencode.db")
+        try Data([0x1, 0x2]).write(to: f)
+        #expect(TranscriptNormalizer.normalize(files: [f], format: .openCodeStore, maxBytes: 10_000) == nil)
+    }
+
+    @Test func finalizeWrapsNDJSONWithHintCounts() {
+        let body = "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"content\":[{\"type\":\"tool_use\"}]}\n"
+        let t = TranscriptNormalizer.finalize(Data(body.utf8), truncated: true)
+        #expect(t?.eventCount == 2)
+        #expect(t?.toolCallCount == 1)
+        #expect(t?.truncated == true)
+        // Empty in ⇒ nil out.
+        #expect(TranscriptNormalizer.finalize(Data(), truncated: false) == nil)
+    }
+
+    @Test func artifactStampMapsOpenCodeStoreToLogDir() {
+        // The object-store format never leaves the collector — it uploads NDJSON
+        // stamped `.logDir`; every other format stamps itself.
+        #expect(AgentLogFormat.openCodeStore.artifactStamp == .logDir)
+        #expect(AgentLogFormat.jsonl.artifactStamp == .jsonl)
+        #expect(AgentLogFormat.logDir.artifactStamp == .logDir)
+        #expect(AgentLogFormat.sqlite.artifactStamp == .sqlite)
+    }
 }

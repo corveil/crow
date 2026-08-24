@@ -41,6 +41,12 @@ public enum TranscriptNormalizer {
         switch format {
         case .jsonl, .logDir:
             return concatenateNDJSON(files: files, maxBytes: maxBytes)
+        case .openCodeStore:
+            // OpenCode's SQLite store (`opencode.db`) selects rows by cwd (live
+            // collector) or session id (backfill) — a selector this file-list
+            // signature can't express — so it is normalized through `OpenCodeStore`
+            // directly by the collector / backfill, never here (CROW-1096).
+            return nil
         case .sqlite:
             // Cursor's `store.db` keeps the conversation as content-addressed
             // blobs, not NDJSON on disk; `CursorStore` extracts the ordered
@@ -49,6 +55,18 @@ public enum TranscriptNormalizer {
             // harness (CROW-1095).
             return concatenateCursorStores(files: files, maxBytes: maxBytes)
         }
+    }
+
+    /// Wrap already-assembled NDJSON `data` in a `NormalizedTranscript`, computing
+    /// the same best-effort event/tool-call hint counts `normalize` produces. The
+    /// shared finalizer for producers that build their bytes outside the
+    /// file-concatenation path — currently `OpenCodeStore`, which reassembles rows
+    /// from `opencode.db` (CROW-1096). `nil` for empty input.
+    public static func finalize(_ data: Data, truncated: Bool) -> NormalizedTranscript? {
+        guard !data.isEmpty else { return nil }
+        let (events, toolCalls) = countEvents(data)
+        return NormalizedTranscript(
+            data: data, eventCount: events, toolCallCount: toolCalls, truncated: truncated)
     }
 
     /// Concatenate NDJSON files, inserting a newline between files that don't end

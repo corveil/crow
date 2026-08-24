@@ -3,6 +3,7 @@ import CrowCore
 import CrowCodex
 import CrowGrok
 import CrowCursor
+import CrowOpenCode
 
 /// The daemon-side orchestration behind `backfill-scan` / `backfill-upload`
 /// (CROW-1075). It composes the CrowCore pieces — the disk scanner, the ticket
@@ -44,16 +45,19 @@ struct BackfillService: Sendable {
         let store = LogSyncLedgerStore.shared(devRoot: devRoot)
         let ledger = await store.snapshot()
         // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`),
-        // the Grok sessions tree through `GrokHome` (honors `$GROK_HOME`), and the
-        // Cursor chats tree through `CursorHome` (honors `$CURSOR_CONFIG_DIR`) — the
-        // same trees the live collector and the launch paths read. CrowCore's
-        // `BackfillScanner` can't import CrowCodex/CrowGrok/CrowCursor, so the daemon
-        // injects all three (CROW-1089, CROW-1098, CROW-1095).
+        // the Grok sessions tree through `GrokHome` (honors `$GROK_HOME`), the Cursor
+        // chats tree through `CursorHome` (honors `$CURSOR_CONFIG_DIR`), and the
+        // OpenCode store through `OpenCodeHome` (honors `$XDG_DATA_HOME`) — the same
+        // trees the live collector and the launch paths read. CrowCore's
+        // `BackfillScanner` can't import CrowCodex / CrowGrok / CrowCursor /
+        // CrowOpenCode, so the daemon injects them all (CROW-1089, CROW-1098,
+        // CROW-1095, CROW-1096).
         let s = scanner ?? BackfillScanner(
             devRoot: devRoot,
             codexSessionsDir: URL(fileURLWithPath: CodexHome.sessionsDir()),
             grokSessionsDir: URL(fileURLWithPath: GrokHome.sessionsDir()),
             cursorChatsDir: URL(fileURLWithPath: CursorHome.chatsDir()),
+            openCodeDatabaseURL: URL(fileURLWithPath: OpenCodeHome.databasePath()),
             now: now)
         return await s.scan(ledger: ledger)
     }
@@ -85,9 +89,20 @@ struct BackfillService: Sendable {
                 ownerRepo: session.ownerRepo, ticketNumber: session.ticketNumber)
         }
 
-        let file = URL(fileURLWithPath: session.filePath)
-        guard let transcript = TranscriptNormalizer.normalize(
-            files: [file], format: format, maxBytes: max(1, maxUploadBytes)) else {
+        // Produce the NDJSON transcript. Claude/Codex normalize through the shared
+        // file path; OpenCode reassembles the one session (by id) from its
+        // `opencode.db` — `session.filePath` is the database, shared by every
+        // OpenCode row (CROW-1096).
+        let cap = max(1, maxUploadBytes)
+        let transcript: NormalizedTranscript?
+        if harness == .opencode {
+            transcript = OpenCodeStore.normalizeSession(
+                databasePath: session.filePath, sessionID: uid, maxBytes: cap)
+        } else {
+            let file = URL(fileURLWithPath: session.filePath)
+            transcript = TranscriptNormalizer.normalize(files: [file], format: format, maxBytes: cap)
+        }
+        guard let transcript else {
             return BackfillUploadOutcome(
                 claudeSessionUID: uid, result: .skipped, harness: harness,
                 ownerRepo: session.ownerRepo, reason: "empty_or_unreadable")
@@ -120,7 +135,7 @@ struct BackfillService: Sendable {
 
         let result = await uploader.upload(
             baseURL: upload.baseURL, apiKey: upload.apiKey,
-            sessionUID: uid, harness: harness, kind: .sessionTranscript, format: format,
+            sessionUID: uid, harness: harness, kind: .sessionTranscript, format: format.artifactStamp,
             transcript: transcript, metadata: metadata, agentSessionID: uid)
 
         let sha = LogSyncCollector.sha256Hex(transcript.data)
@@ -136,27 +151,30 @@ struct BackfillService: Sendable {
     // MARK: - Helpers
 
     /// The upload `format` stamp for a harness's on-disk transcript, honest about
-    /// its on-disk shape so `TranscriptNormalizer` reads it correctly: Claude and
-    /// Grok each write a single NDJSON transcript (`.jsonl`); a Codex rollout is one
-    /// of a set of per-session NDJSON files the collector concatenates (`.logDir`);
-    /// a Cursor chat is a content-addressed SQLite `store.db` (`.sqlite`) whose
-    /// messages `CursorStore` extracts.
+    /// its on-disk shape so the normalizer reads it correctly: Claude and Grok each
+    /// write a single NDJSON transcript (`.jsonl`); a Codex rollout is one of a set of
+    /// per-session NDJSON files the collector concatenates (`.logDir`); a Cursor chat
+    /// is a content-addressed SQLite `store.db` (`.sqlite`) whose messages
+    /// `CursorStore` extracts; OpenCode keeps a SQLite store (`.openCodeStore`,
+    /// reassembled to NDJSON — stamped `.logDir` at upload via `artifactStamp`).
     static func uploadFormat(for harness: LogSyncHarness) -> AgentLogFormat {
         switch harness {
         case .codex: return .logDir
         case .cursor: return .sqlite
+        case .opencode: return .openCodeStore
         default: return .jsonl
         }
     }
 
     /// The `agentKind` sidecar hint for a harness. Only the wired harnesses reach
-    /// here; any other maps to Claude's kind as a harmless default (it never
-    /// occurs — the scanner only emits `.claude`/`.codex`/`.grok`/`.cursor`).
+    /// here; any other maps to Claude's kind as a harmless default (it never occurs
+    /// — the scanner only emits `.claude`/`.codex`/`.grok`/`.cursor`/`.opencode`).
     static func agentKindRawValue(for harness: LogSyncHarness) -> String {
         switch harness {
         case .codex: return AgentKind.codex.rawValue
         case .grok: return AgentKind.grok.rawValue
         case .cursor: return AgentKind.cursor.rawValue
+        case .opencode: return AgentKind.openCode.rawValue
         default: return AgentKind.claudeCode.rawValue
         }
     }
