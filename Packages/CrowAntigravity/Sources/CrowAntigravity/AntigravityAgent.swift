@@ -225,8 +225,10 @@ public struct AntigravityAgent: CodingAgent {
     // opaque protobuf trajectory metadata, and only *conditionally* (an absolute
     // `file:///` path recorded "when `agy` starts inside a workspace it
     // recognises"); or the **ephemeral** hook-stdin / status-line JSON payloads
-    // (`Cwd`, `conversationId`, `workspacePaths`); or the
-    // `…/cache/projects.json` workspace↔conversation map. Reading any of those is
+    // (`conversationId`, `workspacePaths`, `transcriptPath` on the hook; lowercase
+    // `cwd` on the status line); or the `…/cache/last_conversations.json`
+    // workspace→latest-conversation pointer (latest-only, so it can name a stale
+    // conversation — using it would guess). Reading any of those is
     // a new normalizer/attribution subsystem, not a `logSources` override.
     //
     // Downstream, the same no-cwd fact also blocks *backfill*: `BackfillScanner`'s
