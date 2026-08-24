@@ -97,9 +97,14 @@ public struct AntigravityConversationMap: Codable, Equatable, Sendable {
         /// The worktree Crow launched `agy` in for this conversation — taken from
         /// Crow's own session ownership, never the hook payload.
         public var worktreePath: String
-        /// The transcript path the hook payload named, if any — an optional hint;
-        /// the durable `transcript_full.jsonl` is derived from the conversation id
-        /// regardless (see `preferredTranscript`).
+        /// The transcript path the hook payload named, if any — retained purely as
+        /// **untrusted provenance**, so whoever live-verifies against a real `agy`
+        /// can compare what the hook reported against the derived brain-dir template
+        /// (CROW-1107). It is **never** used to locate the collectable file: the
+        /// durable `transcript_full.jsonl` is always derived from the conversation id
+        /// + `brainDir` (`transcripts(forWorktreePath:brainDir:)`), so a payload that
+        /// points outside `brainDir`, or uses a `~` the filesystem won't expand,
+        /// can't redirect or silently drop a collection (CROW-1107 review).
         public var transcriptPath: String?
         /// When the entry was last recorded, epoch seconds.
         public var updatedAt: Double
@@ -155,8 +160,15 @@ public struct AntigravityConversationMap: Codable, Equatable, Sendable {
         var matches: [(path: String, mtime: Date)] = []
         for (conversationID, entry) in conversations
         where (entry.worktreePath as NSString).standardizingPath == want {
-            let candidate = Self.preferredTranscript(
-                entry: entry, conversationID: conversationID, brainDir: brainDir)
+            // The collectable file is ALWAYS derived from the conversation id +
+            // `brainDir` — never from the recorded `transcriptPath`, which is
+            // untrusted hook provenance (see `Entry.transcriptPath`). This confines
+            // every collected path to `brainDir` and sidesteps the payload's `~`
+            // (which `fileExists` won't expand) and any out-of-tree location. A
+            // conversation id that isn't a safe single path component is dropped,
+            // never interpolated into a path (CROW-1107 review).
+            guard Self.isPathSafeConversationID(conversationID) else { continue }
+            let candidate = AntigravityHome.transcriptPath(conversationID: conversationID, brainDir: brainDir)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: candidate, isDirectory: &isDir), !isDir.boolValue else { continue }
             let mtime = (try? URL(fileURLWithPath: candidate)
@@ -167,18 +179,14 @@ public struct AntigravityConversationMap: Codable, Equatable, Sendable {
         return matches.sorted { $0.mtime < $1.mtime }.map { $0.path }
     }
 
-    /// The `transcript_full.jsonl` for an entry: the sibling of a recorded
-    /// `transcriptPath` when present (the recorded *directory* is authoritative
-    /// even if the recorded file was the truncated `transcript.jsonl`), else
-    /// derived from the conversation id + `brainDir`.
-    static func preferredTranscript(entry: Entry, conversationID: String, brainDir: String) -> String {
-        if let recorded = entry.transcriptPath, !recorded.isEmpty {
-            let dir = (recorded as NSString).deletingLastPathComponent
-            if !dir.isEmpty {
-                return (dir as NSString).appendingPathComponent("transcript_full.jsonl")
-            }
-        }
-        return AntigravityHome.transcriptPath(conversationID: conversationID, brainDir: brainDir)
+    /// Whether `id` is a safe single path component to interpolate into the
+    /// brain-dir template — rejecting empty, `.` / `..`, and any id containing a
+    /// path separator or NUL, so an untrusted hook conversation id can never escape
+    /// `brainDir` (CROW-1107 review). Antigravity conversation ids are UUIDs, so a
+    /// real id is never rejected.
+    static func isPathSafeConversationID(_ id: String) -> Bool {
+        guard !id.isEmpty, id != ".", id != ".." else { return false }
+        return !id.contains("/") && !id.contains("\\") && !id.contains("\u{0}")
     }
 
     // MARK: - Writing (synchronous, NSLock-guarded, dedupe-cached)
@@ -207,7 +215,9 @@ public struct AntigravityConversationMap: Codable, Equatable, Sendable {
     ) -> Bool {
         let conv = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
         let wt = worktreePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !conv.isEmpty, !wt.isEmpty else { return false }
+        // Reject an unsafe conversation id up front so it never reaches the map (it
+        // would only be dropped at read time anyway — CROW-1107 review).
+        guard !wt.isEmpty, isPathSafeConversationID(conv) else { return false }
         let transcript = transcriptPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedTranscript = (transcript?.isEmpty == false) ? transcript : nil
 
@@ -217,14 +227,15 @@ public struct AntigravityConversationMap: Codable, Equatable, Sendable {
         let cacheKey = mapURL.path + "\u{0}" + conv
         let cacheVal = wt + "\u{0}" + (normalizedTranscript ?? "")
         if recordedCache[cacheKey] == cacheVal { return false }
-        recordedCache[cacheKey] = cacheVal
 
         var map = load(mapURL: mapURL)
         let existing = map.conversations[conv]
         // Preserve a previously-recorded transcript hint when this event omits one.
         let effectiveTranscript = normalizedTranscript ?? existing?.transcriptPath
-        // No meaningful change (only `updatedAt` would move) ⇒ skip the write.
+        // No meaningful change (only `updatedAt` would move) ⇒ skip the write, but
+        // still cache: disk already matches, so future identical hooks can no-op.
         if existing?.worktreePath == wt, existing?.transcriptPath == effectiveTranscript {
+            recordedCache[cacheKey] = cacheVal
             return false
         }
         map.conversations[conv] = Entry(
@@ -235,6 +246,10 @@ public struct AntigravityConversationMap: Codable, Equatable, Sendable {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(map)
             try data.write(to: mapURL, options: [.atomic])
+            // Cache ONLY after a durable write. A failed first persist must not
+            // poison the cache — otherwise later hooks for this conversation would
+            // short-circuit as a cache hit and never retry (CROW-1107 review).
+            recordedCache[cacheKey] = cacheVal
             return true
         } catch {
             CrowLog.info("[AntigravityConversationMap] failed to persist \(mapURL.path): \(error.localizedDescription)")

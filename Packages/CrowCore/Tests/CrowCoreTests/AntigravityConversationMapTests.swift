@@ -112,21 +112,66 @@ import Testing
         #expect(map.transcripts(forWorktreePath: "/ws/z", brainDir: brain.path).isEmpty)
     }
 
-    @Test func preferredTranscriptRedirectsToFullBesideARecordedTruncatedFile() {
-        // A recorded `transcript.jsonl` hint resolves to the durable
-        // `transcript_full.jsonl` in the same directory.
-        let entry = AntigravityConversationMap.Entry(
-            worktreePath: "/ws",
-            transcriptPath: "/brain/C/.system_generated/logs/transcript.jsonl")
-        let path = AntigravityConversationMap.preferredTranscript(
-            entry: entry, conversationID: "C", brainDir: "/other/brain")
-        #expect(path == "/brain/C/.system_generated/logs/transcript_full.jsonl")
+    @Test func transcriptsIgnoreRecordedHintAndDeriveFromBrainDir() throws {
+        let (dir, _, cleanup) = makeTemp()
+        defer { cleanup() }
+        let brain = dir.appendingPathComponent("brain", isDirectory: true)
+        try writeTranscript(brainDir: brain, conversationID: "A")
+
+        // The recorded hint points at a completely different tree (and uses `~`
+        // that `fileExists` never expands). It must be IGNORED: the collectable
+        // file is always derived from the conversation id + brainDir, so the real
+        // staged transcript is still found and no out-of-tree path is returned.
+        let map = AntigravityConversationMap(conversations: [
+            "A": .init(worktreePath: "/ws/x",
+                       transcriptPath: "~/somewhere/else/.system_generated/logs/transcript.jsonl"),
+        ])
+        let forX = map.transcripts(forWorktreePath: "/ws/x", brainDir: brain.path)
+        #expect(forX == [AntigravityHome.transcriptPath(conversationID: "A", brainDir: brain.path)])
     }
 
-    @Test func preferredTranscriptDerivesFromConversationWhenNoHint() {
-        let entry = AntigravityConversationMap.Entry(worktreePath: "/ws")
-        let path = AntigravityConversationMap.preferredTranscript(
-            entry: entry, conversationID: "C", brainDir: "/b")
-        #expect(path == "/b/C/.system_generated/logs/transcript_full.jsonl")
+    @Test func unsafeConversationIDIsNeverInterpolatedIntoAPath() throws {
+        let (dir, mapURL, cleanup) = makeTemp()
+        defer { cleanup() }
+        let brain = dir.appendingPathComponent("brain", isDirectory: true)
+
+        // A path-traversing / separator-bearing id is rejected at write time …
+        #expect(!AntigravityConversationMap.record(
+            conversationID: "../escape", worktreePath: "/ws/x", mapURL: mapURL))
+        #expect(!AntigravityConversationMap.record(
+            conversationID: "a/b", worktreePath: "/ws/x", mapURL: mapURL))
+        #expect(AntigravityConversationMap.load(mapURL: mapURL).conversations.isEmpty)
+
+        // … and even a map hand-built with an unsafe id yields no path at read time.
+        let map = AntigravityConversationMap(conversations: [
+            "../escape": .init(worktreePath: "/ws/x"),
+            "a/b": .init(worktreePath: "/ws/x"),
+        ])
+        #expect(map.transcripts(forWorktreePath: "/ws/x", brainDir: brain.path).isEmpty)
+
+        #expect(AntigravityConversationMap.isPathSafeConversationID("550e8400-e29b-41d4-a716-446655440000"))
+        for bad in ["", ".", "..", "a/b", "a\\b", "../x"] {
+            #expect(!AntigravityConversationMap.isPathSafeConversationID(bad))
+        }
+    }
+
+    @Test func aFailedWriteDoesNotPoisonTheDedupeCache() throws {
+        let (dir, _, cleanup) = makeTemp()
+        defer { cleanup() }
+        // Point the map at `<dir>/blocker/map.json` where `blocker` is a *file*, so
+        // the directory creation (and thus the write) fails.
+        let blocker = dir.appendingPathComponent("blocker")
+        try "x".write(to: blocker, atomically: true, encoding: .utf8)
+        let mapURL = blocker.appendingPathComponent("map.json")
+
+        // First record fails to persist (returns false) — and must NOT cache, so a
+        // retry after the obstruction clears still writes (CROW-1107 review).
+        #expect(!AntigravityConversationMap.record(
+            conversationID: "C1", worktreePath: "/ws/a", mapURL: mapURL))
+
+        try FileManager.default.removeItem(at: blocker) // clear the obstruction
+        #expect(AntigravityConversationMap.record(
+            conversationID: "C1", worktreePath: "/ws/a", mapURL: mapURL))
+        #expect(AntigravityConversationMap.load(mapURL: mapURL).conversations["C1"]?.worktreePath == "/ws/a")
     }
 }

@@ -4,7 +4,7 @@ import Foundation
 /// been uploaded, reconstructing each one's workspace / repo / ticket so the
 /// Settings "Backfill history" dialog can show a reviewable list (CROW-1075).
 ///
-/// Five harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
+/// Six harnesses are wired: **Claude** (CROW-1075), whose logs are partitioned
 /// by working directory (`~/.claude/projects/<slug>/<uuid>.jsonl`); **Codex**
 /// (CROW-1089), whose rollouts pool globally under `~/.codex/sessions/<date>/…`
 /// but each record their own `cwd` in a first-line `session_meta` event; **Grok**
