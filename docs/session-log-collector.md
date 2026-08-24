@@ -38,7 +38,8 @@ the collector keeps only the rollouts whose recorded `cwd` matches the worktree
 | `codex` | `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl` (already NDJSON; cwd in the first-line `session_meta.payload.cwd`) | **Wired.** Recursive `.logDir` source with a `cwdFilter`; the collector keeps only cwd-matching rollouts and concatenates them (`~/.codex/archived_sessions` and `.../log` are not scanned). |
 | `opencode` | `~/.local/share/opencode/storage/{project,session,message,part}` | Deferred — a `project/<id>.json`'s `worktree` maps to the cwd, but a session's `message`/`part` records must be reassembled into ordered NDJSON first. |
 | `cursor` | `~/.cursor/chats/<id>/<sub>/store.db` (CLI store; cwd in the sibling `meta.json`) | Deferred — the conversation is opaque blobs in a per-chat **SQLite** `store.db`; needs a blob extractor (a `.sqlite` normalizer). Not the Cursor IDE's `state.vscdb`. |
-| `grok`, `antigravity`, `muse` | app state / TBD | Deferred — no confirmed durable, cwd-attributable log location. |
+| `grok` | `~/.grok/sessions/<urlencoded-abs-cwd>/<uuid>/chat_history.jsonl` (NDJSON, path-partitioned) | Deferred — a **lead**, not yet wired (CROW-1090). Already NDJSON needing no transform, but the `grok` binary collides with the community `grok-cli`, so [#1098](https://github.com/corveil/crow/issues/1098) must confirm the store is xAI's grok-build's before wiring. See [harness-transcript-locations.md](harness-transcript-locations.md). |
+| `antigravity`, `muse` | app state / TBD | Deferred — no confirmed durable, cwd-attributable log location (CROW-1097 / CROW-1099). |
 
 The framework (collector, normalizer, uploader, ledger, config, CLI) is
 harness-general; wiring a deferred harness is implementing its `logSources`
@@ -177,6 +178,10 @@ nor change.
 
 ## See also
 
+- [harness-transcript-locations.md](harness-transcript-locations.md) — the
+  verified **on-disk transcript location** per harness (CROW-1090): the input this
+  collector's `logSources` overrides are built from, including the leads and
+  open questions feeding the CROW-1089 fan-out (#1095–#1099).
 - [session-backfill.md](session-backfill.md) — the **historical** backfill
   ([CROW-1075](https://github.com/corveil/crow/issues/1075)): a user-initiated
   reconciliation of the on-disk transcripts this session-centric collector never
