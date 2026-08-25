@@ -194,11 +194,18 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    returns `nil`: *"Review-on-Codex isn't supported in Phase C — the
    `/crow-review-pr` skill is Claude-only."* Cursor and OpenCode instead get the
    skill body inlined into the prompt (they have no slash-command engine);
-   Claude uses the terse `/crow-review-pr <URL>` form.
+   Claude uses the terse `/crow-review-pr <URL>` form. *(Observed at authoring;
+   since closed — the `.review` branch now inlines the `/crow-review-pr` skill
+   body (like Cursor/OpenCode) and runs `gh pr review` itself to post a real
+   verdict, human-gated (#830). Live state: `docs/agent-harness-matrix.md`.)*
 
 2. **Cursor & Codex have no resume.** Both `.job` branches note *"no `--continue`
    equivalent in MVP"* — a restart re-enters a bare TUI rather than replaying the
    prompt. OpenCode's `--continue` re-enters the TUI but carries no history.
+   *(Observed at authoring; since closed — Cursor resumes with `--continue`
+   (#829) and Codex with `codex resume --last` (#830), and OpenCode's
+   run-then-`--continue` shipped in #547. Live state:
+   `docs/agent-harness-matrix.md`.)*
 
 3. **Remote control is Claude-native; every other harness is faked.** Claude has
    real `--rc --name` flags. Cursor, Codex, OpenCode, Grok, Antigravity and Muse set
@@ -240,9 +247,14 @@ records the rationale for each gap here (verbatim reasons preserved from source)
 
 6. **MCP is Claude-only.** Claude's prompt fetches Jira via the `jira` MCP
    server (`jira_get_issue`); its MCP config lives in `~/.claude.json`. The other
-   three have no MCP wiring — Cursor, Codex, and OpenCode all emit the same
-   `acli jira workitem view <key>` fallback line. The gap is MCP, not Jira
-   ticket-fetch: every harness can still fetch the ticket via `acli`.
+   three shipped without an MCP bridge — Cursor, Codex, and OpenCode all emitted
+   the same `acli jira workitem view <key>` fallback line. The gap is MCP, not
+   Jira ticket-fetch: every harness can still fetch the ticket via `acli`.
+   *(Observed at authoring; since closed — Cursor bridges `jira` into
+   `~/.cursor/mcp.json` (#829), Codex mirrors `~/.claude.json` into `config.toml`
+   (#830), and OpenCode mirrors it into `opencode.json`
+   ([CROW-831](https://github.com/corveil/crow/issues/831)). Grok / Antigravity /
+   Muse still fall back to `acli`. Live state: `docs/agent-harness-matrix.md`.)*
 
 7. **Non-Claude hooks are global-scope, session resolved by `cwd`.** Only Claude
    writes a per-worktree config keyed by `--session <UUID>`. Cursor
@@ -250,9 +262,12 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    `notify`), and OpenCode (global JS plugin `crow-hooks.js`) all omit
    `--session` and let the server resolve the session by matching `cwd` against
    registered worktree paths. *(Observed at authoring; since closed for Cursor
-   (#829) and Codex ([CROW-1060](https://github.com/corveil/crow/issues/1060) —
-   per-worktree `.codex/hooks.json`, `notify` bridge retired). The live
-   per-harness hook-scope state is `docs/agent-harness-matrix.md`.)*
+   (#829), Codex ([CROW-1060](https://github.com/corveil/crow/issues/1060) —
+   per-worktree `.codex/hooks.json`, `notify` bridge retired), and OpenCode
+   ([CROW-831](https://github.com/corveil/crow/issues/831) — per-worktree
+   `.opencode/plugins/crow-hooks.js` with `--session <UUID>` baked in; the
+   host-global plugin is a self-suppressing fallback). The live per-harness
+   hook-scope state is `docs/agent-harness-matrix.md`.)*
 
 8. **Capability availability is gated on binary registration.** A harness whose
    `findBinary()` misses is registered as *known-but-unavailable* (surfaced-but-
