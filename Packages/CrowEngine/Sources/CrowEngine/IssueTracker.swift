@@ -524,37 +524,6 @@ public final class IssueTracker {
         "\(channel)\n\(prURL)"
     }
 
-    /// PR URLs with an auto-re-request-review call in flight (CROW-921).
-    /// Keyed by URL, cleared in the attempt's `defer`, so two sessions sharing
-    /// a PR can't both fire and a slow `gh` call can't be re-entered by the
-    /// next poll.
-    /// Internal (not private) so `@testable` tests can read the dispatch
-    /// decision without a live backend.
-    var autoReRequestInFlight: Set<String> = []
-
-    /// One re-request per (PR head, review round). Keyed
-    /// `"<url>\n<headRefOid>\n<lastChangesRequestedAt>"`: a new push or a new
-    /// reviewer submission is a genuinely new round and re-arms the watcher,
-    /// while a retried poll over identical data does not.
-    ///
-    /// Belt-and-braces rather than the primary guard — the watcher is
-    /// self-limiting, because a successful request flips
-    /// `changesRequestedReviewerIsPending` and the PR moves to
-    /// `.awaitingReviewer` on the next poll. This covers the window before
-    /// that snapshot arrives.
-    /// Internal for the same reason as `autoReRequestInFlight`.
-    var autoReRequestAttempted: Set<String> = []
-
-    /// Consecutive failed re-request attempts per round key. Bounds the retry
-    /// loop: the inputs to a re-request are fixed for the life of a round, so
-    /// a non-transient failure would otherwise re-dispatch every poll forever.
-    /// Cleared on success and pruned with `autoReRequestAttempted`.
-    var autoReReviewFailureCounts: [String: Int] = [:]
-
-    /// Hourly clock for the auto-re-request "enabled, nothing to do" line, so
-    /// a healthy steady state doesn't fill `crowd-automation.log`.
-    private var lastAutoReReviewIdleLogAt: Date?
-
     /// Sessions whose PR just had `crow:merge` added via `addMergeLabel` but
     /// whose next fetched snapshot may not yet reflect it (#838). Two windows
     /// leave a fresh label temporarily invisible: an in-flight poll that
@@ -599,6 +568,10 @@ public final class IssueTracker {
     /// GitHub/GitLab/Jira board poll, stale-PR follow-up, PR dedup, and the
     /// `crow:auto` dispatch. Extracted per CROW-1094; `refresh()` drives it.
     lazy var boardPoller = BoardPoller(owner: self)
+
+    /// Auto re-request-review watcher (CROW-921). Extracted per CROW-1094;
+    /// `applyPRStatuses` drives it each poll.
+    lazy var autoReReview = AutoReReviewController(owner: self)
 
     public init(appState: AppState, providerManager: ProviderManager, store: JSONStore) {
         self.appState = appState
@@ -1208,7 +1181,7 @@ public final class IssueTracker {
 
         applyAutoMerge(viewerPRs: viewerPRs)
         applyAutoRebase(viewerPRs: viewerPRs)
-        applyAutoReRequestReview(viewerPRs: viewerPRs)
+        autoReReview.applyAutoReRequestReview(viewerPRs: viewerPRs)
     }
 
     /// Why a needs-refine evaluation did NOT dispatch, or `nil` when it did
@@ -1266,7 +1239,7 @@ public final class IssueTracker {
     /// already emitted for that pair within the heartbeat window. Returns
     /// whether it was emitted, so callers can assert on it in tests.
     @discardableResult
-    private func logSteadyState(
+    func logSteadyState(
         channel: String, prURL: String, message: String, now: Date
     ) -> Bool {
         let key = Self.steadyStateLogKey(channel: channel, prURL: prURL)
@@ -1332,7 +1305,7 @@ public final class IssueTracker {
     /// re-request by a poll or two. It buys the guarantee that Crow doesn't
     /// ping a reviewer (or, in auto-review repos, spawn a review session)
     /// while the agent is still working through finding 2 of 3.
-    private func agentSettled(sessionID: UUID) -> Bool {
+    func agentSettled(sessionID: UUID) -> Bool {
         guard let managedTerminal = appState.terminals(for: sessionID).first(where: { $0.isManaged }),
               appState.terminalReadiness[managedTerminal.id] == .agentLaunched else {
             return true
@@ -1957,7 +1930,7 @@ public final class IssueTracker {
     /// Jira/Corveil-tasked GitHub-code session routes to GitHub rather than its
     /// task provider (CROW-532). `nil` only for a task-only resolution with no
     /// code surface — callers must bow out.
-    private func codeBackend(for session: Session) -> CodeBackend? {
+    func codeBackend(for session: Session) -> CodeBackend? {
         providerManager.codeBackend(for: session.codeProvider ?? session.provider ?? .github)
     }
 
@@ -2677,222 +2650,6 @@ public final class IssueTracker {
         autoRebaseStuckNotified = autoRebaseStuckNotified.filter { !$0.hasPrefix("\(prURL)\n") }
     }
 
-    // MARK: - Auto Re-Request Review Watcher (CROW-921)
-
-    /// Why a PR was not re-requested this poll. `nil` from
-    /// `autoReReviewSkipReason` means "go". Raw values are grep-stable log
-    /// strings — people search `crowd-automation.log` for these.
-    enum AutoReReviewSkipReason: String, Sendable, Equatable {
-        case reviewSession = "review-session"
-        case draft = "draft"
-        case notAwaitingReRequest = "not-awaiting-re-request"
-        case noReviewers = "no-changes-requested-reviewers"
-        case agentBusy = "agent-busy"
-    }
-
-    /// Pure eligibility check for the auto-re-request watcher.
-    /// `nonisolated static` so it is unit-testable without an `IssueTracker`,
-    /// matching `shouldAttemptAutoRebase` / `autoMergeSkipReason`.
-    ///
-    /// `.awaitingReRequest` is the whole decision — it already encodes "open",
-    /// "changes requested", "the fix landed after the review", and "nobody has
-    /// been asked to look again". Everything else here is about whether *this
-    /// session* should be the one to act.
-    nonisolated static func autoReReviewSkipReason(
-        pr: ViewerPR,
-        status: PRStatus,
-        isReviewSession: Bool,
-        agentSettled: Bool
-    ) -> AutoReReviewSkipReason? {
-        if isReviewSession { return .reviewSession }
-        if pr.isDraft { return .draft }
-        guard PRStatus.changesRequestedState(status: status) == .awaitingReRequest else {
-            return .notAwaitingReRequest
-        }
-        if pr.changesRequestedReviewerLogins.isEmpty { return .noReviewers }
-        if !agentSettled { return .agentBusy }
-        return nil
-    }
-
-    /// Sessions eligible to have their PR re-requested. Same exclusions as
-    /// auto-rebase: the Manager owns no PR, and a review session's linked PR
-    /// belongs to somebody else.
-    nonisolated static func sessionEligibleForAutoReReview(_ session: Session) -> Bool {
-        session.id != AppState.managerSessionID && session.kind != .review
-    }
-
-    /// Re-request review on PRs whose CHANGES_REQUESTED findings have been
-    /// addressed but which nobody has been asked to look at again (CROW-921).
-    ///
-    /// This is the missing third leg of the auto-respond loop. Before it, the
-    /// only thing that re-requested review was a sentence inside the
-    /// `addressChanges` prompt — reachable only while the agent still owed a
-    /// fix, and therefore never reachable once the fix landed. A PR fixed by
-    /// any other path (the agent's own in-flight work, an auto-rebase conflict
-    /// delegation, a human nudge) parked in CHANGES_REQUESTED forever,
-    /// invisible to the reviewer's queue and to `review-requested:@me` alike.
-    ///
-    /// Deterministic rather than prompt-driven, like `applyAutoMerge`: a
-    /// one-line API call routed through an agent turn costs a full turn's
-    /// tokens, can't be verified, and would re-inherit the very gate that
-    /// caused the bug. The prompt hint stays as belt-and-braces — adding a
-    /// reviewer who is already requested is a host-side no-op.
-    private func applyAutoReRequestReview(viewerPRs: [ViewerPR]) {
-        guard autoReRequestReviewProvider() else { return }
-        guard !viewerPRs.isEmpty else { return }
-        let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
-
-        // Prune the per-round guard against what this poll actually saw, so a
-        // new push or a new reviewer submission re-arms the watcher. Guarded
-        // by the non-empty check above: a failed fetch must not wipe live
-        // state and let a second request fire.
-        let liveRoundKeys = Set(viewerPRs.map {
-            Self.autoReReviewRoundKey(url: $0.url, headRefOid: $0.headRefOid, lastChangesRequestedAt: $0.lastChangesRequestedAt)
-        })
-        autoReRequestAttempted.formIntersection(liveRoundKeys)
-        autoReReviewFailureCounts = autoReReviewFailureCounts.filter { liveRoundKeys.contains($0.key) }
-
-        let now = Date()
-        var dispatched = 0
-        for session in appState.sessions where Self.sessionEligibleForAutoReReview(session) {
-            guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
-            guard !autoReRequestInFlight.contains(prLink.url) else { continue }
-            guard let pr = byURL[prLink.url] else { continue }
-
-            let status = Self.buildPRStatus(from: pr)
-            let skip = Self.autoReReviewSkipReason(
-                pr: pr,
-                status: status,
-                isReviewSession: session.kind == .review,
-                agentSettled: agentSettled(sessionID: session.id)
-            )
-            if let skip {
-                // Only the states a reader would wonder about get a line —
-                // `.notAwaitingReRequest` is the overwhelming majority of
-                // healthy PRs and is already covered by the needs-refine
-                // gated log. The rest go through the shared rate limiter: a
-                // PR parked on `.agentBusy` or `.noReviewers` would otherwise
-                // emit a line every 60s poll for as long as it stayed there.
-                if skip != .notAwaitingReRequest {
-                    logSteadyState(
-                        channel: Self.autoReReviewLogChannel,
-                        prURL: prLink.url,
-                        message: "auto-re-request: #\(pr.number) skipped:\(skip.rawValue)",
-                        now: now)
-                }
-                continue
-            }
-
-            let roundKey = Self.autoReReviewRoundKey(
-                url: prLink.url, headRefOid: pr.headRefOid, lastChangesRequestedAt: pr.lastChangesRequestedAt)
-            guard !autoReRequestAttempted.contains(roundKey) else { continue }
-            autoReRequestAttempted.insert(roundKey)
-            autoReRequestInFlight.insert(prLink.url)
-            dispatched += 1
-            let capturedSession = session
-            Task { await self.attemptReRequestReview(session: capturedSession, pr: pr, roundKey: roundKey) }
-        }
-        if dispatched == 0 {
-            if lastAutoReReviewIdleLogAt.map({ now.timeIntervalSince($0) >= Self.steadyStateLogHeartbeat }) ?? true {
-                lastAutoReReviewIdleLogAt = now
-                CrowLog.automation("auto-re-request: enabled, no candidates this poll")
-            }
-        } else {
-            lastAutoReReviewIdleLogAt = nil
-        }
-    }
-
-    /// One re-request per (PR, head, review round). A new push changes the
-    /// head; a new reviewer submission changes the CR timestamp. Either is a
-    /// genuinely new round.
-    nonisolated static func autoReReviewRoundKey(
-        url: String, headRefOid: String, lastChangesRequestedAt: Date?
-    ) -> String {
-        "\(url)\n\(headRefOid)\n\(iso(lastChangesRequestedAt))"
-    }
-
-    /// Give up on a round after this many failed attempts. The inputs to a
-    /// re-request are fixed for the life of a round — same PR, same logins —
-    /// so a failure that isn't transient will never stop being a failure.
-    /// Retrying forever would re-dispatch every 60s poll for the life of the
-    /// PR (review of #930).
-    nonisolated static let maxAutoReReviewFailureRetries = 3
-
-    /// Perform the re-request. Capability-gated like every other PR write, so
-    /// a provider without `.requestReviewers` degrades to a logged skip.
-    ///
-    /// Failure handling mirrors `attemptRebase`'s bounded-retry shape rather
-    /// than `attemptDirectMerge`'s latch-everything one: a re-request is
-    /// idempotent, so retrying a transient network failure is free, while
-    /// retrying forever is not. Both terminal conditions below leave the round
-    /// key latched, so they log once per round rather than once per poll.
-    private func attemptReRequestReview(session: Session, pr: ViewerPR, roundKey: String) async {
-        defer { autoReRequestInFlight.remove(pr.url) }
-        guard let backend = codeBackend(for: session) else {
-            // Terminal for this session, not transient: the provider is a
-            // property of the session and can't change under a live round.
-            // Latch, like the capability gate below.
-            logSteadyState(
-                channel: Self.autoReReviewLogChannel,
-                prURL: pr.url,
-                message: "auto-re-request: #\(pr.number) skipped:no-code-backend",
-                now: Date())
-            return
-        }
-        guard backend.capabilities.contains(.requestReviewers) else {
-            logSteadyState(
-                channel: Self.autoReReviewLogChannel,
-                prURL: pr.url,
-                message: "auto-re-request: #\(pr.number) skipped:provider-unsupported "
-                    + "(\(backend.provider.rawValue))",
-                now: Date())
-            return
-        }
-        let logins = pr.changesRequestedReviewerLogins
-        // Logged here rather than at dispatch so `grep dispatched` counts
-        // attempts that actually reached the host: both terminal guards above
-        // return before this point, and used to leave a "dispatched" line
-        // standing in front of a skip that contradicted it.
-        //
-        // Through the shared limiter, and stamped with the head: a retry
-        // within the same round repeats this message verbatim and is deduped,
-        // while a genuinely new round (new push or new reviewer submission)
-        // changes the sha or the timestamp and logs.
-        logSteadyState(
-            channel: Self.autoReReviewLogChannel,
-            prURL: pr.url,
-            message: "auto-re-request: dispatched #\(pr.number) → \(logins.joined(separator: ", ")) "
-                + "(sha=\(pr.headRefOid.prefix(8)), lastCR=\(Self.iso(pr.lastChangesRequestedAt)), "
-                + "lastCommit=\(Self.iso(pr.lastSubstantiveCommitAt)))",
-            now: Date())
-        do {
-            try await backend.requestReviewers(prURL: pr.url, logins: logins)
-            autoReReviewFailureCounts.removeValue(forKey: roundKey)
-            CrowLog.automation(
-                "auto-re-request: #\(pr.number) re-requested \(logins.joined(separator: ", ")) "
-                + "— session=\(session.id.uuidString)")
-        } catch {
-            let failures = (autoReReviewFailureCounts[roundKey] ?? 0) + 1
-            autoReReviewFailureCounts[roundKey] = failures
-            let giveUp = failures >= Self.maxAutoReReviewFailureRetries
-            if !giveUp {
-                // Clear the round key so the next poll retries. The PR is
-                // still in `.awaitingReRequest` (nothing changed host-side),
-                // so this is a genuine retry rather than a duplicate request —
-                // and if the call actually landed despite the error, re-adding
-                // a pending reviewer is a no-op.
-                autoReRequestAttempted.remove(roundKey)
-            }
-            logSteadyState(
-                channel: Self.autoReReviewLogChannel,
-                prURL: pr.url,
-                message: "auto-re-request: #\(pr.number) failed "
-                    + "(attempt \(failures)/\(Self.maxAutoReReviewFailureRetries)"
-                    + "\(giveUp ? ", giving up until the next round" : "")): "
-                    + "\(error.localizedDescription.prefix(200))",
-                now: Date())
-        }
-    }
 
     /// Pure projection of a provider PR record onto the UI-facing `PRStatus`.
     /// `nonisolated static` (like `shouldAttemptAutoMerge`) because it touches
