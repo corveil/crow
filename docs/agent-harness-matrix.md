@@ -713,7 +713,12 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
   interactive TUI takes the positional prompt directly, so no headless `-p` leg
   is needed; `CursorLauncher.launchCommand` feeds the prompt on agent handoff
   (#829). `.work` launches `agent` bare (the user types into the TUI).
-- **Codex:** job only; review returns `nil`.
+- **Codex:** `.job` + `.review` feed the prompt file (`.crow-job-prompt.md` /
+  `.crow-review-prompt.md`) as the initial argv via
+  `ShellLaunchArgs.evalPromptLaunch` — review inlines the `/crow-review-pr` skill
+  body and runs interactively/human-gated, *not* `nil` (#830). `.work` launches
+  bare; restarts resume with `codex resume --last`
+  (`OpenAICodexAgent.autoLaunchCommand`).
 - **OpenCode:** **run-then-`--continue`** — headless `opencode run "$prompt"`
   consumes the prompt reliably, then `; opencode --continue` opens the TUI with a
   fresh stdin so `crow send` keeps working (#547).
