@@ -39,7 +39,7 @@ public struct PRRevertRecord: Codable, Equatable, Sendable {
 /// needed fixing, not the one that fixed it.
 ///
 /// Heuristic (all conditions required; see
-/// `IssueTracker.postMergeFixDetections`):
+/// `PRAttributionRecorder.postMergeFixDetections`):
 /// 1. the fix PR was first seen only after this PR merged;
 /// 2. the fix PR itself merged, within `postMergeFixWindow` (48h) of
 ///    this PR's merge — only landed fixes count;
@@ -98,7 +98,7 @@ public struct PRSessionAttribution: Codable, Equatable, Sendable {
     public var updatedAt: Date
     /// SHAs of the PR's branch commits, deduped, in first-seen order.
     /// Monotonic like `sessionIDs`, capped at
-    /// `IssueTracker.maxStoredCommitSHAs`. Revert-detection match targets
+    /// `PRAttributionRecorder.maxStoredCommitSHAs`. Revert-detection match targets
     /// for merge strategies that land branch commits on the base branch
     /// (merge commit, rebase) and for providers with no merge-commit SHA.
     public var commitSHAs: [String]?
@@ -113,7 +113,7 @@ public struct PRSessionAttribution: Codable, Equatable, Sendable {
     /// CLOSED, so a reopened-then-merged PR counts as merged.
     public var closedAt: Date?
     /// File paths the PR changed, fetched once at the first MERGED
-    /// observation, capped at `IssueTracker.maxStoredChangedFiles`.
+    /// observation, capped at `PRAttributionRecorder.maxStoredChangedFiles`.
     /// Post-merge-fix overlap input; nil when never fetched (pre-#694
     /// records, fetch failure, or provider without file listing).
     public var changedFiles: [String]?
