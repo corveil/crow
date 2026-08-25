@@ -720,3 +720,71 @@ extension IssueTracker {
         BoardPoller.canRunAutoCreate(enabled: enabled, hasHandler: hasHandler)
     }
 }
+
+// MARK: - Jira config resolution (shared by ticket transitions, CROW-1094)
+//
+// Lives with the Jira fetch path; the tracker's transition API reaches it
+// through the IssueTracker.jiraConfig forwarder below.
+extension BoardPoller {
+    private static func matchJiraWorkspace(_ candidates: [WorkspaceInfo], forTicket ticketURL: String) -> WorkspaceInfo? {
+        guard !candidates.isEmpty else { return nil }
+        // Prefer a project-key match (the ticket key's project, e.g. PROPS-12 → PROPS).
+        if let project = Validation.parseJiraKey(ticketURL)?.project,
+           let ws = candidates.first(where: { $0.jiraProjectKey?.uppercased() == project.uppercased() }) {
+            return ws
+        }
+        // Then an exact site-host match (acli is authed to a single site). Compare
+        // parsed hosts, not a loose substring, so "acme.atlassian.net" doesn't
+        // match a "dev.acme.atlassian.net" workspace (or vice versa).
+        if let ticketHost = URL(string: ticketURL)?.host,
+           let ws = candidates.first(where: { ws in
+               guard let site = ws.jiraSite, !site.isEmpty else { return false }
+               let siteHost = URL(string: site.hasPrefix("http") ? site : "https://\(site)")?.host ?? site
+               return siteHost.caseInsensitiveCompare(ticketHost) == .orderedSame
+           }) {
+            return ws
+        }
+        // Single candidate → unambiguous; use it.
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    /// Resolve the per-workspace Crow→Jira status-name map (#523) for a ticket.
+    /// Returns `nil` when no workspace defines a map, so `JiraTaskBackend` falls
+    /// back to its built-in defaults.
+    private static func jiraStatusMap(forTicket ticketURL: String) -> [String: String]? {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot) else { return nil }
+        let candidates = config.workspaces.filter {
+            $0.derivedTaskProvider == "jira" && !($0.jiraStatusMap?.isEmpty ?? true)
+        }
+        return matchJiraWorkspace(candidates, forTicket: ticketURL)?.jiraStatusMap
+    }
+
+    /// Build the full ``JiraConfig`` for a ticket: the matching workspace's site /
+    /// project / JQL / status-map (#523) plus the resolved Jira Cloud REST
+    /// `Authorization` header (#529) so `setTaskStatus`/`closeTask` transition via
+    /// REST rather than `acli`. The credential is the org-wide `jiraCredential`
+    /// username + API token (HTTP Basic, #528), the same one the Settings status
+    /// picker uses; nil when unconfigured, leaving the backend on its `acli`
+    /// fallback.
+    static func jiraConfig(forTicket ticketURL: String) -> JiraConfig {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot) else { return JiraConfig() }
+        let candidates = config.workspaces.filter { $0.derivedTaskProvider == "jira" }
+        let ws = matchJiraWorkspace(candidates, forTicket: ticketURL)
+        let authorization = config.jiraCredential.flatMap { JiraCredentialResolver.resolve($0) }
+        return JiraConfig(
+            site: ws?.jiraSite,
+            projectKey: ws?.jiraProjectKey,
+            jql: ws?.jiraJQL,
+            statusMap: ws?.jiraStatusMap,
+            authorization: authorization
+        )
+    }
+}
+
+extension IssueTracker {
+    static func jiraConfig(forTicket ticketURL: String) -> JiraConfig {
+        BoardPoller.jiraConfig(forTicket: ticketURL)
+    }
+}
