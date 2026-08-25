@@ -35,10 +35,10 @@ capabilities, update this table in the same PR.
 | Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
 | Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
-| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
-| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
+| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
+| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ | ⚠️ trust seed only (`--trust-workspace`, per-launch, withheld from `.review`) |
@@ -55,16 +55,18 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > `0.141.0`, OpenCode `1.17.10`+); several now have an upstream flag and a
 > spin-off closure ticket. **Cursor's row landed in [#829](https://github.com/corveil/crow/issues/829)**
 > (resume, auto-permission `--force --approve-mcps`, per-worktree hooks, `jira`
-> MCP bridge); the
-> remaining cells below stay at Crow's real status until their tickets land:
+> MCP bridge), **Codex's in [#830](https://github.com/corveil/crow/issues/830)**,
+> and **OpenCode's in [#831](https://github.com/corveil/crow/issues/831)** (MCP
+> mirror + per-worktree `.opencode/plugins/` UUID hooks); any cell still ❌/⚠️
+> stays at Crow's real status until its ticket lands:
 >
 > | Gap (grid row) | Now available upstream | Closure ticket |
 > |---|---|---|
-> | Resume / continue | Codex `resume --last`, OpenCode `--continue` (history caveat already closed by #547) | [#830](https://github.com/corveil/crow/issues/830) / [#831](https://github.com/corveil/crow/issues/831) — Cursor ✅ landed #829 |
-> | Auto-permission (Codex) | Codex `-a never -s workspace-write` | #830 — Cursor ✅ landed #829 |
-> | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 / #831 — Cursor ✅ landed #829 (file bridge) |
-> | Review (Codex) | `codex review --base <branch>` / `codex exec review` | #830 |
-> | Hook → session scope | `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #830 / #831 — Cursor ✅ landed #829 |
+> | Resume / continue | Codex `resume --last`, OpenCode `--continue` (history caveat already closed by #547) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 |
+> | Auto-permission (Codex) | Codex `-a never -s workspace-write` | #830 ✅ landed — Cursor ✅ landed #829 |
+> | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 (file bridge) |
+> | Review (Codex) | `codex review --base <branch>` / `codex exec review` | #830 ✅ landed |
+> | Hook → session scope | `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 |
 > | Remote control (Codex) | experimental `codex remote-control` / `--remote` | ✅ **closed [CROW-1001](https://github.com/corveil/crow/issues/1001)** — badge flipped on the `crow send` path; native RC pinned as non-viable |
 >
 > Codex **async hooks** are no longer absent upstream: they landed in
@@ -95,6 +97,20 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > path drives the Codex TUI (verified end-to-end on 0.141.0), *not* because
 > native `codex remote-control` was validated. That path is pinned non-viable —
 > see the Remote control note below. See the gap audit §3b update.
+>
+> **[#831](https://github.com/corveil/crow/issues/831) (OpenCode) landed** — the
+> OpenCode cells above now reflect shipped state. Hooks moved off the host-global
+> plugin: `OpenCodeHookConfigWriter` writes a **per-worktree**
+> `<worktree>/.opencode/plugins/crow-hooks.js` with `--session <uuid>` baked in
+> (per-session UUID scope, not `cwd`), and the global
+> `~/.config/opencode/plugins/crow-hooks.js` installed at boot is a
+> self-suppressing fallback — its plugin body returns no hooks whenever a
+> per-project `crow-hooks.js` exists, so the two never double-fire. MCP is wired:
+> `OpenCodeMCPConfigWriter` mirrors the user's `jira` server from `~/.claude.json`
+> into `<configHome>/opencode.json` (`mcp.jira`) at daemon boot from
+> `LaunchScaffold`, the file-based analogue of Codex's `config.toml` mirror. The
+> remaining OpenCode gaps are unchanged: `.work` still launches bare (a product
+> choice, not a missing flag), and native RC stays a `crow send` paste.
 
 ## Notes per dimension
 
@@ -215,12 +231,16 @@ managed-terminal command needs hook/env prep.
 - **Cursor:** review/job sessions read their prompt file on first launch, then
   resume with `--continue` on restart (`CursorAgent.autoLaunchCommand`, #829);
   `.work` launches bare (deliberate — the user types into the TUI).
-- **Codex:** no `--continue` equivalent in the MVP — a restart drops the user
-  back into a bare TUI rather than re-running the prompt
-  (`OpenAICodexAgent` `.job` branch).
-- **OpenCode:** `--continue` re-enters the TUI (`resumeTUICommand`,
-  `OpenCodeLaunchArgs`) but does not replay conversation history; `.work`
-  launches bare ("MVP doesn't auto-resume").
+- **Codex:** review/job sessions read their prompt file on first launch, then
+  resume with `codex resume --last` on restart; `.work` also relaunches with
+  `codex resume --last` rather than dropping into a bare TUI
+  (`OpenAICodexAgent.autoLaunchCommand`, #830 — the earlier MVP no-resume pin is
+  retired).
+- **OpenCode:** review/job sessions run headless `opencode run "$prompt"` on
+  first launch, then chain `; opencode --continue` to reopen the same session in
+  the TUI on restart (`resumeTUICommand` / `firstLaunchChainedCommand`,
+  `OpenCodeLaunchArgs`, #547); `.work` launches bare (a deliberate product
+  choice — the user types into the TUI — not a missing resume flag).
 
 ### Remote control
 
@@ -432,13 +452,18 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   `.codex/` as defense-in-depth (#843). One consequence: a review clone's
   Crow-written `.codex/hooks.json` won't fire (the clone stays untrusted), so
   Codex review state detection is human-gated — matching the review posture.
-- **OpenCode** — no command-hook file at all; Crow installs a global **JS
-  plugin** `crow-hooks.js` under `~/.config/opencode/plugins/` that subscribes to
-  OpenCode's event bus (`session.status` for the busy/idle edges — see
+- **OpenCode** — a **JS plugin** `crow-hooks.js` that subscribes to OpenCode's
+  event bus (`session.status` for the busy/idle edges — see
   [Hook async delivery](#hook-async-delivery)) + `tool.execute.*` /
-  `permission.ask` hooks and pipes a
-  `{cwd, …}` JSON payload to `crow hook-event --agent opencode`. `cwd`-resolved
-  (`OpenCodeHookConfigWriter`).
+  `permission.ask` hooks and pipes a `{cwd, …}` JSON payload to
+  `crow hook-event --agent opencode`. Written **per-worktree** into
+  `<worktree>/.opencode/plugins/crow-hooks.js` with the session UUID baked in, so
+  the session is resolved by **UUID** — `hook-event --session <uuid>`, exact, no
+  `cwd` match (`OpenCodeHookConfigWriter`, CROW-831). The global
+  `~/.config/opencode/plugins/crow-hooks.js` Crow installs at boot is a
+  **fallback only**: it carries no UUID and **self-suppresses** (its plugin body
+  returns no hooks) whenever a per-project `crow-hooks.js` exists, so the two
+  never double-fire.
 - **Grok** — per-worktree `.grok/hooks/crow.json`, written per session with
   `hook-event --session <UUID>`, resolved by **UUID** (#859,
   `GrokHookConfigWriter`). Grok's hook schema is byte-compatible with Claude's
@@ -503,10 +528,11 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   **needs-eval** — state detection may stay dark until a real binary confirms.
   A git-tracked or user-owned `.muse/hooks.json` is left untouched.
 
-Claude, Cursor, Codex, Grok, Antigravity, and Muse get **per-session UUID scope**; only OpenCode
-still shares the host's global config and is disambiguated by `cwd` (Codex joined
-the UUID-scoped tier in CROW-1060). See
-[ADR 0015](adr/0015-harness-capability-tiers.md).
+Every harness now gets **per-session UUID scope** — Claude, Cursor, Codex, Grok,
+Antigravity, Muse, and (since CROW-831) OpenCode, whose per-worktree
+`.opencode/plugins/crow-hooks.js` carries the baked UUID while the host-global
+plugin is a self-suppressing fallback. Codex joined the UUID-scoped tier in
+CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
 
 ### Hook async delivery
 
@@ -621,11 +647,21 @@ the UUID-scoped tier in CROW-1060). See
   clobbered, and the copy is withdrawn only when `~/.claude.json` parses cleanly
   with no `jira` (an unreadable read is left alone). No-op when no Jira MCP is
   configured.
-- **Codex, OpenCode:** no MCP wiring — both fall back to the same
-  `acli jira workitem view <key> --fields …` prompt line
-  (`CodexLauncher`, `OpenCodeLauncher`). The gap is **MCP**, not Jira
-  ticket-fetch: every harness can fetch the ticket, just via `acli` rather than
-  the `jira` MCP server.
+- **Codex:** the `jira` MCP is **mirrored** — `CodexMCPWriter` copies the user's
+  `mcpServers` from `~/.claude.json` into Codex's `<codexHome>/config.toml`
+  (`[mcp_servers.*]`), installed at daemon boot from `LaunchScaffold` and gated by
+  `defaults.mirrorClaudeMCPToCodex` (default on; #830). Append-only — a server
+  hand-tuned in `config.toml` is never overwritten.
+- **OpenCode:** the `jira` MCP is **mirrored** too — `OpenCodeMCPConfigWriter`
+  copies the user's `jira` server from `~/.claude.json` into
+  `<configHome>/opencode.json` (`mcp.jira`), installed at daemon boot from
+  `LaunchScaffold` (CROW-831), the file-based analogue of Codex's `config.toml`
+  mirror. It un-mirrors when the source `jira` disappears and skips user-authored
+  entries via a `0600` provenance sidecar.
+- **Grok, Antigravity, Muse:** no MCP bridge yet — all three fall back to the
+  same `acli jira workitem view <key> --fields …` prompt line. The gap is
+  **MCP**, not Jira ticket-fetch: every harness can fetch the ticket, just via
+  `acli` rather than the `jira` MCP server.
 
 ### Review (`/crow-review-pr`)
 
