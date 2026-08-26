@@ -189,6 +189,109 @@ import Testing
     #expect(appState.labels(forSession: session).isEmpty)
 }
 
+// MARK: - producedPR(for:) — the crow_sessions PR sidecar (CROW-1115)
+
+private func prAttribution(
+    prURL: String, prNumber: Int, sessionIDs: [UUID],
+    state: String = "MERGED", updatedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+) -> PRSessionAttribution {
+    PRSessionAttribution(
+        prURL: prURL, repoNameWithOwner: "org/repo", prNumber: prNumber,
+        sessionIDs: sessionIDs, state: state,
+        firstSeenAt: Date(timeIntervalSince1970: 1_699_000_000),
+        updatedAt: updatedAt)
+}
+
+@MainActor @Test func producedPRResolvesFromTrailerAttributionForIssueLinkedSession() {
+    let appState = AppState()
+    // Issue-linked session — the ticket is an issue, but the branch's commits
+    // carried this session's `Crow-Session:` trailer, so attribution names the PR.
+    let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/42")
+    appState.sessions = [session]
+    let prURL = "https://github.com/org/repo/pull/99"
+    appState.prAttributions = [prURL: prAttribution(prURL: prURL, prNumber: 99, sessionIDs: [session.id])]
+
+    let result = appState.producedPR(for: session)
+    #expect(result?.url == prURL)
+    #expect(result?.number == 99)
+}
+
+@MainActor @Test func producedPRFallsBackToAssignedIssueClosingPR() {
+    let appState = AppState()
+    let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/7")
+    appState.sessions = [session]
+    // No trailer attribution captured yet; the board poller resolved the issue's
+    // closing PR instead.
+    appState.assignedIssues = [
+        AssignedIssue(
+            id: "github:org/repo#7", number: 7, title: "T", state: "open",
+            url: "https://github.com/org/repo/issues/7", repo: "org/repo",
+            provider: .github, prNumber: 12, prURL: "https://github.com/org/repo/pull/12")
+    ]
+    let result = appState.producedPR(for: session)
+    #expect(result?.url == "https://github.com/org/repo/pull/12")
+    #expect(result?.number == 12)
+}
+
+@MainActor @Test func producedPRPrefersTrailerAttributionOverAssignedIssue() {
+    let appState = AppState()
+    let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/7")
+    appState.sessions = [session]
+    let prURL = "https://github.com/org/repo/pull/99"
+    appState.prAttributions = [prURL: prAttribution(prURL: prURL, prNumber: 99, sessionIDs: [session.id])]
+    // A stale/mismatched closing-PR hint on the board must not win over the
+    // branch-trailer attribution.
+    appState.assignedIssues = [
+        AssignedIssue(
+            id: "github:org/repo#7", number: 7, title: "T", state: "open",
+            url: "https://github.com/org/repo/issues/7", repo: "org/repo",
+            provider: .github, prNumber: 12, prURL: "https://github.com/org/repo/pull/12")
+    ]
+    #expect(appState.producedPR(for: session)?.number == 99)
+}
+
+@MainActor @Test func producedPRReturnsNilWhenNoPRKnown() {
+    let appState = AppState()
+    // A session whose branch never landed a PR and whose issue (if any) has no
+    // resolved closing PR produces no sidecar hint.
+    let session = Session(name: "wip", ticketURL: "https://github.com/org/repo/issues/1")
+    appState.sessions = [session]
+    #expect(appState.producedPR(for: session) == nil)
+}
+
+@MainActor @Test func producedPRIgnoresAttributionsForOtherSessions() {
+    let appState = AppState()
+    let session = Session(name: "mine", ticketURL: "https://github.com/org/repo/issues/1")
+    let other = UUID()
+    appState.sessions = [session]
+    let prURL = "https://github.com/org/repo/pull/5"
+    // The PR carries a different session's trailer — not ours.
+    appState.prAttributions = [prURL: prAttribution(prURL: prURL, prNumber: 5, sessionIDs: [other])]
+    #expect(appState.producedPR(for: session) == nil)
+}
+
+@Test func bestProducedPRPrefersMergedThenMostRecent() {
+    let sid = UUID()
+    let openOld = PRSessionAttribution(
+        prURL: "pr/open-old", repoNameWithOwner: "org/repo", prNumber: 1,
+        sessionIDs: [sid], state: "OPEN",
+        firstSeenAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 100))
+    let mergedOlder = PRSessionAttribution(
+        prURL: "pr/merged-older", repoNameWithOwner: "org/repo", prNumber: 2,
+        sessionIDs: [sid], state: "MERGED",
+        firstSeenAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 50))
+    let mergedNewer = PRSessionAttribution(
+        prURL: "pr/merged-newer", repoNameWithOwner: "org/repo", prNumber: 3,
+        sessionIDs: [sid], state: "MERGED",
+        firstSeenAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 60))
+
+    // A landed PR outranks a newer still-open one.
+    #expect(AppState.bestProducedPR([openOld, mergedOlder])?.prURL == "pr/merged-older")
+    // Among merged, the most recently updated wins.
+    #expect(AppState.bestProducedPR([mergedOlder, mergedNewer])?.prURL == "pr/merged-newer")
+    #expect(AppState.bestProducedPR([]) == nil)
+}
+
 // MARK: - Manager Session Lookups
 
 @MainActor @Test func managerSessionsIncludesPrimaryAndAdditional() {

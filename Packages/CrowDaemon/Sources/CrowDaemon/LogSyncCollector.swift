@@ -60,9 +60,11 @@ struct LogSyncCollector {
         guard appConfig.workspaces.contains(where: { $0.uploadSessionLogs }) else { return }
 
         // Snapshot the live sessions + their worktrees on the main actor, then do
-        // all filesystem/network work off it.
-        let snapshot: [(session: Session, worktrees: [SessionWorktree])] = await MainActor.run {
-            appState.sessions.map { ($0, appState.worktrees(for: $0.id)) }
+        // all filesystem/network work off it. The session's PRODUCED PR is resolved
+        // here too (CROW-1115) — `producedPR` reads the actor-isolated
+        // `prAttributions`/`assignedIssues`, so it must run inside this hop.
+        let snapshot: [(session: Session, worktrees: [SessionWorktree], producedPR: (url: String, number: Int)?)] = await MainActor.run {
+            appState.sessions.map { ($0, appState.worktrees(for: $0.id), appState.producedPR(for: $0)) }
         }
 
         let nowDate = now()
@@ -75,7 +77,7 @@ struct LogSyncCollector {
         // the same actor via `shared(devRoot:)`.
         let ledgerStore = LogSyncLedgerStore.shared(devRoot: devRoot)
 
-        for (session, worktrees) in snapshot {
+        for (session, worktrees, producedPR) in snapshot {
             // Manager sessions run at the dev root, not in a workspace worktree.
             if session.isManager { continue }
             guard let worktree = primaryWorktree(worktrees) else { continue }
@@ -172,6 +174,8 @@ struct LogSyncCollector {
                 agentKind: session.agentKind.rawValue,
                 ticketURL: session.ticketURL,
                 ticketNumber: session.ticketNumber,
+                prURL: producedPR?.url,
+                prNumber: producedPR?.number,
                 repo: worktree.repoName,
                 orgGoal: session.orgGoal)
 

@@ -730,6 +730,47 @@ public final class AppState {
         return assignedIssues.first { ticketMatches(session: session, issue: $0) }
     }
 
+    /// The pull request a session PRODUCED, for the `crow_sessions` PR sidecar
+    /// (CROW-1115) — the write-side of Corveil's AgentSession PR-outcome scoring
+    /// (corveil#2569 sidecar, consumed by corveil#2702). Resolved from the PR Crow
+    /// actually opened for the session's branch, so an **issue-linked** session
+    /// carries its PR too — not only one whose own ticket is a `/pull/` URL.
+    ///
+    /// Primary source is the durable trailer-based attribution (`prAttributions`):
+    /// the PR whose branch commits carried this session's `Crow-Session:` trailer.
+    /// That mapping is persisted, outlives session deletion, and is the PR Crow
+    /// produced for the branch — independent of the ticket. When no attribution
+    /// has been captured yet (e.g. the PR hasn't been polled), it falls back to
+    /// the board poller's resolved closing PR for the session's issue
+    /// (`assignedIssue(for:)`).
+    ///
+    /// Returns `nil` for a review session and any session with no known PR: a
+    /// review session reviews someone else's PR, it does not produce one, so its
+    /// trailer never lands on that PR's commits and it has no assigned issue.
+    public func producedPR(for session: Session) -> (url: String, number: Int)? {
+        let attributed = prAttributions.values.filter { $0.sessionIDs.contains(session.id) }
+        if let best = Self.bestProducedPR(attributed) {
+            return (best.prURL, best.prNumber)
+        }
+        if let issue = assignedIssue(for: session),
+           let url = issue.prURL, let number = issue.prNumber {
+            return (url, number)
+        }
+        return nil
+    }
+
+    /// Pick the PR to report when a session's trailer appears on more than one
+    /// (rare — a session that touched two PRs): a landed PR outranks a still-open
+    /// one, and among equals the most recently updated wins.
+    nonisolated static func bestProducedPR(_ attributions: [PRSessionAttribution]) -> PRSessionAttribution? {
+        attributions.max { a, b in
+            let aMerged = a.state == "MERGED"
+            let bMerged = b.state == "MERGED"
+            if aMerged != bMerged { return bMerged } // a ranks below b only when b merged and a didn't
+            return a.updatedAt < b.updatedAt
+        }
+    }
+
     /// Find the review request linked to a given session (by matching PR link URL).
     public func reviewRequest(for session: Session) -> ReviewRequest? {
         guard session.kind == .review else { return nil }
