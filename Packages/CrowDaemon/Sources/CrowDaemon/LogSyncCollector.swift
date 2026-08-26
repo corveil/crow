@@ -62,7 +62,7 @@ struct LogSyncCollector {
         // Snapshot the live sessions + their worktrees on the main actor, then do
         // all filesystem/network work off it. The session's PRODUCED PR is resolved
         // here too (CROW-1115) — `producedPR` reads the actor-isolated
-        // `prAttributions`/`assignedIssues`, so it must run inside this hop.
+        // `prAttributions` and session `.pr` links, so it must run inside this hop.
         let snapshot: [(session: Session, worktrees: [SessionWorktree], producedPR: (url: String, number: Int)?)] = await MainActor.run {
             appState.sessions.map { ($0, appState.worktrees(for: $0.id), appState.producedPR(for: $0)) }
         }

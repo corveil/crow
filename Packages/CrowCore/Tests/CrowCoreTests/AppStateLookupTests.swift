@@ -216,44 +216,65 @@ private func prAttribution(
     #expect(result?.number == 99)
 }
 
-@MainActor @Test func producedPRFallsBackToAssignedIssueClosingPR() {
+@MainActor @Test func producedPRFallsBackToSessionBranchPRLink() {
     let appState = AppState()
     let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/7")
     appState.sessions = [session]
-    // No trailer attribution captured yet; the board poller resolved the issue's
-    // closing PR instead.
-    appState.assignedIssues = [
-        AssignedIssue(
-            id: "github:org/repo#7", number: 7, title: "T", state: "open",
-            url: "https://github.com/org/repo/issues/7", repo: "org/repo",
-            provider: .github, prNumber: 12, prURL: "https://github.com/org/repo/pull/12")
+    // No trailer attribution captured yet; PRLinkReconciler already attached the
+    // branch-matched `.pr` link ("the PR Crow opened for this branch").
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #12",
+                    url: "https://github.com/org/repo/pull/12", linkType: .pr)
     ]
     let result = appState.producedPR(for: session)
     #expect(result?.url == "https://github.com/org/repo/pull/12")
     #expect(result?.number == 12)
 }
 
-@MainActor @Test func producedPRPrefersTrailerAttributionOverAssignedIssue() {
+@MainActor @Test func producedPRPrefersTrailerAttributionOverPRLink() {
     let appState = AppState()
     let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/7")
     appState.sessions = [session]
     let prURL = "https://github.com/org/repo/pull/99"
     appState.prAttributions = [prURL: prAttribution(prURL: prURL, prNumber: 99, sessionIDs: [session.id])]
-    // A stale/mismatched closing-PR hint on the board must not win over the
-    // branch-trailer attribution.
-    appState.assignedIssues = [
-        AssignedIssue(
-            id: "github:org/repo#7", number: 7, title: "T", state: "open",
-            url: "https://github.com/org/repo/issues/7", repo: "org/repo",
-            provider: .github, prNumber: 12, prURL: "https://github.com/org/repo/pull/12")
+    // Trailer attribution is authorship ground truth and wins over the link.
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #12",
+                    url: "https://github.com/org/repo/pull/12", linkType: .pr)
     ]
     #expect(appState.producedPR(for: session)?.number == 99)
 }
 
+@MainActor @Test func producedPRReturnsNilForReviewSession() {
+    let appState = AppState()
+    // A review session carries a `.pr` link to the PR it REVIEWS — that PR must
+    // never be reported as PRODUCED by the reviewer (enforced, not incidental).
+    let session = Session(name: "review-repo-123", kind: .review)
+    appState.sessions = [session]
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #123",
+                    url: "https://github.com/org/repo/pull/123", linkType: .pr)
+    ]
+    #expect(appState.producedPR(for: session) == nil)
+}
+
+@MainActor @Test func producedPRResolvesForJobSession() {
+    let appState = AppState()
+    // A scheduled job authors its own branch — it is a genuine producer, so its
+    // branch-matched `.pr` link is reported (the guard excludes only reviews).
+    let session = Session(name: "nightly", kind: .job)
+    appState.sessions = [session]
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #8",
+                    url: "https://github.com/org/repo/pull/8", linkType: .pr)
+    ]
+    #expect(appState.producedPR(for: session)?.number == 8)
+}
+
 @MainActor @Test func producedPRReturnsNilWhenNoPRKnown() {
     let appState = AppState()
-    // A session whose branch never landed a PR and whose issue (if any) has no
-    // resolved closing PR produces no sidecar hint.
+    // A session whose branch never landed a PR, with no trailer attribution and
+    // no `.pr` link, produces no sidecar hint (never a guess).
     let session = Session(name: "wip", ticketURL: "https://github.com/org/repo/issues/1")
     appState.sessions = [session]
     #expect(appState.producedPR(for: session) == nil)

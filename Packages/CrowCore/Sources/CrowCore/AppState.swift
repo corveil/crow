@@ -736,25 +736,36 @@ public final class AppState {
     /// actually opened for the session's branch, so an **issue-linked** session
     /// carries its PR too — not only one whose own ticket is a `/pull/` URL.
     ///
-    /// Primary source is the durable trailer-based attribution (`prAttributions`):
-    /// the PR whose branch commits carried this session's `Crow-Session:` trailer.
-    /// That mapping is persisted, outlives session deletion, and is the PR Crow
-    /// produced for the branch — independent of the ticket. When no attribution
-    /// has been captured yet (e.g. the PR hasn't been polled), it falls back to
-    /// the board poller's resolved closing PR for the session's issue
-    /// (`assignedIssue(for:)`).
+    /// A **review** session PRODUCES nothing: it reviews someone else's PR and
+    /// carries a creation-time `.pr` link to *that* PR, so it returns nil rather
+    /// than misattributing the reviewed PR to the reviewer. Work and job sessions
+    /// author their own branch and are genuine producers.
     ///
-    /// Returns `nil` for a review session and any session with no known PR: a
-    /// review session reviews someone else's PR, it does not produce one, so its
-    /// trailer never lands on that PR's commits and it has no assigned issue.
+    /// Sources, in order:
+    /// 1. **Trailer attribution** (`prAttributions`) — authorship ground truth: the
+    ///    PR whose branch commits carried this session's `Crow-Session:` trailer.
+    ///    Durable (outlives session deletion), independent of the ticket. Only
+    ///    populated once the PR's commits have been fetched (auto-merge / auto-rebase).
+    /// 2. **The session-scoped `.pr` link** that `PRLinkReconciler` records by
+    ///    matching the session's worktree branch to a viewer PR — "the PR Crow opened
+    ///    for this branch", with no closing-issue-keyword requirement. This is what
+    ///    runs for the common issue-linked session before any trailer fetch.
+    ///
+    /// The issue's closing-PR hint (`assignedIssue.prURL`) is deliberately NOT used:
+    /// it is stamped from *any* OPEN viewer PR that closes the same issue — possibly
+    /// a pre-existing or another session's PR — and the upload's write-once 409 makes
+    /// a wrong first value uncorrectable, so a missing link yields nil, never a guess.
     public func producedPR(for session: Session) -> (url: String, number: Int)? {
+        // A reviewer produces nothing; its `.pr` link is the PR under review.
+        guard session.kind != .review else { return nil }
+
         let attributed = prAttributions.values.filter { $0.sessionIDs.contains(session.id) }
         if let best = Self.bestProducedPR(attributed) {
             return (best.prURL, best.prNumber)
         }
-        if let issue = assignedIssue(for: session),
-           let url = issue.prURL, let number = issue.prNumber {
-            return (url, number)
+        if let prLink = links(for: session.id).first(where: { $0.linkType == .pr }),
+           let number = Session.parseReviewPR(url: prLink.url)?.number {
+            return (prLink.url, number)
         }
         return nil
     }
