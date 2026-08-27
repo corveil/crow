@@ -74,6 +74,22 @@ enum CorveilOrgProvisioner {
     ) async throws -> [CorveilAPIClient.Organization] {
         let (connection, token) = try await validAccessToken(
             devRoot: devRoot, oauthClient: oauthClient, now: now)
+        return try await cachedOrganizations(
+            connection: connection, token: token, cache: cache,
+            apiClient: apiClient, now: now, forceRefresh: forceRefresh)
+    }
+
+    /// Serve the org list through the cache given an already-resolved
+    /// connection + token. Shared by `listOrganizations` and the mint path's name
+    /// resolution so both hit one cache under one key.
+    private static func cachedOrganizations(
+        connection: CorveilConnection,
+        token: String,
+        cache: CorveilOrgListCache,
+        apiClient: CorveilAPIClient,
+        now: Date,
+        forceRefresh: Bool
+    ) async throws -> [CorveilAPIClient.Organization] {
         let key = Self.cacheKey(connection)
         if !forceRefresh, let cached = cache.get(key: key, now: now) {
             return cached
@@ -88,13 +104,21 @@ enum CorveilOrgProvisioner {
     /// Mint or reuse the one gateway key for `orgID`.
     ///
     /// With `force == false` (a plain select), an org that already has a stored key
-    /// and secret is returned untouched — no network call, no new key. With
+    /// and secret is returned untouched — **no network call at all**, not even the
+    /// membership lookup: a stored key is already known-good, and a reuse must not
+    /// fail on a transient outage or a token that only breaks on refresh. With
     /// `force == true` (rotate), a fresh key is minted; the backend deactivates the
     /// prior one as part of the mint, so the stored record is simply replaced.
+    ///
+    /// `orgName` is the display name to store. `nil` (or empty) means "look it up
+    /// from the user's memberships" — done lazily on the mint path only, which also
+    /// validates `orgID` is a real membership. A caller that already knows the name
+    /// (the UI) passes it to skip that lookup.
     static func provision(
         devRoot: String,
         orgID: String,
-        orgName: String,
+        orgName: String?,
+        cache: CorveilOrgListCache,
         apiClient: CorveilAPIClient = .live,
         oauthClient: CorveilOAuthClient = .live,
         now: Date = Date(),
@@ -105,6 +129,7 @@ enum CorveilOrgProvisioner {
 
         // Reuse: a stored key with a non-empty id and secret is the shared per-org
         // key. Re-minting would rotate it server-side and orphan bound gateways.
+        // Returns before ANY network call — no mint, and no name lookup.
         if !force,
            let existing = connection.orgKeys.first(where: { $0.orgID == orgID }),
            !existing.keyID.isEmpty,
@@ -112,17 +137,47 @@ enum CorveilOrgProvisioner {
             return SelectOutcome(orgKey: existing, reused: true)
         }
 
+        // Mint path. Resolve the display name now — from `orgName` if the caller
+        // supplied one, else from the membership list (which also validates that
+        // `orgID` is an org the user actually belongs to).
+        let resolvedName = try await resolvedOrgName(
+            explicit: orgName, orgID: orgID, connection: connection, token: token,
+            cache: cache, apiClient: apiClient, now: now)
         let key = try await apiClient.provisionKey(
             baseURL: connection.baseURL, accessToken: token, orgID: orgID, name: keyName)
         let orgKey = CorveilOrgKey(
             orgID: orgID,
-            orgName: orgName,
+            orgName: resolvedName,
             keyID: key.id,
             keyPrefix: key.prefix,
             createdAt: key.createdAt ?? now)
         try CorveilConnectionPersistence.upsertOrgKey(
             devRoot: devRoot, orgKey: orgKey, secret: key.value)
         return SelectOutcome(orgKey: orgKey, reused: false)
+    }
+
+    /// The display name to store for a mint: the caller-supplied one wins; otherwise
+    /// look it up in the user's memberships (cached), which also validates that
+    /// `orgID` is one the user belongs to (else `.unknownOrg`).
+    private static func resolvedOrgName(
+        explicit: String?,
+        orgID: String,
+        connection: CorveilConnection,
+        token: String,
+        cache: CorveilOrgListCache,
+        apiClient: CorveilAPIClient,
+        now: Date
+    ) async throws -> String {
+        if let explicit, !explicit.trimmingCharacters(in: .whitespaces).isEmpty {
+            return explicit.trimmingCharacters(in: .whitespaces)
+        }
+        let orgs = try await cachedOrganizations(
+            connection: connection, token: token, cache: cache,
+            apiClient: apiClient, now: now, forceRefresh: false)
+        guard let match = orgs.first(where: { $0.id == orgID }) else {
+            throw ProvisionError.unknownOrg(orgID)
+        }
+        return match.name
     }
 
     // MARK: - Deprovision (deselect)
@@ -182,10 +237,17 @@ enum CorveilOrgProvisioner {
         return (connection, token)
     }
 
-    /// Cache identity — the org list belongs to one (base URL, user). A reconnect
-    /// as a different user changes the key, so stale memberships never leak across.
+    /// Cache identity — the org list belongs to one connection, identified by its
+    /// OAuth **client id**. The browser Connect flow self-registers a fresh client
+    /// per connect (DCR issues a new `client_id` each time), so a disconnect +
+    /// reconnect — even as the same user, certainly as a different one — changes
+    /// this key and misses the cache. This is the cross-path guarantee against
+    /// serving a previous account's memberships: it holds no matter which disconnect
+    /// path (RPC or the HTTP `POST /config/corveil-connection` clear) ran, and does
+    /// not depend on `connectedUser.id`, which the Connect persist path leaves empty.
+    /// `baseURL` is folded in as defensive disambiguation.
     private static func cacheKey(_ connection: CorveilConnection) -> String {
-        "\(connection.baseURL)\u{1}\(connection.connectedUser.id)"
+        "\(connection.baseURL)\u{1}\(connection.clientID)"
     }
 }
 

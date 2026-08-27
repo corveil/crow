@@ -89,6 +89,25 @@ import Testing
         #expect(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection == nil)
     }
 
+    @Test @MainActor func disconnectInvalidatesTheOrgListCache() async throws {
+        // `corveil-disconnect` must clear the org-list cache (CROW-1121) so a
+        // reconnect as a different account never serves the prior user's memberships
+        // out of a warm cache. Drive the real router with a cache we control.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let cache = CorveilOrgListCache()
+        cache.set(
+            [.init(id: "org1", name: "Acme", role: "admin", isActive: true)], key: "warm")
+        #expect(cache.get(key: "warm") != nil)
+
+        let router = makeCommandRouter(
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
+            devRoot: devRoot, cockpit: nil, corveilOrgCache: cache)
+        _ = await call(router, "corveil-disconnect")
+
+        #expect(cache.get(key: "warm") == nil, "disconnect must invalidate the org-list cache")
+    }
+
     @Test @MainActor func connectRefreshPreservesStoredSecretsAndOrgKeys() async throws {
         // A refresh sends only a new access token + expiry; the refresh token,
         // registration token, identity and provisioned org keys must survive.

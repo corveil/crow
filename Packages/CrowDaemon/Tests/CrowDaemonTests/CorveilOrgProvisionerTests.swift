@@ -154,7 +154,7 @@ import FoundationNetworking
         let api = APIStub()
 
         let outcome = try await CorveilOrgProvisioner.provision(
-            devRoot: devRoot, orgID: "org1", orgName: "Acme",
+            devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: neverCalledOAuth())
 
         #expect(outcome.reused == false)
@@ -179,15 +179,64 @@ import FoundationNetworking
             orgKeySecrets: ["org1": "sk-citadel-existing-value"])
         let api = APIStub()
 
+        // No `--name` given: a reuse must still make ZERO network calls — not even
+        // the membership lookup — so it can't fail on a transient outage.
         let outcome = try await CorveilOrgProvisioner.provision(
-            devRoot: devRoot, orgID: "org1", orgName: "Acme",
+            devRoot: devRoot, orgID: "org1", orgName: nil, cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: neverCalledOAuth())
 
         #expect(outcome.reused == true)
         #expect(outcome.orgKey.keyID == "existing")
         #expect(api.posts == 0, "reuse must not mint a new key")
+        #expect(api.lists == 0, "reuse must not even look up the org name")
         // Stored value is untouched — the shared key survives.
         #expect(storedConnection(devRoot)?.orgKeySecrets["org1"] == "sk-citadel-existing-value")
+    }
+
+    // MARK: - Provision: name resolution
+
+    @Test func mintWithoutNameLooksUpTheOrgNameFromMemberships() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seedConnection(devRoot: devRoot)
+        let api = APIStub()
+
+        let outcome = try await CorveilOrgProvisioner.provision(
+            devRoot: devRoot, orgID: "org1", orgName: nil, cache: CorveilOrgListCache(),
+            apiClient: api.client(), oauthClient: neverCalledOAuth())
+
+        #expect(outcome.orgKey.orgName == "Acme", "name resolved from the membership list")
+        #expect(api.lists == 1)
+        #expect(api.posts == 1)
+    }
+
+    @Test func mintWithNameSkipsTheMembershipLookup() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seedConnection(devRoot: devRoot)
+        let api = APIStub()
+
+        let outcome = try await CorveilOrgProvisioner.provision(
+            devRoot: devRoot, orgID: "org1", orgName: "Custom Name", cache: CorveilOrgListCache(),
+            apiClient: api.client(), oauthClient: neverCalledOAuth())
+
+        #expect(outcome.orgKey.orgName == "Custom Name")
+        #expect(api.lists == 0, "a supplied name skips GET /api/me/organizations")
+        #expect(api.posts == 1)
+    }
+
+    @Test func mintForANonMembershipThrowsWithoutMinting() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seedConnection(devRoot: devRoot)
+        let api = APIStub()  // memberships list only contains "org1"
+
+        await #expect(throws: CorveilOrgProvisioner.ProvisionError.unknownOrg("ghost")) {
+            _ = try await CorveilOrgProvisioner.provision(
+                devRoot: devRoot, orgID: "ghost", orgName: nil, cache: CorveilOrgListCache(),
+                apiClient: api.client(), oauthClient: self.neverCalledOAuth())
+        }
+        #expect(api.posts == 0, "an org the user doesn't belong to is never minted")
     }
 
     @Test func provisionTwiceKeepsExactlyOneKeyPerOrg() async throws {
@@ -197,10 +246,10 @@ import FoundationNetworking
         let api = APIStub()
 
         _ = try await CorveilOrgProvisioner.provision(
-            devRoot: devRoot, orgID: "org1", orgName: "Acme",
+            devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: neverCalledOAuth())
         let second = try await CorveilOrgProvisioner.provision(
-            devRoot: devRoot, orgID: "org1", orgName: "Acme",
+            devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: neverCalledOAuth())
 
         #expect(second.reused == true)
@@ -220,7 +269,7 @@ import FoundationNetworking
         let api = APIStub()
 
         let outcome = try await CorveilOrgProvisioner.provision(
-            devRoot: devRoot, orgID: "org1", orgName: "Acme",
+            devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: neverCalledOAuth(), force: true)
 
         #expect(outcome.reused == false)
@@ -276,7 +325,7 @@ import FoundationNetworking
         // No connection seeded.
         await #expect(throws: CorveilOrgProvisioner.ProvisionError.notConnected) {
             _ = try await CorveilOrgProvisioner.provision(
-                devRoot: devRoot, orgID: "org1", orgName: "Acme",
+                devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
                 apiClient: APIStub().client(), oauthClient: self.neverCalledOAuth())
         }
     }
@@ -325,6 +374,57 @@ import FoundationNetworking
         #expect(cache.get(key: "other", now: now) == nil)
     }
 
+    @Test func invalidateClearsTheEntry() {
+        let cache = CorveilOrgListCache()
+        cache.set([.init(id: "org1", name: "Acme", role: "admin", isActive: true)], key: "k")
+        #expect(cache.get(key: "k") != nil)
+        cache.invalidate()
+        #expect(cache.get(key: "k") == nil, "invalidate must drop the entry (disconnect hook)")
+    }
+
+    @Test func orgCacheIsKeyedOnClientIdSoAReconnectMisses() async throws {
+        // The browser Connect flow leaves `connectedUser.id` empty and self-registers
+        // a FRESH client id per DCR. The cache must key on the client id, not the
+        // (empty) user id — otherwise a disconnect + reconnect as a different account
+        // on the same host would be served the previous user's memberships. This is
+        // the Yellow finding's regression test.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let cache = CorveilOrgListCache()
+        let api = APIStub()
+
+        func connect(clientID: String) throws {
+            var config = AppConfig()
+            config.corveilConnection = CorveilConnection(
+                baseURL: base,
+                clientID: clientID,
+                connectedUser: CorveilConnectedUser(),  // empty, as after a browser Connect
+                oauth: CorveilOAuthTokens(
+                    accessToken: "at", refreshToken: "rt",
+                    accessTokenExpiresAt: Date(timeIntervalSinceNow: 3600)))
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+        }
+
+        // Connect as client A → one fetch, cached.
+        try connect(clientID: "client-A")
+        _ = try await CorveilOrgProvisioner.listOrganizations(
+            devRoot: devRoot, cache: cache, apiClient: api.client(), oauthClient: neverCalledOAuth())
+        #expect(api.lists == 1)
+
+        // Same client id (a plain token refresh keeps it) → cache hit, no new fetch.
+        _ = try await CorveilOrgProvisioner.listOrganizations(
+            devRoot: devRoot, cache: cache, apiClient: api.client(), oauthClient: neverCalledOAuth())
+        #expect(api.lists == 1, "the same client id serves the cached list")
+
+        // Reconnect as a DIFFERENT client id (fresh DCR, still-empty user id) → miss.
+        try connect(clientID: "client-B")
+        _ = try await CorveilOrgProvisioner.listOrganizations(
+            devRoot: devRoot, cache: cache, apiClient: api.client(), oauthClient: neverCalledOAuth())
+        #expect(
+            api.lists == 2,
+            "a fresh client id must miss the cache, not leak the prior account's orgs")
+    }
+
     // MARK: - Token refresh
 
     @Test func expiredAccessTokenIsRefreshedBeforeProvisioning() async throws {
@@ -336,7 +436,7 @@ import FoundationNetworking
         let oauth = OAuthStub()
 
         _ = try await CorveilOrgProvisioner.provision(
-            devRoot: devRoot, orgID: "org1", orgName: "Acme",
+            devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: oauth.client())
 
         #expect(oauth.refreshed >= 1, "an expired token triggers a refresh")
@@ -352,7 +452,7 @@ import FoundationNetworking
         let api = APIStub()
 
         _ = try await CorveilOrgProvisioner.provision(
-            devRoot: devRoot, orgID: "org1", orgName: "Acme",
+            devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: neverCalledOAuth())
 
         #expect(api.lastBearer == "Bearer at")
