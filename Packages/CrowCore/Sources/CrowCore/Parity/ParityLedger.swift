@@ -154,6 +154,8 @@ public enum ParityLedger {
         "corveil-list-orgs",
         "corveil-select-org",
         "corveil-deselect-org",
+        "corveil-detect-gateways",
+        "corveil-link-gateway",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -393,6 +395,13 @@ public enum ParityLedger {
         .read("corveil-list-orgs", cli: "corveil list-orgs"),
         .write("corveil-select-org", cli: "corveil select-org"),
         .write("corveil-deselect-org", cli: "corveil deselect-org"),
+
+        // Corveil gateway migration (CROW-1126) — detect manual x-citadel-api-key
+        // gateways and adopt an existing key into the connection as an org's key.
+        // Both local-only alongside the connection verbs (the read reports redacted
+        // key prefixes; the write authors a credential into the connection).
+        .read("corveil-detect-gateways", cli: "corveil detect-gateways"),
+        .write("corveil-link-gateway", cli: "corveil link-gateway"),
 
         // Jobs
         .read("job-list", cli: "job list"),

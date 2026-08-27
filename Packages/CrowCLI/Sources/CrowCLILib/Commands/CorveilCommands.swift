@@ -35,6 +35,8 @@ public struct Corveil: ParsableCommand {
             CorveilListOrgs.self,
             CorveilSelectOrg.self,
             CorveilDeselectOrg.self,
+            CorveilDetectGateways.self,
+            CorveilLinkGateway.self,
         ]
     )
 
@@ -344,5 +346,98 @@ public struct CorveilDeselectOrg: ParsableCommand {
 
     public func run() throws {
         printJSON(try rpc("corveil-deselect-org", params: ["org_id": .string(org)]))
+    }
+}
+
+// MARK: - Gateway migration (CROW-1126)
+
+/// `crow corveil detect-gateways` — list manual `x-citadel-api-key` gateways and
+/// classify each against the connection.
+public struct CorveilDetectGateways: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "detect-gateways",
+        abstract: "Detect manual x-citadel-api-key gateways to link to the connection (local-only)",
+        discussion: """
+        Scans the Manager and every workspace gateway for a hand-entered \
+        `x-citadel-api-key` header — the legacy way to reach Corveil before the \
+        first-class connection — and classifies each:
+
+          managed   — already equals the connection's key for a provisioned org; nothing to do
+          linkable  — a plaintext key on the connection's base URL; adopt it with `corveil link-gateway`
+          manual    — not linkable yet (no connection, an op:// value, or a mismatched base URL); `reason` says why
+
+        Key material is never printed — only a redacted prefix. Offer to link a \
+        `linkable` row with:
+
+          crow corveil link-gateway --workspace <name> --org <org-id>
+          crow corveil link-gateway --manager --org <org-id>
+        """
+    )
+
+    public init() {}
+
+    public func run() throws {
+        printJSON(try rpc("corveil-detect-gateways"))
+    }
+}
+
+/// `crow corveil link-gateway` — adopt a detected gateway's existing plaintext key
+/// into the connection as a named org's key.
+public struct CorveilLinkGateway: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "link-gateway",
+        abstract: "Adopt a manual gateway's key into the connection as an org's key (local-only)",
+        discussion: """
+        Records the target's existing plaintext `x-citadel-api-key` value as \
+        `--org`'s key in the Corveil connection, so the connection now owns it and \
+        the org shows as provisioned. Non-disruptive — the running key is unchanged \
+        — and offline: the Corveil backend has no key→org lookup, so you name the \
+        org. The adopted key is stored with no key id (it was minted by hand); a \
+        later `corveil select-org` on that org mints a real managed key.
+
+          crow corveil link-gateway --workspace MyOrg --org <org-id>
+          crow corveil link-gateway --manager --org <org-id> --org-name "My Org"
+
+        Refuses an op:// reference, a target with no manual gateway, and \
+        overwriting an org that already has a provisioned key (pass `--force`). \
+        Local-only: it authors a credential into the connection over the Unix \
+        socket and is refused for remote web clients.
+        """
+    )
+
+    @Option(name: .customLong("workspace"), help: "Workspace whose gateway to link")
+    public var workspace: String?
+
+    @Flag(name: .customLong("manager"), help: "Link the Manager gateway instead of a workspace")
+    public var manager: Bool = false
+
+    @Option(name: .customLong("org"), help: "Corveil organization id to record the key under")
+    public var org: String
+
+    @Option(name: .customLong("org-name"), help: "Org display name to store (optional)")
+    public var orgName: String?
+
+    @Flag(name: .long, help: "Overwrite an org that already has a provisioned key.")
+    public var force: Bool = false
+
+    public init() {}
+
+    public func run() throws {
+        let workspaceName = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasWorkspace = !workspaceName.isEmpty
+        guard manager != hasWorkspace else {
+            throw ValidationError("Pass exactly one of --manager or --workspace <name>.")
+        }
+        var params: [String: JSONValue] = ["org_id": .string(org)]
+        if manager {
+            params["target"] = .string("manager")
+        } else {
+            params["target"] = .string("workspace")
+            params["workspace"] = .string(workspaceName)
+        }
+        let trimmedName = orgName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedName.isEmpty { params["org_name"] = .string(trimmedName) }
+        if force { params["force"] = .bool(true) }
+        printJSON(try rpc("corveil-link-gateway", params: params))
     }
 }

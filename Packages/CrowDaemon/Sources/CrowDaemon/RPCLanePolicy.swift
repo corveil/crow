@@ -146,6 +146,11 @@ enum RPCLanePolicy {
         // read and takes no lane.
         "corveil-select-org": .on("org_id"),
         "corveil-deselect-org": .on("org_id"),
+        // Gateway migration (CROW-1126). `corveil-link-gateway` adopts an existing
+        // key into the connection — a small, offline config write (no network), so
+        // it shares the config lane. `corveil-detect-gateways` is a read and takes
+        // no lane.
+        "corveil-link-gateway": .fixed(.config),
         "job-add": .fixed(.config),
         "job-edit": .fixed(.config),
         "job-enable": .fixed(.config),

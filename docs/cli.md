@@ -40,7 +40,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow corveil`](#crow-corveil) | Verify the Corveil CLI binary and manage the Corveil connection |
 | [`crow corveil connect`](#crow-corveil-connect) | Store or update the Corveil connection (local-only) |
 | [`crow corveil deselect-org`](#crow-corveil-deselect-org) | Revoke a Corveil org's gateway key (local-only) |
+| [`crow corveil detect-gateways`](#crow-corveil-detect-gateways) | Detect manual x-citadel-api-key gateways to link to the connection (local-only) |
 | [`crow corveil disconnect`](#crow-corveil-disconnect) | Clear the Corveil connection (local-only) |
+| [`crow corveil link-gateway`](#crow-corveil-link-gateway) | Adopt a manual gateway's key into the connection as an org's key (local-only) |
 | [`crow corveil list-orgs`](#crow-corveil-list-orgs) | List the Corveil orgs you belong to (local-only) |
 | [`crow corveil orgs`](#crow-corveil-orgs) | List the connection's per-org gateway keys (local-only) |
 | [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall every embedded slash command from the corveil binary |
@@ -532,10 +534,10 @@ crow complete-session --session <session>
 Verify the Corveil CLI binary and manage the Corveil connection.
 
 ```
-crow corveil <verify|reinstall-skill|connect|status|disconnect|orgs|list-orgs|select-org|deselect-org>
+crow corveil <verify|reinstall-skill|connect|status|disconnect|orgs|list-orgs|select-org|deselect-org|detect-gateways|link-gateway>
 ```
 
-Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil-reinstall-skill), [`connect`](#crow-corveil-connect), [`status`](#crow-corveil-status), [`disconnect`](#crow-corveil-disconnect), [`orgs`](#crow-corveil-orgs), [`list-orgs`](#crow-corveil-list-orgs), [`select-org`](#crow-corveil-select-org), [`deselect-org`](#crow-corveil-deselect-org).
+Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil-reinstall-skill), [`connect`](#crow-corveil-connect), [`status`](#crow-corveil-status), [`disconnect`](#crow-corveil-disconnect), [`orgs`](#crow-corveil-orgs), [`list-orgs`](#crow-corveil-list-orgs), [`select-org`](#crow-corveil-select-org), [`deselect-org`](#crow-corveil-deselect-org), [`detect-gateways`](#crow-corveil-detect-gateways), [`link-gateway`](#crow-corveil-link-gateway).
 
 ---
 
@@ -585,6 +587,31 @@ Revokes the org's provisioned gateway key on the Corveil side and removes its lo
 
 ---
 
+## `crow corveil detect-gateways`
+
+Detect manual x-citadel-api-key gateways to link to the connection (local-only).
+
+```
+crow corveil detect-gateways
+```
+
+Scans the Manager and every workspace gateway for a hand-entered `x-citadel-api-key` header — the legacy way to reach Corveil before the first-class connection — and classifies each:
+
+```
+managed   — already equals the connection's key for a provisioned org; nothing to do
+linkable  — a plaintext key on the connection's base URL; adopt it with `corveil link-gateway`
+manual    — not linkable yet (no connection, an op:// value, or a mismatched base URL); `reason` says why
+```
+
+Key material is never printed — only a redacted prefix. Offer to link a `linkable` row with:
+
+```
+crow corveil link-gateway --workspace <name> --org <org-id>
+crow corveil link-gateway --manager --org <org-id>
+```
+
+---
+
 ## `crow corveil disconnect`
 
 Clear the Corveil connection (local-only).
@@ -594,6 +621,33 @@ crow corveil disconnect
 ```
 
 Removes the stored connection block, so gateway resolution and the log collector stop using it. Revoking the per-org gateway keys on the Corveil side is a separate step (corveil/crow#1121); this clears the local record.
+
+---
+
+## `crow corveil link-gateway`
+
+Adopt a manual gateway's key into the connection as an org's key (local-only).
+
+```
+crow corveil link-gateway [--workspace <workspace>] [--manager] --org <org> [--org-name <org-name>] [--force]
+```
+
+Records the target's existing plaintext `x-citadel-api-key` value as `--org`'s key in the Corveil connection, so the connection now owns it and the org shows as provisioned. Non-disruptive — the running key is unchanged — and offline: the Corveil backend has no key→org lookup, so you name the org. The adopted key is stored with no key id (it was minted by hand); a later `corveil select-org` on that org mints a real managed key.
+
+```
+crow corveil link-gateway --workspace MyOrg --org <org-id>
+crow corveil link-gateway --manager --org <org-id> --org-name "My Org"
+```
+
+Refuses an op:// reference, a target with no manual gateway, and overwriting an org that already has a provisioned key (pass `--force`). Local-only: it authors a credential into the connection over the Unix socket and is refused for remote web clients.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--workspace` | `<workspace>` | no | Workspace whose gateway to link |
+| `--manager` | — | no | Link the Manager gateway instead of a workspace |
+| `--org` | `<org>` | yes | Corveil organization id to record the key under |
+| `--org-name` | `<org-name>` | no | Org display name to store (optional) |
+| `--force` | — | no | Overwrite an org that already has a provisioned key. |
 
 ---
 

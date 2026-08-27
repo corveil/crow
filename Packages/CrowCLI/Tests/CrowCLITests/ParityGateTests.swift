@@ -295,6 +295,10 @@ struct ParityGateTests {
         // a read — but `corveil-list-orgs` is neither `list-`-prefixed nor
         // `-list`-suffixed, so the heuristic presumes a write (CROW-1121).
         "corveil-list-orgs",
+        // `corveil-detect-gateways` reports manual x-citadel-api-key gateways — a
+        // read of config, no mutation — but `detect-` isn't `get-`/`list-` shaped,
+        // so the heuristic presumes a write (CROW-1126).
+        "corveil-detect-gateways",
     ]
 
     /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`
