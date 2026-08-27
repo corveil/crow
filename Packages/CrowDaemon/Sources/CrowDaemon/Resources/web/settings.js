@@ -180,6 +180,7 @@
     catch (_) { autostart = null; }
     dirty = false;
     subForm = null;
+    resetCorveilConnectState();
     activeTab = TABS.some(([k]) => k === tab) ? tab : 'general';
     if (typeof navigate === 'function') navigate({ view: 'settings', tab: activeTab });
     render();
@@ -1326,9 +1327,22 @@
   // it through those two dedicated endpoints, exactly like the AI gateways and the
   // web password. A proxied/remote session sees it read-only.
 
-  // Only one connect poll runs at a time — a second Connect click must not stack
-  // pollers that each call render().
-  let corveilPolling = false;
+  // Connect-flow UI state, module-level so a re-render (Refresh, tab switch,
+  // close/reopen) reconstructs the SAME disconnected card instead of dropping a
+  // fresh, enabled Connect over a poll that is still in flight (round-2 review).
+  // renderCorveilDisconnected derives the button's disabled state and the status
+  // copy from these, and the poller drives every change through render() — the
+  // card is a pure function of state, so nothing can desync from a stale closure.
+  let corveilPolling = false;      // a connect poll is in flight
+  let corveilConnectNote = '';     // status line under Connect (opened / timed-out / error)
+  let corveilAuthorizeURL = '';    // fallback sign-in link, when Connect returned one
+  // Reset the connect-flow state — called when Settings (re)opens so a new modal
+  // never inherits a prior attempt's polling flag or copy.
+  function resetCorveilConnectState() {
+    corveilPolling = false;
+    corveilConnectNote = '';
+    corveilAuthorizeURL = '';
+  }
 
   function renderIntegrations(body) {
     body.appendChild(group('Corveil'));
@@ -1485,8 +1499,7 @@
       return;
     }
 
-    const msg = el('div', 'st-perm-status', '');
-    const fallback = el('div', 'st-perm-status', '');
+    const msg = el('div', 'st-perm-status', corveilConnectNote);
     const urlInput = el('input', 'st-input');
     urlInput.type = 'text';
     urlInput.placeholder = 'https://app.corveil.example';
@@ -1496,47 +1509,56 @@
 
     const btn = el('button', 'action-btn action-primary', 'Connect to Corveil');
     btn.type = 'button';
+    // Disabled while a poll is in flight, so a re-render (Refresh / tab return /
+    // reopen) can never present a second, enabled Connect over a pending sign-in.
+    btn.disabled = corveilPolling;
     btn.onclick = async () => {
       const baseURL = urlInput.value.trim();
-      if (!baseURL) { msg.textContent = 'Enter your Corveil base URL.'; return; }
-      btn.disabled = true; msg.textContent = 'Opening sign-in…'; fallback.textContent = '';
+      if (!baseURL) { corveilConnectNote = 'Enter your Corveil base URL.'; msg.textContent = corveilConnectNote; return; }
+      btn.disabled = true;
+      corveilConnectNote = 'Opening sign-in…';
+      corveilAuthorizeURL = '';
+      msg.textContent = corveilConnectNote;
       try {
         const res = await postConfig('/integrations/corveil/connect', { baseURL });
-        msg.textContent = 'A browser window opened to sign in to Corveil. '
+        corveilConnectNote = 'A browser window opened to sign in to Corveil. '
           + 'Complete it there — this updates automatically when you’re done.';
-        // Auto-open is best-effort on the daemon host; offer the URL as a fallback.
-        if (res && res.authorizeURL) {
-          const a = el('a', null, 'Open the sign-in page');
-          a.href = res.authorizeURL;
-          a.target = '_blank';
-          a.rel = 'noopener';
-          fallback.appendChild(document.createTextNode('Didn’t see a window? '));
-          fallback.appendChild(a);
-        }
-        pollForCorveilConnection(() => {
-          // The sign-in didn't complete within the poll window (consent + 2FA can
-          // outlast it). Re-enable Connect and point at Refresh, instead of leaving
-          // a disabled button under copy that still says it "updates automatically".
-          btn.disabled = false;
-          msg.textContent = 'Still not connected. Finish the Corveil sign-in, then '
-            + 'click Refresh status — or Connect again.';
-        });
+        corveilAuthorizeURL = (res && res.authorizeURL) || '';
+        startCorveilConnectPoll();
+        // Re-render so the whole card reflects the in-flight poll uniformly
+        // (Connect disabled, waiting copy, fallback link) from module state.
+        render();
       } catch (e) {
-        msg.textContent = 'Failed: ' + (e.message || e);
+        corveilConnectNote = 'Failed: ' + (e.message || e);
+        corveilAuthorizeURL = '';
+        msg.textContent = corveilConnectNote;
         btn.disabled = false;
       }
     };
     body.appendChild(field('Connect', btn, 'Applies immediately — no Save needed.'));
     body.appendChild(msg);
-    body.appendChild(fallback);
 
-    // Manual fallback if the auto-poll window elapses (a slow sign-in).
+    // Auto-open is best-effort on the daemon host; offer the URL as a fallback.
+    // Rendered from module state so it survives a re-render while polling.
+    if (corveilAuthorizeURL) {
+      const fallback = el('div', 'st-perm-status');
+      fallback.appendChild(document.createTextNode('Didn’t see a window? '));
+      const a = el('a', null, 'Open the sign-in page');
+      a.href = corveilAuthorizeURL;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      fallback.appendChild(a);
+      body.appendChild(fallback);
+    }
+
+    // Manual fallback if the auto-poll window elapses (a slow sign-in). Safe to
+    // click during a poll — render() keeps Connect disabled until the poll ends.
     const refresh = el('button', 'action-btn', 'Refresh status');
     refresh.type = 'button';
     refresh.onclick = async () => {
       refresh.disabled = true;
       try { await refreshCorveilConnection(); render(); }
-      catch (e) { msg.textContent = 'Could not refresh: ' + (e.message || e); refresh.disabled = false; }
+      catch (e) { corveilConnectNote = 'Could not refresh: ' + (e.message || e); msg.textContent = corveilConnectNote; refresh.disabled = false; }
     };
     body.appendChild(field(null, refresh));
   }
@@ -1544,27 +1566,43 @@
   // After Connect, the OAuth consent completes in a separate browser window and the
   // daemon stores the tokens; this tab still holds the pre-connect config. Poll a
   // fresh get-config until the connection appears (or the user leaves), then
-  // re-render into the connected view. Bounded so a never-completed sign-in stops
-  // polling on its own — `onTimeout` (if given) then restores the Connect control,
-  // since the button was disabled for the duration; the Refresh button also recovers.
-  function pollForCorveilConnection(onTimeout) {
+  // re-render — into the connected view on success, or back to an enabled Connect
+  // (with "still not connected" copy) on timeout. State lives entirely in the module
+  // vars above and the card is a pure function of them, so a mid-poll Refresh / tab
+  // switch can't leave a stale, stuck button behind.
+  function startCorveilConnectPoll() {
     if (corveilPolling) return;
     corveilPolling = true;
+    // Bind this poll to the modal instance that started it: a close+reopen replaces
+    // `backdrop` with a new element, and this poll must go inert rather than drive
+    // (or double up on) the fresh modal — which reset its own state on open.
+    const myBackdrop = backdrop;
     let attempts = 0;
     const tick = async () => {
-      // Stop if the modal closed or the user navigated off the Integrations tab.
-      if (!backdrop || activeTab !== 'integrations') { corveilPolling = false; return; }
+      // Stop if this modal closed/reopened, or the user left the Integrations tab.
+      // Clear the transient copy so a later return shows a clean, enabled card.
+      if (backdrop !== myBackdrop || activeTab !== 'integrations') {
+        if (backdrop === myBackdrop) { corveilPolling = false; corveilConnectNote = ''; corveilAuthorizeURL = ''; }
+        return;
+      }
       attempts++;
       try {
         if (corveilConnected(await refreshCorveilConnection())) {
           corveilPolling = false;
+          corveilConnectNote = '';
+          corveilAuthorizeURL = '';
           render();
           return;
         }
       } catch (_) { /* transient — keep polling */ }
       if (attempts >= 24) {
+        // Consent + 2FA can outlast the poll window. Drop the flag and re-render:
+        // Connect comes back enabled and the copy points at Refresh.
         corveilPolling = false;
-        if (onTimeout) onTimeout();
+        corveilConnectNote = 'Still not connected. Finish the Corveil sign-in, then '
+          + 'click Refresh status — or Connect again.';
+        corveilAuthorizeURL = '';
+        render();
         return;
       }
       setTimeout(tick, 2500);

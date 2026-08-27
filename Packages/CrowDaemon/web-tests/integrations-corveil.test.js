@@ -6,16 +6,19 @@ const { JSDOM } = require('jsdom');
 // app.js + settings.js under jsdom against mocks, the same loader shape as
 // about-sha-link.test.js.
 //
-// The bug this guards is subtle and invisible in a string check: get-config
-// encodes AppConfig with a DEFAULT Swift JSONEncoder, whose .deferredToDate
-// strategy emits a Date as a NUMBER of seconds since the 2001-01-01 reference
-// epoch — not unix ms, and not ISO. Handing that to `new Date(n)` (which reads a
-// number as unix ms) renders the date in January 1970. So the connected card is
-// rendered against a get-config that carries the Swift-epoch numbers, and the
-// rendered date text is asserted to show the real year and never 1970.
-//
-// It also pins the read-only gate: Connect/Disconnect are actionable only when the
-// connection reports `local` (a local-direct browser), read-only otherwise.
+// Guards three things that are invisible in a string check:
+//   1. Swift-epoch date decoding. get-config encodes AppConfig with a DEFAULT
+//      Swift JSONEncoder (.deferredToDate), so Date fields arrive as a NUMBER of
+//      seconds since the 2001-01-01 reference epoch — not unix ms. Handing that to
+//      `new Date(n)` renders the date in January 1970. The connected card is
+//      rendered against those numbers and the text is asserted to show the real
+//      year, never 1970.
+//   2. The local/remote read-only gate across all four states.
+//   3. The connect-poll composition (round-2 review): a re-render (Refresh / tab
+//      return) while a sign-in poll is in flight must NOT present a second, enabled
+//      Connect; the poll timeout must re-enable Connect; a completed sign-in must
+//      flip to the connected view. Driven with a controllable setTimeout so the
+//      24 × 2.5s poll runs deterministically.
 const WEB = __dirname + '/../Sources/CrowDaemon/Resources/web/';
 const APP_JS = WEB + 'app.js';
 const SETTINGS_JS = WEB + 'settings.js';
@@ -73,7 +76,9 @@ function connectedConfig() {
   });
 }
 
-// `local` drives GET /auth/context (isLocal); `config` is the get-config body.
+// `local` drives GET /auth/context (isLocal); `config` is the initial get-config
+// body. Returns handles a test can drive: a controllable setTimeout queue
+// (`flushTimers`), a `setConfig` to simulate the connection completing out of band.
 function load({ config, local }) {
   const dom = new JSDOM(MARKUP, {
     runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/',
@@ -83,14 +88,26 @@ function load({ config, local }) {
     return { send() {}, close() {},
       set onopen(v) {}, set onmessage(v) {}, set onclose(v) {}, set onerror(v) {} };
   };
+  // Controllable timers: settings.js's connect poll schedules via setTimeout, so a
+  // test can flush the queue to run the 24 ticks deterministically instead of
+  // waiting real 2.5s intervals.
+  const timers = [];
+  window.setTimeout = (fn) => { timers.push(fn); return timers.length; };
   window.setInterval = () => 0;
-  window.setTimeout = () => 0;
   window.requestAnimationFrame = () => 0;
   window.matchMedia = () => ({ matches: false, addListener() {}, addEventListener() {} });
+
+  let configBody = config;
   window.fetch = (url) => {
     const u = String(url);
     if (u.startsWith('/auth/context')) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ local: !!local }) });
+    }
+    if (u.startsWith('/integrations/corveil/connect')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ authorizeURL: 'https://app.corveil.example/oauth/authorize?x=1' }),
+      });
     }
     // /autostart and /version.json — settings.js tolerates both failing.
     return Promise.resolve({ ok: false, json: () => Promise.reject(new Error('n/a')) });
@@ -108,24 +125,39 @@ function load({ config, local }) {
   const T = ctx.__t;
   if (!T) throw new Error('epilogue did not run');
   T.setRpc((method) => (method === 'get-config'
-    ? Promise.resolve({ config, dev_root: '/dev' })
+    ? Promise.resolve({ config: configBody, dev_root: '/dev' })
     : method === 'list-agents'
       ? Promise.resolve({ agents: [] })
       : Promise.reject(new Error('not stubbed: ' + method))));
-  return { T, window };
+
+  async function flushTimers(max = 200) {
+    let n = 0;
+    while (timers.length && n < max) {
+      const fn = timers.shift();
+      try { fn(); } catch (_) { /* poll tick errors are non-fatal */ }
+      for (let i = 0; i < 30; i++) await Promise.resolve(); // drain the tick's awaits
+      n++;
+    }
+  }
+  return { T, window, timers, flushTimers, setConfig: (c) => { configBody = c; } };
 }
 
-// Open Settings on Integrations and return the rendered .settings-body once the
-// Corveil card has painted (openSettings' promise chain has drained).
-async function integrationsBody({ config, local }) {
-  const { T, window } = load({ config, local });
-  await T.openSettings('integrations');
+// Open Settings on Integrations and return the load handle once the Corveil card
+// has painted. Discards any timers queued during boot/open so flushTimers later
+// drives only the connect poll.
+async function openIntegrations({ config, local }) {
+  const h = load({ config, local });
+  await h.T.openSettings('integrations');
   for (let i = 0; i < 50; i++) {
-    const status = window.document.querySelector('.st-corveil-status');
-    if (status) return window.document.querySelector('.settings-body');
+    if (h.window.document.querySelector('.st-corveil-status')) { h.timers.length = 0; return h; }
     await Promise.resolve();
   }
   throw new Error('Corveil card never rendered');
+}
+
+async function integrationsBody(opts) {
+  const h = await openIntegrations(opts);
+  return h.window.document.querySelector('.settings-body');
 }
 
 let pass = 0;
@@ -138,13 +170,17 @@ const check = (name, cond) => {
 function buttonByText(root, text) {
   return Array.from(root.querySelectorAll('button')).find((b) => b.textContent.includes(text)) || null;
 }
+function connectBtn(window) { return buttonByText(window.document, 'Connect to Corveil'); }
+function refreshBtn(window) { return buttonByText(window.document, 'Refresh status'); }
+function urlInput(window) {
+  return Array.from(window.document.querySelectorAll('input')).find((i) => /corveil\.example/.test(i.placeholder));
+}
 
 (async () => {
   console.log('Connected card renders Swift-epoch dates in the real year, not 1970:');
   {
     const body = await integrationsBody({ config: connectedConfig(), local: true });
     const text = body.textContent;
-    // The year the production code should show, computed the correct way here.
     const expiryYear = String(new Date('2026-09-01T12:00:00Z').getFullYear());
     const provisionedYear = String(new Date('2026-08-01T12:00:00Z').getFullYear());
     check('identity line shows the connected user',
@@ -155,8 +191,6 @@ function buttonByText(root, text) {
       text.includes('provisioned') && text.includes(provisionedYear));
     check('no date rendered as January 1970 (the misread-as-unix-ms bug)',
       !text.includes('1970'));
-    // Prove the number really WAS the Swift-epoch shape a naive new Date(n) breaks
-    // on — so this test would fail if the fix were reverted.
     const rawExpiry = JSON.parse(connectedConfig()).corveilConnection.oauth.accessTokenExpiresAt;
     check('the fixture date is a bare number the buggy path misreads as 1970',
       typeof rawExpiry === 'number' && new Date(rawExpiry).getUTCFullYear() === 1970);
@@ -193,6 +227,45 @@ function buttonByText(root, text) {
     const body = await integrationsBody({ config: '{}', local: false });
     check('no Connect button', !buttonByText(body, 'Connect to Corveil'));
     check('read-only note present', body.textContent.includes('from a local browser'));
+  }
+
+  // Round-2 review: a re-render (Refresh / tab return) while a sign-in poll is in
+  // flight must NOT drop a fresh enabled Connect over it. setTimeout is queued and
+  // not flushed here, so the poll stays "in flight" across the Refresh re-render.
+  console.log('\nConnect stays disabled across a re-render while polling:');
+  {
+    const h = await openIntegrations({ config: '{}', local: true });
+    urlInput(h.window).value = 'https://app.corveil.example';
+    await connectBtn(h.window).onclick(); // POST resolves, poll starts, card re-renders
+    check('Connect disabled while poll in flight', connectBtn(h.window).disabled === true);
+    check('waiting copy shown', h.window.document.body.textContent.includes('updates automatically'));
+    check('fallback sign-in link shown', !!h.window.document.querySelector('a[target="_blank"]'));
+    // Refresh re-renders the card mid-poll — Connect must stay disabled (the hole).
+    await refreshBtn(h.window).onclick();
+    check('Connect STILL disabled after Refresh re-render', connectBtn(h.window).disabled === true);
+  }
+
+  console.log('\nPoll timeout re-enables Connect with recovery copy:');
+  {
+    const h = await openIntegrations({ config: '{}', local: true });
+    urlInput(h.window).value = 'https://app.corveil.example';
+    await connectBtn(h.window).onclick();
+    check('disabled during poll', connectBtn(h.window).disabled === true);
+    await h.flushTimers(); // drive all 24 ticks; config stays '{}' → never connects
+    check('Connect re-enabled after timeout', connectBtn(h.window).disabled === false);
+    check('recovery copy shown', h.window.document.body.textContent.includes('Still not connected'));
+  }
+
+  console.log('\nPoll detects a completed sign-in and flips to the connected view:');
+  {
+    const h = await openIntegrations({ config: '{}', local: true });
+    urlInput(h.window).value = 'https://app.corveil.example';
+    await connectBtn(h.window).onclick();
+    h.setConfig(connectedConfig()); // the sign-in completed out of band
+    await h.flushTimers();          // next tick observes the stored connection
+    const text = h.window.document.body.textContent;
+    check('connected identity now shown', text.includes('Connected as Dustin Hilgaertner'));
+    check('no Connect button in the connected view', !buttonByText(h.window.document, 'Connect to Corveil'));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
