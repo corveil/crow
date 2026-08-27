@@ -100,8 +100,12 @@ CrowDaemon.startLogSyncPoll (5-min tick, config read fresh each tick)
 - **Attribution** is by worktree-path match (`AppState.sessionIDs(forWorktreePath:)`),
   the same resolution the hook-event handler uses. Metadata attached as untrusted
   sidecar hints: session UUID (the `{sessionUID}`), name, status, `agentKind`,
-  ticket URL/number, repo, org goal. The server derives the *authoring principal*
-  from the API key, never from these hints.
+  ticket URL/number, the PRODUCED PR URL/number (CROW-1115 — the PR Crow opened
+  for the session's branch, resolved by `AppState.producedPR(for:)` from the
+  `Crow-Session:` trailer attribution, falling back to the session's branch-matched
+  `.pr` link; review sessions produce nothing and are excluded), repo, org goal.
+  The server derives the *authoring principal* from the API key, never from these
+  hints.
 - **Upload** authenticates with the workspace operator's own Corveil API key
   (`Authorization: Bearer …`, resolved from an `op://…` reference via the same
   `GatewayResolver.opRead` the gateway uses). The server performs the

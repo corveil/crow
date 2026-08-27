@@ -80,6 +80,16 @@ public struct LogSyncSessionMetadata: Sendable, Equatable {
     public var agentKind: String?
     public var ticketURL: String?
     public var ticketNumber: Int?
+    /// The pull request the session PRODUCED (CROW-1115) — the write-side of
+    /// Corveil's AgentSession PR-outcome scoring. Populated from the PR Crow
+    /// actually opened for the session's branch, so an *issue-linked* session
+    /// carries its PR too, not only one whose ticket URL is itself a `/pull/`
+    /// link. Corveil reads these as the `crow_sessions.pr_url`/`pr_number`
+    /// sidecar (migration 0249 / corveil#2569) and attaches a direct
+    /// `PRODUCED → PullRequest` edge, letting the session score its PR's real
+    /// state instead of `no_pr`. Optional like every other hint.
+    public var prURL: String?
+    public var prNumber: Int?
     public var repo: String?
     public var orgGoal: String?
 
@@ -89,6 +99,8 @@ public struct LogSyncSessionMetadata: Sendable, Equatable {
         agentKind: String? = nil,
         ticketURL: String? = nil,
         ticketNumber: Int? = nil,
+        prURL: String? = nil,
+        prNumber: Int? = nil,
         repo: String? = nil,
         orgGoal: String? = nil
     ) {
@@ -97,6 +109,8 @@ public struct LogSyncSessionMetadata: Sendable, Equatable {
         self.agentKind = agentKind
         self.ticketURL = ticketURL
         self.ticketNumber = ticketNumber
+        self.prURL = prURL
+        self.prNumber = prNumber
         self.repo = repo
         self.orgGoal = orgGoal
     }

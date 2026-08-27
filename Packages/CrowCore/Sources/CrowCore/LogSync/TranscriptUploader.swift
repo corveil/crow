@@ -113,6 +113,12 @@ public struct TranscriptUploader: Sendable {
         add("agent_kind", metadata.agentKind)
         add("ticket_url", metadata.ticketURL)
         if let n = metadata.ticketNumber { add("ticket_number", String(n)) }
+        // The PR the session PRODUCED (CROW-1115). Corveil pairs `pr_url`/`pr_number`
+        // into the `crow_sessions` sidecar and derives a `PRODUCED → PullRequest`
+        // edge — the write-side that lets an issue-linked session score its PR's
+        // real outcome. Omitted (like every hint) when Crow has no PR for the session.
+        add("pr_url", metadata.prURL)
+        if let n = metadata.prNumber { add("pr_number", String(n)) }
         add("repo", metadata.repo)
         add("org_goal", metadata.orgGoal)
         components.queryItems = items

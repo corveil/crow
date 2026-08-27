@@ -730,6 +730,58 @@ public final class AppState {
         return assignedIssues.first { ticketMatches(session: session, issue: $0) }
     }
 
+    /// The pull request a session PRODUCED, for the `crow_sessions` PR sidecar
+    /// (CROW-1115) — the write-side of Corveil's AgentSession PR-outcome scoring
+    /// (corveil#2569 sidecar, consumed by corveil#2702). Resolved from the PR Crow
+    /// actually opened for the session's branch, so an **issue-linked** session
+    /// carries its PR too — not only one whose own ticket is a `/pull/` URL.
+    ///
+    /// A **review** session PRODUCES nothing: it reviews someone else's PR and
+    /// carries a creation-time `.pr` link to *that* PR, so it returns nil rather
+    /// than misattributing the reviewed PR to the reviewer. Work and job sessions
+    /// author their own branch and are genuine producers.
+    ///
+    /// Sources, in order:
+    /// 1. **Trailer attribution** (`prAttributions`) — authorship ground truth: the
+    ///    PR whose branch commits carried this session's `Crow-Session:` trailer.
+    ///    Durable (outlives session deletion), independent of the ticket. Only
+    ///    populated once the PR's commits have been fetched (auto-merge / auto-rebase).
+    /// 2. **The session-scoped `.pr` link** that `PRLinkReconciler` records by
+    ///    matching the session's worktree branch to a viewer PR — "the PR Crow opened
+    ///    for this branch", with no closing-issue-keyword requirement. This is what
+    ///    runs for the common issue-linked session before any trailer fetch.
+    ///
+    /// The issue's closing-PR hint (`assignedIssue.prURL`) is deliberately NOT used:
+    /// it is stamped from *any* OPEN viewer PR that closes the same issue — possibly
+    /// a pre-existing or another session's PR — and the upload's write-once 409 makes
+    /// a wrong first value uncorrectable, so a missing link yields nil, never a guess.
+    public func producedPR(for session: Session) -> (url: String, number: Int)? {
+        // A reviewer produces nothing; its `.pr` link is the PR under review.
+        guard session.kind != .review else { return nil }
+
+        let attributed = prAttributions.values.filter { $0.sessionIDs.contains(session.id) }
+        if let best = Self.bestProducedPR(attributed) {
+            return (best.prURL, best.prNumber)
+        }
+        if let prLink = links(for: session.id).first(where: { $0.linkType == .pr }),
+           let number = Session.parseReviewPR(url: prLink.url)?.number {
+            return (prLink.url, number)
+        }
+        return nil
+    }
+
+    /// Pick the PR to report when a session's trailer appears on more than one
+    /// (rare — a session that touched two PRs): a landed PR outranks a still-open
+    /// one, and among equals the most recently updated wins.
+    nonisolated static func bestProducedPR(_ attributions: [PRSessionAttribution]) -> PRSessionAttribution? {
+        attributions.max { a, b in
+            let aMerged = a.state == "MERGED"
+            let bMerged = b.state == "MERGED"
+            if aMerged != bMerged { return bMerged } // a ranks below b only when b merged and a didn't
+            return a.updatedAt < b.updatedAt
+        }
+    }
+
     /// Find the review request linked to a given session (by matching PR link URL).
     public func reviewRequest(for session: Session) -> ReviewRequest? {
         guard session.kind == .review else { return nil }

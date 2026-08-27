@@ -189,6 +189,130 @@ import Testing
     #expect(appState.labels(forSession: session).isEmpty)
 }
 
+// MARK: - producedPR(for:) — the crow_sessions PR sidecar (CROW-1115)
+
+private func prAttribution(
+    prURL: String, prNumber: Int, sessionIDs: [UUID],
+    state: String = "MERGED", updatedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+) -> PRSessionAttribution {
+    PRSessionAttribution(
+        prURL: prURL, repoNameWithOwner: "org/repo", prNumber: prNumber,
+        sessionIDs: sessionIDs, state: state,
+        firstSeenAt: Date(timeIntervalSince1970: 1_699_000_000),
+        updatedAt: updatedAt)
+}
+
+@MainActor @Test func producedPRResolvesFromTrailerAttributionForIssueLinkedSession() {
+    let appState = AppState()
+    // Issue-linked session — the ticket is an issue, but the branch's commits
+    // carried this session's `Crow-Session:` trailer, so attribution names the PR.
+    let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/42")
+    appState.sessions = [session]
+    let prURL = "https://github.com/org/repo/pull/99"
+    appState.prAttributions = [prURL: prAttribution(prURL: prURL, prNumber: 99, sessionIDs: [session.id])]
+
+    let result = appState.producedPR(for: session)
+    #expect(result?.url == prURL)
+    #expect(result?.number == 99)
+}
+
+@MainActor @Test func producedPRFallsBackToSessionBranchPRLink() {
+    let appState = AppState()
+    let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/7")
+    appState.sessions = [session]
+    // No trailer attribution captured yet; PRLinkReconciler already attached the
+    // branch-matched `.pr` link ("the PR Crow opened for this branch").
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #12",
+                    url: "https://github.com/org/repo/pull/12", linkType: .pr)
+    ]
+    let result = appState.producedPR(for: session)
+    #expect(result?.url == "https://github.com/org/repo/pull/12")
+    #expect(result?.number == 12)
+}
+
+@MainActor @Test func producedPRPrefersTrailerAttributionOverPRLink() {
+    let appState = AppState()
+    let session = Session(name: "fix", ticketURL: "https://github.com/org/repo/issues/7")
+    appState.sessions = [session]
+    let prURL = "https://github.com/org/repo/pull/99"
+    appState.prAttributions = [prURL: prAttribution(prURL: prURL, prNumber: 99, sessionIDs: [session.id])]
+    // Trailer attribution is authorship ground truth and wins over the link.
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #12",
+                    url: "https://github.com/org/repo/pull/12", linkType: .pr)
+    ]
+    #expect(appState.producedPR(for: session)?.number == 99)
+}
+
+@MainActor @Test func producedPRReturnsNilForReviewSession() {
+    let appState = AppState()
+    // A review session carries a `.pr` link to the PR it REVIEWS — that PR must
+    // never be reported as PRODUCED by the reviewer (enforced, not incidental).
+    let session = Session(name: "review-repo-123", kind: .review)
+    appState.sessions = [session]
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #123",
+                    url: "https://github.com/org/repo/pull/123", linkType: .pr)
+    ]
+    #expect(appState.producedPR(for: session) == nil)
+}
+
+@MainActor @Test func producedPRResolvesForJobSession() {
+    let appState = AppState()
+    // A scheduled job authors its own branch — it is a genuine producer, so its
+    // branch-matched `.pr` link is reported (the guard excludes only reviews).
+    let session = Session(name: "nightly", kind: .job)
+    appState.sessions = [session]
+    appState.links[session.id] = [
+        SessionLink(sessionID: session.id, label: "PR #8",
+                    url: "https://github.com/org/repo/pull/8", linkType: .pr)
+    ]
+    #expect(appState.producedPR(for: session)?.number == 8)
+}
+
+@MainActor @Test func producedPRReturnsNilWhenNoPRKnown() {
+    let appState = AppState()
+    // A session whose branch never landed a PR, with no trailer attribution and
+    // no `.pr` link, produces no sidecar hint (never a guess).
+    let session = Session(name: "wip", ticketURL: "https://github.com/org/repo/issues/1")
+    appState.sessions = [session]
+    #expect(appState.producedPR(for: session) == nil)
+}
+
+@MainActor @Test func producedPRIgnoresAttributionsForOtherSessions() {
+    let appState = AppState()
+    let session = Session(name: "mine", ticketURL: "https://github.com/org/repo/issues/1")
+    let other = UUID()
+    appState.sessions = [session]
+    let prURL = "https://github.com/org/repo/pull/5"
+    // The PR carries a different session's trailer — not ours.
+    appState.prAttributions = [prURL: prAttribution(prURL: prURL, prNumber: 5, sessionIDs: [other])]
+    #expect(appState.producedPR(for: session) == nil)
+}
+
+@Test func bestProducedPRPrefersMergedThenMostRecent() {
+    let sid = UUID()
+    let openOld = PRSessionAttribution(
+        prURL: "pr/open-old", repoNameWithOwner: "org/repo", prNumber: 1,
+        sessionIDs: [sid], state: "OPEN",
+        firstSeenAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 100))
+    let mergedOlder = PRSessionAttribution(
+        prURL: "pr/merged-older", repoNameWithOwner: "org/repo", prNumber: 2,
+        sessionIDs: [sid], state: "MERGED",
+        firstSeenAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 50))
+    let mergedNewer = PRSessionAttribution(
+        prURL: "pr/merged-newer", repoNameWithOwner: "org/repo", prNumber: 3,
+        sessionIDs: [sid], state: "MERGED",
+        firstSeenAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 60))
+
+    // A landed PR outranks a newer still-open one.
+    #expect(AppState.bestProducedPR([openOld, mergedOlder])?.prURL == "pr/merged-older")
+    // Among merged, the most recently updated wins.
+    #expect(AppState.bestProducedPR([mergedOlder, mergedNewer])?.prURL == "pr/merged-newer")
+    #expect(AppState.bestProducedPR([]) == nil)
+}
+
 // MARK: - Manager Session Lookups
 
 @MainActor @Test func managerSessionsIncludesPrimaryAndAdditional() {

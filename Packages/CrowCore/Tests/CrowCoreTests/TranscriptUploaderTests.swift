@@ -40,6 +40,7 @@ final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable 
         LogSyncSessionMetadata(
             name: "Fix thing", status: "completed", agentKind: "claude-code",
             ticketURL: "https://github.com/o/r/issues/5", ticketNumber: 5,
+            prURL: "https://github.com/o/r/pull/7", prNumber: 7,
             repo: "o/r", orgGoal: "ship")
     }
 
@@ -64,6 +65,10 @@ final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable 
         #expect(items["agent_session_id"] == "claude-uuid")
         #expect(items["ticket_url"] == "https://github.com/o/r/issues/5")
         #expect(items["ticket_number"] == "5")
+        // The PRODUCED PR sidecar (CROW-1115) — issue-linked sessions carry their
+        // PR too, so the ticket is an issue while pr_url/pr_number name the PR.
+        #expect(items["pr_url"] == "https://github.com/o/r/pull/7")
+        #expect(items["pr_number"] == "7")
         #expect(items["repo"] == "o/r")
         #expect(items["org_goal"] == "ship")
 
@@ -82,6 +87,8 @@ final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable 
         let names = Set((comps.queryItems ?? []).map(\.name))
         #expect(!names.contains("name"))
         #expect(!names.contains("ticket_url"))
+        #expect(!names.contains("pr_url"))
+        #expect(!names.contains("pr_number"))
         #expect(!names.contains("agent_session_id"))
         #expect(names.contains("harness")) // required ones stay
     }
