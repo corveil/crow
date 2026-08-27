@@ -1446,26 +1446,37 @@
     sel.onchange = async () => {
       const orgId = sel.value;
       if (!orgId) return;
-      const org = (corveilOrgs || []).find((x) => x.org_id === orgId) || {};
-      const label = org.org_name || orgId;
+      const org = (corveilOrgs || []).find((x) => x.org_id === orgId) || null;
+      const label = (org && org.org_name) || orgId;
       sel.disabled = true;
       msg.textContent = 'Provisioning gateway for ' + label + '…';
       try {
         // Mint or reuse the org's one gateway key, then write the derived gateway.
         await rpc('corveil-select-org', { org_id: orgId });
         await opts.postOrg(orgId);
-        // Refresh the connection so provisioned-org metadata (and the "key ready"
-        // marker) reflect the new key, then show the derived gateway locally — the
-        // header value is a secret we don't hold, so blank it, exactly how a stored
-        // gateway reads back after stripping.
-        const conn2 = await refreshCorveilConnection();
-        opts.setGateway({ baseURL: (conn2 && conn2.baseURL) || '',
-          customHeaders: { 'x-citadel-api-key': '' } });
-        render();
       } catch (e) {
+        // The pick itself failed — nothing was stored. Reset the select back to the
+        // placeholder so re-picking the SAME org fires `change` again: HTML `change`
+        // does not re-fire for an unchanged value, which would otherwise strand this
+        // ticket's primary control on the org that just failed.
         msg.textContent = 'Failed: ' + (e && (e.message || e));
+        sel.value = '';
         sel.disabled = false;
+        return;
       }
+      // The gateway is written. Everything past this point is success bookkeeping, so
+      // a throw here must NOT report the pick as failed. Mark the org provisioned in
+      // place so its "key ready" badge is right on the next paint without a refetch,
+      // then show the derived gateway locally — the header value is a secret we don't
+      // hold, so blank it, exactly how a stored gateway reads back after stripping.
+      if (org) org.provisioned = true;
+      opts.setGateway({ baseURL: (conn && conn.baseURL) || '',
+        customHeaders: { 'x-citadel-api-key': '' } });
+      // Best-effort: refresh the connection so the Integrations tab's per-org key
+      // metadata reflects the new key. A failure here leaves the gateway stored and
+      // the picker correct, so it must not surface as a failed pick.
+      try { await refreshCorveilConnection(); } catch (_) { /* best-effort */ }
+      render();
     };
     wrap.appendChild(field('Organization', sel,
       'Pick a Corveil organization — Crow provisions its gateway key and points this gateway at it.'));
@@ -1626,6 +1637,10 @@
       try {
         await postConfig('/config/corveil-connection', { clear: true });
         cfg.corveilConnection = null;
+        // Drop the cached memberships too — they belong to the connection just
+        // cleared, and a later Connect in this same modal must refetch its own
+        // account's orgs rather than paint the previous one's (CROW-1123 review).
+        resetCorveilOrgState();
         render();
       } catch (e) {
         msg.textContent = 'Failed: ' + (e.message || e);
@@ -1740,6 +1755,11 @@
           corveilPolling = false;
           corveilConnectNote = '';
           corveilAuthorizeURL = '';
+          // Fresh connection → drop any org list cached from a prior one, so the
+          // gateway pickers lazily refetch this account's memberships (CROW-1123
+          // review). The daemon cache is already connection-keyed; this is the
+          // browser-side twin.
+          resetCorveilOrgState();
           render();
           return;
         }
