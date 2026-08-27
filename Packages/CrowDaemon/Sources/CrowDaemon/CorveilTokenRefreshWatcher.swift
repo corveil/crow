@@ -43,6 +43,10 @@ enum CorveilTokenRefreshWatcher {
         case notDue
         /// The token was refreshed and persisted; health reset to connected.
         case refreshed
+        /// A refresh completed but a reconnect (or disconnect) landed while the token
+        /// HTTP call was in flight, so the result was discarded rather than clobber
+        /// the newer grant. Nothing was written — reconnect-wins.
+        case superseded
         /// A refresh was attempted and failed. `needsReconnect` is true only for a
         /// definitive grant rejection (the connection is now `.revoked`).
         case failed(needsReconnect: Bool)
@@ -78,19 +82,26 @@ enum CorveilTokenRefreshWatcher {
 
         guard isDue(connection, now: now) else { return .notDue }
 
+        // The exact stored refresh token identifies this grant. A reconnect while the
+        // HTTP call is in flight replaces it, and the persist below no-ops on the
+        // mismatch (reconnect-wins), so a stale success/failure can't touch the new
+        // grant.
+        let presentedGrant = connection.oauth.refreshToken
+
         do {
             let response = try await client.refresh(
                 endpoints: endpoints, clientID: connection.clientID, refreshToken: refreshToken)
             let tokens = CorveilConnectionRefresher.mergedTokens(
                 existing: connection.oauth, response: response, now: now)
-            try CorveilConnectionPersistence.recordRefreshSuccess(
-                devRoot: devRoot, tokens: tokens, now: now)
-            return .refreshed
+            let written = try CorveilConnectionPersistence.recordRefreshSuccess(
+                devRoot: devRoot, expectedRefreshToken: presentedGrant, tokens: tokens, now: now)
+            return written ? .refreshed : .superseded
         } catch {
             let revoked = isGrantRejection(error)
-            _ = try? CorveilConnectionPersistence.recordRefreshFailure(
-                devRoot: devRoot, error: describe(error), needsReconnect: revoked)
-            return .failed(needsReconnect: revoked)
+            let written = (try? CorveilConnectionPersistence.recordRefreshFailure(
+                devRoot: devRoot, expectedRefreshToken: presentedGrant,
+                error: describe(error), needsReconnect: revoked)) ?? false
+            return written ? .failed(needsReconnect: revoked) : .superseded
         }
     }
 

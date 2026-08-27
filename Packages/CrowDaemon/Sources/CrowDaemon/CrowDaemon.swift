@@ -572,11 +572,12 @@ public enum CrowDaemon {
         // expires, and latch a "Reconnect" state (surfaced by `crow corveil status`
         // and the Integrations tab) when a refresh is definitively rejected. Each
         // tick reloads the connection, so it needs no reactive config wiring; a
-        // no-op tick when nothing is connected costs one disk read.
+        // no-op tick when nothing is connected costs one disk read. Ticks first,
+        // then sleeps, so an already-expired token is caught at boot rather than one
+        // interval later.
         let corveilRefreshDevRoot = options.devRoot
         Task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(CorveilTokenRefreshWatcher.tickInterval))
                 let outcome = await CorveilTokenRefreshWatcher.tick(devRoot: corveilRefreshDevRoot)
                 switch outcome {
                 case .refreshed:
@@ -584,9 +585,10 @@ public enum CrowDaemon {
                 case .failed(let needsReconnect):
                     log("Corveil token refresh failed"
                         + (needsReconnect ? " — connection revoked, reconnect required" : " (will retry)"))
-                case .noConnection, .notRefreshable, .notDue:
+                case .noConnection, .notRefreshable, .notDue, .superseded:
                     break  // routine; no log
                 }
+                try? await Task.sleep(for: .seconds(CorveilTokenRefreshWatcher.tickInterval))
             }
         }
         // Read-only MCP for off-box clients (CROW-1004). Authenticates with a scoped

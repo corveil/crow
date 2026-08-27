@@ -106,7 +106,12 @@ enum CorveilConnectionRPC {
                 refreshToken: pick(input.refreshToken, base.oauth.refreshToken),
                 registrationAccessToken: pick(
                     input.registrationAccessToken, base.oauth.registrationAccessToken),
-                accessTokenExpiresAt: input.accessTokenExpiresAt ?? base.oauth.accessTokenExpiresAt))
+                accessTokenExpiresAt: input.accessTokenExpiresAt ?? base.oauth.accessTokenExpiresAt),
+            // Reset health explicitly (CROW-1125): a (re)connect through this door is
+            // a fresh grant, so any prior `needsReconnect`/error observation is stale
+            // — carrying `base.health` over would leave a just-reconnected connection
+            // showing "Reconnect". The refresher re-populates it on its next tick.
+            health: CorveilConnectionHealth())
         let hasClientID = !result.clientID.trimmingCharacters(in: .whitespaces).isEmpty
         let hasAccessToken = !result.oauth.accessToken.trimmingCharacters(in: .whitespaces).isEmpty
         guard hasClientID, hasAccessToken else {
