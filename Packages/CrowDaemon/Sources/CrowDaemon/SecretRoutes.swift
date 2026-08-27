@@ -111,28 +111,37 @@ enum SecretRoutes {
                 return json(["error": "a valid workspaceId is required"], status: .badRequest)
             }
             do {
-                let outcome: Result<(found: Bool, set: Bool), GatewayValidationError>
+                let outcome: Result<(found: Bool, set: Bool, logSync: Bool), GatewayValidationError>
                     = try ConfigStore.withConfigLock {
                         var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
                         guard let idx = c.workspaces.firstIndex(where: { $0.id == uid }) else {
-                            return .success((false, false))
+                            return .success((false, false, false))
                         }
                         let resolved = resolveGatewayWrite(
                             body: body.gatewayBody, config: c, stored: c.workspaces[idx].gateway)
                         guard case .success(let merged) = resolved else {
                             // Carry the validation failure out; the success type is unused.
-                            return resolved.map { _ in (found: true, set: false) }
+                            return resolved.map { _ in (found: true, set: false, logSync: false) }
                         }
                         c.workspaces[idx].gateway = merged
+                        // Enabling an org for a workspace opts it into log upload, which
+                        // reuses this same derived gateway for destination + credential
+                        // (corveil/crow#1124). Only on the org path, and only when a
+                        // gateway resulted — a manual edit or clear never flips it.
+                        let enableLogSync = orgSelectionEnablesLogSync(
+                            body: body.gatewayBody, resolvedGateway: merged)
+                        if enableLogSync { c.workspaces[idx].uploadSessionLogs = true }
                         try ConfigStore.saveConfig(c, devRoot: devRoot)
-                        return .success((true, merged != nil))
+                        return .success((true, merged != nil, enableLogSync))
                     }
                 switch outcome {
                 case .failure(let e):
                     return json(["error": e.message], status: .badRequest)
                 case .success(let r):
                     guard r.found else { return json(["error": "workspace not found"], status: .notFound) }
-                    return json(["saved": true, "gateway_set": r.set])
+                    return json([
+                        "saved": true, "gateway_set": r.set, "log_sync_enabled": r.logSync,
+                    ])
                 }
             } catch let e as GatewayValidationError {
                 return json(["error": e.message], status: .badRequest)
@@ -437,6 +446,25 @@ enum SecretRoutes {
             return deriveOrgGateway(orgId: orgId, connection: config.corveilConnection)
         }
         return buildGateway(body).flatMap { mergingPreservedHeaders(incoming: $0, stored: stored) }
+    }
+
+    /// Whether an org-derived workspace-gateway write should also turn
+    /// `uploadSessionLogs` on (corveil/crow#1124). Binding a Corveil org to a
+    /// workspace points its gateway at that org's key, which the log upload reuses
+    /// for both destination and credential — so picking an org is the natural moment
+    /// to opt the workspace into log upload, with no second key or host to enter.
+    ///
+    /// True only when the write is org-derived (`orgId` present) **and** produced a
+    /// gateway: a manual base-URL + headers edit, or a clear, leaves the flag exactly
+    /// as the user set it — only the org picker auto-enables. The workspace can still
+    /// untick the box afterward (a plain `set-config` field), so this is a default,
+    /// not a lock.
+    static func orgSelectionEnablesLogSync(
+        body: GatewayBody?, resolvedGateway: WorkspaceGateway?
+    ) -> Bool {
+        guard let orgId = body?.orgId?.trimmingCharacters(in: .whitespaces), !orgId.isEmpty
+        else { return false }
+        return !(resolvedGateway?.isEmpty ?? true)
     }
 
     /// Build the ``WorkspaceGateway`` for a selected Corveil org from the stored

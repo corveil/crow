@@ -150,6 +150,14 @@ API-key reference — CROW-1070 removed them. The upload **destination and
 credential are the workspace's own gateway** (see below), so ticking the box on a
 workspace that already routes its LLM traffic through Corveil is all it takes.
 
+**Picking a Corveil org enables both at once (CROW-1124).** When a workspace's AI
+gateway is set from the org dropdown (Settings → Workspaces, with a Corveil
+connection), the derived gateway already carries that org's `x-citadel-api-key` —
+the exact credential the upload reuses — so the daemon flips
+`uploadSessionLogs` on in the same write. One org selection satisfies both
+conditions; the checkbox stays user-editable, so a workspace can opt back out
+without touching the gateway. A manual gateway edit never auto-enables it.
+
 The remaining global block, `AppConfig.logSync`, holds only **behavior knobs** —
 `retentionDays`, `quietPeriodMinutes`, `maxUploadBytes`. These are not credentials,
 so unlike the pre-1070 block they are an ordinary, browser-editable config surface:
@@ -170,6 +178,10 @@ upload target **solely** from that workspace's local-only `gateway`:
   `x-api-key` / `x-corveil-key` defensively, resolves an `op://…` reference the same
   way the gateway launch path does, and strips a leading `Bearer ` so
   `TranscriptUploader` can re-wrap the bare key as `Authorization: Bearer <key>`.
+  Rotating an org's key (`corveil select-org --rotate`) rewrites that value in
+  every gateway derived from it — Manager and workspace alike — in the same locked
+  write that stores the new key, so the next upload authenticates with the fresh
+  credential rather than the revoked one (CROW-1124).
 
 **The invariant:** the destination and credential come only from the **local-only**
 gateway — never from any browser-writable workspace field. A web-flippable field must

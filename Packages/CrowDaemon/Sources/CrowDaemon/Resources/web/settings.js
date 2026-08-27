@@ -2120,7 +2120,25 @@
       if (corveilConnected(cfg.corveilConnection)) {
         body.appendChild(orgGatewayEditor({
           current: d.gateway || null,
-          postOrg: (orgId) => postConfig('/config/workspace-gateway', { workspaceId: d.id, orgId }),
+          // Picking an org derives this workspace's gateway from that org's key AND —
+          // because the log upload reuses that same gateway — the daemon auto-enables
+          // uploadSessionLogs in the same write (corveil/crow#1124). The POST reports
+          // that decision back as `log_sync_enabled`; honor it (the single source of
+          // truth, so client and server can't drift) on BOTH the open draft — so the
+          // checkbox reads right — and the live cfg.workspaces entry. The cfg entry is
+          // load-bearing: the draft only reaches cfg on Done, so a pick-then-Cancel
+          // would otherwise leave cfg.uploadSessionLogs false and a later Save
+          // (set-config, which the browser wins on for this non-secret field) would
+          // clobber the server's opt-in back off.
+          postOrg: async (orgId) => {
+            const res = await postConfig('/config/workspace-gateway', { workspaceId: d.id, orgId });
+            if (res && res.log_sync_enabled) {
+              d.uploadSessionLogs = true;
+              const ws = (cfg.workspaces || []).find((w) => w.id === d.id);
+              if (ws) ws.uploadSessionLogs = true;
+            }
+            return res;
+          },
           setGateway: (g) => { d.gateway = g; },
           manual,
         }));
