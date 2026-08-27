@@ -252,7 +252,17 @@ enum CorveilIntegrationRoutes {
         """
         return Response(
             status: status,
-            headers: [.contentType: "text/html; charset=utf-8"],
+            headers: [
+                .contentType: "text/html; charset=utf-8",
+                // Defense in depth behind escape(): the page loads no scripts and no
+                // external resources, so lock it to inline styles only and forbid
+                // framing. Escaping the provider-supplied strings is the real control;
+                // these make a future interpolation slip inert.
+                .contentSecurityPolicy:
+                    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+                    + "form-action 'none'; frame-ancestors 'none'",
+                HTTPField.Name("x-frame-options")!: "DENY",
+            ],
             body: .init(byteBuffer: ByteBuffer(string: html)))
     }
 

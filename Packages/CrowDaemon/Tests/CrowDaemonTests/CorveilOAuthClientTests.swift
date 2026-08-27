@@ -95,6 +95,15 @@ import FoundationNetworking
         #expect(CorveilOAuthClient.Endpoints(baseURL: "not-a-url") == nil)  // no scheme/host
     }
 
+    @Test func endpointsRejectNonHTTPSchemes() {
+        // A non-http(s) base URL is rejected before it can reach the browser or the
+        // transport (review Green #1).
+        #expect(CorveilOAuthClient.Endpoints(baseURL: "file://localhost/x") == nil)
+        #expect(CorveilOAuthClient.Endpoints(baseURL: "javascript://alert.com") == nil)
+        #expect(CorveilOAuthClient.Endpoints(baseURL: "slack://open") == nil)
+        #expect(CorveilOAuthClient.Endpoints(baseURL: "http://corveil.test") != nil)  // http allowed (loopback dev)
+    }
+
     // MARK: - Dynamic Client Registration (RFC 7591)
 
     @Test func registerParsesResponseAndSendsPublicClient() async throws {
@@ -224,6 +233,20 @@ import FoundationNetworking
             _ = try await client.exchangeCode(
                 endpoints: endpoints, clientID: "c", code: "x", codeVerifier: "v", redirectURI: "r")
         }
+    }
+
+    @Test func expiresInOutOfRangeIsIgnoredNotFatal() async throws {
+        // A 2xx token body with an out-of-Int-range `expires_in` (a buggy or hostile
+        // AS) must not trap the daemon: the access token still parses and the expiry
+        // is simply unknown (review Yellow).
+        let client = CorveilOAuthClient(transport: transport { _ in
+            (200, Data(#"{"access_token":"at","refresh_token":"rt","token_type":"Bearer","expires_in":1e20,"scope":"s"}"#.utf8))
+        })
+        let tokens = try await client.exchangeCode(
+            endpoints: endpoints, clientID: "c", code: "x", codeVerifier: "v", redirectURI: "r")
+        #expect(tokens.accessToken == "at")
+        #expect(tokens.expiresIn == nil)
+        #expect(tokens.expiresAt(now: Date()) == nil)
     }
 
     @Test func transportThrowBecomesTransportFailure() async {

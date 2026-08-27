@@ -90,13 +90,14 @@ struct CorveilOAuthClient: Sendable {
         let token: URL
 
         /// Resolve from a base URL like `https://app.corveil.example`. A trailing
-        /// slash is tolerated. Returns nil for a URL with no scheme/host so the
-        /// caller can surface ``Failure/invalidBaseURL(_:)`` instead of building
-        /// nonsense endpoints.
+        /// slash is tolerated. Returns nil unless the URL is an `http`/`https` URL
+        /// with a host, so a `file://`, `javascript://`, or custom-scheme base URL is
+        /// rejected here rather than reaching the browser or the transport.
         init?(baseURL: String) {
             let trimmed = baseURL.trimmingCharacters(in: .whitespaces)
             guard let root = URL(string: trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed),
-                  root.scheme != nil, root.host != nil
+                  let scheme = root.scheme?.lowercased(), scheme == "http" || scheme == "https",
+                  root.host != nil
             else { return nil }
             register = root.appendingPathComponent("mcp/oauth/register")
             authorize = root.appendingPathComponent("mcp/oauth/authorize")
@@ -117,7 +118,7 @@ struct CorveilOAuthClient: Sendable {
     /// Generate a fresh PKCE pair: a 32-byte random verifier (43 base64url chars,
     /// within RFC 7636's 43–128 range) and its S256 challenge.
     static func makePKCE() -> PKCE {
-        let verifier = base64URL(randomBytes(32))
+        let verifier = base64URL(PasswordHash.randomBytes(32))
         return PKCE(verifier: verifier, challenge: challenge(for: verifier))
     }
 
@@ -128,7 +129,7 @@ struct CorveilOAuthClient: Sendable {
     }
 
     /// A fresh anti-forgery `state` value (32 bytes of entropy, base64url).
-    static func makeState() -> String { base64URL(randomBytes(32)) }
+    static func makeState() -> String { base64URL(PasswordHash.randomBytes(32)) }
 
     // MARK: - Dynamic Client Registration (RFC 7591)
 
@@ -307,11 +308,17 @@ struct CorveilOAuthClient: Sendable {
     }
 
     /// `expires_in` may decode as an `Int`, a JSON number (`Double`), or a string —
-    /// accept all three, reject the rest.
+    /// accept all three, but never trap. A non-finite or out-of-`Int`-range `Double`
+    /// (a buggy or hostile AS could return `1e20` in a 2xx token body, after the
+    /// pending `state` is already consumed) returns nil rather than fatal-erroring
+    /// `Int(_:)`. `Int(_:)` on a string already returns nil on overflow or a
+    /// non-integer format, so no expiry is worse than a crashed daemon.
     private static func intValue(_ value: Any?) -> Int? {
         switch value {
         case let int as Int: return int
-        case let double as Double: return Int(double)
+        case let double as Double:
+            guard double.isFinite, double >= Double(Int.min), double < Double(Int.max) else { return nil }
+            return Int(double)
         case let string as String: return Int(string)
         default: return nil
         }
@@ -342,11 +349,5 @@ struct CorveilOAuthClient: Sendable {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-    }
-
-    private static func randomBytes(_ count: Int) -> [UInt8] {
-        var bytes = [UInt8](repeating: 0, count: count)
-        for index in bytes.indices { bytes[index] = UInt8.random(in: .min ... .max) }
-        return bytes
     }
 }

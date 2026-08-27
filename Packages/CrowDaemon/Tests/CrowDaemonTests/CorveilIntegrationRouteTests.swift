@@ -237,6 +237,9 @@ import FoundationNetworking
                 #expect(response.status == .ok)
                 let html = String(buffer: response.body)
                 #expect(html.contains("Connected to Corveil"))
+                // The result page is locked down behind escape() (review Green #3).
+                #expect(response.headers[.contentSecurityPolicy]?.contains("default-src 'none'") == true)
+                #expect(response.headers[HTTPField.Name("x-frame-options")!] == "DENY")
             }
         }
         #expect(h.calls.hitToken)
