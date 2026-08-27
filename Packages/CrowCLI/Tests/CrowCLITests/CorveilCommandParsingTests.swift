@@ -21,7 +21,46 @@ struct CorveilCommandParsingTests {
     func registered() throws {
         #expect(CrowCommand.configuration.subcommands.contains { $0 == Corveil.self })
         let names = Corveil.configuration.subcommands.map { $0.configuration.commandName }
-        #expect(Set(names) == ["verify", "reinstall-skill"])
+        #expect(Set(names) == [
+            "verify", "reinstall-skill", "connect", "status", "disconnect", "orgs",
+        ])
+    }
+
+    // MARK: - Connection (CROW-1120)
+
+    @Test("connect maps its flags to snake_case params and drops blanks")
+    func connectMapsFlags() throws {
+        let connect = try #require(try parse([
+            "corveil", "connect",
+            "--base-url", "https://corveil.example.com",
+            "--client-id", "crow-client-1",
+            "--user-email", "dev@example.com",
+            "--access-token", "at-secret",
+            "--access-token-expires-at", "2026-01-01T00:00:00Z",
+        ]) as? CorveilConnect)
+        let params = connect.params
+        #expect(params["base_url"]?.stringValue == "https://corveil.example.com")
+        #expect(params["client_id"]?.stringValue == "crow-client-1")
+        #expect(params["user_email"]?.stringValue == "dev@example.com")
+        #expect(params["access_token"]?.stringValue == "at-secret")
+        #expect(params["access_token_expires_at"]?.stringValue == "2026-01-01T00:00:00Z")
+        // Nothing sent for the flags that were omitted — a blank must not clear a
+        // stored value.
+        #expect(params["refresh_token"] == nil)
+        #expect(params["user_name"] == nil)
+    }
+
+    @Test("connect with no flags sends no params, so the daemon rejects an empty write")
+    func connectWithoutFlagsSendsNothing() throws {
+        let connect = try #require(try parse(["corveil", "connect"]) as? CorveilConnect)
+        #expect(connect.params.isEmpty)
+    }
+
+    @Test("The read/clear verbs parse and take no arguments")
+    func readAndClearVerbsParse() throws {
+        #expect((try parse(["corveil", "status"]) as? CorveilStatus) != nil)
+        #expect((try parse(["corveil", "disconnect"]) as? CorveilDisconnect) != nil)
+        #expect((try parse(["corveil", "orgs"]) as? CorveilOrgs) != nil)
     }
 
     // MARK: - --path

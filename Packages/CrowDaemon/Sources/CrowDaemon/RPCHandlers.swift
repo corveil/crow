@@ -2095,6 +2095,7 @@ func makeCommandRouter(
     handlers.merge(makeWorkspaceHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeMCPTokenHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeCorveilHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
+    handlers.merge(makeCorveilConnectionHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeBackfillHandlers(devRoot: devRoot)) { existing, _ in existing }
     return CommandRouter(handlers: handlers, fallback: fallback)
 }
@@ -2382,6 +2383,79 @@ private func makeCorveilHandlers(
                 "path": .string(outcome.path),
                 "skill_path": .string(CorveilCLI.commandsDir(devRoot: devRoot)),
             ]
+        },
+    ]
+}
+
+/// The `corveil-connect` / `corveil-status` / `corveil-disconnect` /
+/// `corveil-orgs` verb group — the local-only write path for the Corveil
+/// connection (CROW-1120), the "door" from the epic (corveil/crow#1117) that the
+/// OAuth client (corveil/crow#1119) and org provisioning (corveil/crow#1121)
+/// persist a ``CorveilConnection`` through, never through `set-config`, because
+/// the block holds OAuth tokens.
+///
+/// Its own function for the type-checker-budget reason `makeMCPTokenHandlers`
+/// states, and it must stay in this file so `scripts/check-cli-parity.sh` can
+/// grep the registrations.
+///
+/// All four are local-only on `/rpc`
+/// (``RPCWebSocketHandler/localOnlyDenial(for:devRoot:)``). `corveil-connect`
+/// writes OAuth tokens and `corveil-disconnect` clears the connection — both
+/// author a credential, like `gateway-set`. The two reads carry no secret but are
+/// gated alongside the writes, so the entire connection is one local-only surface
+/// — the choice `mcp-token-list` makes beside the mint/revoke it lists. Not
+/// MCP-exported: the surface is a credential store, and the MCP server is
+/// read-only over `MCPToolCatalog`'s allowlist.
+///
+/// Decoding, the secret-safe merge, and the response shapes live in
+/// ``CorveilConnectionRPC`` so this and the browser's
+/// `POST /config/corveil-connection` (``SecretRoutes``) cannot drift.
+private func makeCorveilConnectionHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
+    [
+        // Store or update the connection. A blank/absent field keeps the stored
+        // value — an access-token refresh need not restate the refresh token — and
+        // the merged result must have at least a client id and an access token.
+        // `orgKeys` are preserved (provisioned by corveil/crow#1121).
+        "corveil-connect": { params in
+            let input: CorveilConnectionRPC.Input
+            do {
+                input = try CorveilConnectionRPC.decodeInput(params)
+            } catch let error as CorveilConnectionRPC.Invalid {
+                throw DaemonRPCError.invalidParams(error.message)
+            }
+            return try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
+                let merged: CorveilConnection
+                do {
+                    merged = try CorveilConnectionRPC.merge(input, into: config.corveilConnection)
+                } catch let error as CorveilConnectionRPC.Invalid {
+                    throw RPCError.invalidParams(error.message)
+                }
+                config.corveilConnection = merged
+                var result = CorveilConnectionRPC.statusJSON(merged)
+                result["saved"] = .bool(true)
+                return result
+            }
+        },
+        // Connection health — no secret. See `CorveilConnectionRPC.statusJSON`.
+        "corveil-status": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            return CorveilConnectionRPC.statusJSON(config.corveilConnection)
+        },
+        // Clear the whole connection. The cascade key-revocation on the Corveil
+        // side is a separate concern (corveil/crow#1121, backend); this removes the
+        // local block so gateway resolution and the log collector stop using it.
+        "corveil-disconnect": { _ in
+            try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
+                let wasConnected = !(config.corveilConnection?.isEmpty ?? true)
+                config.corveilConnection = nil
+                return ["saved": .bool(true), "was_connected": .bool(wasConnected)]
+            }
+        },
+        // The per-org gateway-key metadata (never key material). See
+        // `CorveilConnectionRPC.orgsJSON`.
+        "corveil-orgs": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            return CorveilConnectionRPC.orgsJSON(config.corveilConnection)
         },
     ]
 }

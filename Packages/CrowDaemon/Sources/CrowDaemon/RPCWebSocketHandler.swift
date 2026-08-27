@@ -357,6 +357,18 @@ enum RPCWebSocketHandler {
             // / `open-terminal` are gated on the same argument: a remote session
             // does not get to spawn host processes.
             return "corveil verify and reinstall are local-only"
+        case "corveil-connect", "corveil-status", "corveil-disconnect", "corveil-orgs":
+            // The Corveil connection write path (CROW-1120). `corveil-connect`
+            // stores OAuth tokens and `corveil-disconnect` clears the connection —
+            // both author a credential, exactly like `gateway-set`. The two reads
+            // carry no secret, but are gated alongside the writes so the whole
+            // connection is one local-only surface, the same way `mcp-token-list`
+            // is gated beside the mint/revoke it lists. A remote browser that needs
+            // a read-only Integrations view still gets the non-secret fields
+            // through the stripped `get-config` (`SettingsSecrets`), so nothing web
+            // breaks. The browser's own write door is `POST /config/corveil-connection`
+            // in `SecretRoutes`, gated the same way.
+            return "Corveil connection management is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

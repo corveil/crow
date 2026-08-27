@@ -158,6 +158,23 @@ crow corveil reinstall-skill [--path PATH]     → {"ok":bool,"message":"Skill r
 - A reinstall also updates the launch-time corveil warning: succeeding clears it, failing replaces it.
 - Both are **local-only** on `/rpc` (they execute a path on the daemon host), like `gateway`/`web-password`/`mcp token`. The CLI is unaffected — it goes over the Unix socket.
 
+### Corveil connection
+
+The local-only write path for the **Corveil OAuth connection** (CROW-1120) — the source of truth an Integrations → Corveil setup writes, from which the AI gateway + log-shipping configs are generated. It is the "door" the browser Connect flow (corveil/crow#1119) and org provisioning (corveil/crow#1121) persist a `corveilConnection` through, never `set-config`, because it holds OAuth tokens.
+
+```
+crow corveil connect [--base-url URL] [--client-id ID] [--user-id ID] [--user-email E] [--user-name N] [--access-token T] [--refresh-token T] [--registration-access-token T] [--access-token-expires-at ISO8601]
+                                                → status payload + {"saved":true}
+crow corveil status                             → {connected, base_url, client_id, connected_user, org_count, has_*_token, access_token_expires_at}
+crow corveil disconnect                         → {"saved":true,"was_connected":bool}
+crow corveil orgs                               → {"orgs":[{org_id,org_name,key_id,key_prefix,created_at}],"count":N}
+```
+
+- All four are **local-only** on `/rpc`, like `gateway`/`web-password`/`mcp token`: `connect` stores OAuth tokens and `disconnect` clears them, and the two reads are gated alongside the writes so the whole connection is one local-only surface. The CLI is unaffected — it goes over the Unix socket.
+- `connect` is a **merge**: every field is optional, and a blank/omitted one keeps the stored value, so a token refresh can restate only `--access-token` + `--access-token-expires-at`. The merged result needs at least a client id and an access token; `orgKeys` (provisioned by corveil/crow#1121) are preserved.
+- `status`/`orgs` never return a token value — only presence booleans and non-secret metadata.
+- `disconnect` clears the local record; revoking the per-org gateway keys on the Corveil side is a separate step (corveil/crow#1121).
+
 ### Job Commands
 
 Scheduled prompt-sets scoped to one repo in a workspace (CROW-604) — the Jobs sidebar, as CLI verbs. Jobs are addressed by UUID; `crow job list` prints them. Mutations hit the app's live config, so the scheduler and Settings UI see them immediately.

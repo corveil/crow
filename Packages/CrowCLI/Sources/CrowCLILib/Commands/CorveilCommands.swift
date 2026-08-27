@@ -3,22 +3,36 @@ import CrowCore
 import CrowIPC
 import Foundation
 
-/// The `crow corveil` verb family (CROW-1011).
+/// The `crow corveil` verb family.
 ///
-/// Settings → Corveil CLI's **Verify** and **Reinstall skill** buttons, as CLI
-/// verbs. Both act on `defaults.binaries["corveil"]` — the path Settings stores
-/// — unless `--path` names another, which is how you check a binary before
-/// committing it to config.
+/// Two groups under one command:
 ///
-/// The RPCs behind these are local-only on `/rpc`
-/// (``RPCWebSocketHandler.localOnlyDenial``) because they execute a path on the
-/// daemon host. That is no obstacle here: `crow` reaches the daemon over its
-/// 0600 Unix socket, so a CLI caller is local by construction (ADR 0002).
+/// - **CLI binary** (CROW-1011): Settings → Corveil CLI's **Verify** and
+///   **Reinstall skill** buttons, as verbs. Both act on
+///   `defaults.binaries["corveil"]` — the path Settings stores — unless `--path`
+///   names another, which is how you check a binary before committing it.
+/// - **Connection** (CROW-1120): `connect` / `status` / `disconnect` / `orgs`
+///   manage the local-only Corveil OAuth connection — the "door" the browser
+///   Connect flow (corveil/crow#1119) and org provisioning (corveil/crow#1121)
+///   persist a `CorveilConnection` through.
+///
+/// The RPCs behind every one of these are local-only on `/rpc`
+/// (``RPCWebSocketHandler.localOnlyDenial``): the binary verbs execute a path on
+/// the daemon host, and the connection verbs read and write OAuth tokens. That is
+/// no obstacle here: `crow` reaches the daemon over its 0600 Unix socket, so a CLI
+/// caller is local by construction (ADR 0002).
 public struct Corveil: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "corveil",
-        abstract: "Verify the configured Corveil CLI binary, and reinstall its skill",
-        subcommands: [CorveilVerify.self, CorveilReinstallSkill.self]
+        abstract: "Verify the Corveil CLI binary and manage the Corveil connection",
+        subcommands: [
+            CorveilVerify.self,
+            CorveilReinstallSkill.self,
+            CorveilConnect.self,
+            CorveilStatus.self,
+            CorveilDisconnect.self,
+            CorveilOrgs.self,
+        ]
     )
 
     public init() {}
@@ -87,5 +101,152 @@ public struct CorveilReinstallSkill: ParsableCommand {
 
     public func run() throws {
         printJSON(try rpc("corveil-reinstall-skill", params: pathOption.params))
+    }
+}
+
+// MARK: - Connection (CROW-1120)
+
+/// `crow corveil connect` — store or update the Corveil OAuth connection.
+///
+/// The local-only write path: it persists the identity + tokens the browser
+/// Connect flow (corveil/crow#1119) produces. Every field is optional and a blank
+/// or omitted one keeps whatever is stored, so a plain access-token refresh need
+/// not restate the refresh token — the same "blank keeps the stored secret"
+/// contract `crow gateway set` has. The merged connection must end up with at
+/// least a client id and an access token.
+public struct CorveilConnect: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "connect",
+        abstract: "Store or update the Corveil connection (local-only)",
+        discussion: """
+        Writes the OAuth connection Crow uses to reach Corveil — the door the \
+        browser Connect flow persists through. Every field is optional; a blank or \
+        omitted one keeps whatever is already stored, so a token refresh can update \
+        just the access token and its expiry:
+
+          crow corveil connect --access-token "$AT" --access-token-expires-at 2026-01-01T00:00:00Z
+
+        The merged connection must have at least a client id and an access token. \
+        Tokens passed on the command line are visible to local `ps` and shell \
+        history; the browser Connect flow is the primary writer. Local-only: this \
+        runs over the Unix socket and is refused for remote web clients, because \
+        the tokens are credentials.
+        """
+    )
+
+    @Option(name: .customLong("base-url"), help: "Corveil API base URL")
+    public var baseURL: String?
+
+    @Option(name: .customLong("client-id"), help: "OAuth client id (from Dynamic Client Registration)")
+    public var clientID: String?
+
+    @Option(name: .customLong("user-id"), help: "Connected Corveil user id")
+    public var userID: String?
+
+    @Option(name: .customLong("user-email"), help: "Connected Corveil user email")
+    public var userEmail: String?
+
+    @Option(name: .customLong("user-name"), help: "Connected Corveil user display name")
+    public var userName: String?
+
+    @Option(name: .customLong("access-token"), help: "OAuth access token (secret)")
+    public var accessToken: String?
+
+    @Option(name: .customLong("refresh-token"), help: "OAuth refresh token (secret)")
+    public var refreshToken: String?
+
+    @Option(
+        name: .customLong("registration-access-token"),
+        help: "RFC 7592 registration access token (secret)")
+    public var registrationAccessToken: String?
+
+    @Option(
+        name: .customLong("access-token-expires-at"),
+        help: "Access-token expiry as an ISO-8601 timestamp (e.g. 2026-01-01T00:00:00Z)")
+    public var accessTokenExpiresAt: String?
+
+    public init() {}
+
+    public func run() throws {
+        printJSON(try rpc("corveil-connect", params: params))
+    }
+
+    /// The connection fields as RPC params, dropping every blank/omitted one so
+    /// the daemon's merge keeps the stored value rather than clearing it — an
+    /// empty string is not the same as "not provided".
+    var params: [String: JSONValue] {
+        var params: [String: JSONValue] = [:]
+        func put(_ key: String, _ value: String?) {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty else { return }
+            params[key] = .string(trimmed)
+        }
+        put("base_url", baseURL)
+        put("client_id", clientID)
+        put("user_id", userID)
+        put("user_email", userEmail)
+        put("user_name", userName)
+        put("access_token", accessToken)
+        put("refresh_token", refreshToken)
+        put("registration_access_token", registrationAccessToken)
+        put("access_token_expires_at", accessTokenExpiresAt)
+        return params
+    }
+}
+
+/// `crow corveil status` — report the connection state without any secret.
+public struct CorveilStatus: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "status",
+        abstract: "Show the Corveil connection state (local-only)",
+        discussion: """
+        Reports whether a connection exists and its non-secret fields — base URL, \
+        client id, connected user, org count, access-token expiry, and presence \
+        booleans for the tokens. It never prints a token value.
+        """
+    )
+
+    public init() {}
+
+    public func run() throws {
+        printJSON(try rpc("corveil-status"))
+    }
+}
+
+/// `crow corveil disconnect` — clear the stored connection.
+public struct CorveilDisconnect: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "disconnect",
+        abstract: "Clear the Corveil connection (local-only)",
+        discussion: """
+        Removes the stored connection block, so gateway resolution and the log \
+        collector stop using it. Revoking the per-org gateway keys on the Corveil \
+        side is a separate step (corveil/crow#1121); this clears the local record.
+        """
+    )
+
+    public init() {}
+
+    public func run() throws {
+        printJSON(try rpc("corveil-disconnect"))
+    }
+}
+
+/// `crow corveil orgs` — list the connection's per-org gateway-key metadata.
+public struct CorveilOrgs: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "orgs",
+        abstract: "List the connection's per-org gateway keys (local-only)",
+        discussion: """
+        Prints the metadata for each auto-provisioned per-org gateway key — org id \
+        and name, key id, display prefix, and mint time — never the key material \
+        itself. Empty until an org is provisioned (corveil/crow#1121).
+        """
+    )
+
+    public init() {}
+
+    public func run() throws {
+        printJSON(try rpc("corveil-orgs"))
     }
 }

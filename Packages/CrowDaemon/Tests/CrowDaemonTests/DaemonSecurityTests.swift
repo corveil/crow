@@ -980,6 +980,23 @@ import CrowPersistence
                 == "MCP token management is local-only")
         }
     }
+
+    @Test func corveilConnectionMethodsAreLocalOnly() {
+        // `corveil-connect` stores OAuth tokens and `corveil-disconnect` clears the
+        // connection — both author a credential, like `gateway-set`. The two reads
+        // carry no secret but are gated alongside the writes so the whole
+        // connection is one local-only surface, matching how `mcp-token-list` is
+        // gated beside the mint/revoke it lists (CROW-1120).
+        for method in ["corveil-connect", "corveil-status", "corveil-disconnect", "corveil-orgs"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "client_id": .string("crow-client-1"),
+                "access_token": .string("at"),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+                == "Corveil connection management is local-only")
+        }
+    }
+
     @Test func logsyncMethodsAreNotLocalOnly() {
         // CROW-1070 removed the credential + opt-in from the `logSync` block — it
         // now holds only behavior knobs (retention / quiet period / upload cap), and

@@ -283,6 +283,11 @@ struct ParityGateTests {
         // read — but its name isn't `get-`/`list-` prefixed, so the heuristic
         // presumes a write (CROW-1075).
         "backfill-scan",
+        // `corveil-status` / `corveil-orgs` read the Corveil connection state — no
+        // mutation — but their names aren't `get-`/`list-` shaped, so the heuristic
+        // presumes writes (CROW-1120).
+        "corveil-status",
+        "corveil-orgs",
     ]
 
     /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`

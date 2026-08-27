@@ -37,8 +37,12 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow cleanup set`](#crow-cleanup-set) | Change automatic session cleanup |
 | [`crow close-terminal`](#crow-close-terminal) | Close a terminal tab in a session |
 | [`crow complete-session`](#crow-complete-session) | Mark a session completed |
-| [`crow corveil`](#crow-corveil) | Verify the configured Corveil CLI binary, and reinstall its skill |
+| [`crow corveil`](#crow-corveil) | Verify the Corveil CLI binary and manage the Corveil connection |
+| [`crow corveil connect`](#crow-corveil-connect) | Store or update the Corveil connection (local-only) |
+| [`crow corveil disconnect`](#crow-corveil-disconnect) | Clear the Corveil connection (local-only) |
+| [`crow corveil orgs`](#crow-corveil-orgs) | List the connection's per-org gateway keys (local-only) |
 | [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall every embedded slash command from the corveil binary |
+| [`crow corveil status`](#crow-corveil-status) | Show the Corveil connection state (local-only) |
 | [`crow corveil verify`](#crow-corveil-verify) | Run `corveil --version` and report what came back |
 | [`crow create-manager`](#crow-create-manager) | Create an additional Manager session |
 | [`crow defaults`](#crow-defaults) | View or change workspace and automation defaults |
@@ -522,13 +526,67 @@ crow complete-session --session <session>
 
 ## `crow corveil`
 
-Verify the configured Corveil CLI binary, and reinstall its skill.
+Verify the Corveil CLI binary and manage the Corveil connection.
 
 ```
-crow corveil <verify|reinstall-skill>
+crow corveil <verify|reinstall-skill|connect|status|disconnect|orgs>
 ```
 
-Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil-reinstall-skill).
+Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil-reinstall-skill), [`connect`](#crow-corveil-connect), [`status`](#crow-corveil-status), [`disconnect`](#crow-corveil-disconnect), [`orgs`](#crow-corveil-orgs).
+
+---
+
+## `crow corveil connect`
+
+Store or update the Corveil connection (local-only).
+
+```
+crow corveil connect [--base-url <base-url>] [--client-id <client-id>] [--user-id <user-id>] [--user-email <user-email>] [--user-name <user-name>] [--access-token <access-token>] [--refresh-token <refresh-token>] [--registration-access-token <registration-access-token>] [--access-token-expires-at <access-token-expires-at>]
+```
+
+Writes the OAuth connection Crow uses to reach Corveil — the door the browser Connect flow persists through. Every field is optional; a blank or omitted one keeps whatever is already stored, so a token refresh can update just the access token and its expiry:
+
+```
+crow corveil connect --access-token "$AT" --access-token-expires-at 2026-01-01T00:00:00Z
+```
+
+The merged connection must have at least a client id and an access token. Tokens passed on the command line are visible to local `ps` and shell history; the browser Connect flow is the primary writer. Local-only: this runs over the Unix socket and is refused for remote web clients, because the tokens are credentials.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--base-url` | `<base-url>` | no | Corveil API base URL |
+| `--client-id` | `<client-id>` | no | OAuth client id (from Dynamic Client Registration) |
+| `--user-id` | `<user-id>` | no | Connected Corveil user id |
+| `--user-email` | `<user-email>` | no | Connected Corveil user email |
+| `--user-name` | `<user-name>` | no | Connected Corveil user display name |
+| `--access-token` | `<access-token>` | no | OAuth access token (secret) |
+| `--refresh-token` | `<refresh-token>` | no | OAuth refresh token (secret) |
+| `--registration-access-token` | `<registration-access-token>` | no | RFC 7592 registration access token (secret) |
+| `--access-token-expires-at` | `<access-token-expires-at>` | no | Access-token expiry as an ISO-8601 timestamp (e.g. 2026-01-01T00:00:00Z) |
+
+---
+
+## `crow corveil disconnect`
+
+Clear the Corveil connection (local-only).
+
+```
+crow corveil disconnect
+```
+
+Removes the stored connection block, so gateway resolution and the log collector stop using it. Revoking the per-org gateway keys on the Corveil side is a separate step (corveil/crow#1121); this clears the local record.
+
+---
+
+## `crow corveil orgs`
+
+List the connection's per-org gateway keys (local-only).
+
+```
+crow corveil orgs
+```
+
+Prints the metadata for each auto-provisioned per-org gateway key — org id and name, key id, display prefix, and mint time — never the key material itself. Empty until an org is provisioned (corveil/crow#1121).
 
 ---
 
@@ -547,6 +605,18 @@ A run also updates the launch-time corveil warning: succeeding clears it, a per-
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--path` | `<path>` | no | Binary to act on. Defaults to the path in Settings → General → Corveil CLI. |
+
+---
+
+## `crow corveil status`
+
+Show the Corveil connection state (local-only).
+
+```
+crow corveil status
+```
+
+Reports whether a connection exists and its non-secret fields — base URL, client id, connected user, org count, access-token expiry, and presence booleans for the tokens. It never prints a token value.
 
 ---
 

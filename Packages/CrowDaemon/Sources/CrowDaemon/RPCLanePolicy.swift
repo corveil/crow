@@ -119,6 +119,7 @@ enum RPCLanePolicy {
         "telemetry-set": .fixed(.config),
         "cleanup-set": .fixed(.config),
         "ui-set": .fixed(.config),
+        "terminal-set": .fixed(.config),
         "notifications-set": .fixed(.config),
         "workspace-add": .fixed(.config),
         "workspace-edit": .fixed(.config),
@@ -131,6 +132,11 @@ enum RPCLanePolicy {
         // append (CROW-1004).
         "mcp-token-mint": .fixed(.config),
         "mcp-token-revoke": .fixed(.config),
+        // Corveil connection writes (CROW-1120) — they write config.json, so they
+        // share its lane. The two reads (`corveil-status`/`corveil-orgs`) take no
+        // lane, like every other read.
+        "corveil-connect": .fixed(.config),
+        "corveil-disconnect": .fixed(.config),
         "job-add": .fixed(.config),
         "job-edit": .fixed(.config),
         "job-enable": .fixed(.config),
@@ -145,6 +151,17 @@ enum RPCLanePolicy {
         // Already single-flight: a second caller awaits the in-flight compare
         // instead of spawning another `gh auth token` subprocess + GitHub call.
         "version-update-check": .concurrent,
+
+        // MARK: Corveil CLI binary (CROW-1011)
+        // Both run `defaults.binaries["corveil"]` in a detached subprocess and
+        // write nothing to config.json. `verify` orders nothing; `reinstall-skill`
+        // writes the embedded skill files idempotently (same content each run) and
+        // updates a MainActor warning, so two at once cannot corrupt state. Stated
+        // concurrent rather than omitted, so the ledger gate can tell "decided"
+        // from "forgotten" — these predate the gate and were the latter until
+        // CROW-1120.
+        "corveil-verify": .concurrent,
+        "corveil-reinstall-skill": .concurrent,
 
         // MARK: Job runs
         // Not `.config`: these await a full worktree + tmux spawn, and parking
