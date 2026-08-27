@@ -880,7 +880,7 @@ crow corveil disconnect
 
 #### `crow corveil orgs`
 
-List the per-org gateway-key metadata — org id and name, key id, display prefix, and mint time — never the key material itself (that lives in the generated gateway header). Empty until an org is provisioned (corveil/crow#1121).
+List the per-org gateway-key metadata — org id and name, key id, display prefix, and mint time — never the key material itself (the `sk-citadel-…` value is stored as a per-org secret and copied into the generated gateway header). This is the LOCAL record of what has been provisioned; use `crow corveil list-orgs` to see every org you could select. Empty until an org is provisioned with `crow corveil select-org` (corveil/crow#1121).
 
 ```bash
 crow corveil orgs
@@ -891,6 +891,50 @@ crow corveil orgs
            "key_prefix": "sk-citadel-AbC", "created_at": "2026-01-01T00:00:00Z"}],
  "count": 1}
 ```
+
+### Org listing + one-key-per-org provisioning (CROW-1121)
+
+Using the connection's OAuth bearer, list the orgs you belong to and provision exactly one gateway key per org. All three are local-only — they act with a credential over the Unix socket and are refused for remote web clients. The `sk-citadel-…` key value is stored as a per-org secret in `corveilConnection`; only its metadata is ever printed.
+
+#### `crow corveil list-orgs`
+
+List the Corveil orgs you belong to (`GET /api/me/organizations`), served through a short-lived cache. Each row carries whether that org already has a provisioned key, so the picker can mark selections without a second call. Pass `--refresh` to bypass the cache and re-fetch.
+
+```bash
+crow corveil list-orgs
+crow corveil list-orgs --refresh
+```
+
+```json
+{"orgs": [{"org_id": "org1", "org_name": "Acme", "role": "admin",
+           "is_active": true, "provisioned": true}],
+ "count": 1}
+```
+
+#### `crow corveil select-org`
+
+Mint or reuse the one gateway key for an org. An org that already has a stored key is returned untouched (`"reused": true`) — no new key — so every workspace bound to the org shares it; the backend rotates the key on each mint, so re-minting would break bound gateways. Pass `--rotate` to force a fresh key (the old one is revoked). The org name is taken from `--name` when given, else looked up from your memberships.
+
+```bash
+crow corveil select-org --org org1
+crow corveil select-org --org org1 --name "Acme" --rotate
+```
+
+```json
+{"saved": true, "reused": false,
+ "org": {"org_id": "org1", "org_name": "Acme", "key_id": "key1",
+         "key_prefix": "sk-citadel-AbC", "created_at": "2026-01-01T00:00:00Z"}}
+```
+
+#### `crow corveil deselect-org`
+
+Revoke an org's gateway key on the Corveil side (`DELETE /api/keys/{id}`) and drop its local metadata and stored secret. Idempotent — deselecting an org with no key returns `"removed": false`.
+
+```bash
+crow corveil deselect-org --org org1
+```
+
+- Returns `{"saved": true, "removed": <bool>}`. A revoke that finds the key already gone (404) still succeeds — the end state is "no key".
 
 ---
 

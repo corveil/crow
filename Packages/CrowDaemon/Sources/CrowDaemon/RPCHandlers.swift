@@ -2096,6 +2096,9 @@ func makeCommandRouter(
     handlers.merge(makeMCPTokenHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeCorveilHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeCorveilConnectionHandlers(devRoot: devRoot)) { existing, _ in existing }
+    handlers.merge(
+        makeCorveilProvisioningHandlers(cache: CorveilOrgListCache(), devRoot: devRoot)
+    ) { existing, _ in existing }
     handlers.merge(makeBackfillHandlers(devRoot: devRoot)) { existing, _ in existing }
     return CommandRouter(handlers: handlers, fallback: fallback)
 }
@@ -2458,6 +2461,117 @@ private func makeCorveilConnectionHandlers(devRoot: String) -> [String: CommandR
             return CorveilConnectionRPC.orgsJSON(config.corveilConnection)
         },
     ]
+}
+
+/// The `corveil-list-orgs` / `corveil-select-org` / `corveil-deselect-org` verb
+/// group — org listing + one-key-per-org provisioning (CROW-1121).
+///
+/// These reach the network with the stored OAuth bearer: `corveil-list-orgs`
+/// reads the user's Corveil memberships (served through a shared TTL cache), and
+/// the two writes mint/reuse and revoke the one per-org gateway key via
+/// ``CorveilOrgProvisioner``. All three are local-only on `/rpc`
+/// (``RPCWebSocketHandler/localOnlyDenial``): they act with a credential the
+/// browser must never drive, exactly like the connection verbs beside them. The
+/// cache is passed in (constructed once in ``makeCommandRouter``) so it survives
+/// across calls.
+///
+/// Its own function for the type-checker-budget reason `makeMCPTokenHandlers`
+/// states, and it must stay in this file so `scripts/check-cli-parity.sh` can grep
+/// the registrations.
+private func makeCorveilProvisioningHandlers(
+    cache: CorveilOrgListCache, devRoot: String
+) -> [String: CommandRouter.Handler] {
+    [
+        // List the user's Corveil orgs (cached). Each row is annotated with whether
+        // it currently has a provisioned key, so the dropdown can mark selections
+        // without a second call.
+        "corveil-list-orgs": { params in
+            let forceRefresh = params["refresh"]?.boolValue ?? false
+            let orgs = try await corveilMapErrors {
+                try await CorveilOrgProvisioner.listOrganizations(
+                    devRoot: devRoot, cache: cache, forceRefresh: forceRefresh)
+            }
+            let provisioned = Set(
+                (ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection?.orgKeys ?? [])
+                    .map(\.orgID))
+            let rows = orgs.map { org -> JSONValue in
+                .object([
+                    "org_id": .string(org.id),
+                    "org_name": .string(org.name),
+                    "role": .string(org.role),
+                    "is_active": .bool(org.isActive),
+                    "provisioned": .bool(provisioned.contains(org.id)),
+                ])
+            }
+            return ["orgs": .array(rows), "count": .int(rows.count)]
+        },
+        // Select an org: mint or reuse its one gateway key. `rotate` re-mints
+        // (the backend revokes the prior key as part of the mint).
+        "corveil-select-org": { params in
+            guard let orgID = params["org_id"]?.stringValue?.trimmingCharacters(in: .whitespaces),
+                  !orgID.isEmpty
+            else { throw DaemonRPCError.invalidParams("org_id is required") }
+            let rotate = params["rotate"]?.boolValue ?? false
+            let explicitName =
+                params["org_name"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
+            let outcome = try await corveilMapErrors {
+                let orgName = try await resolveCorveilOrgName(
+                    explicit: explicitName, orgID: orgID, cache: cache, devRoot: devRoot)
+                return try await CorveilOrgProvisioner.provision(
+                    devRoot: devRoot, orgID: orgID, orgName: orgName, force: rotate)
+            }
+            let formatter = ISO8601DateFormatter()
+            return [
+                "saved": .bool(true),
+                "reused": .bool(outcome.reused),
+                "org": .object([
+                    "org_id": .string(outcome.orgKey.orgID),
+                    "org_name": .string(outcome.orgKey.orgName),
+                    "key_id": .string(outcome.orgKey.keyID),
+                    "key_prefix": .string(outcome.orgKey.keyPrefix),
+                    "created_at": outcome.orgKey.createdAt
+                        .map { .string(formatter.string(from: $0)) } ?? .null,
+                ]),
+            ]
+        },
+        // Deselect an org: revoke its key server-side and drop the local record.
+        "corveil-deselect-org": { params in
+            guard let orgID = params["org_id"]?.stringValue?.trimmingCharacters(in: .whitespaces),
+                  !orgID.isEmpty
+            else { throw DaemonRPCError.invalidParams("org_id is required") }
+            let removed = try await corveilMapErrors {
+                try await CorveilOrgProvisioner.deprovision(devRoot: devRoot, orgID: orgID)
+            }
+            return ["saved": .bool(true), "removed": .bool(removed)]
+        },
+    ]
+}
+
+/// Resolve an org's display name for storage: the caller-supplied `--name` wins;
+/// otherwise look it up in the user's memberships (cached), which also validates
+/// that the org id is one the user actually belongs to.
+private func resolveCorveilOrgName(
+    explicit: String, orgID: String, cache: CorveilOrgListCache, devRoot: String
+) async throws -> String {
+    if !explicit.isEmpty { return explicit }
+    let orgs = try await CorveilOrgProvisioner.listOrganizations(devRoot: devRoot, cache: cache)
+    guard let match = orgs.first(where: { $0.id == orgID }) else {
+        throw CorveilOrgProvisioner.ProvisionError.unknownOrg(orgID)
+    }
+    return match.name
+}
+
+/// Map provisioning + Corveil API failures to `DaemonRPCError` so a CLI/web caller
+/// gets a clear message. All are operational (network, auth, not-connected), not
+/// bad params, so they surface as `applicationError`.
+private func corveilMapErrors<T>(_ body: () async throws -> T) async throws -> T {
+    do {
+        return try await body()
+    } catch let error as CorveilOrgProvisioner.ProvisionError {
+        throw DaemonRPCError.applicationError(error.description)
+    } catch let error as CorveilAPIClient.Failure {
+        throw DaemonRPCError.applicationError(error.description)
+    }
 }
 
 /// The binary a `corveil-*` call should act on: the caller's `path`, else the

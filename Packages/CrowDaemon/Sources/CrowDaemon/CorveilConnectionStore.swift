@@ -182,6 +182,43 @@ enum CorveilConnectionPersistence {
             return true
         }
     }
+
+    /// Store (or replace) the one provisioned gateway key for an org: its metadata
+    /// in `orgKeys` and its `sk-citadel-…` value in the secret `orgKeySecrets`
+    /// (corveil/crow#1121). Read-modify-write under the shared config lock, merging
+    /// into whatever is stored now — so a token refresh that landed between the
+    /// mint and this write is preserved, and re-selecting an org replaces its key
+    /// in place rather than appending a duplicate.
+    static func upsertOrgKey(devRoot: String, orgKey: CorveilOrgKey, secret: String) throws {
+        try ConfigStore.withConfigLock {
+            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            var connection = config.corveilConnection ?? CorveilConnection()
+            connection.orgKeys.removeAll { $0.orgID == orgKey.orgID }
+            connection.orgKeys.append(orgKey)
+            connection.orgKeySecrets[orgKey.orgID] = secret
+            config.corveilConnection = connection
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+        }
+    }
+
+    /// Drop an org's provisioned key metadata and secret (a deselect). Returns
+    /// whether anything was actually removed, so the caller can distinguish "cleared
+    /// a key" from "nothing was there". Leaves the rest of the connection intact.
+    @discardableResult
+    static func removeOrg(devRoot: String, orgID: String) throws -> Bool {
+        try ConfigStore.withConfigLock {
+            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            guard var connection = config.corveilConnection else { return false }
+            let hadKey = connection.orgKeys.contains { $0.orgID == orgID }
+            let hadSecret = connection.orgKeySecrets[orgID] != nil
+            guard hadKey || hadSecret else { return false }
+            connection.orgKeys.removeAll { $0.orgID == orgID }
+            connection.orgKeySecrets[orgID] = nil
+            config.corveilConnection = connection
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+            return true
+        }
+    }
 }
 
 // MARK: - Refresh

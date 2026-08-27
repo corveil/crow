@@ -23,6 +23,7 @@ struct CorveilCommandParsingTests {
         let names = Corveil.configuration.subcommands.map { $0.configuration.commandName }
         #expect(Set(names) == [
             "verify", "reinstall-skill", "connect", "status", "disconnect", "orgs",
+            "list-orgs", "select-org", "deselect-org",
         ])
     }
 
@@ -61,6 +62,47 @@ struct CorveilCommandParsingTests {
         #expect((try parse(["corveil", "status"]) as? CorveilStatus) != nil)
         #expect((try parse(["corveil", "disconnect"]) as? CorveilDisconnect) != nil)
         #expect((try parse(["corveil", "orgs"]) as? CorveilOrgs) != nil)
+    }
+
+    // MARK: - Org provisioning (CROW-1121)
+
+    @Test("list-orgs sends refresh only when the flag is set")
+    func listOrgsRefreshFlag() throws {
+        let plain = try #require(try parse(["corveil", "list-orgs"]) as? CorveilListOrgs)
+        #expect(plain.refresh == false)
+
+        let refreshed = try #require(
+            try parse(["corveil", "list-orgs", "--refresh"]) as? CorveilListOrgs)
+        #expect(refreshed.refresh == true)
+    }
+
+    @Test("select-org requires --org and maps optional name/rotate")
+    func selectOrgFlags() throws {
+        let minimal = try #require(
+            try parse(["corveil", "select-org", "--org", "org-123"]) as? CorveilSelectOrg)
+        #expect(minimal.org == "org-123")
+        #expect(minimal.name == nil)
+        #expect(minimal.rotate == false)
+
+        let full = try #require(try parse([
+            "corveil", "select-org", "--org", "org-123", "--name", "Acme Inc", "--rotate",
+        ]) as? CorveilSelectOrg)
+        #expect(full.org == "org-123")
+        #expect(full.name == "Acme Inc")
+        #expect(full.rotate == true)
+    }
+
+    @Test("select-org without --org is rejected")
+    func selectOrgRequiresOrg() {
+        #expect(throws: (any Error).self) { _ = try self.parse(["corveil", "select-org"]) }
+    }
+
+    @Test("deselect-org requires --org")
+    func deselectOrgFlags() throws {
+        let deselect = try #require(
+            try parse(["corveil", "deselect-org", "--org", "org-9"]) as? CorveilDeselectOrg)
+        #expect(deselect.org == "org-9")
+        #expect(throws: (any Error).self) { _ = try self.parse(["corveil", "deselect-org"]) }
     }
 
     // MARK: - --path

@@ -12,6 +12,8 @@ import Foundation
 ///   - each `workspaces[].gateway.customHeaders` value (per-workspace gateway auth)
 ///   - `corveilConnection.oauth` token strings (Corveil OAuth access / refresh /
 ///     registration-access tokens — CROW-1118)
+///   - `corveilConnection.orgKeySecrets` values (per-org `sk-citadel-…` gateway
+///     keys — CROW-1121)
 ///
 /// So the web round-trip is deliberately trivial: **strip** the credential values
 /// on the way out (the browser shows names/URLs/username read-only but never the
@@ -61,10 +63,18 @@ public enum SettingsSecrets {
         // what's connected without ever seeing a token. Like a gateway header
         // value, only the secret is blanked, not the surrounding structure — the
         // block still decodes unchanged in shape.
+        //
+        // The per-org gateway-key *values* (`orgKeySecrets`, CROW-1121) are the
+        // same kind of secret as the OAuth tokens: blank the values but keep the
+        // org-id keys, so the read-only view still knows which orgs are
+        // provisioned (the same information `orgKeys` metadata already carries)
+        // without holding a spendable `sk-citadel-…` key.
         if c.corveilConnection != nil {
             c.corveilConnection?.oauth.accessToken = ""
             c.corveilConnection?.oauth.refreshToken = ""
             c.corveilConnection?.oauth.registrationAccessToken = ""
+            let blankedOrgKeys = c.corveilConnection?.orgKeySecrets.mapValues { _ in "" } ?? [:]
+            c.corveilConnection?.orgKeySecrets = blankedOrgKeys
         }
         return c
     }
@@ -99,12 +109,13 @@ public enum SettingsSecrets {
         result.mcpTokens = current?.mcpTokens ?? []
         result.managerGateway = current?.managerGateway
         // Corveil connection (CROW-1118): authored only through the local-only
-        // Connect (OAuth) flow and its CLI verbs (corveil/crow#1120), never
-        // `set-config`. Restore the whole block from `current` — exactly like
-        // `managerGateway` above — so a browser can neither read the OAuth tokens
-        // (blanked by `strippedForTransport`) nor change or clear the connection
-        // through a config save. A nil `current` drops it, so a client can't
-        // introduce a forged connection when no config is stored yet.
+        // Connect (OAuth) flow and its CLI verbs (corveil/crow#1120) plus the
+        // org-provisioning flow (corveil/crow#1121), never `set-config`. Restore
+        // the whole block from `current` — exactly like `managerGateway` above —
+        // so a browser can neither read the OAuth tokens or per-org key values
+        // (both blanked by `strippedForTransport`) nor change or clear the
+        // connection through a config save. A nil `current` drops it, so a client
+        // can't introduce a forged connection when no config is stored yet.
         result.corveilConnection = current?.corveilConnection
         // Session-log collector (CROW-1070): the `logSync` block is now ordinary,
         // non-secret behavior tuning, so — unlike the gateways/tokens above — it is

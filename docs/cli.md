@@ -39,9 +39,12 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow complete-session`](#crow-complete-session) | Mark a session completed |
 | [`crow corveil`](#crow-corveil) | Verify the Corveil CLI binary and manage the Corveil connection |
 | [`crow corveil connect`](#crow-corveil-connect) | Store or update the Corveil connection (local-only) |
+| [`crow corveil deselect-org`](#crow-corveil-deselect-org) | Revoke a Corveil org's gateway key (local-only) |
 | [`crow corveil disconnect`](#crow-corveil-disconnect) | Clear the Corveil connection (local-only) |
+| [`crow corveil list-orgs`](#crow-corveil-list-orgs) | List the Corveil orgs you belong to (local-only) |
 | [`crow corveil orgs`](#crow-corveil-orgs) | List the connection's per-org gateway keys (local-only) |
 | [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall every embedded slash command from the corveil binary |
+| [`crow corveil select-org`](#crow-corveil-select-org) | Provision or reuse the gateway key for a Corveil org (local-only) |
 | [`crow corveil status`](#crow-corveil-status) | Show the Corveil connection state (local-only) |
 | [`crow corveil verify`](#crow-corveil-verify) | Run `corveil --version` and report what came back |
 | [`crow create-manager`](#crow-create-manager) | Create an additional Manager session |
@@ -529,10 +532,10 @@ crow complete-session --session <session>
 Verify the Corveil CLI binary and manage the Corveil connection.
 
 ```
-crow corveil <verify|reinstall-skill|connect|status|disconnect|orgs>
+crow corveil <verify|reinstall-skill|connect|status|disconnect|orgs|list-orgs|select-org|deselect-org>
 ```
 
-Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil-reinstall-skill), [`connect`](#crow-corveil-connect), [`status`](#crow-corveil-status), [`disconnect`](#crow-corveil-disconnect), [`orgs`](#crow-corveil-orgs).
+Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil-reinstall-skill), [`connect`](#crow-corveil-connect), [`status`](#crow-corveil-status), [`disconnect`](#crow-corveil-disconnect), [`orgs`](#crow-corveil-orgs), [`list-orgs`](#crow-corveil-list-orgs), [`select-org`](#crow-corveil-select-org), [`deselect-org`](#crow-corveil-deselect-org).
 
 ---
 
@@ -566,6 +569,22 @@ The merged connection must have at least a client id and an access token. Tokens
 
 ---
 
+## `crow corveil deselect-org`
+
+Revoke a Corveil org's gateway key (local-only).
+
+```
+crow corveil deselect-org --org <org>
+```
+
+Revokes the org's provisioned gateway key on the Corveil side and removes its local metadata and stored secret. Idempotent — deselecting an org with no key is a no-op. Local-only: it acts with a credential over the Unix socket and is refused for remote web clients.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--org` | `<org>` | yes | Corveil organization id whose key to revoke |
+
+---
+
 ## `crow corveil disconnect`
 
 Clear the Corveil connection (local-only).
@@ -578,6 +597,22 @@ Removes the stored connection block, so gateway resolution and the log collector
 
 ---
 
+## `crow corveil list-orgs`
+
+List the Corveil orgs you belong to (local-only).
+
+```
+crow corveil list-orgs [--refresh]
+```
+
+Fetches your Corveil memberships with the connection's OAuth token and prints each org's id, name, role, active flag, and whether it already has a provisioned gateway key. The result is cached briefly; pass `--refresh` to force a re-fetch. This is the list you pick from — `corveil orgs` shows only the orgs already provisioned locally. Local-only: it acts with a credential, so it runs over the Unix socket and is refused for remote web clients.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--refresh` | — | no | Bypass the cache and re-fetch the org list from Corveil. |
+
+---
+
 ## `crow corveil orgs`
 
 List the connection's per-org gateway keys (local-only).
@@ -586,7 +621,7 @@ List the connection's per-org gateway keys (local-only).
 crow corveil orgs
 ```
 
-Prints the metadata for each auto-provisioned per-org gateway key — org id and name, key id, display prefix, and mint time — never the key material itself. Empty until an org is provisioned (corveil/crow#1121).
+Prints the metadata for each auto-provisioned per-org gateway key — org id and name, key id, display prefix, and mint time — never the key material itself. This is the LOCAL record of what has been provisioned; use `corveil list-orgs` to see every org you could select. Empty until an org is provisioned with `corveil select-org` (corveil/crow#1121).
 
 ---
 
@@ -605,6 +640,29 @@ A run also updates the launch-time corveil warning: succeeding clears it, a per-
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--path` | `<path>` | no | Binary to act on. Defaults to the path in Settings → General → Corveil CLI. |
+
+---
+
+## `crow corveil select-org`
+
+Provision or reuse the gateway key for a Corveil org (local-only).
+
+```
+crow corveil select-org --org <org> [--name <name>] [--rotate]
+```
+
+Mints exactly one `sk-citadel-…` gateway key for the org, reusing the stored one if the org already has a key — so every workspace bound to the org shares it. The key value is stored as a secret; only its metadata (id, prefix, mint time) is ever printed. Pass `--rotate` to force a fresh key (the old one is revoked). The org name is taken from `--name` if given, else looked up from your memberships. Local-only: it mints a credential over the Unix socket and is refused for remote web clients.
+
+```
+crow corveil select-org --org <org-id>
+crow corveil select-org --org <org-id> --rotate
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--org` | `<org>` | yes | Corveil organization id to provision a key for |
+| `--name` | `<name>` | no | Org display name to store (looked up if omitted) |
+| `--rotate` | — | no | Revoke the existing key and mint a fresh one. |
 
 ---
 

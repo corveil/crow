@@ -241,6 +241,7 @@ import Testing
             baseURL: "https://corveil.example.com",
             clientID: "crow-client-1",
             orgKeys: [CorveilOrgKey(orgID: "org1", keyID: "key1")],
+            orgKeySecrets: ["org1": "sk-citadel-secret"],
             oauth: CorveilOAuthTokens(accessToken: "at-old", refreshToken: "rt-keep"))
         // Only a new access token; blanks/absent keep the rest.
         let input = CorveilConnectionRPC.Input(accessToken: "at-new")
@@ -249,6 +250,9 @@ import Testing
         #expect(merged.oauth.refreshToken == "rt-keep")
         #expect(merged.clientID == "crow-client-1")
         #expect(merged.orgKeys.count == 1)
+        // A token refresh through this door must NOT drop the provisioned per-org
+        // key metadata or its secret (corveil/crow#1121).
+        #expect(merged.orgKeySecrets["org1"] == "sk-citadel-secret")
     }
 
     @Test func mergeRequiresBothClientIdAndAccessToken() {

@@ -75,9 +75,10 @@ enum CorveilConnectionRPC {
     /// Build the connection to persist by merging `input` over `stored`.
     ///
     /// Non-blank fields overwrite; blank or absent fields keep the stored value
-    /// (or empty when nothing is stored). `orgKeys` are always carried over
-    /// untouched — they are provisioned by a separate flow (corveil/crow#1121),
-    /// and a token refresh through this door must not drop them.
+    /// (or empty when nothing is stored). `orgKeys` **and** their secret
+    /// `orgKeySecrets` are always carried over untouched — they are provisioned by
+    /// a separate flow (corveil/crow#1121), and a token refresh through this door
+    /// must not drop the shared per-org gateway keys.
     ///
     /// Rejects a merged result that lacks a client id **or** an access token. This
     /// is deliberately stricter than `CorveilConnection.isEmpty`, which is an AND
@@ -101,6 +102,7 @@ enum CorveilConnectionRPC {
                 email: pick(input.userEmail, base.connectedUser.email),
                 name: pick(input.userName, base.connectedUser.name)),
             orgKeys: base.orgKeys,
+            orgKeySecrets: base.orgKeySecrets,
             oauth: CorveilOAuthTokens(
                 accessToken: pick(input.accessToken, base.oauth.accessToken),
                 refreshToken: pick(input.refreshToken, base.oauth.refreshToken),
