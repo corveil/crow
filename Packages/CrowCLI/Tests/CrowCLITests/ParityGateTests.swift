@@ -211,6 +211,7 @@ struct ParityGateTests {
                         orgID: "org1", orgName: "Acme", keyID: "key1",
                         keyPrefix: "sk-citadel-AbC", createdAt: Date())
                 ],
+                orgKeySecrets: ["org1": "sk-citadel-AbCdEfGhIjKl"],
                 oauth: CorveilOAuthTokens(
                     accessToken: "at", refreshToken: "rt",
                     registrationAccessToken: "rat", accessTokenExpiresAt: Date()),
@@ -290,6 +291,10 @@ struct ParityGateTests {
         // presumes writes (CROW-1120).
         "corveil-status",
         "corveil-orgs",
+        // `corveil-list-orgs` lists the user's Corveil orgs from the API (cached) —
+        // a read — but `corveil-list-orgs` is neither `list-`-prefixed nor
+        // `-list`-suffixed, so the heuristic presumes a write (CROW-1121).
+        "corveil-list-orgs",
     ]
 
     /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`

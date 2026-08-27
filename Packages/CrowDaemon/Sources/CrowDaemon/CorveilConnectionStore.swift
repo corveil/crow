@@ -182,6 +182,63 @@ enum CorveilConnectionPersistence {
             return true
         }
     }
+
+    /// Store (or replace) the one provisioned gateway key for an org: its metadata
+    /// in `orgKeys` and its `sk-citadel-…` value in the secret `orgKeySecrets`
+    /// (corveil/crow#1121). Read-modify-write under the shared config lock, merging
+    /// into whatever is stored now — so a token refresh that landed between the
+    /// mint and this write is preserved, and re-selecting an org replaces its key
+    /// in place rather than appending a duplicate.
+    ///
+    /// Returns whether the key was written. **Reconnect-wins** (mirrors
+    /// ``recordRefreshSuccess``): the write is refused unless the stored connection
+    /// is still the same grant that minted — its `clientID` must equal
+    /// `expectedClientID`. `select-org` and `connect`/`disconnect` sit in different
+    /// `/rpc` lanes (and browser Connect is HTTP, un-laned), so they overlap; if a
+    /// disconnect cleared the block or a reconnect — even as a **different account**,
+    /// which gets a fresh DCR client id — replaced it while this mint was in flight,
+    /// writing here would attach a spendable `sk-citadel-…` to a connection that
+    /// didn't make it (`isEmpty` can't catch that; a different live connection is not
+    /// empty). Using the client id, not the refresh token, means a concurrent token
+    /// refresh (same client id) still lands. The caller
+    /// (``CorveilOrgProvisioner/provision``) revokes the now-orphaned key when this
+    /// returns false.
+    @discardableResult
+    static func upsertOrgKey(
+        devRoot: String, expectedClientID: String, orgKey: CorveilOrgKey, secret: String
+    ) throws -> Bool {
+        try ConfigStore.withConfigLock {
+            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            guard var connection = config.corveilConnection,
+                  connection.clientID == expectedClientID
+            else { return false }
+            connection.orgKeys.removeAll { $0.orgID == orgKey.orgID }
+            connection.orgKeys.append(orgKey)
+            connection.orgKeySecrets[orgKey.orgID] = secret
+            config.corveilConnection = connection
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+            return true
+        }
+    }
+
+    /// Drop an org's provisioned key metadata and secret (a deselect). Returns
+    /// whether anything was actually removed, so the caller can distinguish "cleared
+    /// a key" from "nothing was there". Leaves the rest of the connection intact.
+    @discardableResult
+    static func removeOrg(devRoot: String, orgID: String) throws -> Bool {
+        try ConfigStore.withConfigLock {
+            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            guard var connection = config.corveilConnection else { return false }
+            let hadKey = connection.orgKeys.contains { $0.orgID == orgID }
+            let hadSecret = connection.orgKeySecrets[orgID] != nil
+            guard hadKey || hadSecret else { return false }
+            connection.orgKeys.removeAll { $0.orgID == orgID }
+            connection.orgKeySecrets[orgID] = nil
+            config.corveilConnection = connection
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+            return true
+        }
+    }
 }
 
 // MARK: - Refresh

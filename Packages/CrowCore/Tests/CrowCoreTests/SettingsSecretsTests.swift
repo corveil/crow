@@ -39,6 +39,7 @@ import CrowCore
                     keyPrefix: "sk-citadel-AbC",
                     createdAt: Date(timeIntervalSince1970: 1_800_000_000)),
             ],
+            orgKeySecrets: ["org1": "sk-citadel-AbCdEfGhIjKlMnOp"],
             oauth: CorveilOAuthTokens(
                 accessToken: "CORVEIL-ACCESS-SECRET",
                 refreshToken: "CORVEIL-REFRESH-SECRET",
@@ -222,6 +223,9 @@ import CrowCore
         #expect(stripped.corveilConnection?.oauth.accessToken == "")
         #expect(stripped.corveilConnection?.oauth.refreshToken == "")
         #expect(stripped.corveilConnection?.oauth.registrationAccessToken == "")
+        // …as is the per-org gateway-key value, but its org-id key stays so the
+        // read-only view still knows which orgs are provisioned (CROW-1121).
+        #expect(stripped.corveilConnection?.orgKeySecrets["org1"] == "")
         // …but everything the read-only Integrations view needs survives.
         #expect(stripped.corveilConnection?.baseURL == "https://corveil.example")
         #expect(stripped.corveilConnection?.clientID == "crow-client-id")
@@ -242,6 +246,8 @@ import CrowCore
         #expect(!text.contains("CORVEIL-ACCESS-SECRET"))
         #expect(!text.contains("CORVEIL-REFRESH-SECRET"))
         #expect(!text.contains("CORVEIL-REG-SECRET"))
+        // The per-org `sk-citadel-…` key value is a secret too and must not ship.
+        #expect(!text.contains("sk-citadel-AbCdEfGhIjKlMnOp"))
     }
 
     @Test func preserveRestoresCorveilConnectionAndIgnoresBrowserEdits() {

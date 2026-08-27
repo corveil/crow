@@ -541,9 +541,21 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
     /// The signed-in Corveil user this connection belongs to.
     public var connectedUser: CorveilConnectedUser
     /// Metadata (never key material) for the one auto-provisioned gateway key per
-    /// Corveil org. The `sk-citadel-…` value itself lives in the generated
-    /// ``WorkspaceGateway`` header, not here.
+    /// Corveil org — org id/name, key id, display prefix, mint time. The
+    /// `sk-citadel-…` value itself is **not** here; it lives in the sibling
+    /// ``orgKeySecrets`` (a secret), from which the generated ``WorkspaceGateway``
+    /// header is populated (corveil/crow#1124). Keeping the metadata free of key
+    /// material means this array is safe to serialize to the read-only web view.
     public var orgKeys: [CorveilOrgKey]
+    /// The `sk-citadel-…` gateway-key value for each provisioned org, keyed by
+    /// Corveil org id — the **secret** half of ``orgKeys`` (CROW-1121). This is the
+    /// source of truth `corveilConnection` holds so a key is minted once per org
+    /// and reused across every workspace bound to it (the backend rotates the key
+    /// on each `POST /api/keys`, so re-minting would silently invalidate bound
+    /// gateways). Stripped for transport by `SettingsSecrets`, exactly like a
+    /// gateway header value and the OAuth tokens; a generated ``WorkspaceGateway``
+    /// (corveil/crow#1124) copies the value into its `x-citadel-api-key` header.
+    public var orgKeySecrets: [String: String]
     /// OAuth token material — the secrets. Stripped for transport by
     /// `SettingsSecrets`.
     public var oauth: CorveilOAuthTokens
@@ -583,6 +595,7 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
         clientID: String = "",
         connectedUser: CorveilConnectedUser = CorveilConnectedUser(),
         orgKeys: [CorveilOrgKey] = [],
+        orgKeySecrets: [String: String] = [:],
         oauth: CorveilOAuthTokens = CorveilOAuthTokens(),
         health: CorveilConnectionHealth = CorveilConnectionHealth()
     ) {
@@ -590,6 +603,7 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
         self.clientID = clientID
         self.connectedUser = connectedUser
         self.orgKeys = orgKeys
+        self.orgKeySecrets = orgKeySecrets
         self.oauth = oauth
         self.health = health
     }
@@ -601,13 +615,14 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
         connectedUser = try c.decodeIfPresent(CorveilConnectedUser.self, forKey: .connectedUser)
             ?? CorveilConnectedUser()
         orgKeys = try c.decodeIfPresent([CorveilOrgKey].self, forKey: .orgKeys) ?? []
+        orgKeySecrets = try c.decodeIfPresent([String: String].self, forKey: .orgKeySecrets) ?? [:]
         oauth = try c.decodeIfPresent(CorveilOAuthTokens.self, forKey: .oauth) ?? CorveilOAuthTokens()
         health = try c.decodeIfPresent(CorveilConnectionHealth.self, forKey: .health)
             ?? CorveilConnectionHealth()
     }
 
     private enum CodingKeys: String, CodingKey {
-        case baseURL, clientID, connectedUser, orgKeys, oauth, health
+        case baseURL, clientID, connectedUser, orgKeys, orgKeySecrets, oauth, health
     }
 }
 

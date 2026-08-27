@@ -151,6 +151,9 @@ public enum ParityLedger {
         "corveil-status",
         "corveil-disconnect",
         "corveil-orgs",
+        "corveil-list-orgs",
+        "corveil-select-org",
+        "corveil-deselect-org",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -369,19 +372,27 @@ public enum ParityLedger {
         // Corveil connection — the local-only write path (CROW-1120). The "door"
         // the OAuth client (corveil/crow#1119) and org provisioning
         // (corveil/crow#1121) persist a `CorveilConnection` through, never
-        // `set-config`, because it holds OAuth tokens. All four are local-only on
-        // `/rpc` (RPCWebSocketHandler.localOnlyDenial): the two writes author a
-        // credential, and the two reads are gated alongside them so the connection
+        // `set-config`, because it holds OAuth tokens. All are local-only on
+        // `/rpc` (RPCWebSocketHandler.localOnlyDenial): the writes author a
+        // credential, and the reads are gated alongside them so the connection
         // is one local-only surface — the `mcp-token-list` precedent.
         //
-        // `corveil-status`/`corveil-orgs` return only non-secret connection fields
-        // — never a token — so they are safe reads; they are gated for
-        // surface-coherence, not because they leak. NOT MCP-exported: the surface
-        // is a credential store and the MCP server is read-only.
+        // `corveil-status`/`corveil-orgs`/`corveil-list-orgs` return only
+        // non-secret fields — never a token or key value — so they are safe reads;
+        // they are gated for surface-coherence, not because they leak. NOT
+        // MCP-exported: the surface is a credential store and the MCP server is
+        // read-only.
+        //
+        // `corveil-list-orgs` reads the user's Corveil memberships (cached) with
+        // the OAuth bearer; `corveil-select-org`/`corveil-deselect-org` mint/reuse
+        // and revoke the one per-org gateway key (corveil/crow#1121).
         .write("corveil-connect", cli: "corveil connect"),
         .read("corveil-status", cli: "corveil status"),
         .write("corveil-disconnect", cli: "corveil disconnect"),
         .read("corveil-orgs", cli: "corveil orgs"),
+        .read("corveil-list-orgs", cli: "corveil list-orgs"),
+        .write("corveil-select-org", cli: "corveil select-org"),
+        .write("corveil-deselect-org", cli: "corveil deselect-org"),
 
         // Jobs
         .read("job-list", cli: "job list"),
@@ -738,55 +749,32 @@ public enum ParityLedger {
         // CROW-1120 gave the block its CLI surface: `corveil connect` writes the
         // identity + tokens, `corveil status` reads the non-secret health, `corveil
         // orgs` reads the per-org key metadata, and `corveil disconnect` clears it.
-        // The three token strings stay read-exempt (a secret is never read back,
-        // like `webAuth.hashB64`), and `orgKeys[].*` stay write-exempt (provisioned
-        // by corveil/crow#1121, not by `corveil connect`).
+        // CROW-1121 adds the provisioning verbs: `corveil select-org` mints/reuses
+        // the per-org gateway key (writing `orgKeys[].*` + the secret
+        // `orgKeySecrets` value) and `corveil deselect-org` revokes it. The OAuth
+        // token strings and the per-org key values stay read-exempt (a secret is
+        // never read back, like `webAuth.hashB64`).
 
         .field("corveilConnection.baseURL", read: "corveil status", write: "corveil connect"),
         .field("corveilConnection.clientID", read: "corveil status", write: "corveil connect"),
         .field("corveilConnection.connectedUser.id", read: "corveil status", write: "corveil connect"),
         .field("corveilConnection.connectedUser.email", read: "corveil status", write: "corveil connect"),
         .field("corveilConnection.connectedUser.name", read: "corveil status", write: "corveil connect"),
+        .field("corveilConnection.orgKeys[].orgID", read: "corveil orgs", write: "corveil select-org"),
+        .field("corveilConnection.orgKeys[].orgName", read: "corveil orgs", write: "corveil select-org"),
+        .field("corveilConnection.orgKeys[].keyID", read: "corveil orgs", write: "corveil select-org"),
+        .field("corveilConnection.orgKeys[].keyPrefix", read: "corveil orgs", write: "corveil select-org"),
+        .field("corveilConnection.orgKeys[].createdAt", read: "corveil orgs", write: "corveil select-org"),
         .field(
-            "corveilConnection.orgKeys[].orgID",
-            read: "corveil orgs",
-            writeNoCLI: """
-                Corveil org id for one auto-provisioned gateway key (CROW-1118). \
-                Populated by the local-only org-provisioning step (corveil/crow#1121), \
-                not by `corveil connect`; not user-settable.
-                """),
-        .field(
-            "corveilConnection.orgKeys[].orgName",
-            read: "corveil orgs",
-            writeNoCLI: """
-                Display name of a Corveil org with an auto-provisioned key \
-                (CROW-1118). Populated by the local-only provisioning flow \
-                (corveil/crow#1121); read via `corveil orgs`, not independently set.
-                """),
-        .field(
-            "corveilConnection.orgKeys[].keyID",
-            read: "corveil orgs",
-            writeNoCLI: """
-                Id of the auto-provisioned per-org gateway key — the handle a \
-                disconnect revokes by (CROW-1118). Minted server-side by the \
-                provisioning flow (corveil/crow#1121); not user-settable.
-                """),
-        .field(
-            "corveilConnection.orgKeys[].keyPrefix",
-            read: "corveil orgs",
-            writeNoCLI: """
-                Display prefix of the auto-provisioned per-org key so the UI can tell \
-                keys apart (CROW-1118). Derived from the minted key during \
-                provisioning (corveil/crow#1121); not independently settable.
-                """),
-        .field(
-            "corveilConnection.orgKeys[].createdAt",
-            read: "corveil orgs",
-            writeNoCLI: """
-                Mint timestamp of the per-org gateway key (CROW-1118). Stamped when \
-                the key is provisioned by the local-only flow (corveil/crow#1121); \
-                not user-settable.
-                """),
+            "corveilConnection.orgKeySecrets",
+            readNoCLI: """
+                Per-org `sk-citadel-…` gateway-key values (secret), keyed by org id \
+                (CROW-1121). Never read back by any surface — `corveil orgs` reports \
+                the key metadata only, never the value — so exposing it would defeat \
+                holding a spendable credential locally. Written by `corveil \
+                select-org` and blanked by `SettingsSecrets` for transport.
+                """,
+            write: "corveil select-org"),
         .field(
             "corveilConnection.oauth.accessToken",
             readNoCLI: """

@@ -369,6 +369,15 @@ enum RPCWebSocketHandler {
             // breaks. The browser's own write door is `POST /config/corveil-connection`
             // in `SecretRoutes`, gated the same way.
             return "Corveil connection management is local-only"
+        case "corveil-list-orgs", "corveil-select-org", "corveil-deselect-org":
+            // Org listing + one-key-per-org provisioning (CROW-1121). All three act
+            // with the stored OAuth bearer — a credential — against Corveil: listing
+            // the user's orgs and minting/revoking the per-org gateway key. A remote
+            // peer must no more drive a key mint than it may read the token that
+            // authorizes it, so these are gated exactly like the connection verbs
+            // above. The read-only Integrations view gets nothing from these; it
+            // reads provisioned-org metadata through the stripped `get-config`.
+            return "Corveil org provisioning is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

@@ -137,6 +137,15 @@ enum RPCLanePolicy {
         // lane, like every other read.
         "corveil-connect": .fixed(.config),
         "corveil-disconnect": .fixed(.config),
+        // Org provisioning (CROW-1121) mints/revokes a per-org key over the
+        // network before its small config write, so it must NOT sit on `.config`
+        // (a slow round-trip would park every Settings save). Keyed on the org so
+        // two selects for one org can't double-mint, while different orgs and
+        // config writes proceed in parallel; the config write itself is still
+        // serialized by `ConfigStore.withConfigLock`. `corveil-list-orgs` is a
+        // read and takes no lane.
+        "corveil-select-org": .on("org_id"),
+        "corveil-deselect-org": .on("org_id"),
         "job-add": .fixed(.config),
         "job-edit": .fixed(.config),
         "job-enable": .fixed(.config),

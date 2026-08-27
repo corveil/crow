@@ -32,6 +32,9 @@ public struct Corveil: ParsableCommand {
             CorveilStatus.self,
             CorveilDisconnect.self,
             CorveilOrgs.self,
+            CorveilListOrgs.self,
+            CorveilSelectOrg.self,
+            CorveilDeselectOrg.self,
         ]
     )
 
@@ -240,7 +243,9 @@ public struct CorveilOrgs: ParsableCommand {
         discussion: """
         Prints the metadata for each auto-provisioned per-org gateway key — org id \
         and name, key id, display prefix, and mint time — never the key material \
-        itself. Empty until an org is provisioned (corveil/crow#1121).
+        itself. This is the LOCAL record of what has been provisioned; use `corveil \
+        list-orgs` to see every org you could select. Empty until an org is \
+        provisioned with `corveil select-org` (corveil/crow#1121).
         """
     )
 
@@ -248,5 +253,96 @@ public struct CorveilOrgs: ParsableCommand {
 
     public func run() throws {
         printJSON(try rpc("corveil-orgs"))
+    }
+}
+
+// MARK: - Org provisioning (CROW-1121)
+
+/// `crow corveil list-orgs` — list the user's Corveil orgs from the API (cached).
+public struct CorveilListOrgs: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "list-orgs",
+        abstract: "List the Corveil orgs you belong to (local-only)",
+        discussion: """
+        Fetches your Corveil memberships with the connection's OAuth token and \
+        prints each org's id, name, role, active flag, and whether it already has a \
+        provisioned gateway key. The result is cached briefly; pass `--refresh` to \
+        force a re-fetch. This is the list you pick from — `corveil orgs` shows only \
+        the orgs already provisioned locally. Local-only: it acts with a credential, \
+        so it runs over the Unix socket and is refused for remote web clients.
+        """
+    )
+
+    @Flag(name: .long, help: "Bypass the cache and re-fetch the org list from Corveil.")
+    public var refresh: Bool = false
+
+    public init() {}
+
+    public func run() throws {
+        var params: [String: JSONValue] = [:]
+        if refresh { params["refresh"] = .bool(true) }
+        printJSON(try rpc("corveil-list-orgs", params: params))
+    }
+}
+
+/// `crow corveil select-org` — provision (or reuse) the one gateway key for an org.
+public struct CorveilSelectOrg: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "select-org",
+        abstract: "Provision or reuse the gateway key for a Corveil org (local-only)",
+        discussion: """
+        Mints exactly one `sk-citadel-…` gateway key for the org, reusing the stored \
+        one if the org already has a key — so every workspace bound to the org shares \
+        it. The key value is stored as a secret; only its metadata (id, prefix, mint \
+        time) is ever printed. Pass `--rotate` to force a fresh key (the old one is \
+        revoked). The org name is taken from `--name` if given, else looked up from \
+        your memberships. Local-only: it mints a credential over the Unix socket and \
+        is refused for remote web clients.
+
+          crow corveil select-org --org <org-id>
+          crow corveil select-org --org <org-id> --rotate
+        """
+    )
+
+    @Option(name: .customLong("org"), help: "Corveil organization id to provision a key for")
+    public var org: String
+
+    @Option(name: .customLong("name"), help: "Org display name to store (looked up if omitted)")
+    public var name: String?
+
+    @Flag(name: .long, help: "Revoke the existing key and mint a fresh one.")
+    public var rotate: Bool = false
+
+    public init() {}
+
+    public func run() throws {
+        var params: [String: JSONValue] = ["org_id": .string(org)]
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedName.isEmpty { params["org_name"] = .string(trimmedName) }
+        if rotate { params["rotate"] = .bool(true) }
+        printJSON(try rpc("corveil-select-org", params: params))
+    }
+}
+
+/// `crow corveil deselect-org` — revoke an org's gateway key and drop the record.
+public struct CorveilDeselectOrg: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "deselect-org",
+        abstract: "Revoke a Corveil org's gateway key (local-only)",
+        discussion: """
+        Revokes the org's provisioned gateway key on the Corveil side and removes its \
+        local metadata and stored secret. Idempotent — deselecting an org with no key \
+        is a no-op. Local-only: it acts with a credential over the Unix socket and is \
+        refused for remote web clients.
+        """
+    )
+
+    @Option(name: .customLong("org"), help: "Corveil organization id whose key to revoke")
+    public var org: String
+
+    public init() {}
+
+    public func run() throws {
+        printJSON(try rpc("corveil-deselect-org", params: ["org_id": .string(org)]))
     }
 }

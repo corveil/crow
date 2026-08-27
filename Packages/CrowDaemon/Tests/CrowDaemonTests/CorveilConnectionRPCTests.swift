@@ -89,6 +89,25 @@ import Testing
         #expect(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection == nil)
     }
 
+    @Test @MainActor func disconnectInvalidatesTheOrgListCache() async throws {
+        // `corveil-disconnect` must clear the org-list cache (CROW-1121) so a
+        // reconnect as a different account never serves the prior user's memberships
+        // out of a warm cache. Drive the real router with a cache we control.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let cache = CorveilOrgListCache()
+        cache.set(
+            [.init(id: "org1", name: "Acme", role: "admin", isActive: true)], key: "warm")
+        #expect(cache.get(key: "warm") != nil)
+
+        let router = makeCommandRouter(
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
+            devRoot: devRoot, cockpit: nil, corveilOrgCache: cache)
+        _ = await call(router, "corveil-disconnect")
+
+        #expect(cache.get(key: "warm") == nil, "disconnect must invalidate the org-list cache")
+    }
+
     @Test @MainActor func connectRefreshPreservesStoredSecretsAndOrgKeys() async throws {
         // A refresh sends only a new access token + expiry; the refresh token,
         // registration token, identity and provisioned org keys must survive.
@@ -241,6 +260,7 @@ import Testing
             baseURL: "https://corveil.example.com",
             clientID: "crow-client-1",
             orgKeys: [CorveilOrgKey(orgID: "org1", keyID: "key1")],
+            orgKeySecrets: ["org1": "sk-citadel-secret"],
             oauth: CorveilOAuthTokens(accessToken: "at-old", refreshToken: "rt-keep"))
         // Only a new access token; blanks/absent keep the rest.
         let input = CorveilConnectionRPC.Input(accessToken: "at-new")
@@ -249,6 +269,9 @@ import Testing
         #expect(merged.oauth.refreshToken == "rt-keep")
         #expect(merged.clientID == "crow-client-1")
         #expect(merged.orgKeys.count == 1)
+        // A token refresh through this door must NOT drop the provisioned per-org
+        // key metadata or its secret (corveil/crow#1121).
+        #expect(merged.orgKeySecrets["org1"] == "sk-citadel-secret")
     }
 
     @Test func mergeRequiresBothClientIdAndAccessToken() {
