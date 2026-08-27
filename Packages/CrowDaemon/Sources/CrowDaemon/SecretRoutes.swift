@@ -65,36 +65,43 @@ enum SecretRoutes {
             }
         }
 
-        // Set or clear the Manager AI gateway. Local-only.
+        // Set or clear the Manager AI gateway. Local-only. A body with `orgId`
+        // derives the gateway from the stored Corveil connection (corveil/crow#1123);
+        // otherwise the manual base-URL + headers path runs.
         router.post("/config/manager-gateway") { request, context -> Response in
             guard gateOK(request, context, boundHost: boundHost) else {
                 return json(["error": "local-only"], status: .forbidden)
             }
-            switch buildGateway(await decode(GatewayBody.self, request)) {
-            case .failure(let e):
-                return json(["error": e.message], status: .badRequest)
-            case .success(let gateway):
-                do {
-                    let saved: WorkspaceGateway? = try ConfigStore.withConfigLock {
+            let body = await decode(GatewayBody.self, request)
+            do {
+                let outcome: Result<WorkspaceGateway?, GatewayValidationError>
+                    = try ConfigStore.withConfigLock {
                         var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
                         // Blank header values mean "keep stored" — the local editor
                         // prefills stripped keys with empty values (review Yellow #1).
-                        let merged = try mergingPreservedHeaders(
-                            incoming: gateway, stored: c.managerGateway).get()
+                        let resolved = resolveGatewayWrite(
+                            body: body, config: c, stored: c.managerGateway)
+                        guard case .success(let merged) = resolved else { return resolved }
                         c.managerGateway = merged
                         try ConfigStore.saveConfig(c, devRoot: devRoot)
-                        return merged
+                        return .success(merged)
                     }
-                    return json(["saved": true, "gateway_set": saved != nil])
-                } catch let e as GatewayValidationError {
+                switch outcome {
+                case .failure(let e):
                     return json(["error": e.message], status: .badRequest)
-                } catch {
-                    return json(["error": "failed to save: \(error.localizedDescription)"], status: .internalServerError)
+                case .success(let saved):
+                    return json(["saved": true, "gateway_set": saved != nil])
                 }
+            } catch let e as GatewayValidationError {
+                return json(["error": e.message], status: .badRequest)
+            } catch {
+                return json(["error": "failed to save: \(error.localizedDescription)"], status: .internalServerError)
             }
         }
 
         // Set or clear a per-workspace AI gateway (matched by workspace id). Local-only.
+        // A body with `orgId` derives the gateway from the stored Corveil connection
+        // (corveil/crow#1123); otherwise the manual base-URL + headers path runs.
         router.post("/config/workspace-gateway") { request, context -> Response in
             guard gateOK(request, context, boundHost: boundHost) else {
                 return json(["error": "local-only"], status: .forbidden)
@@ -103,29 +110,34 @@ enum SecretRoutes {
                   let uid = UUID(uuidString: body.workspaceId) else {
                 return json(["error": "a valid workspaceId is required"], status: .badRequest)
             }
-            switch buildGateway(body.gatewayBody) {
-            case .failure(let e):
-                return json(["error": e.message], status: .badRequest)
-            case .success(let gateway):
-                do {
-                    let outcome = try ConfigStore.withConfigLock { () -> (found: Bool, set: Bool) in
+            do {
+                let outcome: Result<(found: Bool, set: Bool), GatewayValidationError>
+                    = try ConfigStore.withConfigLock {
                         var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
                         guard let idx = c.workspaces.firstIndex(where: { $0.id == uid }) else {
-                            return (false, false)
+                            return .success((false, false))
                         }
-                        let merged = try mergingPreservedHeaders(
-                            incoming: gateway, stored: c.workspaces[idx].gateway).get()
+                        let resolved = resolveGatewayWrite(
+                            body: body.gatewayBody, config: c, stored: c.workspaces[idx].gateway)
+                        guard case .success(let merged) = resolved else {
+                            // Carry the validation failure out; the success type is unused.
+                            return resolved.map { _ in (found: true, set: false) }
+                        }
                         c.workspaces[idx].gateway = merged
                         try ConfigStore.saveConfig(c, devRoot: devRoot)
-                        return (true, merged != nil)
+                        return .success((true, merged != nil))
                     }
-                    guard outcome.found else { return json(["error": "workspace not found"], status: .notFound) }
-                    return json(["saved": true, "gateway_set": outcome.set])
-                } catch let e as GatewayValidationError {
+                switch outcome {
+                case .failure(let e):
                     return json(["error": e.message], status: .badRequest)
-                } catch {
-                    return json(["error": "failed to save: \(error.localizedDescription)"], status: .internalServerError)
+                case .success(let r):
+                    guard r.found else { return json(["error": "workspace not found"], status: .notFound) }
+                    return json(["saved": true, "gateway_set": r.set])
                 }
+            } catch let e as GatewayValidationError {
+                return json(["error": e.message], status: .badRequest)
+            } catch {
+                return json(["error": "failed to save: \(error.localizedDescription)"], status: .internalServerError)
             }
         }
 
@@ -293,6 +305,12 @@ enum SecretRoutes {
         let baseURL: String?
         let headers: [String: String]?
         let clear: Bool?
+        // Corveil org selection (corveil/crow#1123). When set, the gateway is
+        // DERIVED from the stored connection (base URL + that org's
+        // `x-citadel-api-key`) instead of the manual `baseURL`/`headers` — the key
+        // secret never crosses to the browser, so only the org id travels here.
+        // Defaulted so the RPC `gateway-set` path (manual-only) still constructs it.
+        var orgId: String? = nil
     }
 
     struct WorkspaceGatewayBody: Decodable {
@@ -300,7 +318,10 @@ enum SecretRoutes {
         let baseURL: String?
         let headers: [String: String]?
         let clear: Bool?
-        var gatewayBody: GatewayBody { GatewayBody(baseURL: baseURL, headers: headers, clear: clear) }
+        let orgId: String?
+        var gatewayBody: GatewayBody {
+            GatewayBody(baseURL: baseURL, headers: headers, clear: clear, orgId: orgId)
+        }
     }
 
     /// A gateway body that violates the both-or-neither invariant.
@@ -395,6 +416,46 @@ enum SecretRoutes {
                 message: "a gateway header has no value and no stored secret to keep"))
         }
         return .success(WorkspaceGateway(baseURL: incoming.baseURL, customHeaders: headers))
+    }
+
+    /// Resolve the gateway a `/config/*-gateway` POST should store, given the
+    /// request body and the already-loaded `config` (both callers derive under the
+    /// config lock, so the connection they read matches what they save against).
+    ///
+    /// An `orgId` selects the Corveil-org-derived gateway (corveil/crow#1123): the
+    /// stored connection's base URL plus that org's `x-citadel-api-key`. The key
+    /// secret is server-side only (``SettingsSecrets`` strips it), so the browser
+    /// sends just the org id and the daemon fills in the credential here. Any other
+    /// body runs the manual base-URL + headers path unchanged, preserving stored
+    /// header values a blank re-send means to keep.
+    static func resolveGatewayWrite(
+        body: GatewayBody?,
+        config: AppConfig,
+        stored: WorkspaceGateway?
+    ) -> Result<WorkspaceGateway?, GatewayValidationError> {
+        if let orgId = body?.orgId?.trimmingCharacters(in: .whitespaces), !orgId.isEmpty {
+            return deriveOrgGateway(orgId: orgId, connection: config.corveilConnection)
+        }
+        return buildGateway(body).flatMap { mergingPreservedHeaders(incoming: $0, stored: stored) }
+    }
+
+    /// Build the ``WorkspaceGateway`` for a selected Corveil org from the stored
+    /// connection (corveil/crow#1123). Fails with actionable copy when there is no
+    /// usable connection, or the org has no provisioned key yet — the picker
+    /// provisions via `corveil-select-org` before writing, so the second case means
+    /// the two calls raced or the org was deselected out of band.
+    static func deriveOrgGateway(
+        orgId: String, connection: CorveilConnection?
+    ) -> Result<WorkspaceGateway?, GatewayValidationError> {
+        guard let connection, !connection.isEmpty else {
+            return .failure(GatewayValidationError(
+                message: "not connected to Corveil — connect on the Integrations tab, then pick an organization"))
+        }
+        guard let gateway = connection.derivedGateway(orgID: orgId) else {
+            return .failure(GatewayValidationError(
+                message: "that organization has no provisioned gateway key yet — select it and try again"))
+        }
+        return .success(gateway)
     }
 
     // MARK: - Gating

@@ -1320,3 +1320,39 @@ import Testing
         CorveilConnection.self, from: try JSONEncoder().encode(connection))
     #expect(reencoded == connection)
 }
+
+// MARK: - Org-derived gateway (corveil/crow#1123)
+
+@Test func corveilDerivedGatewayBuildsFromBaseURLAndOrgSecret() throws {
+    let conn = CorveilConnection(
+        baseURL: "https://gw.corveil.example",
+        clientID: "cid",
+        orgKeys: [CorveilOrgKey(orgID: "org-1", orgName: "Acme", keyID: "k1", keyPrefix: "sk-citadel-Ab")],
+        orgKeySecrets: ["org-1": "sk-citadel-AbCdEf"],
+        oauth: CorveilOAuthTokens(accessToken: "at"))
+
+    let gateway = try #require(conn.derivedGateway(orgID: "org-1"))
+    #expect(gateway.baseURL == "https://gw.corveil.example")
+    #expect(gateway.customHeaders == [CorveilConnection.gatewayAPIKeyHeader: "sk-citadel-AbCdEf"])
+    // The derived gateway satisfies WorkspaceGateway's both-or-neither invariant, so
+    // it round-trips through the decoder unchanged (a half-filled block would throw).
+    let roundTripped = try JSONDecoder().decode(
+        WorkspaceGateway.self, from: try JSONEncoder().encode(gateway))
+    #expect(roundTripped == gateway)
+}
+
+@Test func corveilDerivedGatewayIsNilWithoutSecretOrBaseURL() {
+    // No stored secret for the org (metadata present, secret stripped) → nil.
+    let noSecret = CorveilConnection(
+        baseURL: "https://gw.corveil.example",
+        clientID: "cid",
+        orgKeys: [CorveilOrgKey(orgID: "org-1")],
+        orgKeySecrets: ["org-1": ""])
+    #expect(noSecret.derivedGateway(orgID: "org-1") == nil)
+    // Unknown org → nil.
+    #expect(noSecret.derivedGateway(orgID: "org-x") == nil)
+    // A blank base URL can't authenticate a gateway → nil even with a secret.
+    let noBase = CorveilConnection(
+        baseURL: "   ", clientID: "cid", orgKeySecrets: ["org-1": "sk-citadel-AbCdEf"])
+    #expect(noBase.derivedGateway(orgID: "org-1") == nil)
+}
