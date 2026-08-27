@@ -851,16 +851,22 @@ crow corveil connect --access-token "$AT" --access-token-expires-at 2027-06-01T1
 
 Report the connection state — no secret. Whether a connection exists, its base URL, client id, connected user, org count, access-token expiry, and presence booleans for the tokens. It never prints a token value, so the output is safe to paste into a ticket.
 
+Since CROW-1125 it also reports token health. A background refresher renews the access token before it expires; `state` is the derived health — one of `connected`, `expired` (past expiry, refresh not keeping up), `revoked` (a refresh was rejected with `invalid_grant`/`invalid_client` — the grant is dead), or `disconnected` — and `needs_reconnect` is the "the user must Reconnect" flag (true for `expired` and `revoked`). `last_refresh_at` / `last_refresh_error` expose the refresher's most recent outcome. This is the same signal the Integrations tab keys its Reconnect affordance off.
+
 ```bash
 crow corveil status
 ```
 
 ```json
-{"connected": true, "base_url": "https://corveil.example.com", "client_id": "crow-client-1",
+{"connected": true, "state": "connected", "needs_reconnect": false,
+ "base_url": "https://corveil.example.com", "client_id": "crow-client-1",
  "connected_user": {"id": "u1", "email": "dev@example.com", "name": "Dev"},
  "org_count": 2, "has_access_token": true, "has_refresh_token": true,
- "has_registration_access_token": true, "access_token_expires_at": "2026-01-01T00:00:00Z"}
+ "has_registration_access_token": true, "access_token_expires_at": "2026-01-01T00:00:00Z",
+ "last_refresh_at": "2025-12-31T23:00:00Z", "last_refresh_error": null}
 ```
+
+A disconnected or revoked connection is the cue to reconnect (rerun the browser Connect flow); the refresher recovers an `expired` one on its own once it can reach Corveil again.
 
 #### `crow corveil disconnect`
 

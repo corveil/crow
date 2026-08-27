@@ -816,5 +816,36 @@ public enum ParityLedger {
             "corveilConnection.oauth.accessTokenExpiresAt",
             read: "corveil status",
             write: "corveil connect"),
+
+        // Token health — server-computed by the background refresher (CROW-1125),
+        // read via `corveil status`, never user-settable. The refresher owns these:
+        // a reconnect resets them and each refresh tick updates them, so — like the
+        // server-assigned `jobs[].lastRunAt` — they carry a write exemption while
+        // staying readable.
+        .field(
+            "corveilConnection.health.lastRefreshAt",
+            read: "corveil status",
+            writeNoCLI: """
+                When the background token refresher last succeeded (CROW-1125). \
+                Stamped by the refresher on each successful renewal and reset on \
+                reconnect; not user-settable — a manual write would misreport health.
+                """),
+        .field(
+            "corveilConnection.health.lastRefreshError",
+            read: "corveil status",
+            writeNoCLI: """
+                Why the last background token refresh failed (CROW-1125), or absent \
+                after a success. A diagnostic the refresher owns and clears on the \
+                next success; not something a user sets.
+                """),
+        .field(
+            "corveilConnection.health.needsReconnect",
+            read: "corveil status",
+            writeNoCLI: """
+                Whether the stored grant was definitively rejected (invalid_grant / \
+                invalid_client) so the user must reconnect (CROW-1125). Latched by \
+                the background refresher and cleared only by a reconnect; deriving it \
+                is the refresher's job, not a CLI write.
+                """),
     ]
 }

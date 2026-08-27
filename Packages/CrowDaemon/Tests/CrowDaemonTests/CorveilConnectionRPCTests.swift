@@ -306,6 +306,50 @@ import Testing
     @Test func statusJSONReportsDisconnectedForNilAndEmpty() {
         #expect(CorveilConnectionRPC.statusJSON(nil)["connected"] == .bool(false))
         #expect(CorveilConnectionRPC.statusJSON(CorveilConnection())["connected"] == .bool(false))
+        // Even disconnected, the shape carries the state fields the UI keys off.
+        #expect(CorveilConnectionRPC.statusJSON(nil)["state"] == .string("disconnected"))
+        #expect(CorveilConnectionRPC.statusJSON(nil)["needs_reconnect"] == .bool(false))
+    }
+
+    // A live connection whose token is comfortably in the future (CROW-1125).
+    private func liveConnection(
+        expiresAt: Date?, health: CorveilConnectionHealth = CorveilConnectionHealth()
+    ) -> CorveilConnection {
+        CorveilConnection(
+            clientID: "crow-client-1",
+            oauth: CorveilOAuthTokens(
+                accessToken: "at", refreshToken: "rt", accessTokenExpiresAt: expiresAt),
+            health: health)
+    }
+
+    @Test func statusJSONReportsConnectedStateWhenTokenIsFresh() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let json = CorveilConnectionRPC.statusJSON(
+            liveConnection(expiresAt: now.addingTimeInterval(3600)), now: now)
+        #expect(json["state"] == .string("connected"))
+        #expect(json["needs_reconnect"] == .bool(false))
+    }
+
+    @Test func statusJSONReportsExpiredStateOncePastExpiry() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let json = CorveilConnectionRPC.statusJSON(
+            liveConnection(expiresAt: now.addingTimeInterval(-60)), now: now)
+        #expect(json["state"] == .string("expired"))
+        #expect(json["needs_reconnect"] == .bool(true))
+    }
+
+    @Test func statusJSONReportsRevokedWhenHealthLatchedIt() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        // Revoked wins even though the clock hasn't reached expiry yet.
+        let json = CorveilConnectionRPC.statusJSON(
+            liveConnection(
+                expiresAt: now.addingTimeInterval(3600),
+                health: CorveilConnectionHealth(
+                    lastRefreshError: "invalid_grant", needsReconnect: true)),
+            now: now)
+        #expect(json["state"] == .string("revoked"))
+        #expect(json["needs_reconnect"] == .bool(true))
+        #expect(json["last_refresh_error"] == .string("invalid_grant"))
     }
 
     @Test func statusJSONNeverExposesTokenValues() {

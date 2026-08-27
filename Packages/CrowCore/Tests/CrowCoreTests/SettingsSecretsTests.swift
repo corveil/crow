@@ -43,7 +43,11 @@ import CrowCore
                 accessToken: "CORVEIL-ACCESS-SECRET",
                 refreshToken: "CORVEIL-REFRESH-SECRET",
                 registrationAccessToken: "CORVEIL-REG-SECRET",
-                accessTokenExpiresAt: Date(timeIntervalSince1970: 1_900_000_000)))
+                accessTokenExpiresAt: Date(timeIntervalSince1970: 1_900_000_000)),
+            health: CorveilConnectionHealth(
+                lastRefreshAt: Date(timeIntervalSince1970: 1_850_000_000),
+                lastRefreshError: "invalid_grant",
+                needsReconnect: true))
         return c
     }
 
@@ -226,6 +230,10 @@ import CrowCore
         #expect(
             stripped.corveilConnection?.oauth.accessTokenExpiresAt
                 == Date(timeIntervalSince1970: 1_900_000_000))
+        // Token health is not a secret, so it survives stripping — the read-only
+        // Integrations view renders its "Reconnect" state from it (CROW-1125).
+        #expect(stripped.corveilConnection?.health.needsReconnect == true)
+        #expect(stripped.corveilConnection?.health.lastRefreshError == "invalid_grant")
     }
 
     @Test func strippedCorveilTokensNeverAppearInTheSerializedConfig() throws {

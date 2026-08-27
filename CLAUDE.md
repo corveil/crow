@@ -165,7 +165,7 @@ The local-only write path for the **Corveil OAuth connection** (CROW-1120) — t
 ```
 crow corveil connect [--base-url URL] [--client-id ID] [--user-id ID] [--user-email E] [--user-name N] [--access-token T] [--refresh-token T] [--registration-access-token T] [--access-token-expires-at ISO8601]
                                                 → status payload + {"saved":true}
-crow corveil status                             → {connected, base_url, client_id, connected_user, org_count, has_*_token, access_token_expires_at}
+crow corveil status                             → {connected, state, needs_reconnect, base_url, client_id, connected_user, org_count, has_*_token, access_token_expires_at, last_refresh_at, last_refresh_error}
 crow corveil disconnect                         → {"saved":true,"was_connected":bool}
 crow corveil orgs                               → {"orgs":[{org_id,org_name,key_id,key_prefix,created_at}],"count":N}
 ```
@@ -173,6 +173,7 @@ crow corveil orgs                               → {"orgs":[{org_id,org_name,ke
 - All four are **local-only** on `/rpc`, like `gateway`/`web-password`/`mcp token`: `connect` stores OAuth tokens and `disconnect` clears them, and the two reads are gated alongside the writes so the whole connection is one local-only surface. The CLI is unaffected — it goes over the Unix socket.
 - `connect` is a **merge**: every field is optional, and a blank/omitted one keeps the stored value, so a token refresh can restate only `--access-token` + `--access-token-expires-at`. The merged result needs at least a client id and an access token; `orgKeys` (provisioned by corveil/crow#1121) are preserved.
 - `status`/`orgs` never return a token value — only presence booleans and non-secret metadata.
+- **Token health/refresh (CROW-1125):** a daemon-lifetime watcher renews the access token before it expires. `status.state` is the derived health — `connected` · `expired` (past expiry, refresh not keeping up) · `revoked` (a refresh was rejected `invalid_grant`/`invalid_client` — the grant is dead) · `disconnected` — and `needs_reconnect` is true for `expired`/`revoked`. `last_refresh_at`/`last_refresh_error` expose the watcher's most recent outcome. `revoked`/`disconnected` mean rerun Connect; `expired` self-heals once the daemon can reach Corveil again. The Integrations tab (corveil/crow#1122) keys its Reconnect affordance off the same `needs_reconnect`.
 - `disconnect` clears the local record; revoking the per-org gateway keys on the Corveil side is a separate step (corveil/crow#1121).
 
 ### Job Commands
