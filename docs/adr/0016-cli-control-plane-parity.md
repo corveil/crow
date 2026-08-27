@@ -84,7 +84,7 @@ since — board verbs (#866), agents (#886), automation (#884):
 | Layer | File(s) | Enforced by |
 |---|---|---|
 | Shared handler body | `Packages/CrowEngine/Sources/CrowEngine/*RPCSupport.swift` | — |
-| RPC registration | `Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift` | `RPCLedgerParityTests`, `check-cli-parity.sh` |
+| RPC registration | `Packages/CrowDaemon/Sources/CrowDaemon/*RPCHandlers.swift` | `RPCLedgerParityTests`, `check-cli-parity.sh` |
 | Local-only gate, when it carries secrets or host affordances | `RPCWebSocketHandler.swift` + `DaemonSecurityTests.swift` | — |
 | The verb | `Packages/CrowCLI/Sources/CrowCLILib/Commands/*Commands.swift` | — |
 | Verb registration | `CrowCommand.swift` `subcommands` | `ParityGateTests` |
@@ -156,9 +156,10 @@ ledger sees a single row where two bodies of code exist, and no check can tell
 them apart.
 
 Those bodies have already drifted. `get-config` reports `app_running: false`
-from `RPCHandlers.swift` and `true` from `EngineRouter.swift`, and the daemon's
-copy returns three keys the engine's omits (`configured`, `default_dev_root`,
-`vs_code_available`) — one method name, two response contracts. `delete-session`
+from the daemon (`SnapshotRPCHandlers.swift`) and `true` from
+`EngineRouter.swift`, and the daemon's copy returns three keys the engine's
+omits (`configured`, `default_dev_root`, `vs_code_available`) — one method
+name, two response contracts. `delete-session`
 refuses without tmux in the daemon copy and has no such guard in the engine's.
 
 Parity work must respect this: **a verb wired against the shadowed copy is a

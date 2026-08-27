@@ -1,0 +1,318 @@
+import CrowCore
+import CrowEngine
+import CrowIPC
+import CrowPersistence
+import Foundation
+
+/// Live snapshot, scorecard, whole-blob config, and first-run setup.
+///
+/// Extracted from `makeCommandRouter`'s dictionary literal (CROW-1134).
+func makeSnapshotHandlers(
+    appState: AppState,
+    rebuildScorecard: (@MainActor @Sendable () async -> Void)?,
+    devRoot: String
+) -> [String: CommandRouter.Handler] {
+    // The explicit annotation is load-bearing, not decoration: a large
+    // dictionary of closures without a contextual type blows Swift's
+    // type-checker solver budget (CROW-1134).
+    let handlers: [String: CommandRouter.Handler] = [
+        // Batched live per-session state (remote-control + PR + PR link).
+        // Forwarded to the app when running; with the app down the daemon builds
+        // the same map from its OWN appState — prStatus from the board poll, RC
+        // flags from the runtime terminal set, and the (possibly memory-only) PR
+        // link from `links(for:)`. Matches the app's makeEngineRouter shape so the
+        // web shows PR badges wherever the desktop does (CROW-581, M-E).
+        "list-sessions-live": { params in
+            return await MainActor.run {
+                var out: [String: JSONValue] = [:]
+                for session in appState.sessions {
+                    let id = session.id
+                    let available = AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl ?? false
+                    let rcActive = appState.terminals(for: id)
+                        .contains { appState.remoteControlActiveTerminals.contains($0.id) }
+                    var entry: [String: JSONValue] = [
+                        "remote_control_active": .bool(rcActive),
+                        "remote_control_available": .bool(available),
+                        // PR quick-actions need a managed Claude Code terminal to
+                        // dispatch into — mirrors native `canDispatchQuickAction`.
+                        // The web disables the quick-action buttons when false (CROW-749).
+                        "can_dispatch": .bool(appState.terminals(for: id).contains { $0.isManaged }),
+                    ]
+                    entry["pr"] = appState.prStatus[id].map { .object(prStatusJSON($0)) }
+                        ?? .object(["has_pr": .bool(false)])
+                    if let prLink = appState.links(for: id).first(where: { $0.linkType == .pr }) {
+                        entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
+                    }
+                    // What the auto-merge watcher decided about this PR — a
+                    // SIBLING of `pr`, not a member of it. `pr` mirrors what the
+                    // forge says about the pull request; this is what *Crow*
+                    // decided about it, and the two have different lifetimes: a
+                    // PR missing from the viewer fetch has no `prStatus` at all,
+                    // yet that absence is itself a verdict worth showing (#888).
+                    // Absent key means "nothing to report", which is also what
+                    // every pre-#888 daemon sends — so old clients degrade to
+                    // the persisted `auto_merge` bool on `list-sessions`.
+                    if let autoMerge = appState.autoMergeState[id] {
+                        entry["auto_merge_state"] = .object([
+                            "phase": .string(autoMerge.phase.rawValue),
+                            "reason": .string(autoMerge.reason),
+                            "message": .string(autoMerge.message),
+                            "permanent": .bool(autoMerge.permanent),
+                        ])
+                    }
+                    // What the auto-rebase watcher decided about this branch
+                    // (#944). Same sibling-of-`pr` contract as `auto_merge_state`
+                    // above, and for a sharper reason: `prStatusJSON` never ships
+                    // `mergeStateStatus`, so a PR that is BEHIND its base is
+                    // invisible in `pr` entirely — a wedged branch renders as a
+                    // fully green pill. Absent key means "nothing to report".
+                    if let autoRebase = appState.autoRebaseState[id] {
+                        entry["auto_rebase_state"] = .object([
+                            "phase": .string(autoRebase.phase.rawValue),
+                            "reason": .string(autoRebase.reason),
+                            "message": .string(autoRebase.message),
+                            "permanent": .bool(autoRebase.permanent),
+                        ])
+                    }
+                    // Per-session analytics strip (CROW-722). Prefer the live
+                    // in-memory hook aggregate (open sessions); fall back to the
+                    // durable end-of-session snapshot (terminal sessions). Mirrors
+                    // `writeAnalyticsSnapshot`'s own source preference. Never for the
+                    // Manager, and never an all-zeros aggregate — the web renders
+                    // the strip only when this key is present (chips-only empty
+                    // state), so absence IS the empty state.
+                    if !appState.isManagerSession(id) {
+                        let dto: SessionAnalyticsDTO?
+                        if let live = appState.existingHookState(for: id)?.analytics, !live.isEmpty {
+                            dto = SessionAnalyticsDTO(live: live, wallClockDuration: session.wallClockDuration)
+                        } else if let snapshot = appState.analyticsSnapshots[id.uuidString] {
+                            dto = SessionAnalyticsDTO(snapshot: snapshot)
+                        } else {
+                            dto = nil
+                        }
+                        if let dto, let encoded = try? JSONValue(encoding: dto) {
+                            entry["analytics"] = encoded
+                        }
+                    }
+                    out[id.uuidString] = .object(entry)
+                }
+                return ["sessions": .object(out)]
+            }
+        },
+
+        // Full render-state snapshot so a rich client (the macOS app) can rebuild
+        // its entire AppState in ONE call, then keep it fresh by re-fetching on
+        // each EventHub `changed` push. Read-only and always local — the daemon's
+        // own AppState is the live view whether or not the desktop app is up, and
+        // there is nothing to forward (ADR 0007; CROW-581, Stage 2 / F). The
+        // response object *is* a `DaemonStateSnapshot` — the client decodes the
+        // whole result into that type.
+        "get-state": { _ in
+            let snapshot = await MainActor.run { () -> DaemonStateSnapshot in
+                // Strip credentials (Jira token, gateway auth headers, web-password
+                // hash+salt) before sending state to any authenticated /rpc client —
+                // the same treatment get-config applies. Without this, get-state
+                // shipped the raw AppConfig secrets over the wire (review: Red 1).
+                let safeConfig = ConfigStore.loadConfig(devRoot: devRoot)
+                    .map(SettingsSecrets.strippedForTransport)
+                return DaemonStateSnapshot(appState: appState, config: safeConfig)
+            }
+            do {
+                guard case .object(let dict) = try JSONValue(encoding: snapshot) else {
+                    throw DaemonRPCError.applicationError("state snapshot did not encode to an object")
+                }
+                return dict
+            } catch let error as DaemonRPCError {
+                throw error
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to encode state snapshot: \(error)")
+            }
+        },
+
+        // Private efficiency scorecard (ADR 0008; web parity #721). The web has
+        // no Swift value types, so we build the ONE Core `ScorecardModel.build(...)`
+        // here — off `appState.analyticsSnapshots` + `appState.prAttributions` —
+        // and ship its flattened `ScorecardDTO`. Building the model server-side is
+        // the single source of truth for the grade/throughput/combined/baseline —
+        // there is no JS re-implementation of the grading to keep in sync.
+        // Read-only and always local (same posture as get-state).
+        "get-scorecard": { _ in
+            let dto = await MainActor.run { () -> ScorecardDTO in
+                let model = ScorecardModel.build(
+                    snapshots: Array(appState.analyticsSnapshots.values),
+                    attributions: Array(appState.prAttributions.values),
+                    now: Date(),
+                    calendar: .current
+                )
+                let telemetryEnabled = ConfigStore.loadConfig(devRoot: devRoot)?.telemetry.enabled ?? false
+                return ScorecardDTO(
+                    model,
+                    telemetryEnabled: telemetryEnabled,
+                    snapshotCount: appState.analyticsSnapshots.count,
+                    // Manager rollups ride alongside the model rather than
+                    // through it (#767) — see `ScorecardDTO.managerWeeks`.
+                    managerUsage: Array(appState.managerUsageWeekly.values),
+                    // Names for the per-Manager breakdown (CROW-983). Only
+                    // live sessions resolve; a deleted Manager's persisted
+                    // weeks still render, just without a name.
+                    managerNames: Dictionary(
+                        appState.managerSessions.map { ($0.id, $0.name) },
+                        uniquingKeysWith: { first, _ in first }),
+                    captureStatus: appState.telemetryCaptureStatus
+                )
+            }
+            do {
+                guard case .object(let dict) = try JSONValue(encoding: dto) else {
+                    throw DaemonRPCError.applicationError("scorecard did not encode to an object")
+                }
+                return dict
+            } catch let error as DaemonRPCError {
+                throw error
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to encode scorecard: \(error)")
+            }
+        },
+
+        // Manual scorecard rebuild (#745, #767) — backs the web Rebuild button,
+        // the port of the desktop's `AppDelegate.rebuildScorecard()`. Backfills
+        // snapshots for sessions recorded before snapshotting existed (without
+        // re-running them), recomputes the ungraded Manager weekly rollups, and
+        // refreshes the capture-status line. Idempotent, local-only, and a
+        // no-op error when telemetry is off (there'd be no DB to read).
+        "rebuild-scorecard": { _ in
+            guard let rebuildScorecard else {
+                throw DaemonRPCError.applicationError(
+                    "Rebuilding the scorecard requires telemetry — enable it in Settings and restart crowd")
+            }
+            await rebuildScorecard()
+            return ["rebuilt": .bool(true)]
+        },
+
+        // App config (the web Settings modal). Forward to the app when it's
+        // running so its `saveSettings` side effects run (AppState mirror,
+        // notification settings); read/write `{devRoot}/.claude/config.json`
+        // directly when it's off so Settings still work headless (the app picks
+        // up the change on next launch). Credential values are stripped on the
+        // way out and preserved on the way in — never editable from the browser
+        // (CROW-581, desktop-only creds). Only one writer at a time: forward when
+        // reachable, else write locally.
+        "get-config": { params in
+            // Forward to the app when it's reachable AND recognizes the method;
+            // otherwise read {devRoot}/.claude/config.json directly. The fallback
+            // covers both the app being down (socket error) and an app too old to
+            // know get-config (method-not-found) during a daemon-ahead rollout.
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            let stripped = SettingsSecrets.strippedForTransport(config)
+            guard let data = try? JSONEncoder().encode(stripped),
+                  let json = String(data: data, encoding: .utf8) else {
+                throw DaemonRPCError.applicationError("Failed to encode config")
+            }
+            // `configured` mirrors the desktop's first-run gate
+            // (`ConfigStore.loadDevRoot() == nil`); `dev_root` itself is never
+            // empty (cwd fallback), so it can't detect first-run. `default_dev_root`
+            // lets the web wizard prefill step 1 without knowing $HOME (CROW-605).
+            let defaultDevRoot = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Dev").path
+            return [
+                "config": .string(json),
+                "dev_root": .string(devRoot),
+                "app_running": .bool(false),
+                "configured": .bool(ConfigStore.loadDevRoot() != nil),
+                "default_dev_root": .string(defaultDevRoot),
+                // Host capability: is the VS Code `code` CLI installed? Gates the
+                // web "Open in VS Code" button, mirroring native `vsCodeAvailable`.
+                // Computed here (not off `sessionService`) so it's independent of
+                // tmux presence (CROW-749).
+                "vs_code_available": .bool(SessionService.findVSCodeBinary() != nil),
+            ]
+        },
+        // Non-secret settings write. `defaults.binaries` is held to the same
+        // local-direct bar as secret writes — the `/rpc` WebSocket handler rejects
+        // that field change from non-local peers before this runs (review Yellow).
+        // Scheduled `jobs` are NOT gated (CROW-665): an authenticated remote
+        // session may edit them. Unix-socket / CLI callers are always local.
+        "set-config": { params in
+            guard let json = params["config"]?.stringValue,
+                  let data = json.data(using: .utf8),
+                  let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+                throw DaemonRPCError.invalidParams("config must be a valid AppConfig JSON string")
+            }
+            // The browser can't see or change credentials, so keep whatever is
+            // already on disk (nil-current drops any credential shell — see
+            // SettingsSecrets). Load+save under the shared lock so a concurrent
+            // web-password-set / gateway-set / onJobRan can't clobber this
+            // write (review #10).
+            let merged: AppConfig
+            do {
+                merged = try ConfigStore.withConfigLock {
+                    let current = ConfigStore.loadConfig(devRoot: devRoot)
+                    let m = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                    try ConfigStore.saveConfig(m, devRoot: devRoot)
+                    return m
+                }
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to save config: \(error.localizedDescription)")
+            }
+            let stripped = SettingsSecrets.strippedForTransport(merged)
+            guard let outData = try? JSONEncoder().encode(stripped),
+                  let outJSON = String(data: outData, encoding: .utf8) else {
+                throw DaemonRPCError.applicationError("Failed to encode config")
+            }
+            return ["config": .string(outJSON), "saved": .bool(true)]
+        },
+
+        // First-run setup wizard (CROW-605). Scaffolds the chosen dev root,
+        // writes config.json + the App Support pointer, then asks the daemon to
+        // re-exec so every subsystem that captured `devRoot` at startup adopts
+        // the new path. Rejected once a pointer already exists.
+        //
+        // Local-direct only: the `/rpc` WebSocket handler rejects non-local
+        // callers before this runs (review Yellow). Documented here so a future
+        // Unix-socket / CLI path doesn't reintroduce a remote write+re-exec.
+        "run-setup": { params in
+            if ConfigStore.loadDevRoot() != nil {
+                throw DaemonRPCError.invalidParams("Already configured — setup wizard is one-shot")
+            }
+            guard let rawRoot = params["dev_root"]?.stringValue?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawRoot.isEmpty else {
+                throw DaemonRPCError.invalidParams("dev_root required")
+            }
+            let chosen = expandSetupDevRoot(rawRoot)
+            guard !chosen.isEmpty else {
+                throw DaemonRPCError.invalidParams("dev_root required")
+            }
+            guard let json = params["config"]?.stringValue,
+                  let data = json.data(using: .utf8),
+                  let config = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+                throw DaemonRPCError.invalidParams("config must be a valid AppConfig JSON string")
+            }
+            do {
+                try ConfigStore.withConfigLock {
+                    try Scaffolder(devRoot: chosen).scaffold(
+                        workspaceNames: config.workspaces.map(\.name))
+                    try ConfigStore.saveConfig(config, devRoot: chosen)
+                    try ConfigStore.saveDevRoot(chosen)
+                }
+            } catch {
+                throw DaemonRPCError.applicationError(
+                    "Setup failed: \(error.localizedDescription)")
+            }
+            CrowDaemon.requestReexec()
+            return ["ok": .bool(true), "dev_root": .string(chosen)]
+        },
+    ]
+    return handlers
+}
+
+/// Expand a wizard-supplied `dev_root`: leading `~` → home; relative paths
+/// resolve under home. Absolute paths pass through unchanged (CROW-605).
+private func expandSetupDevRoot(_ raw: String) -> String {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    if raw == "~" { return home }
+    if raw.hasPrefix("~/") {
+        return (home as NSString).appendingPathComponent(String(raw.dropFirst(2)))
+    }
+    if (raw as NSString).isAbsolutePath { return raw }
+    return (home as NSString).appendingPathComponent(raw)
+}

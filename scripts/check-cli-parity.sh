@@ -5,7 +5,11 @@
 # in the checked-in parity ledger. A new RPC method that nobody ledgered — and
 # therefore nobody decided whether to give a `crow` verb — fails this check.
 #
-#   - daemon handlers → Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift
+#   - daemon handlers → Packages/CrowDaemon/Sources/CrowDaemon/*RPCHandlers.swift
+#     (`RPCHandlers.swift` is the assembler; each verb group is its own file.
+#      The glob is load-bearing: a group that doesn't match it is invisible to
+#      this gate. Support files — `*RPCSupport.swift`, `RPCWebSocketHandler.swift`,
+#      `RPCDispatcher.swift`, `RPCLanePolicy.swift` — deliberately do not match.)
 #   - engine handlers → Packages/CrowEngine/Sources/CrowEngine/EngineRouter.swift
 #     (the daemon router is built with `fallback: makeEngineRouter(ctx)`, so the
 #      live surface is the union of the two dictionaries)
@@ -19,16 +23,38 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DAEMON="$ROOT/Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift"
+DAEMON_DIR="$ROOT/Packages/CrowDaemon/Sources/CrowDaemon"
 ENGINE="$ROOT/Packages/CrowEngine/Sources/CrowEngine/EngineRouter.swift"
 LEDGER="$ROOT/Packages/CrowCore/Sources/CrowCore/Parity/ParityLedger.swift"
 
-for f in "$DAEMON" "$ENGINE" "$LEDGER"; do
+if [ ! -d "$DAEMON_DIR" ]; then
+  echo "check-cli-parity: missing $DAEMON_DIR" >&2
+  exit 1
+fi
+for f in "$ENGINE" "$LEDGER"; do
   if [ ! -f "$f" ]; then
     echo "check-cli-parity: missing $f" >&2
     exit 1
   fi
 done
+
+# bash 3.2 compatible (macOS /bin/bash). `nullglob` so a stale glob becomes an
+# empty array rather than a literal `*RPCHandlers.swift` path that grep would
+# treat as a missing file with a confusing error.
+shopt -s nullglob
+DAEMON_FILES=("$DAEMON_DIR"/*RPCHandlers.swift)
+shopt -u nullglob
+
+# Vacuity: if the glob stops matching the extracted groups, EngineRouter.swift
+# alone still has enough methods to clear MIN_METHODS below, and the ledger
+# comparison would silently ignore every daemon verb. Fail loudly instead.
+MIN_DAEMON_FILES=8
+if [ "${#DAEMON_FILES[@]}" -lt "$MIN_DAEMON_FILES" ]; then
+  echo "check-cli-parity: only ${#DAEMON_FILES[@]} *RPCHandlers.swift files under $DAEMON_DIR (expected >= $MIN_DAEMON_FILES)." >&2
+  echo "The daemon-handler glob has probably gone stale — registrations live in" >&2
+  echo "Packages/CrowDaemon/Sources/CrowDaemon/*RPCHandlers.swift (CROW-1134)." >&2
+  exit 1
+fi
 
 # A handler registration is a dictionary key whose value opens a closure:
 #     "job-add": { params in            (daemon)
@@ -41,7 +67,7 @@ done
 HANDLER_RE='^[[:space:]]+"[a-z0-9-]+": \{ (@Sendable )?[A-Za-z_][A-Za-z0-9_]* in([[:space:]]|$)'
 
 registered_methods() {
-  grep -hoE "$HANDLER_RE" "$DAEMON" "$ENGINE" \
+  grep -hoE "$HANDLER_RE" "${DAEMON_FILES[@]}" "$ENGINE" \
     | sed -E 's/^[[:space:]]*"([a-z0-9-]+)".*/\1/' \
     | sort -u
 }
@@ -69,7 +95,7 @@ count="$(registered_methods | wc -l | tr -d ' ')"
 if [ "$count" -lt "$MIN_METHODS" ]; then
   echo "check-cli-parity: only $count RPC methods extracted (expected >= $MIN_METHODS)." >&2
   echo "The handler-registration regex has probably gone stale — check that" >&2
-  echo "RPCHandlers.swift / EngineRouter.swift still register handlers as" >&2
+  echo "*RPCHandlers.swift / EngineRouter.swift still register handlers as" >&2
   echo '    "method-name": { params in' >&2
   exit 1
 fi

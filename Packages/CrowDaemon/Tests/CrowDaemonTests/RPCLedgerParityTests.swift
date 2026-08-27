@@ -29,8 +29,8 @@ import Testing
 /// too; this suite does not.
 ///
 /// Router construction is side-effect free: `makeCommandRouter` only allocates
-/// before its dictionary literal, and every handler's I/O lives inside a closure
-/// that is never invoked here.
+/// shared deps then merges handler maps, and every handler's I/O lives inside a
+/// closure that is never invoked here.
 @Suite("RPC ledger parity")
 @MainActor
 struct RPCLedgerParityTests {
