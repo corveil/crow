@@ -568,6 +568,27 @@ public enum CrowDaemon {
         CorveilIntegrationRoutes.mount(
             on: httpRouter, boundHost: options.host, devRoot: options.devRoot,
             httpPort: options.httpPort, pending: corveilPendingAuth)
+        // Corveil token health (CROW-1125): renew the stored access token before it
+        // expires, and latch a "Reconnect" state (surfaced by `crow corveil status`
+        // and the Integrations tab) when a refresh is definitively rejected. Each
+        // tick reloads the connection, so it needs no reactive config wiring; a
+        // no-op tick when nothing is connected costs one disk read.
+        let corveilRefreshDevRoot = options.devRoot
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(CorveilTokenRefreshWatcher.tickInterval))
+                let outcome = await CorveilTokenRefreshWatcher.tick(devRoot: corveilRefreshDevRoot)
+                switch outcome {
+                case .refreshed:
+                    log("Corveil access token refreshed")
+                case .failed(let needsReconnect):
+                    log("Corveil token refresh failed"
+                        + (needsReconnect ? " — connection revoked, reconnect required" : " (will retry)"))
+                case .noConnection, .notRefreshable, .notDue:
+                    break  // routine; no log
+                }
+            }
+        }
         // Read-only MCP for off-box clients (CROW-1004). Authenticates with a scoped
         // bearer token minted by `crow mcp token mint`, NOT the web-session cookie —
         // `/mcp` is listed in `WebAuthMiddleware.isAuthExempt` for that reason, and

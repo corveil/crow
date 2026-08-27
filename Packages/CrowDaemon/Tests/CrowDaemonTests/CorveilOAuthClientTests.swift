@@ -402,4 +402,203 @@ import FoundationNetworking
         #expect(merged.refreshToken == "keep-me")  // server didn't rotate → keep old
         #expect(merged.registrationAccessToken == "reg")
     }
+
+    // MARK: - Health persistence + reconnect state (CROW-1125)
+
+    /// Seed a config with one connection whose token expires at `expiresAt`.
+    private func seed(
+        devRoot: String, expiresAt: Date?,
+        refreshToken: String = "old-rt",
+        health: CorveilConnectionHealth = CorveilConnectionHealth()
+    ) throws {
+        var config = AppConfig()
+        config.corveilConnection = CorveilConnection(
+            baseURL: "https://corveil.test", clientID: "cid",
+            oauth: CorveilOAuthTokens(
+                accessToken: "old-at", refreshToken: refreshToken,
+                registrationAccessToken: "reg-keep", accessTokenExpiresAt: expiresAt),
+            health: health)
+        try ConfigStore.saveConfig(config, devRoot: devRoot)
+    }
+
+    private func storedHealth(_ devRoot: String) -> CorveilConnectionHealth? {
+        ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection?.health
+    }
+
+    @Test func storeResetsHealthSoAReconnectClearsNeedsReconnect() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seed(
+            devRoot: devRoot, expiresAt: Date(),
+            health: CorveilConnectionHealth(lastRefreshError: "invalid_grant", needsReconnect: true))
+
+        try CorveilConnectionPersistence.store(
+            devRoot: devRoot, baseURL: "https://corveil.test", clientID: "cid",
+            tokens: CorveilOAuthTokens(accessToken: "fresh", refreshToken: "fresh-rt"))
+
+        let health = try #require(storedHealth(devRoot))
+        #expect(!health.needsReconnect)
+        #expect(health.lastRefreshError == nil)
+    }
+
+    @Test func recordRefreshSuccessStampsHealthy() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seed(
+            devRoot: devRoot, expiresAt: Date(),
+            health: CorveilConnectionHealth(lastRefreshError: "boom", needsReconnect: true))
+        let now = Date(timeIntervalSince1970: 3_000_000)
+
+        let ok = try CorveilConnectionPersistence.recordRefreshSuccess(
+            devRoot: devRoot, tokens: CorveilOAuthTokens(accessToken: "new-at"), now: now)
+        #expect(ok)
+        let health = try #require(storedHealth(devRoot))
+        #expect(health.lastRefreshAt == now)
+        #expect(health.lastRefreshError == nil)
+        #expect(!health.needsReconnect)
+    }
+
+    @Test func recordRefreshFailureLatchesReconnectOnlyWhenAsked() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seed(devRoot: devRoot, expiresAt: Date())
+
+        // A transient failure records the message but does not latch reconnect.
+        #expect(try CorveilConnectionPersistence.recordRefreshFailure(
+            devRoot: devRoot, error: "network down", needsReconnect: false))
+        var health = try #require(storedHealth(devRoot))
+        #expect(health.lastRefreshError == "network down")
+        #expect(!health.needsReconnect)
+
+        // A definitive rejection latches it.
+        #expect(try CorveilConnectionPersistence.recordRefreshFailure(
+            devRoot: devRoot, error: "invalid_grant", needsReconnect: true))
+        health = try #require(storedHealth(devRoot))
+        #expect(health.needsReconnect)
+
+        // A later transient failure must not *clear* the latch.
+        #expect(try CorveilConnectionPersistence.recordRefreshFailure(
+            devRoot: devRoot, error: "flaky again", needsReconnect: false))
+        #expect(try #require(storedHealth(devRoot)).needsReconnect)
+    }
+
+    @Test func recordRefreshReturnsFalseWithoutConnection() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        #expect(try !CorveilConnectionPersistence.recordRefreshSuccess(
+            devRoot: devRoot, tokens: CorveilOAuthTokens(accessToken: "x"), now: Date()))
+        #expect(try !CorveilConnectionPersistence.recordRefreshFailure(
+            devRoot: devRoot, error: "x", needsReconnect: true))
+    }
+
+    // MARK: - Watcher (schedule + classify)
+
+    @Test func isDueSchedulesAgainstTheRefreshMargin() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func conn(_ expiresAt: Date?) -> CorveilConnection {
+            CorveilConnection(oauth: CorveilOAuthTokens(accessTokenExpiresAt: expiresAt))
+        }
+        // Unknown expiry is never scheduled.
+        #expect(!CorveilTokenRefreshWatcher.isDue(conn(nil), now: now))
+        // Comfortably in the future → not due.
+        #expect(!CorveilTokenRefreshWatcher.isDue(conn(now.addingTimeInterval(3600)), now: now))
+        // Inside the 10-minute window → due.
+        #expect(CorveilTokenRefreshWatcher.isDue(conn(now.addingTimeInterval(120)), now: now))
+        // Already expired → still due (catch-up).
+        #expect(CorveilTokenRefreshWatcher.isDue(conn(now.addingTimeInterval(-60)), now: now))
+    }
+
+    @Test func isGrantRejectionOnlyForDeadGrants() {
+        typealias F = CorveilOAuthClient.Failure
+        #expect(CorveilTokenRefreshWatcher.isGrantRejection(F.oauth(error: "invalid_grant", description: nil)))
+        #expect(CorveilTokenRefreshWatcher.isGrantRejection(F.oauth(error: "invalid_client", description: nil)))
+        // A server hiccup or a slow-down is transient, not a reason to reconnect.
+        #expect(!CorveilTokenRefreshWatcher.isGrantRejection(F.oauth(error: "temporarily_unavailable", description: nil)))
+        #expect(!CorveilTokenRefreshWatcher.isGrantRejection(F.http(status: 503, body: "")))
+        #expect(!CorveilTokenRefreshWatcher.isGrantRejection(F.transport("connection refused")))
+    }
+
+    @Test func watcherRefreshesADueTokenAndStampsHealth() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let now = Date(timeIntervalSince1970: 5_000_000)
+        try seed(devRoot: devRoot, expiresAt: now.addingTimeInterval(120))  // within margin
+
+        let client = CorveilOAuthClient(transport: transport { _ in
+            (200, self.jsonData([
+                "access_token": "new-at", "refresh_token": "new-rt",
+                "token_type": "Bearer", "expires_in": 3600, "scope": "orgs.read",
+            ]))
+        })
+        let outcome = await CorveilTokenRefreshWatcher.tick(devRoot: devRoot, client: client, now: now)
+        #expect(outcome == .refreshed)
+
+        let connection = try #require(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection)
+        #expect(connection.oauth.accessToken == "new-at")
+        #expect(connection.oauth.accessTokenExpiresAt == now.addingTimeInterval(3600))
+        #expect(connection.health.lastRefreshAt == now)
+        #expect(!connection.health.needsReconnect)
+        #expect(connection.healthState(now: now.addingTimeInterval(1)) == .connected)
+    }
+
+    @Test func watcherSkipsAFreshToken() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let now = Date(timeIntervalSince1970: 5_000_000)
+        try seed(devRoot: devRoot, expiresAt: now.addingTimeInterval(3600))  // far future
+
+        let log = RequestLog()
+        let client = CorveilOAuthClient(transport: transport(log: log) { _ in (200, Data()) })
+        let outcome = await CorveilTokenRefreshWatcher.tick(devRoot: devRoot, client: client, now: now)
+        #expect(outcome == .notDue)
+        #expect(log.all.isEmpty)  // never hit the network
+        // Token untouched.
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection?.oauth.accessToken == "old-at")
+    }
+
+    @Test func watcherLatchesReconnectOnInvalidGrant() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let now = Date(timeIntervalSince1970: 5_000_000)
+        try seed(devRoot: devRoot, expiresAt: now.addingTimeInterval(-30))  // expired → due
+
+        let client = CorveilOAuthClient(transport: transport { _ in
+            (400, self.jsonData(["error": "invalid_grant", "error_description": "token revoked"]))
+        })
+        let outcome = await CorveilTokenRefreshWatcher.tick(devRoot: devRoot, client: client, now: now)
+        #expect(outcome == .failed(needsReconnect: true))
+
+        let connection = try #require(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection)
+        #expect(connection.health.needsReconnect)
+        #expect(connection.oauth.accessToken == "old-at")  // stale token left in place
+        #expect(connection.healthState(now: now) == .revoked)
+    }
+
+    @Test func watcherKeepsRetryingOnTransientError() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let now = Date(timeIntervalSince1970: 5_000_000)
+        try seed(devRoot: devRoot, expiresAt: now.addingTimeInterval(-30))
+
+        let client = CorveilOAuthClient(transport: transport { _ in (503, Data("upstream".utf8)) })
+        let outcome = await CorveilTokenRefreshWatcher.tick(devRoot: devRoot, client: client, now: now)
+        #expect(outcome == .failed(needsReconnect: false))
+
+        let connection = try #require(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection)
+        #expect(!connection.health.needsReconnect)  // a 5xx is not the user's to fix
+        #expect(connection.health.lastRefreshError != nil)
+        // Still just "expired" (clock), not "revoked".
+        #expect(connection.healthState(now: now) == .expired)
+    }
+
+    @Test func watcherNoOpsWithoutAConnectionOrRefreshToken() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        // Nothing stored.
+        #expect(await CorveilTokenRefreshWatcher.tick(devRoot: devRoot) == .noConnection)
+        // A connection with no refresh token cannot be refreshed here.
+        let now = Date(timeIntervalSince1970: 5_000_000)
+        try seed(devRoot: devRoot, expiresAt: now.addingTimeInterval(-30), refreshToken: "")
+        #expect(await CorveilTokenRefreshWatcher.tick(devRoot: devRoot, now: now) == .notRefreshable)
+    }
 }

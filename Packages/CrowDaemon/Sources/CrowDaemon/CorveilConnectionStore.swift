@@ -103,6 +103,11 @@ enum CorveilConnectionPersistence {
             connection.baseURL = baseURL
             connection.clientID = clientID
             connection.oauth = tokens
+            // Fresh tokens make any prior refresh observation stale: a reconnect
+            // after a revocation must clear `needsReconnect`, or the UI would keep
+            // asking the user to reconnect a connection that just succeeded
+            // (CROW-1125). The refresher re-populates health on its next tick.
+            connection.health = CorveilConnectionHealth()
             config.corveilConnection = connection
             try ConfigStore.saveConfig(config, devRoot: devRoot)
         }
@@ -117,6 +122,47 @@ enum CorveilConnectionPersistence {
             var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
             guard var connection = config.corveilConnection else { return false }
             connection.oauth = tokens
+            config.corveilConnection = connection
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+            return true
+        }
+    }
+
+    /// Persist a successful background refresh (CROW-1125): replace the OAuth block
+    /// and stamp the connection **healthy** — `lastRefreshAt = now`, no error, no
+    /// pending reconnect. Reloads inside the config lock, so a disconnect that
+    /// raced the in-flight refresh wins (returns false rather than resurrecting the
+    /// connection).
+    @discardableResult
+    static func recordRefreshSuccess(
+        devRoot: String, tokens: CorveilOAuthTokens, now: Date
+    ) throws -> Bool {
+        try ConfigStore.withConfigLock {
+            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            guard var connection = config.corveilConnection else { return false }
+            connection.oauth = tokens
+            connection.health = CorveilConnectionHealth(
+                lastRefreshAt: now, lastRefreshError: nil, needsReconnect: false)
+            config.corveilConnection = connection
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+            return true
+        }
+    }
+
+    /// Persist a failed background refresh (CROW-1125): record `error`, and — only
+    /// for a definitive grant rejection — latch `needsReconnect`. The tokens and
+    /// `lastRefreshAt` are left untouched (a transient failure must not erase a
+    /// still-valid token), and `needsReconnect` is never *cleared* here — only a
+    /// success or a reconnect clears it. Same disconnect-wins reload as above.
+    @discardableResult
+    static func recordRefreshFailure(
+        devRoot: String, error: String, needsReconnect: Bool
+    ) throws -> Bool {
+        try ConfigStore.withConfigLock {
+            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            guard var connection = config.corveilConnection else { return false }
+            connection.health.lastRefreshError = error
+            if needsReconnect { connection.health.needsReconnect = true }
             config.corveilConnection = connection
             try ConfigStore.saveConfig(config, devRoot: devRoot)
             return true

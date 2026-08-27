@@ -213,7 +213,9 @@ struct ParityGateTests {
                 ],
                 oauth: CorveilOAuthTokens(
                     accessToken: "at", refreshToken: "rt",
-                    registrationAccessToken: "rat", accessTokenExpiresAt: Date()))
+                    registrationAccessToken: "rat", accessTokenExpiresAt: Date()),
+                health: CorveilConnectionHealth(
+                    lastRefreshAt: Date(), lastRefreshError: "probe", needsReconnect: true))
         )
     }
 

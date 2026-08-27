@@ -547,6 +547,11 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
     /// OAuth token material — the secrets. Stripped for transport by
     /// `SettingsSecrets`.
     public var oauth: CorveilOAuthTokens
+    /// Token-refresh health, owned by the background refresher (CROW-1125). Not a
+    /// secret — it carries no token, only the *outcome* of the last refresh — so it
+    /// passes through `SettingsSecrets` untouched and the read-only Integrations
+    /// view can render a "Reconnect" state from it.
+    public var health: CorveilConnectionHealth
 
     /// Whether the connection has enough to be usable — a client id and an access
     /// token. An all-empty block (e.g. a partially-written record) reads as unset.
@@ -555,18 +560,38 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
             && oauth.accessToken.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// The connection's health as of `now` (CROW-1125), the single fact the
+    /// Integrations tab and `crow corveil status` key their "Reconnect" affordance
+    /// off. Derived, not stored: a background refresh that renews the token moves
+    /// `accessTokenExpiresAt` into the future and flips this back to `.connected`
+    /// with no extra write.
+    ///
+    /// `.revoked` wins over `.expired` — a definitively-rejected grant
+    /// (`health.needsReconnect`, set when a refresh came back `invalid_grant`) is a
+    /// stronger, sooner signal than the clock passing an expiry the refresher might
+    /// still renew. An unknown expiry (`nil`) is treated as not-yet-expired, since a
+    /// token with no stated lifetime is not evidence of a lapse.
+    public func healthState(now: Date = Date()) -> CorveilConnectionState {
+        if isEmpty { return .disconnected }
+        if health.needsReconnect { return .revoked }
+        if let expiry = oauth.accessTokenExpiresAt, expiry <= now { return .expired }
+        return .connected
+    }
+
     public init(
         baseURL: String = "",
         clientID: String = "",
         connectedUser: CorveilConnectedUser = CorveilConnectedUser(),
         orgKeys: [CorveilOrgKey] = [],
-        oauth: CorveilOAuthTokens = CorveilOAuthTokens()
+        oauth: CorveilOAuthTokens = CorveilOAuthTokens(),
+        health: CorveilConnectionHealth = CorveilConnectionHealth()
     ) {
         self.baseURL = baseURL
         self.clientID = clientID
         self.connectedUser = connectedUser
         self.orgKeys = orgKeys
         self.oauth = oauth
+        self.health = health
     }
 
     public init(from decoder: Decoder) throws {
@@ -577,11 +602,33 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
             ?? CorveilConnectedUser()
         orgKeys = try c.decodeIfPresent([CorveilOrgKey].self, forKey: .orgKeys) ?? []
         oauth = try c.decodeIfPresent(CorveilOAuthTokens.self, forKey: .oauth) ?? CorveilOAuthTokens()
+        health = try c.decodeIfPresent(CorveilConnectionHealth.self, forKey: .health)
+            ?? CorveilConnectionHealth()
     }
 
     private enum CodingKeys: String, CodingKey {
-        case baseURL, clientID, connectedUser, orgKeys, oauth
+        case baseURL, clientID, connectedUser, orgKeys, oauth, health
     }
+}
+
+/// The health of a ``CorveilConnection``'s access token, as one of four states
+/// (CROW-1125). Drives the Integrations tab and `crow corveil status`: `.expired`
+/// and `.revoked` are the two that ask the user to **Reconnect**.
+public enum CorveilConnectionState: String, Codable, Sendable, Equatable, CaseIterable {
+    /// No connection is stored.
+    case disconnected
+    /// A usable, non-expired access token — nothing to do.
+    case connected
+    /// The access token is past its expiry and the background refresh has not
+    /// renewed it (offline too long, or refresh failing). Reconnect fixes it.
+    case expired
+    /// A refresh was definitively rejected (`invalid_grant`/`invalid_client`) — the
+    /// stored grant is dead (the user or an admin revoked it, or the refresh token
+    /// lapsed). Only reconnecting issues a fresh grant.
+    case revoked
+
+    /// Whether this state asks the user to reconnect.
+    public var needsReconnect: Bool { self == .expired || self == .revoked }
 }
 
 /// The signed-in Corveil user identity behind a ``CorveilConnection`` (CROW-1118).
@@ -697,6 +744,51 @@ public struct CorveilOAuthTokens: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case accessToken, refreshToken, registrationAccessToken, accessTokenExpiresAt
+    }
+}
+
+/// Token-refresh health for a ``CorveilConnection`` (CROW-1125) — the outcome of
+/// the background refresher's most recent attempt. Not a secret (no token, just
+/// booleans/timestamps/a message), so it is **not** stripped for transport and the
+/// read-only Integrations view can render it.
+///
+/// Owned by the refresher, not the user: `store`/`connect` reset it to a fresh
+/// healthy default whenever new tokens land (replacing the tokens invalidates any
+/// prior observation), and the refresher updates it in place — success clears it
+/// and stamps `lastRefreshAt`; a definitive rejection sets `needsReconnect`; a
+/// transient failure records only `lastRefreshError`. Decodes tolerantly so a
+/// connection written before this field existed loads as healthy.
+public struct CorveilConnectionHealth: Codable, Sendable, Equatable {
+    /// When a background refresh last succeeded. `nil` = none has run since the
+    /// tokens were (re)connected.
+    public var lastRefreshAt: Date?
+    /// Why the last refresh attempt failed, or `nil` when the last attempt
+    /// succeeded (or none has run). Diagnostic only — cleared on the next success.
+    public var lastRefreshError: String?
+    /// Set when a refresh was rejected in a way that means the stored grant is dead
+    /// (`invalid_grant`/`invalid_client`), so the user must reconnect. A transient
+    /// network failure leaves this alone; a success clears it.
+    public var needsReconnect: Bool
+
+    public init(
+        lastRefreshAt: Date? = nil,
+        lastRefreshError: String? = nil,
+        needsReconnect: Bool = false
+    ) {
+        self.lastRefreshAt = lastRefreshAt
+        self.lastRefreshError = lastRefreshError
+        self.needsReconnect = needsReconnect
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lastRefreshAt = try c.decodeIfPresent(Date.self, forKey: .lastRefreshAt)
+        lastRefreshError = try c.decodeIfPresent(String.self, forKey: .lastRefreshError)
+        needsReconnect = try c.decodeIfPresent(Bool.self, forKey: .needsReconnect) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case lastRefreshAt, lastRefreshError, needsReconnect
     }
 }
 

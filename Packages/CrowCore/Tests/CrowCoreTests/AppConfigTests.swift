@@ -1271,3 +1271,52 @@ import Testing
     #expect(!CorveilConnection(clientID: "cid").isEmpty)
     #expect(!CorveilConnection(oauth: CorveilOAuthTokens(accessToken: "at")).isEmpty)
 }
+
+// MARK: - Corveil connection health (CROW-1125)
+
+@Test func corveilHealthStateDerivesTheFourStates() {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    func conn(expiresAt: Date?, needsReconnect: Bool = false) -> CorveilConnection {
+        CorveilConnection(
+            clientID: "cid",
+            oauth: CorveilOAuthTokens(accessToken: "at", accessTokenExpiresAt: expiresAt),
+            health: CorveilConnectionHealth(needsReconnect: needsReconnect))
+    }
+
+    // No connection / empty → disconnected.
+    #expect(CorveilConnection().healthState(now: now) == .disconnected)
+    // A token still in the future → connected.
+    #expect(conn(expiresAt: now.addingTimeInterval(3600)).healthState(now: now) == .connected)
+    // An unknown expiry is not evidence of a lapse → connected.
+    #expect(conn(expiresAt: nil).healthState(now: now) == .connected)
+    // Past its expiry → expired.
+    #expect(conn(expiresAt: now.addingTimeInterval(-1)).healthState(now: now) == .expired)
+    // A latched reconnect wins even when the clock hasn't reached expiry.
+    #expect(
+        conn(expiresAt: now.addingTimeInterval(3600), needsReconnect: true)
+            .healthState(now: now) == .revoked)
+
+    // Only expired/revoked ask the user to reconnect.
+    #expect(!CorveilConnectionState.connected.needsReconnect)
+    #expect(!CorveilConnectionState.disconnected.needsReconnect)
+    #expect(CorveilConnectionState.expired.needsReconnect)
+    #expect(CorveilConnectionState.revoked.needsReconnect)
+}
+
+@Test func corveilHealthDecodesTolerantlyAndRoundTrips() throws {
+    // A connection written before `health` existed loads as healthy.
+    let legacy = #"{"clientID":"cid","oauth":{"accessToken":"at"}}"#.data(using: .utf8)!
+    let decoded = try JSONDecoder().decode(CorveilConnection.self, from: legacy)
+    #expect(decoded.health == CorveilConnectionHealth())
+    #expect(!decoded.health.needsReconnect)
+
+    // And a populated health round-trips.
+    let now = Date(timeIntervalSince1970: 1_500_000)
+    let connection = CorveilConnection(
+        clientID: "cid",
+        oauth: CorveilOAuthTokens(accessToken: "at"),
+        health: CorveilConnectionHealth(lastRefreshAt: now, lastRefreshError: "boom", needsReconnect: true))
+    let reencoded = try JSONDecoder().decode(
+        CorveilConnection.self, from: try JSONEncoder().encode(connection))
+    #expect(reencoded == connection)
+}

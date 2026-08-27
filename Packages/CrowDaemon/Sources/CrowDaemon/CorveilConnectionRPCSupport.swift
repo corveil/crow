@@ -168,14 +168,29 @@ enum CorveilConnectionRPC {
     /// access-token expiry, and *presence* booleans for the tokens — never a
     /// token value. Safe to paste into a ticket, like `gateway-get` without
     /// `reveal`.
-    static func statusJSON(_ connection: CorveilConnection?) -> [String: JSONValue] {
-        guard let connection, !connection.isEmpty else {
-            return ["connected": .bool(false)]
-        }
+    ///
+    /// Since CROW-1125 it also reports token health: `state` is one of
+    /// `disconnected` / `connected` / `expired` / `revoked`, `needs_reconnect` is
+    /// the derived "the user must click Reconnect" flag (true for `expired` and
+    /// `revoked`), and `last_refresh_at` / `last_refresh_error` expose the
+    /// background refresher's most recent outcome. `now` is injectable so the
+    /// expiry→state derivation is deterministic in tests.
+    static func statusJSON(_ connection: CorveilConnection?, now: Date = Date()) -> [String: JSONValue] {
         let formatter = ISO8601DateFormatter()
+        let state = connection?.healthState(now: now) ?? .disconnected
+        guard let connection, !connection.isEmpty else {
+            return [
+                "connected": .bool(false),
+                "state": .string(state.rawValue),
+                "needs_reconnect": .bool(state.needsReconnect),
+            ]
+        }
         let user = connection.connectedUser
+        let health = connection.health
         return [
             "connected": .bool(true),
+            "state": .string(state.rawValue),
+            "needs_reconnect": .bool(state.needsReconnect),
             "base_url": .string(connection.baseURL),
             "client_id": .string(connection.clientID),
             "connected_user": .object([
@@ -189,6 +204,9 @@ enum CorveilConnectionRPC {
             "has_registration_access_token": .bool(!connection.oauth.registrationAccessToken.isEmpty),
             "access_token_expires_at": connection.oauth.accessTokenExpiresAt
                 .map { .string(formatter.string(from: $0)) } ?? .null,
+            "last_refresh_at": health.lastRefreshAt
+                .map { .string(formatter.string(from: $0)) } ?? .null,
+            "last_refresh_error": health.lastRefreshError.map { .string($0) } ?? .null,
         ]
     }
 
