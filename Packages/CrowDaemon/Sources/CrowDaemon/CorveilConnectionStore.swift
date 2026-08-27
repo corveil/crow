@@ -189,15 +189,28 @@ enum CorveilConnectionPersistence {
     /// into whatever is stored now — so a token refresh that landed between the
     /// mint and this write is preserved, and re-selecting an org replaces its key
     /// in place rather than appending a duplicate.
-    static func upsertOrgKey(devRoot: String, orgKey: CorveilOrgKey, secret: String) throws {
+    ///
+    /// Returns whether the key was written. **Disconnect-wins:** if no connection is
+    /// stored — because a `corveil-disconnect` cleared it while this mint was in
+    /// flight (`select-org` and `disconnect` sit in different `/rpc` lanes, so they
+    /// overlap) — this refuses to create one, exactly like `updateTokens` /
+    /// `recordRefreshSuccess` / `removeOrg`. Materializing a `CorveilConnection` here
+    /// would leave a "zombie" block that reads as disconnected (`isEmpty` checks only
+    /// the client id + access token) yet holds a spendable `sk-citadel-…` in
+    /// `orgKeySecrets`, which the next `corveil-connect` merge would silently inherit.
+    /// The caller (`CorveilOrgProvisioner.provision`) revokes the now-orphaned key
+    /// when this returns false.
+    @discardableResult
+    static func upsertOrgKey(devRoot: String, orgKey: CorveilOrgKey, secret: String) throws -> Bool {
         try ConfigStore.withConfigLock {
             var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-            var connection = config.corveilConnection ?? CorveilConnection()
+            guard var connection = config.corveilConnection else { return false }
             connection.orgKeys.removeAll { $0.orgID == orgKey.orgID }
             connection.orgKeys.append(orgKey)
             connection.orgKeySecrets[orgKey.orgID] = secret
             config.corveilConnection = connection
             try ConfigStore.saveConfig(config, devRoot: devRoot)
+            return true
         }
     }
 

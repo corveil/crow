@@ -110,10 +110,10 @@ enum CorveilOrgProvisioner {
     /// `force == true` (rotate), a fresh key is minted; the backend deactivates the
     /// prior one as part of the mint, so the stored record is simply replaced.
     ///
-    /// `orgName` is the display name to store. `nil` (or empty) means "look it up
-    /// from the user's memberships" — done lazily on the mint path only, which also
-    /// validates `orgID` is a real membership. A caller that already knows the name
-    /// (the UI) passes it to skip that lookup.
+    /// `orgName` is a display-name override to store. It never bypasses validation:
+    /// the mint path always confirms `orgID` is one of the user's memberships
+    /// (a cached lookup) and falls back to the membership's own name when `orgName`
+    /// is nil or empty. A reuse skips this lookup entirely.
     static func provision(
         devRoot: String,
         orgID: String,
@@ -137,9 +137,11 @@ enum CorveilOrgProvisioner {
             return SelectOutcome(orgKey: existing, reused: true)
         }
 
-        // Mint path. Resolve the display name now — from `orgName` if the caller
-        // supplied one, else from the membership list (which also validates that
-        // `orgID` is an org the user actually belongs to).
+        // Mint path. Always validate `orgID` against the user's memberships (a
+        // cheap cached lookup) before minting a spendable key — `--name` is only a
+        // display override, never a way to skip the membership check. The backend
+        // enforces membership too, but validating locally gives a clear error and
+        // never mints for an org the user doesn't belong to.
         let resolvedName = try await resolvedOrgName(
             explicit: orgName, orgID: orgID, connection: connection, token: token,
             cache: cache, apiClient: apiClient, now: now)
@@ -151,14 +153,25 @@ enum CorveilOrgProvisioner {
             keyID: key.id,
             keyPrefix: key.prefix,
             createdAt: key.createdAt ?? now)
-        try CorveilConnectionPersistence.upsertOrgKey(
+        // Disconnect-wins: if a `corveil-disconnect` cleared the connection while the
+        // mint was in flight, the persist is refused (returns false) rather than
+        // resurrecting a zombie connection that holds the key. The key is now
+        // orphaned server-side, so revoke it best-effort and fail the select — never
+        // report success for a key that isn't stored.
+        let stored = try CorveilConnectionPersistence.upsertOrgKey(
             devRoot: devRoot, orgKey: orgKey, secret: key.value)
+        guard stored else {
+            try? await apiClient.revokeKey(
+                baseURL: connection.baseURL, accessToken: token, keyID: key.id)
+            throw ProvisionError.notConnected
+        }
         return SelectOutcome(orgKey: orgKey, reused: false)
     }
 
-    /// The display name to store for a mint: the caller-supplied one wins; otherwise
-    /// look it up in the user's memberships (cached), which also validates that
-    /// `orgID` is one the user belongs to (else `.unknownOrg`).
+    /// The display name to store for a mint. Always fetches the user's memberships
+    /// (cached) to validate that `orgID` is one they belong to (else `.unknownOrg`).
+    /// A caller-supplied `explicit` name overrides the membership's display name but
+    /// does **not** skip that validation — it is display-only.
     private static func resolvedOrgName(
         explicit: String?,
         orgID: String,
@@ -168,16 +181,14 @@ enum CorveilOrgProvisioner {
         apiClient: CorveilAPIClient,
         now: Date
     ) async throws -> String {
-        if let explicit, !explicit.trimmingCharacters(in: .whitespaces).isEmpty {
-            return explicit.trimmingCharacters(in: .whitespaces)
-        }
         let orgs = try await cachedOrganizations(
             connection: connection, token: token, cache: cache,
             apiClient: apiClient, now: now, forceRefresh: false)
         guard let match = orgs.first(where: { $0.id == orgID }) else {
             throw ProvisionError.unknownOrg(orgID)
         }
-        return match.name
+        let trimmed = explicit?.trimmingCharacters(in: .whitespaces) ?? ""
+        return trimmed.isEmpty ? match.name : trimmed
     }
 
     // MARK: - Deprovision (deselect)

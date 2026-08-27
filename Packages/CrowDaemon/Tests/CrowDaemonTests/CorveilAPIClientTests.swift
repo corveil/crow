@@ -192,4 +192,28 @@ import FoundationNetworking
             try await api.revokeKey(baseURL: self.base, accessToken: "tok", keyID: "key-123")
         }
     }
+
+    @Test func revokeKeyRejectsAPathTraversingKeyIDWithoutSendingARequest() async throws {
+        let log = RequestLog()
+        let api = client(log: log) { _ in (200, Data()) }
+        // `appendingPathComponent` neither encodes `/` nor collapses `..`, so an id
+        // like `../me` would target a different endpoint. Reject before any request.
+        for badID in ["../me", "a/b", "..", "keys/../secrets", ""] {
+            await #expect(throws: CorveilAPIClient.Failure.self) {
+                try await api.revokeKey(baseURL: self.base, accessToken: "tok", keyID: badID)
+            }
+        }
+        #expect(log.all.isEmpty, "an unsafe key id must never reach the network")
+    }
+
+    @Test func isSafeKeyIDAcceptsUUIDsAndRejectsTraversal() {
+        #expect(CorveilAPIClient.isSafeKeyID("3fa85f64-5717-4562-b3fc-2c963f66afa6"))
+        #expect(CorveilAPIClient.isSafeKeyID("key-123"))
+        #expect(!CorveilAPIClient.isSafeKeyID(""))
+        #expect(!CorveilAPIClient.isSafeKeyID("   "))
+        #expect(!CorveilAPIClient.isSafeKeyID("a/b"))
+        #expect(!CorveilAPIClient.isSafeKeyID(".."))
+        #expect(!CorveilAPIClient.isSafeKeyID("../me"))
+        #expect(!CorveilAPIClient.isSafeKeyID("a\\b"))
+    }
 }

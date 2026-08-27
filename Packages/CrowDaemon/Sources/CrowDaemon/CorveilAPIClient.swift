@@ -93,11 +93,24 @@ struct CorveilAPIClient: Sendable {
             keys = root.appendingPathComponent("api/keys")
         }
 
-        /// `DELETE /api/keys/{id}` for a specific key id. The id is path-escaped so
-        /// a hostile/odd id can't break out of the path.
+        /// `DELETE /api/keys/{id}` for a specific key id. Callers validate `id` is a
+        /// single safe path segment first (``isSafeKeyID``): `appendingPathComponent`
+        /// does not encode `/` and does not collapse `..`, so an id like `../me` would
+        /// otherwise resolve to a different endpoint. Key ids are backend-issued
+        /// UUIDs, so this is defense-in-depth against a hostile `baseURL`.
         func key(id: String) -> URL {
             root.appendingPathComponent("api/keys").appendingPathComponent(id)
         }
+    }
+
+    /// Whether a key id is a single, safe URL path segment. Rejects the sequences
+    /// `appendingPathComponent` mishandles — path separators and `..` traversal —
+    /// plus empty/whitespace. Backend key ids are UUIDs; anything else is anomalous.
+    static func isSafeKeyID(_ id: String) -> Bool {
+        !id.trimmingCharacters(in: .whitespaces).isEmpty
+            && !id.contains("/")
+            && !id.contains("\\")
+            && !id.contains("..")
     }
 
     // MARK: - Models
@@ -172,6 +185,11 @@ struct CorveilAPIClient: Sendable {
     /// for a caller whose goal is "this key no longer exists".
     func revokeKey(baseURL: String, accessToken: String, keyID: String) async throws {
         let endpoints = try resolve(baseURL)
+        guard Self.isSafeKeyID(keyID) else {
+            // An id carrying `/` or `..` could target a different endpoint via
+            // `appendingPathComponent`; refuse rather than issue the request.
+            throw Failure.malformedResponse("unsafe key id")
+        }
         var request = URLRequest(url: endpoints.key(id: keyID))
         request.httpMethod = "DELETE"
         authorize(&request, accessToken)

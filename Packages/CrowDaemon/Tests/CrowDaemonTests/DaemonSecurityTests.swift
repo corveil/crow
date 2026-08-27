@@ -995,6 +995,15 @@ import CrowPersistence
             #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
                 == "Corveil connection management is local-only")
         }
+
+        // The org listing + provisioning verbs (CROW-1121) act with the stored OAuth
+        // bearer — listing memberships, minting/revoking the per-org gateway key — so
+        // they are gated local-only alongside the connection verbs.
+        for method in ["corveil-list-orgs", "corveil-select-org", "corveil-deselect-org"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: ["org_id": .string("org1")])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+                == "Corveil org provisioning is local-only")
+        }
     }
 
     @Test func logsyncMethodsAreNotLocalOnly() {

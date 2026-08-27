@@ -145,6 +145,15 @@ import FoundationNetworking
         })
     }
 
+    /// A thread-safe counter for observing calls from an async transport closure
+    /// (the lock is taken inside the synchronous `increment`, never from `async`).
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _value = 0
+        var value: Int { lock.lock(); defer { lock.unlock() }; return _value }
+        func increment() { lock.lock(); _value += 1; lock.unlock() }
+    }
+
     // MARK: - Provision: mint
 
     @Test func provisionMintsAndStoresKeyPlusSecret() async throws {
@@ -210,18 +219,20 @@ import FoundationNetworking
         #expect(api.posts == 1)
     }
 
-    @Test func mintWithNameSkipsTheMembershipLookup() async throws {
+    @Test func mintWithNameValidatesMembershipButUsesTheNameForDisplay() async throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
         try seedConnection(devRoot: devRoot)
         let api = APIStub()
 
+        // A supplied `--name` is display-only: it overrides the stored name but does
+        // NOT skip the membership validation.
         let outcome = try await CorveilOrgProvisioner.provision(
             devRoot: devRoot, orgID: "org1", orgName: "Custom Name", cache: CorveilOrgListCache(),
             apiClient: api.client(), oauthClient: neverCalledOAuth())
 
         #expect(outcome.orgKey.orgName == "Custom Name")
-        #expect(api.lists == 0, "a supplied name skips GET /api/me/organizations")
+        #expect(api.lists == 1, "membership is always validated, even with a supplied name")
         #expect(api.posts == 1)
     }
 
@@ -229,14 +240,76 @@ import FoundationNetworking
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
         try seedConnection(devRoot: devRoot)
-        let api = APIStub()  // memberships list only contains "org1"
 
-        await #expect(throws: CorveilOrgProvisioner.ProvisionError.unknownOrg("ghost")) {
-            _ = try await CorveilOrgProvisioner.provision(
-                devRoot: devRoot, orgID: "ghost", orgName: nil, cache: CorveilOrgListCache(),
-                apiClient: api.client(), oauthClient: self.neverCalledOAuth())
+        // Both with and without a supplied name, an org the user doesn't belong to
+        // is rejected locally and never minted — `--name` can't smuggle it past.
+        for name in [String?.none, "Ghost Corp"] {
+            let api = APIStub()  // memberships list only contains "org1"
+            await #expect(throws: CorveilOrgProvisioner.ProvisionError.unknownOrg("ghost")) {
+                _ = try await CorveilOrgProvisioner.provision(
+                    devRoot: devRoot, orgID: "ghost", orgName: name, cache: CorveilOrgListCache(),
+                    apiClient: api.client(), oauthClient: self.neverCalledOAuth())
+            }
+            #expect(api.posts == 0, "an org the user doesn't belong to is never minted")
         }
-        #expect(api.posts == 0, "an org the user doesn't belong to is never minted")
+    }
+
+    // MARK: - Provision: disconnect racing the mint
+
+    @Test func disconnectDuringMintDoesNotResurrectTheConnectionOrLeakTheKey() async throws {
+        // `select-org` (lane .on org_id) and `disconnect` (lane .fixed .config) can
+        // overlap. If a disconnect clears the connection while the mint HTTP call is
+        // in flight, the freshly minted `sk-citadel-…` must NOT be written back onto
+        // a resurrected zombie connection — it must be revoked and the select must
+        // fail. (The Red finding's regression test.)
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seedConnection(devRoot: devRoot)
+        let deletes = Counter()
+
+        // A client whose mint, mid-flight, simulates a concurrent disconnect
+        // clearing the stored connection, then returns the freshly minted key.
+        let client = CorveilAPIClient(transport: { request in
+            let method = request.httpMethod ?? "GET"
+            let path = request.url?.path ?? ""
+            var status = 200
+            var body: [String: Any] = [:]
+            if path.hasSuffix("/api/me/organizations") {
+                body = ["organizations": [[
+                    "organization_id": "org1", "organization_name": "Acme",
+                    "role": "admin", "is_active": true,
+                ]]]
+            } else if method == "POST", path.hasSuffix("/api/keys") {
+                // The disconnect lands during the mint.
+                var cfg = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+                cfg.corveilConnection = nil
+                try? ConfigStore.saveConfig(cfg, devRoot: devRoot)
+                body = [
+                    "id": "key-orphan", "key_prefix": "sk-citadel-orph",
+                    "key": "sk-citadel-LEAKED", "created_at": "2026-01-02T03:04:05Z",
+                ]
+            } else if method == "DELETE" {
+                deletes.increment()
+                body = ["status": "ok", "message": "revoked"]
+            } else {
+                status = 404
+            }
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+            return (data, response)
+        })
+
+        await #expect(throws: CorveilOrgProvisioner.ProvisionError.notConnected) {
+            _ = try await CorveilOrgProvisioner.provision(
+                devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
+                apiClient: client, oauthClient: self.neverCalledOAuth())
+        }
+
+        // No zombie connection, and no spendable secret left on disk.
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection == nil)
+        // The orphaned key was revoked.
+        #expect(deletes.value == 1, "the orphaned key must be revoked when the write is refused")
     }
 
     @Test func provisionTwiceKeepsExactlyOneKeyPerOrg() async throws {
