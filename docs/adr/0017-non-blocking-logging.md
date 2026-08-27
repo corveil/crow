@@ -7,8 +7,8 @@
 ## Context
 
 `crowd` is the sole authority ([0009](./0009-crowd-sole-authority-clients-only.md)), and
-its RPC handlers mutate `@MainActor`-isolated state — roughly half of the 64 handlers in
-`RPCHandlers.swift` hop to the main actor to do it. That serialization is deliberate and
+its RPC handlers mutate `@MainActor`-isolated state — roughly half of the 64 handlers
+hop to the main actor to do it. That serialization is deliberate and
 is what makes concurrent CLI use safe. It also means the main actor is a **shared,
 single-threaded resource for every CLI and web client at once**: anything that blocks it
 stalls the whole daemon, not one request.

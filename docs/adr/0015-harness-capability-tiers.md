@@ -282,7 +282,7 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    registry lookup. The two Manager-creation surfaces also differ: the **web**
    `create-manager` (`EngineRouter.swift`) validates against the registry (CROW-593
    security gate, falling back to the configured default), but the **daemon's**
-   `create-manager` (`RPCHandlers.swift`) passes the requested kind straight through —
+   `create-manager` (`LifecycleRPCHandlers.swift`) passes the requested kind straight through —
    and there the launch degrades differently again, `managerCommand` falling back
    to `AgentRegistry.defaultAgent` rather than no-op'ing. Closing these
    asymmetries is a code follow-up ([#834](https://github.com/corveil/crow/issues/834)),

@@ -197,7 +197,7 @@ enum CorveilIntegrationRoutes {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         // Reap the child so the long-lived daemon doesn't accumulate zombies
-        // (matches `launchHostProcess` in RPCHandlers).
+        // (matches `launchHostProcess` in RPCHandlerSupport).
         process.terminationHandler = { _ in }
         try? process.run()
     }

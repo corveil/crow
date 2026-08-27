@@ -262,14 +262,14 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 | -------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Settings tab UI                  | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/settings.js`                                     |
 | CLI verb (`crow automation`)     | `Packages/CrowCLI/Sources/CrowCLILib/Commands/AutomationCommands.swift`                                |
-| `automation-*` RPC handlers      | `Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift` + `Packages/CrowEngine/Sources/CrowEngine/SettingsRPCSupport.swift` (`SettingsRPC.automationJSON`, `ListPatch`) |
+| `automation-*` RPC handlers      | `Packages/CrowDaemon/Sources/CrowDaemon/SettingsRPCHandlers.swift` + `Packages/CrowEngine/Sources/CrowEngine/SettingsRPCSupport.swift` (`SettingsRPC.automationJSON`, `ListPatch`) |
 | Persisted toggles                | `Packages/CrowCore/Sources/CrowCore/Models/AppConfig.swift` (`ConfigDefaults`, `AutoRespondSettings`) |
 | Manager auto-permission decision | `Packages/CrowEngine/Sources/CrowEngine/SessionService.swift` (Manager command rebuild)                                    |
 | Auto-create / auto-respond loop  | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (60s polling cycle)                                         |
 | Review session auto-start        | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
 | Auto-merge watcher (`crow:merge`)| `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
 | Auto re-request review            | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoReRequestReview`, `autoReReviewSkipReason`, `agentSettled`) + `PRStatus.changesRequestedState` + `CodeBackend.requestReviewers` |
-| Auto-merge verdict → UI          | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`AutoMergeSkipReason.state`, `publishAutoMergeVerdict`) → `Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift` (`list-sessions-live` → `auto_merge_state`) → `.../web/app.js` (`PR_AUTOMERGE_GLYPH`, `prAutoMergeGlyph`) |
+| Auto-merge verdict → UI          | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`AutoMergeSkipReason.state`, `publishAutoMergeVerdict`) → `Packages/CrowDaemon/Sources/CrowDaemon/SnapshotRPCHandlers.swift` (`list-sessions-live` → `auto_merge_state`) → `.../web/app.js` (`PR_AUTOMERGE_GLYPH`, `prAutoMergeGlyph`) |
 | Direct-merge fallback            | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`shouldDirectMerge`, `directMergeGatesPass`, `performDirectMerge`) + `CodeBackend.mergeNow` |
 | Automation notification push     | `Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift` (`wireTrackerAutomations`) + `EventHub.notifyFrame`             |
 | Notification events + defaults   | `Packages/CrowCore/Sources/CrowCore/Models/NotificationEvent.swift`                                                       |
