@@ -961,7 +961,7 @@ crow corveil detect-gateways
 
 #### `crow corveil link-gateway`
 
-Adopt a detected gateway's existing plaintext key into the connection as a named org's key (CROW-1126) — the connection now owns it and the org shows as provisioned. Non-disruptive (the running key is unchanged) and offline: the Corveil backend has no key→org lookup, so you name the `--org`. Pass exactly one of `--workspace <name>` or `--manager`.
+Adopt a detected gateway's existing plaintext key into the connection as a named org's key (CROW-1126) — the connection now owns it and the org shows as provisioned. Non-disruptive (the running key is unchanged) and offline: the Corveil backend has no key→org lookup, so you name the `--org`. Pass exactly one of `--workspace <name|uuid>` (resolved like `crow gateway` — a UUID or a unique name, error on unknown/ambiguous) or `--manager`.
 
 ```bash
 crow corveil link-gateway --workspace Acme --org org1

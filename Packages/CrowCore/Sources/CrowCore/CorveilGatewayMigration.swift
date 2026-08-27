@@ -14,7 +14,7 @@ import Foundation
 ///     that carries the `x-citadel-api-key` header and classifies it as already
 ///     **managed** by the connection, **linkable** (adoptable), or **manual**
 ///     (why it can't be linked yet).
-///   - ``link(config:target:orgID:orgName:force:now:)`` **adopts** a linkable
+///   - ``link(config:target:orgID:orgName:now:)`` **adopts** a linkable
 ///     gateway's existing plaintext key into the connection as the named org's
 ///     key — a non-disruptive record write (the running key is unchanged), so the
 ///     connection now "owns" the org and the org dropdown reflects it.

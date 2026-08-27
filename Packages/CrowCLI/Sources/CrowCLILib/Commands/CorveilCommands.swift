@@ -407,7 +407,7 @@ public struct CorveilLinkGateway: ParsableCommand {
         """
     )
 
-    @Option(name: .customLong("workspace"), help: "Workspace whose gateway to link")
+    @Option(name: .customLong("workspace"), help: "Workspace whose gateway to link (name or UUID)")
     public var workspace: String?
 
     @Flag(name: .customLong("manager"), help: "Link the Manager gateway instead of a workspace")
@@ -427,18 +427,19 @@ public struct CorveilLinkGateway: ParsableCommand {
         let hasWorkspace =
             !(workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
         guard manager != hasWorkspace else {
-            throw ValidationError("Pass exactly one of --manager or --workspace <name>.")
+            throw ValidationError("Pass exactly one of --manager or --workspace <name|uuid>.")
         }
     }
 
     public func run() throws {
-        let workspaceName = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Same target selector as `crow gateway`: `target: "manager"` OR
+        // `workspace: <name|uuid>`, resolved daemon-side via SecretsRPC.decodeTarget.
         var params: [String: JSONValue] = ["org_id": .string(org)]
         if manager {
             params["target"] = .string("manager")
         } else {
-            params["target"] = .string("workspace")
-            params["workspace"] = .string(workspaceName)
+            let workspaceRef = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            params["workspace"] = .string(workspaceRef)
         }
         let trimmedName = orgName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedName.isEmpty { params["org_name"] = .string(trimmedName) }

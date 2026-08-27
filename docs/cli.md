@@ -643,7 +643,7 @@ Only a gateway on the connection's own base URL is adopted (the key would otherw
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| `--workspace` | `<workspace>` | no | Workspace whose gateway to link |
+| `--workspace` | `<workspace>` | no | Workspace whose gateway to link (name or UUID) |
 | `--manager` | — | no | Link the Manager gateway instead of a workspace |
 | `--org` | `<org>` | yes | Corveil organization id to record the key under |
 | `--org-name` | `<org-name>` | no | Org display name to store (optional) |

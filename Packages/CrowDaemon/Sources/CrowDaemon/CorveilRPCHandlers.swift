@@ -257,33 +257,30 @@ func makeCorveilMigrationHandlers(devRoot: String) -> [String: CommandRouter.Han
         // Adopt a detected gateway's existing plaintext key into the connection as
         // the named org's key. Pure config write.
         "corveil-link-gateway": { params in
-            let targetKind =
-                params["target"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
+            // The Manager-vs-workspace selector goes through the SAME decoder the
+            // `gateway-*` verbs use (`target: "manager"` XOR `workspace: <name|uuid>`),
+            // so `--workspace` accepts a UUID or a unique name and errors on an
+            // unknown/ambiguous one — no parallel selector (CROW-1126 review).
+            let gatewayTarget = try SecretsRPC.decodeTarget(params)
             let orgID = params["org_id"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
             guard !orgID.isEmpty else { throw DaemonRPCError.invalidParams("org_id is required") }
-
-            let target: CorveilGatewayMigration.Target
-            let targetName: String
-            switch targetKind {
-            case "manager":
-                target = .manager
-                targetName = "Manager"
-            case "workspace":
-                guard let workspace =
-                    params["workspace"]?.stringValue?.trimmingCharacters(in: .whitespaces),
-                    !workspace.isEmpty
-                else {
-                    throw DaemonRPCError.invalidParams(
-                        "workspace is required when target is 'workspace'")
-                }
-                target = .workspace(workspace)
-                targetName = workspace
-            default:
-                throw DaemonRPCError.invalidParams("target must be 'manager' or 'workspace'")
-            }
             let orgName = params["org_name"]?.stringValue
 
             return try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
+                // Resolve a workspace ref to its canonical name via the shared
+                // resolver, then hand Core a `Target` whose name matches exactly.
+                let target: CorveilGatewayMigration.Target
+                let targetName: String
+                switch gatewayTarget {
+                case .manager:
+                    target = .manager
+                    targetName = "Manager"
+                case .workspace(let ref):
+                    let index = try SecretsRPC.resolveWorkspace(ref, in: config)
+                    targetName = config.workspaces[index].name
+                    target = .workspace(targetName)
+                }
+
                 let orgKey: CorveilOrgKey
                 do {
                     orgKey = try CorveilGatewayMigration.link(
