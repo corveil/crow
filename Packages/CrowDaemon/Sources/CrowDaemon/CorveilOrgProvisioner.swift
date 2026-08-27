@@ -42,6 +42,10 @@ enum CorveilOrgProvisioner {
         case notConnected
         /// The named org is not one of the user's Corveil memberships.
         case unknownOrg(String)
+        /// The stored connection changed (disconnected, or reconnected as a
+        /// different DCR client) while a key was being minted, so the mint was
+        /// rolled back rather than attached to a connection that didn't make it.
+        case connectionChanged
 
         var description: String {
             switch self {
@@ -49,6 +53,9 @@ enum CorveilOrgProvisioner {
                 return "no usable Corveil connection — connect to Corveil first"
             case .unknownOrg(let id):
                 return "organization \(id) is not one of your Corveil memberships"
+            case .connectionChanged:
+                return "the Corveil connection changed while provisioning — "
+                    + "the key was rolled back; reconnect and try again"
             }
         }
     }
@@ -153,17 +160,21 @@ enum CorveilOrgProvisioner {
             keyID: key.id,
             keyPrefix: key.prefix,
             createdAt: key.createdAt ?? now)
-        // Disconnect-wins: if a `corveil-disconnect` cleared the connection while the
-        // mint was in flight, the persist is refused (returns false) rather than
-        // resurrecting a zombie connection that holds the key. The key is now
-        // orphaned server-side, so revoke it best-effort and fail the select — never
-        // report success for a key that isn't stored.
+        // Disconnect/reconnect-wins: the persist is refused (returns false) unless
+        // the stored connection is still the SAME grant that minted — same client
+        // id. If a `corveil-disconnect` cleared it, or a reconnect / a different
+        // account's Connect replaced it (fresh DCR client id) while the mint was in
+        // flight, the key would otherwise be planted on a connection that didn't
+        // make it. On refusal the key is orphaned server-side, so revoke it
+        // best-effort and fail the select — never report success for a key that
+        // isn't stored, and never attach it to the wrong connection.
         let stored = try CorveilConnectionPersistence.upsertOrgKey(
-            devRoot: devRoot, orgKey: orgKey, secret: key.value)
+            devRoot: devRoot, expectedClientID: connection.clientID,
+            orgKey: orgKey, secret: key.value)
         guard stored else {
             try? await apiClient.revokeKey(
                 baseURL: connection.baseURL, accessToken: token, keyID: key.id)
-            throw ProvisionError.notConnected
+            throw ProvisionError.connectionChanged
         }
         return SelectOutcome(orgKey: orgKey, reused: false)
     }
@@ -262,11 +273,12 @@ enum CorveilOrgProvisioner {
     }
 }
 
-/// A tiny TTL cache for one user's Corveil org list (CROW-1121). Lock-guarded so
-/// the concurrent `/rpc` handlers share one instance; keyed on (base URL, user) so
-/// a reconnect as a different user is a miss rather than a leak. Holds only the
-/// membership list — the "which org is provisioned" flag is derived live from the
-/// stored connection, never cached.
+/// A tiny TTL cache for one connection's Corveil org list (CROW-1121). Lock-guarded
+/// so the concurrent `/rpc` handlers share one instance; keyed on (base URL, DCR
+/// client id) — see ``CorveilOrgProvisioner/cacheKey(_:)`` — so a reconnect (which
+/// gets a fresh client id) is a miss rather than a leak. Holds only the membership
+/// list — the "which org is provisioned" flag is derived live from the stored
+/// connection, never cached.
 final class CorveilOrgListCache: @unchecked Sendable {
     /// Long enough that opening the dropdown twice doesn't re-hit the API, short
     /// enough that a newly-added org membership shows up on its own before long.

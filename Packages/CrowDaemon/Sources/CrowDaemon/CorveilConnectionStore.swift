@@ -190,21 +190,28 @@ enum CorveilConnectionPersistence {
     /// mint and this write is preserved, and re-selecting an org replaces its key
     /// in place rather than appending a duplicate.
     ///
-    /// Returns whether the key was written. **Disconnect-wins:** if no connection is
-    /// stored — because a `corveil-disconnect` cleared it while this mint was in
-    /// flight (`select-org` and `disconnect` sit in different `/rpc` lanes, so they
-    /// overlap) — this refuses to create one, exactly like `updateTokens` /
-    /// `recordRefreshSuccess` / `removeOrg`. Materializing a `CorveilConnection` here
-    /// would leave a "zombie" block that reads as disconnected (`isEmpty` checks only
-    /// the client id + access token) yet holds a spendable `sk-citadel-…` in
-    /// `orgKeySecrets`, which the next `corveil-connect` merge would silently inherit.
-    /// The caller (`CorveilOrgProvisioner.provision`) revokes the now-orphaned key
-    /// when this returns false.
+    /// Returns whether the key was written. **Reconnect-wins** (mirrors
+    /// ``recordRefreshSuccess``): the write is refused unless the stored connection
+    /// is still the same grant that minted — its `clientID` must equal
+    /// `expectedClientID`. `select-org` and `connect`/`disconnect` sit in different
+    /// `/rpc` lanes (and browser Connect is HTTP, un-laned), so they overlap; if a
+    /// disconnect cleared the block or a reconnect — even as a **different account**,
+    /// which gets a fresh DCR client id — replaced it while this mint was in flight,
+    /// writing here would attach a spendable `sk-citadel-…` to a connection that
+    /// didn't make it (`isEmpty` can't catch that; a different live connection is not
+    /// empty). Using the client id, not the refresh token, means a concurrent token
+    /// refresh (same client id) still lands. The caller
+    /// (``CorveilOrgProvisioner/provision``) revokes the now-orphaned key when this
+    /// returns false.
     @discardableResult
-    static func upsertOrgKey(devRoot: String, orgKey: CorveilOrgKey, secret: String) throws -> Bool {
+    static func upsertOrgKey(
+        devRoot: String, expectedClientID: String, orgKey: CorveilOrgKey, secret: String
+    ) throws -> Bool {
         try ConfigStore.withConfigLock {
             var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-            guard var connection = config.corveilConnection else { return false }
+            guard var connection = config.corveilConnection,
+                  connection.clientID == expectedClientID
+            else { return false }
             connection.orgKeys.removeAll { $0.orgID == orgKey.orgID }
             connection.orgKeys.append(orgKey)
             connection.orgKeySecrets[orgKey.orgID] = secret

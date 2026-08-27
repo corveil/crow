@@ -254,21 +254,18 @@ import FoundationNetworking
         }
     }
 
-    // MARK: - Provision: disconnect racing the mint
+    // MARK: - Provision: a concurrent write racing the mint
 
-    @Test func disconnectDuringMintDoesNotResurrectTheConnectionOrLeakTheKey() async throws {
-        // `select-org` (lane .on org_id) and `disconnect` (lane .fixed .config) can
-        // overlap. If a disconnect clears the connection while the mint HTTP call is
-        // in flight, the freshly minted `sk-citadel-…` must NOT be written back onto
-        // a resurrected zombie connection — it must be revoked and the select must
-        // fail. (The Red finding's regression test.)
-        let devRoot = tempDevRoot()
-        defer { try? FileManager.default.removeItem(atPath: devRoot) }
-        try seedConnection(devRoot: devRoot)
+    /// Drive a `provision` whose mint, mid-flight (during the `POST /api/keys`),
+    /// runs `midMint(devRoot)` to mutate the stored connection — simulating a
+    /// concurrent disconnect or reconnect that lands in the window between mint and
+    /// persist. Returns the error thrown (if any) and how many revoke DELETEs ran.
+    private func provisionRacingAMint(
+        devRoot: String,
+        orgID: String = "org1",
+        midMint: @escaping @Sendable (String) -> Void
+    ) async -> (error: Error?, deletes: Int) {
         let deletes = Counter()
-
-        // A client whose mint, mid-flight, simulates a concurrent disconnect
-        // clearing the stored connection, then returns the freshly minted key.
         let client = CorveilAPIClient(transport: { request in
             let method = request.httpMethod ?? "GET"
             let path = request.url?.path ?? ""
@@ -280,10 +277,7 @@ import FoundationNetworking
                     "role": "admin", "is_active": true,
                 ]]]
             } else if method == "POST", path.hasSuffix("/api/keys") {
-                // The disconnect lands during the mint.
-                var cfg = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-                cfg.corveilConnection = nil
-                try? ConfigStore.saveConfig(cfg, devRoot: devRoot)
+                midMint(devRoot)  // the concurrent disconnect/reconnect lands here
                 body = [
                     "id": "key-orphan", "key_prefix": "sk-citadel-orph",
                     "key": "sk-citadel-LEAKED", "created_at": "2026-01-02T03:04:05Z",
@@ -299,17 +293,67 @@ import FoundationNetworking
             let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
             return (data, response)
         })
-
-        await #expect(throws: CorveilOrgProvisioner.ProvisionError.notConnected) {
+        var thrown: Error?
+        do {
             _ = try await CorveilOrgProvisioner.provision(
-                devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
-                apiClient: client, oauthClient: self.neverCalledOAuth())
+                devRoot: devRoot, orgID: orgID, orgName: "Acme", cache: CorveilOrgListCache(),
+                apiClient: client, oauthClient: neverCalledOAuth())
+        } catch {
+            thrown = error
+        }
+        return (thrown, deletes.value)
+    }
+
+    @Test func disconnectDuringMintDoesNotResurrectTheConnectionOrLeakTheKey() async throws {
+        // A `corveil-disconnect` clears the connection while the mint is in flight.
+        // The freshly minted `sk-citadel-…` must NOT be written back onto a
+        // resurrected zombie connection — it must be revoked and the select fail.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seedConnection(devRoot: devRoot)
+
+        let (error, deletes) = await provisionRacingAMint(devRoot: devRoot) { root in
+            var cfg = ConfigStore.loadConfig(devRoot: root) ?? AppConfig()
+            cfg.corveilConnection = nil
+            try? ConfigStore.saveConfig(cfg, devRoot: root)
         }
 
+        #expect(error as? CorveilOrgProvisioner.ProvisionError == .connectionChanged)
         // No zombie connection, and no spendable secret left on disk.
         #expect(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection == nil)
-        // The orphaned key was revoked.
-        #expect(deletes.value == 1, "the orphaned key must be revoked when the write is refused")
+        #expect(deletes == 1, "the orphaned key must be revoked when the write is refused")
+    }
+
+    @Test func reconnectAsADifferentAccountDuringMintDoesNotInheritTheKey() async throws {
+        // The subtler race: a DIFFERENT account connects mid-mint (fresh DCR client
+        // id). The nil-guard doesn't catch this — a different live connection is not
+        // empty — so the write must also refuse on a client-id mismatch, or account
+        // B inherits account A's minted key.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try seedConnection(devRoot: devRoot)  // mints under clientID "client-1"
+        let baseURL = base
+
+        let (error, deletes) = await provisionRacingAMint(devRoot: devRoot) { root in
+            var cfg = ConfigStore.loadConfig(devRoot: root) ?? AppConfig()
+            cfg.corveilConnection = CorveilConnection(
+                baseURL: baseURL,
+                clientID: "client-2",  // a fresh DCR registration — a different grant
+                connectedUser: CorveilConnectedUser(id: "u2", email: "b@corp.com", name: "B"),
+                oauth: CorveilOAuthTokens(
+                    accessToken: "at2", refreshToken: "rt2",
+                    accessTokenExpiresAt: Date(timeIntervalSinceNow: 3600)))
+            try? ConfigStore.saveConfig(cfg, devRoot: root)
+        }
+
+        #expect(error as? CorveilOrgProvisioner.ProvisionError == .connectionChanged)
+        let conn = try #require(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection)
+        #expect(conn.clientID == "client-2", "the reconnected account is left untouched")
+        #expect(conn.orgKeys.isEmpty, "the other account's key metadata is not attached")
+        #expect(
+            conn.orgKeySecrets["org1"] == nil,
+            "the minted secret never lands on a different connection")
+        #expect(deletes == 1, "the orphaned key is revoked")
     }
 
     @Test func provisionTwiceKeepsExactlyOneKeyPerOrg() async throws {
