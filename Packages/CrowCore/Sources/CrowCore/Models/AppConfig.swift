@@ -626,6 +626,32 @@ public struct CorveilConnection: Codable, Sendable, Equatable {
     }
 }
 
+extension CorveilConnection {
+    /// Header the AI gateway authenticates a provisioned org's `sk-citadel-…` key
+    /// with — the one auth header a derived ``WorkspaceGateway`` carries.
+    public static let gatewayAPIKeyHeader = "x-citadel-api-key"
+
+    /// The AI gateway derived for a provisioned org (corveil/crow#1123): this
+    /// connection's ``baseURL`` plus the org's stored `sk-citadel-…` key as the
+    /// ``gatewayAPIKeyHeader``. The secret lives only in ``orgKeySecrets`` — it never
+    /// leaves the daemon host — so the org picker can't build this itself; it POSTs
+    /// the org id to the local-only gateway route, which derives the result here and
+    /// stores it. ``GatewayResolver`` and the log collector then consume it as an
+    /// ordinary ``WorkspaceGateway`` (corveil/crow#1124), no special-casing.
+    ///
+    /// Returns nil when the org has no stored key secret, or the base URL is blank —
+    /// the two halves a `WorkspaceGateway` requires (its both-or-neither invariant).
+    /// A nil result is the signal to reject the write with "select the org first",
+    /// never to store a half-filled gateway.
+    public func derivedGateway(orgID: String) -> WorkspaceGateway? {
+        let base = baseURL.trimmingCharacters(in: .whitespaces)
+        let secret = (orgKeySecrets[orgID] ?? "").trimmingCharacters(in: .whitespaces)
+        guard !base.isEmpty, !secret.isEmpty else { return nil }
+        return WorkspaceGateway(
+            baseURL: base, customHeaders: [Self.gatewayAPIKeyHeader: secret])
+    }
+}
+
 /// The health of a ``CorveilConnection``'s access token, as one of four states
 /// (CROW-1125). Drives the Integrations tab and `crow corveil status`: `.expired`
 /// and `.revoked` are the two that ask the user to **Reconnect**.

@@ -819,17 +819,30 @@
       'Passes --permission-mode auto so a kicked-off code review runs its review flow unattended instead of coming up in plan mode. On by default.'));
 
     body.appendChild(group('Manager AI gateway'));
-    if (isLocal) {
-      body.appendChild(gatewayEditor(cfg.managerGateway || null, async (g) => {
-        await postConfig('/config/manager-gateway', g ? { baseURL: g.baseURL, headers: g.customHeaders } : { clear: true });
-        cfg.managerGateway = g;
-        render();
-      }));
-    } else {
+    if (!isLocal) {
       body.appendChild(readonlyNote((cfg.managerGateway && cfg.managerGateway.baseURL
         ? 'Manager gateway: ' + cfg.managerGateway.baseURL + '. '
         : 'No Manager gateway set. ')
         + 'The gateway is editable only from a local browser (on the machine running crowd).'));
+    } else {
+      // Out-of-band local-only write, like the desktop editor — not part of Save.
+      const applyManual = async (g) => {
+        await postConfig('/config/manager-gateway', g ? { baseURL: g.baseURL, headers: g.customHeaders } : { clear: true });
+        cfg.managerGateway = g;
+        render();
+      };
+      const manual = gatewayEditor(cfg.managerGateway || null, applyManual);
+      // Connected → org picker (manual under Advanced); otherwise the raw editor.
+      if (corveilConnected(cfg.corveilConnection)) {
+        body.appendChild(orgGatewayEditor({
+          current: cfg.managerGateway || null,
+          postOrg: (orgId) => postConfig('/config/manager-gateway', { orgId }),
+          setGateway: (g) => { cfg.managerGateway = g; },
+          manual,
+        }));
+      } else {
+        body.appendChild(manual);
+      }
     }
     // Jira credential stays read-only on the web — its token is an op:// ref
     // managed outside the browser.
@@ -1342,6 +1355,142 @@
     corveilPolling = false;
     corveilConnectNote = '';
     corveilAuthorizeURL = '';
+    resetCorveilOrgState();
+  }
+
+  // Org-dropdown state for the gateway editors (corveil/crow#1123), shared by the
+  // Manager (Automation tab) and per-workspace (Workspaces tab) pickers — both bind
+  // the same connection's memberships. Lazily loaded once through the local-only
+  // `corveil-list-orgs` RPC (which caches server-side), then reused across renders.
+  // `corveilOrgs === null` means "not fetched yet"; an array (possibly empty) means
+  // "fetched". Reset when Settings (re)opens, exactly like the connect-flow state.
+  let corveilOrgs = null;          // [{org_id, org_name, provisioned, is_active, role}] | null
+  let corveilOrgsLoading = false;  // a list fetch is in flight
+  let corveilOrgsError = '';       // last fetch error, shown inline
+  function resetCorveilOrgState() {
+    corveilOrgs = null;
+    corveilOrgsLoading = false;
+    corveilOrgsError = '';
+  }
+
+  // Fetch the user's Corveil orgs through the local-only provisioning RPC and
+  // re-render when done. Guarded so overlapping renders can't stack fetches; the
+  // finally-render lets the picker repaint from `corveilOrgs`/`corveilOrgsError`.
+  // `force` re-fetches past the server-side cache (the explicit Refresh).
+  async function loadCorveilOrgs(force) {
+    if (corveilOrgsLoading) return;
+    corveilOrgsLoading = true;
+    corveilOrgsError = '';
+    if (force) render();
+    try {
+      const res = await rpc('corveil-list-orgs', force ? { refresh: true } : {});
+      corveilOrgs = (res && res.orgs) || [];
+    } catch (e) {
+      corveilOrgs = corveilOrgs || [];
+      corveilOrgsError = (e && (e.message || String(e))) || 'could not load organizations';
+    } finally {
+      corveilOrgsLoading = false;
+      render();
+    }
+  }
+
+  // The org-picker gateway control (corveil/crow#1123). Replaces the raw
+  // base-URL+headers editor when a Corveil connection exists: pick an org and Crow
+  // provisions its one gateway key (corveil-select-org) and writes the DERIVED
+  // gateway — base URL + x-citadel-api-key — through the same local-only POST the
+  // manual editor uses, but with { orgId } so the daemon fills in the key secret it
+  // never hands the browser. The manual editor stays reachable under "Advanced".
+  //
+  //   opts.current      — the stored gateway ({baseURL, customHeaders}) or null.
+  //   opts.postOrg(id)  — POST the derived gateway ({ orgId: id }); returns a Promise.
+  //   opts.setGateway(g)— set the local gateway (cfg.managerGateway / draft.gateway).
+  //   opts.manual       — the manual gatewayEditor node (the Advanced fallback).
+  function orgGatewayEditor(opts) {
+    const wrap = el('div');
+    const conn = cfg.corveilConnection || null;
+
+    // Whether the stored gateway looks derived from this connection (its base URL
+    // matches and it carries the x-citadel-api-key header). We can't tell WHICH org
+    // it came from — the key value is stripped in transport and every org shares the
+    // base URL — so we note "set from Corveil" without claiming an org (honest).
+    const current = opts.current;
+    const derived = !!(current && conn
+      && (current.baseURL || '') === (conn.baseURL || '')
+      && current.customHeaders
+      && Object.keys(current.customHeaders).some((k) => k.toLowerCase() === 'x-citadel-api-key'));
+    if (current && current.baseURL) {
+      wrap.appendChild(el('div', 'st-perm-status', derived
+        ? 'Gateway set from your Corveil connection (' + current.baseURL + ').'
+        : 'A manually-entered gateway is set (' + current.baseURL + ').'));
+    }
+
+    // Kick the lazy load on first paint; the finally-render repaints with options.
+    if (corveilOrgs === null && !corveilOrgsLoading) loadCorveilOrgs(false);
+
+    const msg = el('div', 'st-perm-status', '');
+    const sel = el('select', 'st-select');
+    const placeholder = el('option', null,
+      corveilOrgsLoading ? 'Loading organizations…' : 'Choose an organization…');
+    placeholder.value = '';
+    sel.appendChild(placeholder);
+    for (const org of (corveilOrgs || [])) {
+      const bits = [];
+      if (org.provisioned) bits.push('key ready');
+      if (org.is_active === false) bits.push('inactive');
+      const o = el('option', null,
+        (org.org_name || org.org_id || '(unnamed org)') + (bits.length ? ' · ' + bits.join(' · ') : ''));
+      o.value = org.org_id;
+      sel.appendChild(o);
+    }
+    sel.disabled = corveilOrgsLoading;
+    sel.onchange = async () => {
+      const orgId = sel.value;
+      if (!orgId) return;
+      const org = (corveilOrgs || []).find((x) => x.org_id === orgId) || {};
+      const label = org.org_name || orgId;
+      sel.disabled = true;
+      msg.textContent = 'Provisioning gateway for ' + label + '…';
+      try {
+        // Mint or reuse the org's one gateway key, then write the derived gateway.
+        await rpc('corveil-select-org', { org_id: orgId });
+        await opts.postOrg(orgId);
+        // Refresh the connection so provisioned-org metadata (and the "key ready"
+        // marker) reflect the new key, then show the derived gateway locally — the
+        // header value is a secret we don't hold, so blank it, exactly how a stored
+        // gateway reads back after stripping.
+        const conn2 = await refreshCorveilConnection();
+        opts.setGateway({ baseURL: (conn2 && conn2.baseURL) || '',
+          customHeaders: { 'x-citadel-api-key': '' } });
+        render();
+      } catch (e) {
+        msg.textContent = 'Failed: ' + (e && (e.message || e));
+        sel.disabled = false;
+      }
+    };
+    wrap.appendChild(field('Organization', sel,
+      'Pick a Corveil organization — Crow provisions its gateway key and points this gateway at it.'));
+
+    if (corveilOrgsError) {
+      wrap.appendChild(el('div', 'st-perm-status', 'Could not load organizations: ' + corveilOrgsError));
+    } else if (corveilOrgs && !corveilOrgs.length && !corveilOrgsLoading) {
+      wrap.appendChild(el('div', 'st-help', 'No Corveil organizations found for your account.'));
+    }
+    wrap.appendChild(msg);
+
+    const refresh = el('button', 'action-btn', 'Refresh organizations');
+    refresh.type = 'button';
+    refresh.disabled = corveilOrgsLoading;
+    refresh.onclick = () => loadCorveilOrgs(true);
+    wrap.appendChild(field(null, refresh));
+
+    // Manual entry stays available as an advanced fallback. Native <details> keeps
+    // it collapsed by default and needs no extra render state.
+    const adv = el('details', 'st-advanced-gateway');
+    const sum = el('summary', 'st-advanced-summary', 'Enter a gateway manually');
+    adv.appendChild(sum);
+    adv.appendChild(opts.manual);
+    wrap.appendChild(adv);
+    return wrap;
   }
 
   function renderIntegrations(body) {
@@ -1937,12 +2086,27 @@
     } else if (subForm.isNew) {
       body.appendChild(readonlyNote('Save this workspace first, then reopen it to set an AI gateway.'));
     } else {
-      body.appendChild(gatewayEditor(d.gateway || null, async (g) => {
+      // Out-of-band local-only write, matched to the workspace by id — like the
+      // desktop editor, not part of Save (`preservingSecrets` restores the stored
+      // gateway on set-config, so the blank header the org path leaves is never
+      // written back).
+      const applyManual = async (g) => {
         await postConfig('/config/workspace-gateway',
           Object.assign({ workspaceId: d.id }, g ? { baseURL: g.baseURL, headers: g.customHeaders } : { clear: true }));
         d.gateway = g;
         render();
-      }));
+      };
+      const manual = gatewayEditor(d.gateway || null, applyManual);
+      if (corveilConnected(cfg.corveilConnection)) {
+        body.appendChild(orgGatewayEditor({
+          current: d.gateway || null,
+          postOrg: (orgId) => postConfig('/config/workspace-gateway', { workspaceId: d.id, orgId }),
+          setGateway: (g) => { d.gateway = g; },
+          manual,
+        }));
+      } else {
+        body.appendChild(manual);
+      }
     }
 
     // Session-log upload opt-in (CROW-1066; sole opt-in since CROW-1070). A plain

@@ -720,6 +720,77 @@ import CrowPersistence
     }
 }
 
+/// The org-selection write path (corveil/crow#1123): a `/config/*-gateway` POST
+/// carrying `orgId` derives the gateway from the stored Corveil connection instead
+/// of the manual base-URL+headers, so the `sk-citadel-…` key never has to reach the
+/// browser to be stored.
+@Suite struct SecretGatewayOrgDerivationTests {
+    private func connected() -> AppConfig {
+        var c = AppConfig()
+        c.corveilConnection = CorveilConnection(
+            baseURL: "https://gw.corveil.example",
+            clientID: "cid",
+            orgKeys: [CorveilOrgKey(orgID: "org-1", orgName: "Acme")],
+            orgKeySecrets: ["org-1": "sk-citadel-AbCdEf"],
+            oauth: CorveilOAuthTokens(accessToken: "at"))
+        return c
+    }
+    private func orgBody(_ orgId: String?) -> SecretRoutes.GatewayBody {
+        SecretRoutes.GatewayBody(baseURL: nil, headers: nil, clear: nil, orgId: orgId)
+    }
+
+    @Test func orgIdDerivesGatewayFromConnection() throws {
+        let gateway = try SecretRoutes.resolveGatewayWrite(
+            body: orgBody("org-1"), config: connected(), stored: nil).get()
+        #expect(gateway?.baseURL == "https://gw.corveil.example")
+        #expect(gateway?.customHeaders == ["x-citadel-api-key": "sk-citadel-AbCdEf"])
+    }
+
+    @Test func orgIdWinsOverManualFieldsInTheSameBody() throws {
+        // A body that carries both an org id and manual fields resolves to the org —
+        // the picker never sends both, but the org path must not be a merge.
+        let body = SecretRoutes.GatewayBody(
+            baseURL: "https://manual.example", headers: ["X": "y"], clear: nil, orgId: "org-1")
+        let gateway = try SecretRoutes.resolveGatewayWrite(
+            body: body, config: connected(), stored: nil).get()
+        #expect(gateway?.baseURL == "https://gw.corveil.example")
+        #expect(gateway?.customHeaders == ["x-citadel-api-key": "sk-citadel-AbCdEf"])
+    }
+
+    @Test func notConnectedIsRejected() {
+        guard case .failure(let error) = SecretRoutes.resolveGatewayWrite(
+            body: orgBody("org-1"), config: AppConfig(), stored: nil) else {
+            Issue.record("expected a failure with no connection")
+            return
+        }
+        #expect(error.message.contains("not connected"))
+    }
+
+    @Test func unprovisionedOrgIsRejected() {
+        guard case .failure(let error) = SecretRoutes.deriveOrgGateway(
+            orgId: "org-x", connection: connected().corveilConnection) else {
+            Issue.record("expected a failure for an org with no key")
+            return
+        }
+        #expect(error.message.contains("no provisioned gateway key"))
+    }
+
+    @Test func blankOrgIdFallsBackToManualPath() throws {
+        // A blank/whitespace orgId is not a selection — the manual base-URL+headers
+        // path runs, so an all-empty body still clears the gateway.
+        let empty = SecretRoutes.GatewayBody(baseURL: "", headers: [:], clear: nil, orgId: "  ")
+        #expect(try SecretRoutes.resolveGatewayWrite(
+            body: empty, config: connected(), stored: nil).get() == nil)
+        // And a manual body with no orgId is untouched by the org path.
+        let manual = SecretRoutes.GatewayBody(
+            baseURL: "https://manual.example", headers: ["X-Api-Key": "sk-1"], clear: nil, orgId: nil)
+        let gateway = try SecretRoutes.resolveGatewayWrite(
+            body: manual, config: connected(), stored: nil).get()
+        #expect(gateway?.baseURL == "https://manual.example")
+        #expect(gateway?.customHeaders == ["X-Api-Key": "sk-1"])
+    }
+}
+
 /// `CrowDaemon.resolvedExecutablePath` must return an absolute path to *this*
 /// process so `reexec` can `execv` after a PATH-launched `crowd` (review Yellow #2).
 @Suite struct ReexecPathResolutionTests {
