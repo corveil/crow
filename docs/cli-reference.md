@@ -827,6 +827,65 @@ crow corveil reinstall-skill --path ~/src/corveil/bin/corveil
 - The loop this serves is "I just rebuilt corveil locally; install its new embedded skills." Each skill installs independently — one that fails doesn't abort the rest, and `message` names the ones that didn't install (`ok` is then `false`).
 - A run also updates the launch-time corveil warning: succeeding clears it, a per-skill failure replaces it. There is one answer to "is corveil broken?", not a startup one and a button one.
 
+### The Corveil connection
+
+`connect` / `status` / `disconnect` / `orgs` manage the **Corveil OAuth connection** — the source of truth an Integrations → Corveil setup writes, from which the AI gateway and log-shipping configs are generated (CROW-1120). This is the local-only **write path** the browser Connect flow (corveil/crow#1119) and org provisioning (corveil/crow#1121) persist through; it never travels via `set-config`, because the block holds OAuth tokens.
+
+All four are **local-only** on `/rpc`, like the gateway and web-password verbs: `connect` stores tokens and `disconnect` clears them, and the two reads are gated alongside the writes so the whole connection is one local-only surface. From the CLI that is no obstacle — the Unix socket is local by construction.
+
+#### `crow corveil connect`
+
+Store or update the connection. Every field is optional; a blank or omitted one keeps whatever is already stored, so a token refresh can update just the access token and its expiry without restating the refresh token — the same blank-keeps-the-secret contract [`crow gateway set`](#crow-gateway-get--set--clear) has. The merged connection must end up with at least a client id and an access token; `orgKeys` (provisioned separately) are preserved.
+
+```bash
+crow corveil connect --base-url https://corveil.example.com --client-id crow-client-1 \
+  --access-token "$AT" --refresh-token "$RT" --access-token-expires-at 2026-01-01T00:00:00Z
+# A refresh restates only what changed:
+crow corveil connect --access-token "$AT" --access-token-expires-at 2027-06-01T12:00:00Z
+```
+
+- Options: `--base-url`, `--client-id`, `--user-id`, `--user-email`, `--user-name`, `--access-token`, `--refresh-token`, `--registration-access-token`, `--access-token-expires-at` (ISO-8601).
+- Tokens passed on the command line are visible to local `ps` and shell history; the browser Connect flow is the primary writer. The response is the same non-secret payload as `crow corveil status`, plus `"saved": true`.
+
+#### `crow corveil status`
+
+Report the connection state — no secret. Whether a connection exists, its base URL, client id, connected user, org count, access-token expiry, and presence booleans for the tokens. It never prints a token value, so the output is safe to paste into a ticket.
+
+```bash
+crow corveil status
+```
+
+```json
+{"connected": true, "base_url": "https://corveil.example.com", "client_id": "crow-client-1",
+ "connected_user": {"id": "u1", "email": "dev@example.com", "name": "Dev"},
+ "org_count": 2, "has_access_token": true, "has_refresh_token": true,
+ "has_registration_access_token": true, "access_token_expires_at": "2026-01-01T00:00:00Z"}
+```
+
+#### `crow corveil disconnect`
+
+Clear the stored connection so gateway resolution and the log collector stop using it. Revoking the per-org gateway keys on the Corveil side is a separate step (corveil/crow#1121); this removes the local record.
+
+```bash
+crow corveil disconnect
+```
+
+- Returns `{"saved": true, "was_connected": <bool>}`. Safe to run when nothing is connected — `was_connected` is then `false`.
+
+#### `crow corveil orgs`
+
+List the per-org gateway-key metadata — org id and name, key id, display prefix, and mint time — never the key material itself (that lives in the generated gateway header). Empty until an org is provisioned (corveil/crow#1121).
+
+```bash
+crow corveil orgs
+```
+
+```json
+{"orgs": [{"org_id": "org1", "org_name": "Acme", "key_id": "key1",
+           "key_prefix": "sk-citadel-AbC", "created_at": "2026-01-01T00:00:00Z"}],
+ "count": 1}
+```
+
 ---
 
 ## Automation Commands

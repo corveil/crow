@@ -147,6 +147,10 @@ public enum ParityLedger {
         "mcp-token-revoke",
         "corveil-verify",
         "corveil-reinstall-skill",
+        "corveil-connect",
+        "corveil-status",
+        "corveil-disconnect",
+        "corveil-orgs",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -362,6 +366,23 @@ public enum ParityLedger {
         .write("corveil-verify", cli: "corveil verify"),
         .write("corveil-reinstall-skill", cli: "corveil reinstall-skill"),
 
+        // Corveil connection — the local-only write path (CROW-1120). The "door"
+        // the OAuth client (corveil/crow#1119) and org provisioning
+        // (corveil/crow#1121) persist a `CorveilConnection` through, never
+        // `set-config`, because it holds OAuth tokens. All four are local-only on
+        // `/rpc` (RPCWebSocketHandler.localOnlyDenial): the two writes author a
+        // credential, and the two reads are gated alongside them so the connection
+        // is one local-only surface — the `mcp-token-list` precedent.
+        //
+        // `corveil-status`/`corveil-orgs` return only non-secret connection fields
+        // — never a token — so they are safe reads; they are gated for
+        // surface-coherence, not because they leak. NOT MCP-exported: the surface
+        // is a credential store and the MCP server is read-only.
+        .write("corveil-connect", cli: "corveil connect"),
+        .read("corveil-status", cli: "corveil status"),
+        .write("corveil-disconnect", cli: "corveil disconnect"),
+        .read("corveil-orgs", cli: "corveil orgs"),
+
         // Jobs
         .read("job-list", cli: "job list"),
         .read("job-get", cli: "job get"),
@@ -425,7 +446,8 @@ public enum ParityLedger {
     /// that already have verbs are covered: `telemetry`, `cleanup`, `sidebar`,
     /// `notifications`, gateways and jobs, `defaults` since CROW-810, agent
     /// selection since CROW-811, `workspaces[].*` since CROW-809, the automation
-    /// toggles since CROW-812 and `terminal.*` since CROW-1085. What the web
+    /// toggles since CROW-812, `terminal.*` since CROW-1085 and
+    /// `corveilConnection.*` since CROW-1120 (`crow corveil`). What the web
     /// Settings tab still owns exclusively is `jiraCredential.*`; the `webAuth`
     /// hash and salt are writable but readable nowhere.
     ///
@@ -704,117 +726,95 @@ public enum ParityLedger {
                 `jiraCredential.username`; no verb exists yet.
                 """),
 
-        // MARK: Exempt — Corveil connection (CROW-1118)
+        // MARK: Corveil connection — `crow corveil` (CROW-1118 model, CROW-1120 verbs)
         //
         // The whole `corveilConnection` block is authored only through the
-        // local-only Connect (OAuth) flow and its CLI verbs (corveil/crow#1120),
-        // never `set-config` — the same local-only constraint as `managerGateway`
-        // / `jiraCredential`. The three OAuth token strings are additionally
-        // blanked by `SettingsSecrets` on the way to a browser and restored on the
-        // way back, so they never leave the machine and a web round-trip can't
-        // clear them. Verbs land in corveil/crow#1120; until then the block has no
-        // CLI surface at all.
+        // local-only Connect (OAuth) flow and its CLI verbs, never `set-config` —
+        // the same local-only constraint as `managerGateway` / `jiraCredential`.
+        // The three OAuth token strings are additionally blanked by
+        // `SettingsSecrets` on the way to a browser and restored on the way back,
+        // so they never leave the machine and a web round-trip can't clear them.
+        //
+        // CROW-1120 gave the block its CLI surface: `corveil connect` writes the
+        // identity + tokens, `corveil status` reads the non-secret health, `corveil
+        // orgs` reads the per-org key metadata, and `corveil disconnect` clears it.
+        // The three token strings stay read-exempt (a secret is never read back,
+        // like `webAuth.hashB64`), and `orgKeys[].*` stay write-exempt (provisioned
+        // by corveil/crow#1121, not by `corveil connect`).
 
-        .field(
-            "corveilConnection.baseURL",
-            noCLI: """
-                Corveil API base URL of the active Connect (OAuth) integration \
-                (CROW-1118). Authored only by the local-only Connect flow; CLI verbs \
-                land in corveil/crow#1120.
-                """),
-        .field(
-            "corveilConnection.clientID",
-            noCLI: """
-                OAuth client id Crow self-registered via Dynamic Client Registration \
-                (CROW-1118). Written only by the local-only Connect flow; no \
-                `set-config` path.
-                """),
-        .field(
-            "corveilConnection.connectedUser.id",
-            noCLI: """
-                Corveil user id behind the connection (CROW-1118). Fetched during the \
-                local-only Connect flow and shown read-only; no CLI verb yet \
-                (corveil/crow#1120).
-                """),
-        .field(
-            "corveilConnection.connectedUser.email",
-            noCLI: """
-                Connected Corveil user email (CROW-1118). Read-only display of \
-                connection identity, authored by the local-only Connect flow; verbs \
-                in corveil/crow#1120.
-                """),
-        .field(
-            "corveilConnection.connectedUser.name",
-            noCLI: """
-                Connected Corveil user display name (CROW-1118). Read-only display, \
-                authored by the local-only Connect flow; no `set-config` path \
-                (corveil/crow#1120).
-                """),
+        .field("corveilConnection.baseURL", read: "corveil status", write: "corveil connect"),
+        .field("corveilConnection.clientID", read: "corveil status", write: "corveil connect"),
+        .field("corveilConnection.connectedUser.id", read: "corveil status", write: "corveil connect"),
+        .field("corveilConnection.connectedUser.email", read: "corveil status", write: "corveil connect"),
+        .field("corveilConnection.connectedUser.name", read: "corveil status", write: "corveil connect"),
         .field(
             "corveilConnection.orgKeys[].orgID",
-            noCLI: """
+            read: "corveil orgs",
+            writeNoCLI: """
                 Corveil org id for one auto-provisioned gateway key (CROW-1118). \
-                Populated by the local-only org-provisioning step (corveil/crow#1121); \
-                not user-settable.
+                Populated by the local-only org-provisioning step (corveil/crow#1121), \
+                not by `corveil connect`; not user-settable.
                 """),
         .field(
             "corveilConnection.orgKeys[].orgName",
-            noCLI: """
+            read: "corveil orgs",
+            writeNoCLI: """
                 Display name of a Corveil org with an auto-provisioned key \
-                (CROW-1118). Populated by the local-only Connect / provisioning flow; \
-                no CLI verb yet.
+                (CROW-1118). Populated by the local-only provisioning flow \
+                (corveil/crow#1121); read via `corveil orgs`, not independently set.
                 """),
         .field(
             "corveilConnection.orgKeys[].keyID",
-            noCLI: """
+            read: "corveil orgs",
+            writeNoCLI: """
                 Id of the auto-provisioned per-org gateway key — the handle a \
-                disconnect revokes by (CROW-1118). Minted server-side; not \
-                user-settable (corveil/crow#1121).
+                disconnect revokes by (CROW-1118). Minted server-side by the \
+                provisioning flow (corveil/crow#1121); not user-settable.
                 """),
         .field(
             "corveilConnection.orgKeys[].keyPrefix",
-            noCLI: """
+            read: "corveil orgs",
+            writeNoCLI: """
                 Display prefix of the auto-provisioned per-org key so the UI can tell \
-                keys apart (CROW-1118). Derived from the minted key; not \
-                independently settable.
+                keys apart (CROW-1118). Derived from the minted key during \
+                provisioning (corveil/crow#1121); not independently settable.
                 """),
         .field(
             "corveilConnection.orgKeys[].createdAt",
-            noCLI: """
+            read: "corveil orgs",
+            writeNoCLI: """
                 Mint timestamp of the per-org gateway key (CROW-1118). Stamped when \
                 the key is provisioned by the local-only flow (corveil/crow#1121); \
                 not user-settable.
                 """),
         .field(
             "corveilConnection.oauth.accessToken",
-            noCLI: """
-                User-scoped OAuth access token (secret). Blanked by \
-                `SettingsSecrets.strippedForTransport` and restored from the stored \
-                config on `set-config`, so it never reaches a browser and a round-trip \
-                can't clear it. Written only by the local-only Corveil OAuth client \
-                (corveil/crow#1120).
-                """),
+            readNoCLI: """
+                User-scoped OAuth access token (secret). Never read back by any \
+                surface — `corveil status` reports only that a token is present — so \
+                exposing it would defeat holding a credential locally. Written by \
+                `corveil connect` (the OAuth client's door, corveil/crow#1119).
+                """,
+            write: "corveil connect"),
         .field(
             "corveilConnection.oauth.refreshToken",
-            noCLI: """
-                OAuth refresh token (secret). Same secret-safe transport as the access \
-                token — stripped for a browser, restored on the way back — and written \
-                only by the local-only Corveil OAuth client (corveil/crow#1120).
-                """),
+            readNoCLI: """
+                OAuth refresh token (secret). Never read back — same reason as the \
+                access token above; `corveil status` reports presence only. Written \
+                by `corveil connect`, and blanked by `SettingsSecrets` for transport.
+                """,
+            write: "corveil connect"),
         .field(
             "corveilConnection.oauth.registrationAccessToken",
-            noCLI: """
+            readNoCLI: """
                 RFC 7592 registration access token that manages Crow's own DCR client \
-                (secret). Stripped for transport and restored from the stored config; \
-                authored only by the local-only Corveil OAuth client \
-                (corveil/crow#1120).
-                """),
+                (secret). Never read back by any surface; written by `corveil connect` \
+                and stripped for transport by `SettingsSecrets`.
+                """,
+            write: "corveil connect"),
         .field(
             "corveilConnection.oauth.accessTokenExpiresAt",
-            noCLI: """
-                Access-token expiry that drives refresh (CROW-1118). Written with the \
-                tokens by the local-only Corveil OAuth client (corveil/crow#1120); \
-                read-only connection-health display, with no `set-config` write path.
-                """),
+            read: "corveil status",
+            write: "corveil connect"),
     ]
 }

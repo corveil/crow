@@ -188,6 +188,95 @@ enum SecretRoutes {
                     status: .internalServerError)
             }
         }
+
+        // Set or clear the Corveil connection (CROW-1120). Local-only (see type
+        // doc) — the block holds OAuth tokens, so a remote peer must not author or
+        // clear it. This is the browser's half of the write path; the CLI's is the
+        // `corveil-connect` / `corveil-disconnect` RPC. Both share the decode +
+        // secret-safe merge in `CorveilConnectionRPC`, so the Integrations tab and
+        // `crow corveil` cannot drift on what a blank field means.
+        router.post("/config/corveil-connection") { request, context -> Response in
+            guard gateOK(request, context, boundHost: boundHost) else {
+                return json(["error": "local-only"], status: .forbidden)
+            }
+            guard let body = await decode(CorveilConnectionBody.self, request) else {
+                return json(["error": "a JSON body is required"], status: .badRequest)
+            }
+
+            // Disconnect: drop the whole block. Gateway resolution and the log
+            // collector stop using it on the next read.
+            if body.clear == true {
+                do {
+                    let wasConnected = try ConfigStore.withConfigLock { () -> Bool in
+                        var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+                        let was = !(c.corveilConnection?.isEmpty ?? true)
+                        c.corveilConnection = nil
+                        try ConfigStore.saveConfig(c, devRoot: devRoot)
+                        return was
+                    }
+                    return json(["saved": true, "connected": false, "was_connected": wasConnected])
+                } catch {
+                    return json(
+                        ["error": "failed to save: \(error.localizedDescription)"],
+                        status: .internalServerError)
+                }
+            }
+
+            // Parse expiry (ISO-8601) up front so a bad value is a 400, not a
+            // silent drop — matching the RPC's `decodeInput`.
+            var expiresAt: Date?
+            if let raw = body.accessTokenExpiresAt?.trimmingCharacters(in: .whitespaces),
+               !raw.isEmpty {
+                guard let date = ISO8601DateFormatter().date(from: raw) else {
+                    return json(
+                        ["error": "accessTokenExpiresAt must be an ISO-8601 timestamp"],
+                        status: .badRequest)
+                }
+                expiresAt = date
+            }
+            let input = CorveilConnectionRPC.Input(
+                baseURL: body.baseURL,
+                clientID: body.clientID,
+                userID: body.userId,
+                userEmail: body.userEmail,
+                userName: body.userName,
+                accessToken: body.accessToken,
+                refreshToken: body.refreshToken,
+                registrationAccessToken: body.registrationAccessToken,
+                accessTokenExpiresAt: expiresAt)
+            do {
+                try ConfigStore.withConfigLock {
+                    var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+                    c.corveilConnection = try CorveilConnectionRPC.merge(
+                        input, into: c.corveilConnection)
+                    try ConfigStore.saveConfig(c, devRoot: devRoot)
+                }
+                return json(["saved": true, "connected": true])
+            } catch let error as CorveilConnectionRPC.Invalid {
+                return json(["error": error.message], status: .badRequest)
+            } catch {
+                return json(
+                    ["error": "failed to save: \(error.localizedDescription)"],
+                    status: .internalServerError)
+            }
+        }
+    }
+
+    /// Body of `POST /config/corveil-connection`. All fields optional; a blank or
+    /// absent token keeps the stored secret (matching the gateway route's
+    /// blank-value contract). `clear: true` disconnects. `accessTokenExpiresAt` is
+    /// an ISO-8601 string.
+    struct CorveilConnectionBody: Decodable {
+        let baseURL: String?
+        let clientID: String?
+        let userId: String?
+        let userEmail: String?
+        let userName: String?
+        let accessToken: String?
+        let refreshToken: String?
+        let registrationAccessToken: String?
+        let accessTokenExpiresAt: String?
+        let clear: Bool?
     }
 
     /// Body of `POST /config/mcp-tokens`. One shape for both actions — `mint` reads
