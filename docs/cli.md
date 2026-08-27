@@ -629,7 +629,7 @@ Removes the stored connection block, so gateway resolution and the log collector
 Adopt a manual gateway's key into the connection as an org's key (local-only).
 
 ```
-crow corveil link-gateway [--workspace <workspace>] [--manager] --org <org> [--org-name <org-name>] [--force]
+crow corveil link-gateway [--workspace <workspace>] [--manager] --org <org> [--org-name <org-name>]
 ```
 
 Records the target's existing plaintext `x-citadel-api-key` value as `--org`'s key in the Corveil connection, so the connection now owns it and the org shows as provisioned. Non-disruptive — the running key is unchanged — and offline: the Corveil backend has no key→org lookup, so you name the org. The adopted key is stored with no key id (it was minted by hand); a later `corveil select-org` on that org mints a real managed key.
@@ -639,7 +639,7 @@ crow corveil link-gateway --workspace MyOrg --org <org-id>
 crow corveil link-gateway --manager --org <org-id> --org-name "My Org"
 ```
 
-Refuses an op:// reference, a target with no manual gateway, and overwriting an org that already has a provisioned key (pass `--force`). Local-only: it authors a credential into the connection over the Unix socket and is refused for remote web clients.
+Only a gateway on the connection's own base URL is adopted (the key would otherwise be sent to the wrong host), and op:// references are refused. If the org already has a *provisioned* key, retire it with `corveil deselect-org --org <org-id>` first — that revokes it on Corveil — then link. Local-only: it authors a credential into the connection over the Unix socket and is refused for remote web clients.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -647,7 +647,6 @@ Refuses an op:// reference, a target with no manual gateway, and overwriting an 
 | `--manager` | — | no | Link the Manager gateway instead of a workspace |
 | `--org` | `<org>` | yes | Corveil organization id to record the key under |
 | `--org-name` | `<org-name>` | no | Org display name to store (optional) |
-| `--force` | — | no | Overwrite an org that already has a provisioned key. |
 
 ---
 

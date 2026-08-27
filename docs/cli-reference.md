@@ -975,7 +975,8 @@ crow corveil link-gateway --manager --org org1 --org-name "Acme"
 ```
 
 - The adopted key is stored with **no key id** (it was minted by hand, not by this client). That is also the upgrade path: a later `crow corveil select-org --org org1` sees the empty id, skips the reuse fast-path, and mints a real managed key.
-- Refuses an `op://` reference (only plaintext keys are adopted), a target with no manual gateway, a blank `--org`, and overwriting an org that already has a **provisioned** key — pass `--force` for that last case.
+- Only a gateway on the **connection's own base URL** is adopted — `derivedGateway` would otherwise pair the key with the wrong host (trailing slashes are ignored). `op://` references are not adopted (only plaintext keys), and a target with no manual gateway is refused.
+- If the org already has a **provisioned** key, `link-gateway` refuses rather than silently dropping its revoke handle. Retire it first with `crow corveil deselect-org --org org1` (which revokes it on Corveil), then link — or just `select-org` to mint a fresh managed key.
 
 ---
 

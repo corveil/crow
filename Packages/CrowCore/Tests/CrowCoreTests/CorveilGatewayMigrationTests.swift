@@ -106,6 +106,19 @@ import Testing
         #expect(candidate.classification == .linkable)
     }
 
+    @Test func detectTreatsTrailingSlashAsSameBaseURL() {
+        var config = AppConfig()
+        // Connection base has no trailing slash; the manual gateway typed one — the
+        // same host two ways. It must read as linkable, not a "doesn't match" manual.
+        config.corveilConnection = connection(baseURL: "https://gw.corveil.example")
+        config.workspaces = [
+            WorkspaceInfo(
+                id: UUID(), name: "ws",
+                gateway: gateway("https://gw.corveil.example/", "sk-citadel-Foreign")),
+        ]
+        #expect(CorveilGatewayMigration.detect(config: config)[0].classification == .linkable)
+    }
+
     @Test func detectManagedWhenGatewayEqualsDerived() {
         let secret = "sk-citadel-AbCdEfGhIjKl"
         var config = AppConfig()
@@ -237,9 +250,10 @@ import Testing
         }
     }
 
-    @Test func linkRefusesToOverwriteMintedKeyWithoutForce() {
+    @Test func linkRefusesToOverwriteMintedKey() {
         var config = AppConfig()
-        // org-1 already has a MINTED key (non-empty keyID).
+        // org-1 already has a MINTED key (non-empty keyID) — overwriting it would
+        // strand a live key on Corveil, so link refuses and points at deselect-org.
         config.corveilConnection = connection(orgID: "org-1", keyID: "minted-key")
         config.managerGateway = gateway("https://gw.corveil.example", "sk-citadel-New")
         #expect(throws: CorveilGatewayMigration.LinkError.orgAlreadyProvisioned(orgID: "org-1")) {
@@ -247,15 +261,36 @@ import Testing
         }
     }
 
-    @Test func linkOverwritesMintedKeyWithForce() throws {
+    @Test func linkAllowsReAdoptingAnAdoptedKey() throws {
         var config = AppConfig()
-        config.corveilConnection = connection(orgID: "org-1", keyID: "minted-key", secret: "sk-citadel-Old")
+        // org-1 has an ADOPTED key (empty keyID) — no server-side handle to strand,
+        // so re-adopting (e.g. the manual key rotated) is allowed, no --force needed.
+        config.corveilConnection = connection(orgID: "org-1", keyID: "", secret: "sk-citadel-Old")
         config.managerGateway = gateway("https://gw.corveil.example", "sk-citadel-New")
-        let orgKey = try CorveilGatewayMigration.link(
-            config: &config, target: .manager, orgID: "org-1", orgName: nil, force: true)
-        #expect(orgKey.keyID == "")  // now adopted
+        try CorveilGatewayMigration.link(config: &config, target: .manager, orgID: "org-1", orgName: nil)
         #expect(config.corveilConnection?.orgKeySecrets["org-1"] == "sk-citadel-New")
-        // No duplicate row for the org.
         #expect(config.corveilConnection?.orgKeys.filter { $0.orgID == "org-1" }.count == 1)
+    }
+
+    @Test func linkRefusesBaseURLMismatch() {
+        var config = AppConfig()
+        config.corveilConnection = connection(baseURL: "https://gw.corveil.example")
+        // The gateway points at a DIFFERENT host than the connection — detect calls
+        // this `.manual`, and link must refuse it: derivedGateway would send the
+        // adopted key to the connection's host, not this one.
+        config.managerGateway = gateway("https://other.example", "sk-citadel-Foreign")
+        #expect(throws: CorveilGatewayMigration.LinkError.baseURLMismatch(
+            gateway: "https://other.example", connection: "https://gw.corveil.example")) {
+            try CorveilGatewayMigration.link(config: &config, target: .manager, orgID: "org-9", orgName: nil)
+        }
+    }
+
+    @Test func linkAcceptsTrailingSlashBaseURL() throws {
+        var config = AppConfig()
+        config.corveilConnection = connection(baseURL: "https://gw.corveil.example")
+        // A trailing slash is the same host — link normalizes it, like detect does.
+        config.managerGateway = gateway("https://gw.corveil.example/", "sk-citadel-Slash")
+        try CorveilGatewayMigration.link(config: &config, target: .manager, orgID: "org-2", orgName: nil)
+        #expect(config.corveilConnection?.orgKeySecrets["org-2"] == "sk-citadel-Slash")
     }
 }

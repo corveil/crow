@@ -282,14 +282,12 @@ func makeCorveilMigrationHandlers(devRoot: String) -> [String: CommandRouter.Han
                 throw DaemonRPCError.invalidParams("target must be 'manager' or 'workspace'")
             }
             let orgName = params["org_name"]?.stringValue
-            let force = params["force"]?.boolValue ?? false
 
             return try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
                 let orgKey: CorveilOrgKey
                 do {
                     orgKey = try CorveilGatewayMigration.link(
-                        config: &config, target: target, orgID: orgID,
-                        orgName: orgName, force: force)
+                        config: &config, target: target, orgID: orgID, orgName: orgName)
                 } catch let error as CorveilGatewayMigration.LinkError {
                     throw RPCError.invalidParams(error.description)
                 }

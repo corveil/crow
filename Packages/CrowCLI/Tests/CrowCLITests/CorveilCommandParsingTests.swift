@@ -120,15 +120,13 @@ struct CorveilCommandParsingTests {
         #expect(workspace.workspace == "Acme")
         #expect(workspace.manager == false)
         #expect(workspace.org == "org-1")
-        #expect(workspace.force == false)
 
         let manager = try #require(try parse([
-            "corveil", "link-gateway", "--manager", "--org", "org-1", "--org-name", "Acme", "--force",
+            "corveil", "link-gateway", "--manager", "--org", "org-1", "--org-name", "Acme",
         ]) as? CorveilLinkGateway)
         #expect(manager.manager == true)
         #expect(manager.workspace == nil)
         #expect(manager.orgName == "Acme")
-        #expect(manager.force == true)
     }
 
     @Test("link-gateway requires --org")
@@ -136,6 +134,23 @@ struct CorveilCommandParsingTests {
         #expect(throws: (any Error).self) {
             _ = try self.parse(["corveil", "link-gateway", "--manager"])
         }
+    }
+
+    @Test("link-gateway requires exactly one of --manager / --workspace")
+    func linkGatewayTargetIsExclusive() {
+        // `validate()` runs during `parseAsRoot`, so an invalid target combination
+        // is rejected at parse time (like a missing required option).
+        //   Neither:
+        #expect(throws: (any Error).self) {
+            _ = try self.parse(["corveil", "link-gateway", "--org", "org-1"])
+        }
+        //   Both:
+        #expect(throws: (any Error).self) {
+            _ = try self.parse([
+                "corveil", "link-gateway", "--manager", "--workspace", "Acme", "--org", "org-1",
+            ])
+        }
+        // Exactly one parses cleanly — covered by `linkGatewayFlags` above.
     }
 
     // MARK: - --path

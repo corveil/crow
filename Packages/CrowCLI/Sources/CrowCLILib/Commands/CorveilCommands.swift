@@ -398,8 +398,10 @@ public struct CorveilLinkGateway: ParsableCommand {
           crow corveil link-gateway --workspace MyOrg --org <org-id>
           crow corveil link-gateway --manager --org <org-id> --org-name "My Org"
 
-        Refuses an op:// reference, a target with no manual gateway, and \
-        overwriting an org that already has a provisioned key (pass `--force`). \
+        Only a gateway on the connection's own base URL is adopted (the key would \
+        otherwise be sent to the wrong host), and op:// references are refused. If \
+        the org already has a *provisioned* key, retire it with `corveil \
+        deselect-org --org <org-id>` first — that revokes it on Corveil — then link. \
         Local-only: it authors a credential into the connection over the Unix \
         socket and is refused for remote web clients.
         """
@@ -417,17 +419,20 @@ public struct CorveilLinkGateway: ParsableCommand {
     @Option(name: .customLong("org-name"), help: "Org display name to store (optional)")
     public var orgName: String?
 
-    @Flag(name: .long, help: "Overwrite an org that already has a provisioned key.")
-    public var force: Bool = false
-
     public init() {}
 
-    public func run() throws {
-        let workspaceName = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let hasWorkspace = !workspaceName.isEmpty
+    /// Exactly one target must be named. `validate()` (not `run()`) so the check
+    /// runs before any daemon round-trip and is unit-testable without a socket.
+    public func validate() throws {
+        let hasWorkspace =
+            !(workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
         guard manager != hasWorkspace else {
             throw ValidationError("Pass exactly one of --manager or --workspace <name>.")
         }
+    }
+
+    public func run() throws {
+        let workspaceName = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var params: [String: JSONValue] = ["org_id": .string(org)]
         if manager {
             params["target"] = .string("manager")
@@ -437,7 +442,6 @@ public struct CorveilLinkGateway: ParsableCommand {
         }
         let trimmedName = orgName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedName.isEmpty { params["org_name"] = .string(trimmedName) }
-        if force { params["force"] = .bool(true) }
         printJSON(try rpc("corveil-link-gateway", params: params))
     }
 }

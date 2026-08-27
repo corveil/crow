@@ -105,6 +105,7 @@ public enum CorveilGatewayMigration {
         case noCitadelGateway
         case notPlaintext
         case orgRequired
+        case baseURLMismatch(gateway: String, connection: String)
         case orgAlreadyProvisioned(orgID: String)
 
         public var description: String {
@@ -119,8 +120,12 @@ public enum CorveilGatewayMigration {
                 return "the gateway key is an op:// reference — link adopts plaintext keys only"
             case .orgRequired:
                 return "an organization id is required"
+            case .baseURLMismatch(let gateway, let connection):
+                return "the gateway base URL \(gateway) doesn't match the Corveil connection "
+                    + "(\(connection)) — this key isn't for that host"
             case .orgAlreadyProvisioned(let orgID):
-                return "organization \(orgID) already has a provisioned key — pass --force to overwrite it"
+                return "organization \(orgID) already has a provisioned key — run "
+                    + "`crow corveil deselect-org --org \(orgID)` to revoke it first, then link"
             }
         }
     }
@@ -197,16 +202,22 @@ public enum CorveilGatewayMigration {
     ///
     /// The key is stored verbatim (so ``CorveilConnection/derivedGateway(orgID:)``
     /// reproduces the original gateway exactly) with an empty `keyID` marking it as
-    /// adopted rather than minted. Refuses an `op://` value, a missing header, a
-    /// blank org, and — unless `force` — overwriting an org that already has a
-    /// *minted* key (non-empty `keyID`).
+    /// adopted rather than minted. Enforces the same preconditions ``detect``
+    /// classifies as `.linkable`: refuses an `op://` value, a missing header, a
+    /// blank org, and a **base URL that doesn't match the connection** — because
+    /// `derivedGateway` pairs the adopted secret with the *connection's* base URL,
+    /// so a foreign-host key would be sent to the wrong gateway.
+    ///
+    /// Also refuses to overwrite an org that already has a **minted** key (non-empty
+    /// `keyID`): replacing it here would drop the only handle `deselect-org` revokes
+    /// by, orphaning a live key on Corveil. Retire it with `deselect-org` first
+    /// (which revokes server-side), then link.
     @discardableResult
     public static func link(
         config: inout AppConfig,
         target: Target,
         orgID: String,
         orgName: String?,
-        force: Bool = false,
         now: Date = Date()
     ) throws -> CorveilOrgKey {
         guard var connection = config.corveilConnection, !connection.isEmpty else {
@@ -227,9 +238,20 @@ public enum CorveilGatewayMigration {
         }
         guard let gateway, let value = citadelValue(gateway) else { throw LinkError.noCitadelGateway }
         guard !isOpReference(value) else { throw LinkError.notPlaintext }
+        // The key must belong to the connection's host — `detect` classifies a
+        // base-URL mismatch as `.manual` (not linkable) for exactly this reason.
+        guard sameBaseURL(gateway.baseURL, connection.baseURL) else {
+            throw LinkError.baseURLMismatch(
+                gateway: gateway.baseURL.trimmingCharacters(in: .whitespaces),
+                connection: connection.baseURL.trimmingCharacters(in: .whitespaces))
+        }
 
+        // Refuse to clobber a MINTED key: its `keyID` is the handle `deselect-org`
+        // revokes by, and overwriting it with an adopted (empty-`keyID`) row would
+        // strand a live key on Corveil. An adopted key has no server-side handle,
+        // so re-adopting one is fine.
         let existing = connection.orgKeys.first { $0.orgID == trimmedOrg }
-        if let existing, !existing.keyID.isEmpty, !force {
+        if let existing, !existing.keyID.isEmpty {
             throw LinkError.orgAlreadyProvisioned(orgID: trimmedOrg)
         }
 
@@ -275,8 +297,17 @@ public enum CorveilGatewayMigration {
         value.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("op://")
     }
 
+    /// Normalize a base URL for comparison the way the rest of the Corveil stack
+    /// does (`CorveilAPIClient.Endpoints` / `CorveilOAuthClient.Endpoints`): trim
+    /// whitespace and drop a single trailing slash, so `…/example` and `…/example/`
+    /// — the same host typed two ways — compare equal.
+    static func normalizedBaseURL(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+    }
+
     private static func sameBaseURL(_ a: String, _ b: String) -> Bool {
-        a.trimmingCharacters(in: .whitespaces) == b.trimmingCharacters(in: .whitespaces)
+        normalizedBaseURL(a) == normalizedBaseURL(b)
     }
 
     /// A short, non-secret display hint for a key value — a leading `Bearer ` is
