@@ -1383,14 +1383,29 @@
     const t = corveilUserText(conn.connectedUser || {});
     return t ? 'Connected as ' + t : 'Connected to Corveil.';
   }
+
+  // Config dates arrive from get-config encoded by a default Swift JSONEncoder,
+  // whose .deferredToDate strategy emits a NUMBER of seconds since the 2001-01-01
+  // reference epoch — not unix milliseconds, and not ISO. Handing that straight to
+  // `new Date(n)` (which reads a bare number as unix ms) renders every date in
+  // January 1970 (CROW-1122 review). Convert the number from the Swift epoch here;
+  // also accept an ISO-8601 string defensively (the shape `crow corveil status`
+  // emits). Returns a Date, or null when the value is absent or unparseable.
+  const SWIFT_REFERENCE_EPOCH_MS = Date.UTC(2001, 0, 1); // 978307200000
+  function corveilParseDate(v) {
+    if (v == null || v === '') return null;
+    const d = typeof v === 'number'
+      ? new Date(SWIFT_REFERENCE_EPOCH_MS + v * 1000)
+      : new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   function corveilOrgSub(org) {
     const parts = [];
     if (org.orgID && org.orgID !== org.orgName) parts.push(org.orgID);
     if ((org.keyPrefix || '').trim()) parts.push('key ' + org.keyPrefix + '…');
-    if (org.createdAt) {
-      const d = new Date(org.createdAt);
-      if (!isNaN(d.getTime())) parts.push('provisioned ' + d.toLocaleDateString());
-    }
+    const created = corveilParseDate(org.createdAt);
+    if (created) parts.push('provisioned ' + created.toLocaleDateString());
     return parts.join(' · ') || '—';
   }
 
@@ -1408,11 +1423,8 @@
     // token VALUE never reaches the browser (stripped); only its expiry does.
     const detail = [];
     if ((conn.clientID || '').trim()) detail.push('Client ID ' + conn.clientID);
-    const exp = conn.oauth && conn.oauth.accessTokenExpiresAt;
-    if (exp) {
-      const d = new Date(exp);
-      if (!isNaN(d.getTime())) detail.push('access token expires ' + d.toLocaleString());
-    }
+    const exp = corveilParseDate(conn.oauth && conn.oauth.accessTokenExpiresAt);
+    if (exp) detail.push('access token expires ' + exp.toLocaleString());
     if (detail.length) body.appendChild(el('div', 'st-perm-status', detail.join(' · ')));
 
     // Organizations — the per-org gateway-key metadata (never key material; the
@@ -1501,7 +1513,14 @@
           fallback.appendChild(document.createTextNode('Didn’t see a window? '));
           fallback.appendChild(a);
         }
-        pollForCorveilConnection();
+        pollForCorveilConnection(() => {
+          // The sign-in didn't complete within the poll window (consent + 2FA can
+          // outlast it). Re-enable Connect and point at Refresh, instead of leaving
+          // a disabled button under copy that still says it "updates automatically".
+          btn.disabled = false;
+          msg.textContent = 'Still not connected. Finish the Corveil sign-in, then '
+            + 'click Refresh status — or Connect again.';
+        });
       } catch (e) {
         msg.textContent = 'Failed: ' + (e.message || e);
         btn.disabled = false;
@@ -1526,8 +1545,9 @@
   // daemon stores the tokens; this tab still holds the pre-connect config. Poll a
   // fresh get-config until the connection appears (or the user leaves), then
   // re-render into the connected view. Bounded so a never-completed sign-in stops
-  // polling on its own; the Refresh button covers a sign-in slower than the window.
-  function pollForCorveilConnection() {
+  // polling on its own — `onTimeout` (if given) then restores the Connect control,
+  // since the button was disabled for the duration; the Refresh button also recovers.
+  function pollForCorveilConnection(onTimeout) {
     if (corveilPolling) return;
     corveilPolling = true;
     let attempts = 0;
@@ -1542,7 +1562,11 @@
           return;
         }
       } catch (_) { /* transient — keep polling */ }
-      if (attempts >= 24) { corveilPolling = false; return; }
+      if (attempts >= 24) {
+        corveilPolling = false;
+        if (onTimeout) onTimeout();
+        return;
+      }
       setTimeout(tick, 2500);
     };
     setTimeout(tick, 2500);
