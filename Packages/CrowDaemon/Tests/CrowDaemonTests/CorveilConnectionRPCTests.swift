@@ -138,6 +138,22 @@ import Testing
         #expect(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection == nil)
     }
 
+    @Test @MainActor func connectRejectsAHalfFilledConnection() async throws {
+        // The reviewer's reproduction: a client-id-only (or token-only) connect
+        // must not be stored as a live-but-broken connection (CROW-1120 review).
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let router = router(devRoot: devRoot)
+
+        let clientOnly = await call(router, "corveil-connect", ["client_id": .string("crow-client-1")])
+        #expect(clientOnly.error?.code == RPCErrorCode.invalidParams)
+
+        let tokenOnly = await call(router, "corveil-connect", ["access_token": .string("at")])
+        #expect(tokenOnly.error?.code == RPCErrorCode.invalidParams)
+
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection == nil)
+    }
+
     @Test @MainActor func connectRejectsMalformedExpiry() async throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
@@ -235,15 +251,26 @@ import Testing
         #expect(merged.orgKeys.count == 1)
     }
 
-    @Test func mergeRejectsAResultWithNoClientOrToken() {
-        #expect(throws: CorveilConnectionRPC.Invalid.self) {
-            _ = try CorveilConnectionRPC.merge(CorveilConnectionRPC.Input(), into: nil)
+    @Test func mergeRequiresBothClientIdAndAccessToken() {
+        // `CorveilConnection.isEmpty` is an AND, so a half-filled connection is not
+        // "empty" — but it is not usable either. The merge must reject any result
+        // missing a client id or an access token, matching the error/CLI/docs.
+        let cases: [CorveilConnectionRPC.Input] = [
+            CorveilConnectionRPC.Input(),                                         // neither
+            CorveilConnectionRPC.Input(baseURL: "https://corveil.example.com"),   // base URL only
+            CorveilConnectionRPC.Input(clientID: "crow-client-1"),               // client id only
+            CorveilConnectionRPC.Input(accessToken: "at"),                        // token only
+        ]
+        for input in cases {
+            #expect(throws: CorveilConnectionRPC.Invalid.self) {
+                _ = try CorveilConnectionRPC.merge(input, into: nil)
+            }
         }
-        // A base URL alone is still not a connection.
-        #expect(throws: CorveilConnectionRPC.Invalid.self) {
-            _ = try CorveilConnectionRPC.merge(
-                CorveilConnectionRPC.Input(baseURL: "https://corveil.example.com"), into: nil)
-        }
+        // Both → accepted.
+        let ok = try? CorveilConnectionRPC.merge(
+            CorveilConnectionRPC.Input(clientID: "crow-client-1", accessToken: "at"), into: nil)
+        #expect(ok?.clientID == "crow-client-1")
+        #expect(ok?.oauth.accessToken == "at")
     }
 
     @Test func decodeInputParsesISOExpiryAndRejectsGarbage() throws {
@@ -259,6 +286,20 @@ import Testing
             _ = try CorveilConnectionRPC.decodeInput([
                 "access_token_expires_at": .string("nonsense"),
             ])
+        }
+    }
+
+    @Test func expiryParsesBothPlainAndFractionalSeconds() throws {
+        // A browser's `Date.toISOString()` emits milliseconds; both the plain shape
+        // `statusJSON` writes and the fractional one must parse (CROW-1120 review).
+        for stamp in ["2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000Z"] {
+            #expect(try CorveilConnectionRPC.parseExpiry(stamp) != nil, "\(stamp) should parse")
+        }
+        // Absent / blank keeps the stored value (nil, no throw); garbage throws.
+        #expect(try CorveilConnectionRPC.parseExpiry(nil) == nil)
+        #expect(try CorveilConnectionRPC.parseExpiry("  ") == nil)
+        #expect(throws: CorveilConnectionRPC.Invalid.self) {
+            _ = try CorveilConnectionRPC.parseExpiry("2026-01-01")
         }
     }
 

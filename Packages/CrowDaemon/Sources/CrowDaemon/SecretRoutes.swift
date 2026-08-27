@@ -223,16 +223,13 @@ enum SecretRoutes {
             }
 
             // Parse expiry (ISO-8601) up front so a bad value is a 400, not a
-            // silent drop — matching the RPC's `decodeInput`.
-            var expiresAt: Date?
-            if let raw = body.accessTokenExpiresAt?.trimmingCharacters(in: .whitespaces),
-               !raw.isEmpty {
-                guard let date = ISO8601DateFormatter().date(from: raw) else {
-                    return json(
-                        ["error": "accessTokenExpiresAt must be an ISO-8601 timestamp"],
-                        status: .badRequest)
-                }
-                expiresAt = date
+            // silent drop. Shared with the RPC's `decodeInput` through
+            // `parseExpiry`, so the two doors accept exactly the same shapes.
+            let expiresAt: Date?
+            do {
+                expiresAt = try CorveilConnectionRPC.parseExpiry(body.accessTokenExpiresAt)
+            } catch let error as CorveilConnectionRPC.Invalid {
+                return json(["error": error.message], status: .badRequest)
             }
             let input = CorveilConnectionRPC.Input(
                 baseURL: body.baseURL,

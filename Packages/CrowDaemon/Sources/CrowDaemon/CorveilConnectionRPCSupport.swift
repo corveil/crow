@@ -79,11 +79,14 @@ enum CorveilConnectionRPC {
     /// untouched — they are provisioned by a separate flow (corveil/crow#1121),
     /// and a token refresh through this door must not drop them.
     ///
-    /// Rejects a merged result that is still empty (no client id and no access
-    /// token, per ``CorveilConnection/isEmpty``): a connection with neither is not
-    /// a connection, and storing one would leave a block that reads as
-    /// connected-but-broken. A caller that means to remove the connection uses
-    /// disconnect, not an all-blank connect.
+    /// Rejects a merged result that lacks a client id **or** an access token. This
+    /// is deliberately stricter than `CorveilConnection.isEmpty`, which is an AND
+    /// (blank client id *and* blank token) and so would accept a half-filled
+    /// connection — a client-id-only connect would be stored as a live connection
+    /// that `statusJSON` reports as `connected: true` with `has_access_token:
+    /// false`. Both fields are the documented contract, here and in the CLI and
+    /// the reference. A caller that means to remove the connection uses disconnect,
+    /// not an all-blank connect.
     static func merge(_ input: Input, into stored: CorveilConnection?) throws -> CorveilConnection {
         func pick(_ incoming: String?, _ current: String) -> String {
             let trimmed = incoming?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -104,7 +107,9 @@ enum CorveilConnectionRPC {
                 registrationAccessToken: pick(
                     input.registrationAccessToken, base.oauth.registrationAccessToken),
                 accessTokenExpiresAt: input.accessTokenExpiresAt ?? base.oauth.accessTokenExpiresAt))
-        if result.isEmpty {
+        let hasClientID = !result.clientID.trimmingCharacters(in: .whitespaces).isEmpty
+        let hasAccessToken = !result.oauth.accessToken.trimmingCharacters(in: .whitespaces).isEmpty
+        guard hasClientID, hasAccessToken else {
             throw Invalid("a Corveil connection needs at least a client id and an access token")
         }
         return result
@@ -113,9 +118,9 @@ enum CorveilConnectionRPC {
     /// Decode `corveil-connect` params into an ``Input``.
     ///
     /// `access_token_expires_at` is an ISO-8601 string — the shape `corveil-status`
-    /// emits — parsed here; a present-but-unparseable value is rejected rather
-    /// than silently dropped, since a caller who bothered to send an expiry meant
-    /// something by it.
+    /// emits — parsed by ``parseExpiry(_:)``; a present-but-unparseable value is
+    /// rejected rather than silently dropped, since a caller who bothered to send
+    /// an expiry meant something by it.
     static func decodeInput(_ params: [String: JSONValue]) throws -> Input {
         var input = Input()
         input.baseURL = params["base_url"]?.stringValue
@@ -126,15 +131,36 @@ enum CorveilConnectionRPC {
         input.accessToken = params["access_token"]?.stringValue
         input.refreshToken = params["refresh_token"]?.stringValue
         input.registrationAccessToken = params["registration_access_token"]?.stringValue
-        if let raw = params["access_token_expires_at"]?.stringValue,
-           !raw.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let date = ISO8601DateFormatter().date(from: raw) else {
-                throw Invalid(
-                    "access_token_expires_at must be an ISO-8601 timestamp (e.g. 2026-01-01T00:00:00Z)")
-            }
-            input.accessTokenExpiresAt = date
-        }
+        input.accessTokenExpiresAt = try parseExpiry(params["access_token_expires_at"]?.stringValue)
         return input
+    }
+
+    /// Parse an optional ISO-8601 access-token expiry, shared by both doors (the
+    /// CLI RPC and the HTTP POST) so a later format change can't drift the two
+    /// parsers. A nil or blank value is "not provided" — keep whatever is stored;
+    /// a present value that won't parse is rejected rather than silently dropped.
+    ///
+    /// Accepts both the plain `2026-01-01T00:00:00Z` shape `statusJSON` emits and
+    /// the fractional-seconds shape a browser's `Date.toISOString()` produces
+    /// (`…00.000Z`). A single `ISO8601DateFormatter` accepts only one of the two,
+    /// so try both (CROW-1120 review).
+    static func parseExpiry(_ raw: String?) throws -> Date? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty else {
+            return nil
+        }
+        guard let date = parseISO8601(trimmed) else {
+            throw Invalid(
+                "the access-token expiry must be an ISO-8601 timestamp (e.g. 2026-01-01T00:00:00Z)")
+        }
+        return date
+    }
+
+    private static func parseISO8601(_ value: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        if let date = plain.date(from: value) { return date }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value)
     }
 
     /// The `corveil-status` payload: connection health, no secrets. Whether a
