@@ -553,6 +553,21 @@ public enum CrowDaemon {
         // path on this machine.
         CorveilRoutes.mount(
             on: httpRouter, boundHost: options.host, devRoot: options.devRoot, appState: appState)
+        // Corveil Connect (OAuth) flow (CROW-1119): the loopback callback +
+        // Connect trigger. Local-only, same rationale as the routes above — the
+        // callback stores user-scoped OAuth tokens on the host. The in-flight
+        // authorization store lives for the daemon's lifetime; a periodic prune
+        // drops abandoned flows.
+        let corveilPendingAuth = CorveilPendingAuthStore()
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(300))
+                corveilPendingAuth.prune()
+            }
+        }
+        CorveilIntegrationRoutes.mount(
+            on: httpRouter, boundHost: options.host, devRoot: options.devRoot,
+            httpPort: options.httpPort, pending: corveilPendingAuth)
         // Read-only MCP for off-box clients (CROW-1004). Authenticates with a scoped
         // bearer token minted by `crow mcp token mint`, NOT the web-session cookie —
         // `/mcp` is listed in `WebAuthMiddleware.isAuthExempt` for that reason, and
