@@ -154,6 +154,8 @@ public enum ParityLedger {
         "corveil-list-orgs",
         "corveil-select-org",
         "corveil-deselect-org",
+        "corveil-detect-gateways",
+        "corveil-link-gateway",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -393,6 +395,13 @@ public enum ParityLedger {
         .read("corveil-list-orgs", cli: "corveil list-orgs"),
         .write("corveil-select-org", cli: "corveil select-org"),
         .write("corveil-deselect-org", cli: "corveil deselect-org"),
+
+        // Corveil gateway migration (CROW-1126) — detect manual x-citadel-api-key
+        // gateways and adopt an existing key into the connection as an org's key.
+        // Both local-only alongside the connection verbs (the read reports redacted
+        // key prefixes; the write authors a credential into the connection).
+        .read("corveil-detect-gateways", cli: "corveil detect-gateways"),
+        .write("corveil-link-gateway", cli: "corveil link-gateway"),
 
         // Jobs
         .read("job-list", cli: "job list"),
@@ -760,6 +769,12 @@ public enum ParityLedger {
         .field("corveilConnection.connectedUser.id", read: "corveil status", write: "corveil connect"),
         .field("corveilConnection.connectedUser.email", read: "corveil status", write: "corveil connect"),
         .field("corveilConnection.connectedUser.name", read: "corveil status", write: "corveil connect"),
+        // `orgKeys[]` + `orgKeySecrets` name `corveil select-org` as the writer
+        // (the primary path — mint/reuse a real backend key). `corveil
+        // link-gateway` (CROW-1126) is a *second* writer: it adopts an existing
+        // manual key into these same fields with an empty `keyID`. The ledger row
+        // carries one `write:` string, so this comment is the honest record that a
+        // second verb touches these fields.
         .field("corveilConnection.orgKeys[].orgID", read: "corveil orgs", write: "corveil select-org"),
         .field("corveilConnection.orgKeys[].orgName", read: "corveil orgs", write: "corveil select-org"),
         .field("corveilConnection.orgKeys[].keyID", read: "corveil orgs", write: "corveil select-org"),
@@ -772,7 +787,9 @@ public enum ParityLedger {
                 (CROW-1121). Never read back by any surface — `corveil orgs` reports \
                 the key metadata only, never the value — so exposing it would defeat \
                 holding a spendable credential locally. Written by `corveil \
-                select-org` and blanked by `SettingsSecrets` for transport.
+                select-org` (mint/reuse) and `corveil link-gateway` (adopt an \
+                existing manual key, CROW-1126); blanked by `SettingsSecrets` for \
+                transport.
                 """,
             write: "corveil select-org"),
         .field(

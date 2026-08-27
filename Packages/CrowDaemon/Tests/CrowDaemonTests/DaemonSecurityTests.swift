@@ -1098,6 +1098,15 @@ import CrowPersistence
             #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
                 == "Corveil org provisioning is local-only")
         }
+
+        // The manual-gateway migration verbs (CROW-1126): the detect read reports
+        // redacted key prefixes and the link write adopts a key into the connection
+        // — both part of the one local-only Corveil surface.
+        for method in ["corveil-detect-gateways", "corveil-link-gateway"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: ["org_id": .string("org1")])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+                == "Corveil gateway migration is local-only")
+        }
     }
 
     @Test func logsyncMethodsAreNotLocalOnly() {

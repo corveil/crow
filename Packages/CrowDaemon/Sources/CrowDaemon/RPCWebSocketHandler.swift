@@ -378,6 +378,14 @@ enum RPCWebSocketHandler {
             // above. The read-only Integrations view gets nothing from these; it
             // reads provisioned-org metadata through the stripped `get-config`.
             return "Corveil org provisioning is local-only"
+        case "corveil-detect-gateways", "corveil-link-gateway":
+            // Gateway migration (CROW-1126). `corveil-detect-gateways` reports
+            // redacted key prefixes from the config's gateways and
+            // `corveil-link-gateway` adopts an existing plaintext key into the
+            // connection as an org's key — authoring a credential, like the
+            // connection verbs above. Both are gated so the whole migration surface
+            // stays part of the one local-only Corveil connection surface.
+            return "Corveil gateway migration is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

@@ -89,6 +89,7 @@ func makeCommandRouter(
     handlers.merge(
         makeCorveilProvisioningHandlers(cache: corveilOrgCache, devRoot: devRoot)
     ) { existing, _ in existing }
+    handlers.merge(makeCorveilMigrationHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeBackfillHandlers(devRoot: devRoot)) { existing, _ in existing }
     return CommandRouter(handlers: handlers, fallback: fallback)
 }

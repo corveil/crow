@@ -222,6 +222,115 @@ func makeCorveilProvisioningHandlers(
     ]
 }
 
+/// The `corveil-detect-gateways` / `corveil-link-gateway` verb group — the
+/// migration from manual `x-citadel-api-key` gateways to the first-class
+/// connection (CROW-1126), the finale of the epic (corveil/crow#1117).
+///
+/// `corveil-detect-gateways` reads the config and reports every gateway (Manager +
+/// each workspace) carrying the `x-citadel-api-key` header, classified against the
+/// stored connection (``CorveilGatewayMigration``). `corveil-link-gateway` adopts a
+/// detected gateway's existing plaintext key into the connection as a named org's
+/// key — a pure, offline config write (no re-mint; the Corveil backend has no
+/// key→org lookup, so the org is user-supplied).
+///
+/// Both are local-only on `/rpc`
+/// (``RPCWebSocketHandler/localOnlyDenial(for:devRoot:)``): the detect read reports
+/// redacted key prefixes and the link write authors a credential into the
+/// connection, so the whole migration surface is gated alongside the other
+/// `corveil-*` connection verbs. Own file group so `makeCommandRouter` stays a thin
+/// assembler and `scripts/check-cli-parity.sh` globs the `"method": { params in`
+/// key lines.
+func makeCorveilMigrationHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
+    [
+        // Report manual x-citadel-api-key gateways, classified against the
+        // connection. No secret leaves — only redacted key prefixes.
+        "corveil-detect-gateways": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            let candidates = CorveilGatewayMigration.detect(config: config)
+            let connected = !(config.corveilConnection?.isEmpty ?? true)
+            return [
+                "gateways": .array(candidates.map(corveilCandidateJSON)),
+                "count": .int(candidates.count),
+                "connected": .bool(connected),
+            ]
+        },
+        // Adopt a detected gateway's existing plaintext key into the connection as
+        // the named org's key. Pure config write.
+        "corveil-link-gateway": { params in
+            // The Manager-vs-workspace selector goes through the SAME decoder the
+            // `gateway-*` verbs use (`target: "manager"` XOR `workspace: <name|uuid>`),
+            // so `--workspace` accepts a UUID or a unique name and errors on an
+            // unknown/ambiguous one — no parallel selector (CROW-1126 review).
+            let gatewayTarget = try SecretsRPC.decodeTarget(params)
+            let orgID = params["org_id"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
+            guard !orgID.isEmpty else { throw DaemonRPCError.invalidParams("org_id is required") }
+            let orgName = params["org_name"]?.stringValue
+
+            return try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
+                // Resolve a workspace ref to its canonical name via the shared
+                // resolver, then hand Core a `Target` whose name matches exactly.
+                let target: CorveilGatewayMigration.Target
+                let targetName: String
+                switch gatewayTarget {
+                case .manager:
+                    target = .manager
+                    targetName = "Manager"
+                case .workspace(let ref):
+                    let index = try SecretsRPC.resolveWorkspace(ref, in: config)
+                    targetName = config.workspaces[index].name
+                    target = .workspace(targetName)
+                }
+
+                let orgKey: CorveilOrgKey
+                do {
+                    orgKey = try CorveilGatewayMigration.link(
+                        config: &config, target: target, orgID: orgID, orgName: orgName)
+                } catch let error as CorveilGatewayMigration.LinkError {
+                    throw RPCError.invalidParams(error.description)
+                }
+                let formatter = ISO8601DateFormatter()
+                return [
+                    "saved": .bool(true),
+                    "linked": .bool(true),
+                    "target": .string(target.kind),
+                    "target_name": .string(targetName),
+                    "org": .object([
+                        "org_id": .string(orgKey.orgID),
+                        "org_name": .string(orgKey.orgName),
+                        "key_prefix": .string(orgKey.keyPrefix),
+                        "created_at": orgKey.createdAt
+                            .map { .string(formatter.string(from: $0)) } ?? .null,
+                    ]),
+                ]
+            }
+        },
+    ]
+}
+
+/// Encode one detected gateway candidate for the `corveil-detect-gateways`
+/// response. `org_id`/`org_name` are present only for a `managed` row; `reason`
+/// only for a `manual` row.
+private func corveilCandidateJSON(_ candidate: CorveilGatewayMigration.Candidate) -> JSONValue {
+    var object: [String: JSONValue] = [
+        "target": .string(candidate.target.kind),
+        "target_name": .string(candidate.targetName),
+        "base_url": .string(candidate.baseURL),
+        "value_kind": .string(candidate.valueKind.rawValue),
+        "key_prefix": .string(candidate.keyPrefix),
+        "classification": .string(candidate.classification.kind),
+    ]
+    switch candidate.classification {
+    case .managed(let orgID, let orgName):
+        object["org_id"] = .string(orgID)
+        object["org_name"] = .string(orgName)
+    case .manual(let reason):
+        object["reason"] = .string(reason)
+    case .linkable:
+        break
+    }
+    return .object(object)
+}
+
 /// Map provisioning + Corveil API failures to `DaemonRPCError` so a CLI/web caller
 /// gets a clear message. All are operational (network, auth, not-connected), not
 /// bad params, so they surface as `applicationError`.

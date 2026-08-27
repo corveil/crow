@@ -131,6 +131,8 @@ Configure the default and per-kind overrides in **Settings → General**, or fro
 
 A workspace can route its Claude Code sessions through a proxy/gateway (e.g. an internal LLM gateway) instead of the vanilla Anthropic API, with its own API key. This replaces setting `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` globally in your shell — which would force *every* `claude` on the machine through one gateway — with a per-workspace setting Crow manages.
 
+> **Using a Corveil gateway?** The hand-entered `x-citadel-api-key` gateway below is the **manual** path — it still works and is the right tool for any non-Corveil proxy. But for Corveil, the recommended path is the first-class **[Corveil connection](#corveil-connection-first-class)**: connect once (OAuth), pick an org, and Crow provisions and injects the gateway key for you. If you already have manual `x-citadel-api-key` gateways, [migrate them](#migrating-manual-gateways-to-the-connection) with `crow corveil detect-gateways` / `link-gateway`. See [ADR 0020](adr/0020-first-class-corveil-integration.md).
+
 ```jsonc
 "gateway": {
   "baseURL": "https://corveil.io",
@@ -219,6 +221,42 @@ The Manager session sits at the dev root and isn't bound to a single workspace, 
 ```
 
 Same shape, same secret-storage rules, same two-way injection (written to `{devRoot}/.claude/settings.local.json`). Configure it under **Settings → Automation → Manager AI Gateway**. Takes effect on the next app launch.
+
+## Corveil connection (first-class)
+
+For a **Corveil** gateway, the recommended path is not a hand-entered `x-citadel-api-key` header but a first-class OAuth **connection** (CROW-1117, [ADR 0020](adr/0020-first-class-corveil-integration.md)). You **Connect** once under **Settings → Integrations → Corveil**; Crow self-registers with Corveil's authorization server (Dynamic Client Registration + PKCE, a `127.0.0.1` loopback callback), stores the resulting tokens in a top-level `corveilConnection` block, and keeps the access token fresh in the background (CROW-1125). From there the gateway editors show an **org dropdown** instead of a raw base-URL + header form: pick an org and Crow mints (or reuses) **one** `sk-citadel-…` gateway key for it and injects the derived gateway automatically.
+
+```jsonc
+{
+  "corveilConnection": {
+    "baseURL": "https://corveil.example",
+    "clientID": "…",                    // from Dynamic Client Registration
+    "connectedUser": { "id": "…", "email": "…", "name": "…" },
+    "orgKeys": [                          // metadata only — never key material
+      { "orgID": "org1", "orgName": "Acme", "keyID": "key1", "keyPrefix": "sk-citadel-AbC" }
+    ]
+    // oauth tokens + per-org key secrets live here too, stripped before any browser sees them
+  }
+}
+```
+
+- **The connection is the source of truth; the gateway is *generated* from it.** When a workspace (or the Manager) is bound to an org, the effective `WorkspaceGateway` is `baseURL` + `x-citadel-api-key: <that org's key>` — so [gateway resolution](#which-gateway-applies) and the [session-log collector](session-log-collector.md) consume it as an ordinary gateway, no special-casing.
+- **One key per org, reused.** Every workspace bound to the same org shares its one key. The backend rotates the key on each mint, so Crow reuses the stored value and only re-mints on an explicit rotate.
+- **Local-only, like every other credential.** The whole `corveilConnection` surface — Connect, org selection, and the migration verbs below — is authored only over the local Unix socket / a local-direct browser POST; a remote web session gets a read-only view (tokens and key values stripped). See [Gateways & Secrets](cli-reference.md#gateways--secrets).
+- Drive it from the CLI with `crow corveil connect` / `status` / `list-orgs` / `select-org` (see the [CLI reference](cli-reference.md#the-corveil-connection)).
+
+### Migrating manual gateways to the connection
+
+If you configured Corveil the old way — a `gateway` with a hand-entered `x-citadel-api-key` header — you can bring that key under the connection without disrupting the running session (CROW-1126):
+
+```bash
+crow corveil detect-gateways                          # list manual x-citadel-api-key gateways, classified
+crow corveil link-gateway --workspace Acme --org org1 # adopt one workspace's key into the connection
+crow corveil link-gateway --manager --org org1        # …or the Manager gateway
+```
+
+- **`detect-gateways`** scans the Manager and every workspace gateway for the `x-citadel-api-key` header and classifies each: **`managed`** (already equals the connection's derived gateway for a provisioned org), **`linkable`** (a plaintext key on the connection's base URL — adopt it), or **`manual`** (not linkable yet, with a `reason`: no connection, an `op://` value, or a base URL that doesn't match the connection). Key material is never printed — only a redacted prefix.
+- **`link-gateway`** *adopts* the target's existing plaintext key as the named org's key in the connection. It is **non-disruptive** (the running key is unchanged) and **offline** — because the Corveil backend has no key→org lookup, you supply the org. The adopted key is stored with **no key id** (it was entered by hand, not minted by Crow), which is also the upgrade path: a later `crow corveil select-org --org <id>` mints a real, revocable managed key in its place. Only a gateway on the **connection's own base URL** is adopted (`op://` references are not); and if the org already has a *provisioned* key, `link-gateway` refuses rather than orphan it — retire it with `crow corveil deselect-org --org <id>` first (that revokes it on Corveil), then link.
 
 ## Jira MCP
 

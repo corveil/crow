@@ -936,6 +936,48 @@ crow corveil deselect-org --org org1
 
 - Returns `{"saved": true, "removed": <bool>}`. A revoke that finds the key already gone (404) still succeeds — the end state is "no key".
 
+#### `crow corveil detect-gateways`
+
+Detect **manual** `x-citadel-api-key` gateways — the legacy way to reach Corveil before the first-class connection — and classify each against the stored connection (CROW-1126). It scans the Manager gateway and every workspace gateway; gateways without the header (a non-Corveil proxy) are ignored, and key material is never printed (only a redacted prefix).
+
+```bash
+crow corveil detect-gateways
+```
+
+```json
+{"gateways": [
+   {"target": "workspace", "target_name": "Acme", "base_url": "https://gw.corveil.example",
+    "value_kind": "plaintext", "key_prefix": "sk-citadel-Ab…", "classification": "linkable"},
+   {"target": "manager", "target_name": "Manager", "base_url": "https://gw.corveil.example",
+    "value_kind": "plaintext", "key_prefix": "sk-citadel-Cd…", "classification": "managed",
+    "org_id": "org1", "org_name": "Acme"}],
+ "count": 2, "connected": true}
+```
+
+- **`classification`** is one of:
+  - **`managed`** — the gateway already equals the connection's derived gateway for a provisioned org (`org_id`/`org_name` name it). Nothing to migrate.
+  - **`linkable`** — a plaintext key on the connection's base URL. Adopt it with `crow corveil link-gateway` below.
+  - **`manual`** — not linkable yet; a `reason` field says why (no connection, an `op://` value, or a base URL that doesn't match the connection).
+
+#### `crow corveil link-gateway`
+
+Adopt a detected gateway's existing plaintext key into the connection as a named org's key (CROW-1126) — the connection now owns it and the org shows as provisioned. Non-disruptive (the running key is unchanged) and offline: the Corveil backend has no key→org lookup, so you name the `--org`. Pass exactly one of `--workspace <name|uuid>` (resolved like `crow gateway` — a UUID or a unique name, error on unknown/ambiguous) or `--manager`.
+
+```bash
+crow corveil link-gateway --workspace Acme --org org1
+crow corveil link-gateway --manager --org org1 --org-name "Acme"
+```
+
+```json
+{"saved": true, "linked": true, "target": "workspace", "target_name": "Acme",
+ "org": {"org_id": "org1", "org_name": "Acme", "key_prefix": "sk-citadel-Ab…",
+         "created_at": "2026-01-01T00:00:00Z"}}
+```
+
+- The adopted key is stored with **no key id** (it was minted by hand, not by this client). That is also the upgrade path: a later `crow corveil select-org --org org1` sees the empty id, skips the reuse fast-path, and mints a real managed key.
+- Only a gateway on the **connection's own base URL** is adopted — `derivedGateway` would otherwise pair the key with the wrong host (trailing slashes are ignored). `op://` references are not adopted (only plaintext keys), and a target with no manual gateway is refused.
+- If the org already has a **provisioned** key, `link-gateway` refuses rather than silently dropping its revoke handle. Retire it first with `crow corveil deselect-org --org org1` (which revokes it on Corveil), then link — or just `select-org` to mint a fresh managed key.
+
 ---
 
 ## Automation Commands
