@@ -1177,3 +1177,97 @@ import Testing
 @Test func sessionKindAllCasesCoversEveryRole() {
     #expect(SessionKind.allCases == [.work, .review, .job, .manager])
 }
+
+// MARK: - Corveil connection (CROW-1118)
+
+@Test func corveilConnectionFullRoundTrip() throws {
+    var config = AppConfig()
+    config.corveilConnection = CorveilConnection(
+        baseURL: "https://corveil.example",
+        clientID: "crow-client-id",
+        connectedUser: CorveilConnectedUser(id: "u1", email: "me@corp.com", name: "Me"),
+        orgKeys: [
+            CorveilOrgKey(
+                orgID: "org1", orgName: "Acme", keyID: "key1",
+                keyPrefix: "sk-citadel-AbC",
+                createdAt: Date(timeIntervalSince1970: 1_800_000_000)),
+        ],
+        oauth: CorveilOAuthTokens(
+            accessToken: "at", refreshToken: "rt", registrationAccessToken: "rat",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_900_000_000)))
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.corveilConnection == config.corveilConnection)
+}
+
+@Test func corveilConnectionDefaultsNilWhenKeyMissing() throws {
+    // A config written before the integration existed decodes with no connection.
+    let json = #"{"workspaces": []}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.corveilConnection == nil)
+}
+
+@Test func corveilConnectionUnsetKeyIsOmittedOnSave() throws {
+    // nil connection encodes as an ABSENT key (optional), not `null`.
+    let data = try JSONEncoder().encode(AppConfig())
+    let text = String(data: data, encoding: .utf8) ?? ""
+    #expect(!text.contains("corveilConnection"))
+}
+
+/// Acceptance (CROW-809 lesson): the block decodes leniently — a missing key
+/// never traps, and a partial object fills the rest from defaults rather than
+/// failing the whole config load.
+@Test func corveilConnectionDecodesLeniently() throws {
+    // Only some keys present, and even a nested block (`oauth`) partially filled.
+    let json = #"""
+    {"corveilConnection": {"baseURL": "https://corveil.example",
+      "connectedUser": {"email": "me@corp.com"},
+      "oauth": {"accessToken": "at"}}}
+    """#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    let conn = try #require(config.corveilConnection)
+    #expect(conn.baseURL == "https://corveil.example")
+    #expect(conn.clientID == "")                       // absent → default
+    #expect(conn.connectedUser.email == "me@corp.com")
+    #expect(conn.connectedUser.name == "")             // absent → default
+    #expect(conn.orgKeys.isEmpty)                       // absent → default
+    #expect(conn.oauth.accessToken == "at")
+    #expect(conn.oauth.refreshToken == "")             // absent → default
+    #expect(conn.oauth.accessTokenExpiresAt == nil)    // absent → nil
+}
+
+/// An empty `corveilConnection: {}` decodes to an all-default connection rather
+/// than trapping — the same tolerance every other settings block has (CROW-814).
+@Test func corveilConnectionDecodesEmptyObject() throws {
+    let json = #"{"corveilConnection": {}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    let conn = try #require(config.corveilConnection)
+    #expect(conn.baseURL == "")
+    #expect(conn.isEmpty)
+}
+
+/// The CROW-809 regression proper: every stored field must be in `CodingKeys`,
+/// or the synthesized `encode(to:)` silently drops it on the next config save.
+/// A full connection read off disk must still be there after the re-encode.
+@Test func corveilConnectionSurvivesAConfigRewrite() throws {
+    let json = #"""
+    {"corveilConnection": {"baseURL": "https://corveil.example", "clientID": "cid",
+      "connectedUser": {"id": "u1", "email": "me@corp.com", "name": "Me"},
+      "orgKeys": [{"orgID": "org1", "orgName": "Acme", "keyID": "key1", "keyPrefix": "sk-citadel-AbC"}],
+      "oauth": {"accessToken": "at", "refreshToken": "rt", "registrationAccessToken": "rat"}}}
+    """#.data(using: .utf8)!
+    let loaded = try JSONDecoder().decode(AppConfig.self, from: json)
+    let rewritten = try JSONDecoder().decode(
+        AppConfig.self, from: try JSONEncoder().encode(loaded))
+    #expect(rewritten.corveilConnection == loaded.corveilConnection)
+    #expect(rewritten.corveilConnection?.orgKeys.first?.keyID == "key1")
+    #expect(rewritten.corveilConnection?.oauth.registrationAccessToken == "rat")
+}
+
+@Test func corveilConnectionIsEmptyReflectsClientAndAccessToken() {
+    #expect(CorveilConnection().isEmpty)
+    #expect(CorveilConnection(baseURL: "https://corveil.example").isEmpty)  // no client/token yet
+    #expect(!CorveilConnection(clientID: "cid").isEmpty)
+    #expect(!CorveilConnection(oauth: CorveilOAuthTokens(accessToken: "at")).isEmpty)
+}

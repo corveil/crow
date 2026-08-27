@@ -110,6 +110,17 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// browser-editable config block. `nil`/absent means all-default knobs.
     public var logSync: LogSyncConfig?
 
+    /// First-class Corveil integration connection state (CROW-1118; epic
+    /// CROW-1117). The source of truth for Crow's Corveil "Connect" (OAuth)
+    /// integration — base URL, self-registered client id, connected user, per-org
+    /// key metadata, and the OAuth tokens. The existing `WorkspaceGateway` +
+    /// logsync configs are *generated* from it. Absent (`nil`) means "not
+    /// connected". Its three OAuth token strings are secrets: `SettingsSecrets`
+    /// blanks them for the browser and restores the whole block on the way back,
+    /// so they never leave via `get-config`/`set-config` and a round-trip can't
+    /// clear the connection. See ``CorveilConnection``.
+    public var corveilConnection: CorveilConnection?
+
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
     /// excluded by any workspace (or the global default) is hidden from the review
@@ -174,7 +185,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         jiraCredential: JiraCredential? = nil,
         webAuth: WebAuthConfig? = nil,
         mcpTokens: [MCPTokenRecord] = [],
-        logSync: LogSyncConfig? = nil
+        logSync: LogSyncConfig? = nil,
+        corveilConnection: CorveilConnection? = nil
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -202,6 +214,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.webAuth = webAuth
         self.mcpTokens = mcpTokens
         self.logSync = logSync
+        self.corveilConnection = corveilConnection
     }
 
     public init(from decoder: Decoder) throws {
@@ -256,6 +269,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         webAuth = try container.decodeIfPresent(WebAuthConfig.self, forKey: .webAuth)
         mcpTokens = try container.decodeIfPresent([MCPTokenRecord].self, forKey: .mcpTokens) ?? []
         logSync = try container.decodeIfPresent(LogSyncConfig.self, forKey: .logSync)
+        corveilConnection = try container.decodeIfPresent(CorveilConnection.self, forKey: .corveilConnection)
     }
 
     /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
@@ -279,7 +293,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync
+        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -494,6 +508,195 @@ public struct JiraCredential: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case username, tokenRef
+    }
+}
+
+/// First-class Corveil integration connection state (CROW-1118; epic CROW-1117).
+///
+/// The source of truth for Crow's Corveil **Connect** (OAuth) integration. A
+/// Connect button runs a Dynamic-Client-Registration + PKCE OAuth flow against
+/// Corveil's own authorization server over a `127.0.0.1` loopback callback; the
+/// result is stored here, and the existing per-workspace / Manager
+/// ``WorkspaceGateway`` + logsync configs are **generated** from it (org picker →
+/// gateway header + upload opt-in), so gateway resolution and the log collector
+/// are unchanged. Absent (`nil`) means "not connected".
+///
+/// **Secret-safe transport.** Like ``WorkspaceGateway`` and ``JiraCredential``, the
+/// whole block is authored only through the local-only Connect flow and its CLI
+/// verbs (corveil/crow#1120), never `set-config`: `SettingsSecrets` blanks the
+/// three OAuth token strings on the way to a browser and restores the stored
+/// connection verbatim on the way back, so a web round-trip can neither read the
+/// tokens nor clear the connection. The non-secret fields (base URL, client id,
+/// connected user, per-org key metadata, token expiry) pass through for a
+/// read-only display.
+///
+/// Decodes leniently (every field `decodeIfPresent … ?? default`) so a
+/// partially-written block never traps the whole config load — the CROW-814 /
+/// CROW-809 lesson.
+public struct CorveilConnection: Codable, Sendable, Equatable {
+    /// Corveil API base URL the OAuth flow and generated gateway resolve against.
+    public var baseURL: String
+    /// The OAuth client id Crow self-registered via Dynamic Client Registration.
+    public var clientID: String
+    /// The signed-in Corveil user this connection belongs to.
+    public var connectedUser: CorveilConnectedUser
+    /// Metadata (never key material) for the one auto-provisioned gateway key per
+    /// Corveil org. The `sk-citadel-…` value itself lives in the generated
+    /// ``WorkspaceGateway`` header, not here.
+    public var orgKeys: [CorveilOrgKey]
+    /// OAuth token material — the secrets. Stripped for transport by
+    /// `SettingsSecrets`.
+    public var oauth: CorveilOAuthTokens
+
+    /// Whether the connection has enough to be usable — a client id and an access
+    /// token. An all-empty block (e.g. a partially-written record) reads as unset.
+    public var isEmpty: Bool {
+        clientID.trimmingCharacters(in: .whitespaces).isEmpty
+            && oauth.accessToken.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    public init(
+        baseURL: String = "",
+        clientID: String = "",
+        connectedUser: CorveilConnectedUser = CorveilConnectedUser(),
+        orgKeys: [CorveilOrgKey] = [],
+        oauth: CorveilOAuthTokens = CorveilOAuthTokens()
+    ) {
+        self.baseURL = baseURL
+        self.clientID = clientID
+        self.connectedUser = connectedUser
+        self.orgKeys = orgKeys
+        self.oauth = oauth
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        baseURL = try c.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        clientID = try c.decodeIfPresent(String.self, forKey: .clientID) ?? ""
+        connectedUser = try c.decodeIfPresent(CorveilConnectedUser.self, forKey: .connectedUser)
+            ?? CorveilConnectedUser()
+        orgKeys = try c.decodeIfPresent([CorveilOrgKey].self, forKey: .orgKeys) ?? []
+        oauth = try c.decodeIfPresent(CorveilOAuthTokens.self, forKey: .oauth) ?? CorveilOAuthTokens()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case baseURL, clientID, connectedUser, orgKeys, oauth
+    }
+}
+
+/// The signed-in Corveil user identity behind a ``CorveilConnection`` (CROW-1118).
+/// Not a secret — shown read-only in the Integrations UI. Empty strings mean "not
+/// yet populated"; decodes tolerantly so a partial record never traps the config
+/// load.
+public struct CorveilConnectedUser: Codable, Sendable, Equatable {
+    public var id: String
+    public var email: String
+    public var name: String
+
+    public init(id: String = "", email: String = "", name: String = "") {
+        self.id = id
+        self.email = email
+        self.name = name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        email = try c.decodeIfPresent(String.self, forKey: .email) ?? ""
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, email, name }
+}
+
+/// Metadata for the one auto-provisioned gateway key Crow mints per Corveil org
+/// (CROW-1118). Deliberately holds **no key material** — the `sk-citadel-…` value
+/// is written into the generated ``WorkspaceGateway`` header (a separate secret
+/// field), so this block is not a secret and needs no stripping. `keyID` is the
+/// handle a disconnect revokes by; `keyPrefix` lets the UI tell keys apart.
+/// Decodes tolerantly (missing field → empty / nil).
+public struct CorveilOrgKey: Codable, Sendable, Equatable {
+    /// Corveil organization id the key belongs to.
+    public var orgID: String
+    /// Human-readable org name, for the org dropdown.
+    public var orgName: String
+    /// Id of the auto-provisioned gateway key, used to revoke on disconnect.
+    public var keyID: String
+    /// Display prefix of the minted key (never the full `sk-citadel-…` value).
+    public var keyPrefix: String
+    /// When the key was provisioned. `nil` = unknown.
+    public var createdAt: Date?
+
+    public init(
+        orgID: String = "",
+        orgName: String = "",
+        keyID: String = "",
+        keyPrefix: String = "",
+        createdAt: Date? = nil
+    ) {
+        self.orgID = orgID
+        self.orgName = orgName
+        self.keyID = keyID
+        self.keyPrefix = keyPrefix
+        self.createdAt = createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        orgID = try c.decodeIfPresent(String.self, forKey: .orgID) ?? ""
+        orgName = try c.decodeIfPresent(String.self, forKey: .orgName) ?? ""
+        keyID = try c.decodeIfPresent(String.self, forKey: .keyID) ?? ""
+        keyPrefix = try c.decodeIfPresent(String.self, forKey: .keyPrefix) ?? ""
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case orgID, orgName, keyID, keyPrefix, createdAt
+    }
+}
+
+/// OAuth token material for a ``CorveilConnection`` — the secrets (CROW-1118).
+///
+/// All three token strings are blanked by `SettingsSecrets.strippedForTransport`
+/// before the config reaches a browser and restored from the stored config on the
+/// way back, exactly like a gateway header value: they never leave the machine via
+/// `get-config`/`set-config`, and a web round-trip can't clear them. Written only
+/// by the local-only Corveil OAuth client (corveil/crow#1120).
+/// `accessTokenExpiresAt` is not itself a secret but rides with the tokens as one
+/// unit. Decodes tolerantly so a partial record never traps the config load.
+public struct CorveilOAuthTokens: Codable, Sendable, Equatable {
+    /// User-scoped, cross-org OAuth access token (secret).
+    public var accessToken: String
+    /// OAuth refresh token used to renew `accessToken` (secret).
+    public var refreshToken: String
+    /// RFC 7592 registration access token — lets Crow manage (rotate/delete) its
+    /// own Dynamic Client Registration (secret).
+    public var registrationAccessToken: String
+    /// When `accessToken` expires; drives refresh. `nil` = unknown.
+    public var accessTokenExpiresAt: Date?
+
+    public init(
+        accessToken: String = "",
+        refreshToken: String = "",
+        registrationAccessToken: String = "",
+        accessTokenExpiresAt: Date? = nil
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.registrationAccessToken = registrationAccessToken
+        self.accessTokenExpiresAt = accessTokenExpiresAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try c.decodeIfPresent(String.self, forKey: .accessToken) ?? ""
+        refreshToken = try c.decodeIfPresent(String.self, forKey: .refreshToken) ?? ""
+        registrationAccessToken = try c.decodeIfPresent(String.self, forKey: .registrationAccessToken) ?? ""
+        accessTokenExpiresAt = try c.decodeIfPresent(Date.self, forKey: .accessTokenExpiresAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accessToken, refreshToken, registrationAccessToken, accessTokenExpiresAt
     }
 }
 
