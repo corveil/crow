@@ -789,6 +789,29 @@ import CrowPersistence
         #expect(gateway?.baseURL == "https://manual.example")
         #expect(gateway?.customHeaders == ["X-Api-Key": "sk-1"])
     }
+
+    // MARK: - Auto-enable log upload on org selection (corveil/crow#1124)
+
+    @Test func orgSelectionEnablesLogSyncOnlyForOrgDerivedWrites() throws {
+        let derived = try SecretRoutes.resolveGatewayWrite(
+            body: orgBody("org-1"), config: connected(), stored: nil).get()
+        // Picking an org (which produced a gateway) opts the workspace into log upload.
+        #expect(SecretRoutes.orgSelectionEnablesLogSync(
+            body: orgBody("org-1"), resolvedGateway: derived) == true)
+
+        // A manual base-URL + headers write never auto-enables — the user's opt-in
+        // choice is left alone.
+        let manualBody = SecretRoutes.GatewayBody(
+            baseURL: "https://manual.example", headers: ["X-Api-Key": "sk-1"], clear: nil, orgId: nil)
+        let manual = try SecretRoutes.resolveGatewayWrite(
+            body: manualBody, config: connected(), stored: nil).get()
+        #expect(SecretRoutes.orgSelectionEnablesLogSync(body: manualBody, resolvedGateway: manual) == false)
+
+        // A clear (no resulting gateway) never enables, even down the org path.
+        #expect(SecretRoutes.orgSelectionEnablesLogSync(body: orgBody("org-1"), resolvedGateway: nil) == false)
+        // A blank orgId is not a selection.
+        #expect(SecretRoutes.orgSelectionEnablesLogSync(body: orgBody("  "), resolvedGateway: derived) == false)
+    }
 }
 
 /// `CrowDaemon.resolvedExecutablePath` must return an absolute path to *this*

@@ -2121,7 +2121,12 @@
         body.appendChild(orgGatewayEditor({
           current: d.gateway || null,
           postOrg: (orgId) => postConfig('/config/workspace-gateway', { workspaceId: d.id, orgId }),
-          setGateway: (g) => { d.gateway = g; },
+          // Picking an org points this workspace's gateway at that org's key, which
+          // the log upload reuses — so the daemon auto-enables uploadSessionLogs in
+          // the same write (corveil/crow#1124). Mirror it into the draft so the
+          // checkbox reads correct and Save (set-config, which round-trips this
+          // non-secret field) doesn't clobber the server's opt-in back to false.
+          setGateway: (g) => { d.gateway = g; if (g) d.uploadSessionLogs = true; },
           manual,
         }));
       } else {

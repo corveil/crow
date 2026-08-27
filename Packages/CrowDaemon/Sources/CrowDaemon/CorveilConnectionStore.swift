@@ -190,6 +190,12 @@ enum CorveilConnectionPersistence {
     /// mint and this write is preserved, and re-selecting an org replaces its key
     /// in place rather than appending a duplicate.
     ///
+    /// A **rotate** (a fresh secret over an existing one) also propagates the new key
+    /// into every gateway derived from the old value — the Manager gateway and each
+    /// workspace gateway embed the `sk-citadel-…` inline, and the log upload reuses
+    /// that same header — so they don't strand on the revoked key (corveil/crow#1124).
+    /// Done in this one locked write for atomicity; a no-op on a first mint or a reuse.
+    ///
     /// Returns whether the key was written. **Reconnect-wins** (mirrors
     /// ``recordRefreshSuccess``): the write is refused unless the stored connection
     /// is still the same grant that minted — its `clientID` must equal
@@ -212,10 +218,19 @@ enum CorveilConnectionPersistence {
             guard var connection = config.corveilConnection,
                   connection.clientID == expectedClientID
             else { return false }
+            // Capture the outgoing key BEFORE replacing it: a rotate (`force: true`)
+            // mints a fresh secret over an existing one, and the gateways derived from
+            // the old value must be carried forward to the new one (corveil/crow#1124).
+            let previousSecret = connection.orgKeySecrets[orgKey.orgID] ?? ""
             connection.orgKeys.removeAll { $0.orgID == orgKey.orgID }
             connection.orgKeys.append(orgKey)
             connection.orgKeySecrets[orgKey.orgID] = secret
             config.corveilConnection = connection
+            // Rotation propagation, in the SAME locked write as the key replacement so
+            // there is no window where the connection holds the new key while a bound
+            // gateway (Manager or workspace) still carries the revoked one. A no-op on
+            // a first mint (previousSecret blank) or a reuse that didn't change it.
+            config.propagateCorveilKeyRotation(from: previousSecret, to: secret)
             try ConfigStore.saveConfig(config, devRoot: devRoot)
             return true
         }

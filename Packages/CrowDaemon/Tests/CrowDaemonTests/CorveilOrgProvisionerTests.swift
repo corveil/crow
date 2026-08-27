@@ -50,6 +50,14 @@ import FoundationNetworking
         ConfigStore.loadConfig(devRoot: devRoot)?.corveilConnection
     }
 
+    /// Load the stored config, mutate it, and save it back — for seeding gateways /
+    /// workspaces on top of a `seedConnection`.
+    private func updateStoredConfig(_ devRoot: String, _ mutate: (inout AppConfig) -> Void) throws {
+        var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+        mutate(&config)
+        try ConfigStore.saveConfig(config, devRoot: devRoot)
+    }
+
     // MARK: - API stub
 
     /// Records requests and serves per-endpoint canned responses, so tests can
@@ -396,6 +404,44 @@ import FoundationNetworking
         #expect(conn.orgKeys.count == 1)
         #expect(conn.orgKeys.first?.keyID == "key-1")
         #expect(conn.orgKeySecrets["org1"] == "sk-citadel-secret-1")
+    }
+
+    @Test func provisionForcePropagatesRotatedKeyToBoundGateways() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let header = CorveilConnection.gatewayAPIKeyHeader
+        // Seed a connection holding org1's OLD key, plus the gateways derived from it:
+        // the Manager gateway and one workspace gateway carry the old value, and a
+        // second workspace is bound to a DIFFERENT org's key that must NOT rotate.
+        try seedConnection(
+            devRoot: devRoot,
+            orgKeys: [CorveilOrgKey(orgID: "org1", orgName: "Acme", keyID: "old", keyPrefix: "sk-citadel-old")],
+            orgKeySecrets: ["org1": "sk-citadel-old-value"])
+        try updateStoredConfig(devRoot) { config in
+            config.managerGateway = WorkspaceGateway(
+                baseURL: self.base, customHeaders: [header: "sk-citadel-old-value"])
+            var bound = WorkspaceInfo(name: "bound")
+            bound.gateway = WorkspaceGateway(baseURL: self.base, customHeaders: [header: "sk-citadel-old-value"])
+            bound.uploadSessionLogs = true
+            var otherOrg = WorkspaceInfo(name: "other")
+            otherOrg.gateway = WorkspaceGateway(baseURL: self.base, customHeaders: [header: "sk-citadel-other"])
+            config.workspaces = [bound, otherOrg]
+        }
+        let api = APIStub()
+
+        _ = try await CorveilOrgProvisioner.provision(
+            devRoot: devRoot, orgID: "org1", orgName: "Acme", cache: CorveilOrgListCache(),
+            apiClient: api.client(), oauthClient: neverCalledOAuth(), force: true)
+
+        let config = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        // The rotated key reached the connection, the Manager gateway, and the bound
+        // workspace's gateway — the same header the log upload reuses (corveil/crow#1124).
+        #expect(config.corveilConnection?.orgKeySecrets["org1"] == "sk-citadel-secret-1")
+        #expect(config.managerGateway?.customHeaders[header] == "sk-citadel-secret-1")
+        #expect(config.workspaces[0].gateway?.customHeaders[header] == "sk-citadel-secret-1")
+        #expect(config.workspaces[0].uploadSessionLogs == true)
+        // A gateway bound to a different org's key is left untouched.
+        #expect(config.workspaces[1].gateway?.customHeaders[header] == "sk-citadel-other")
     }
 
     // MARK: - Deprovision

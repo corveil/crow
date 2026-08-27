@@ -1356,3 +1356,67 @@ import Testing
         baseURL: "   ", clientID: "cid", orgKeySecrets: ["org-1": "sk-citadel-AbCdEf"])
     #expect(noBase.derivedGateway(orgID: "org-1") == nil)
 }
+
+// MARK: - Key-rotation propagation (corveil/crow#1124)
+
+@Test func gatewayRewritesCorveilKeyByValue() {
+    let key = CorveilConnection.gatewayAPIKeyHeader
+    let gateway = WorkspaceGateway(
+        baseURL: "https://gw.corveil.example", customHeaders: [key: "sk-citadel-old"])
+
+    let rotated = gateway.rewritingGatewayKey(from: "sk-citadel-old", to: "sk-citadel-new")
+    #expect(rotated.customHeaders == [key: "sk-citadel-new"])
+    #expect(rotated.baseURL == gateway.baseURL)
+
+    // A gateway that doesn't carry the old value is returned unchanged (a manual
+    // gateway on a different key, or one already rotated).
+    let unrelated = WorkspaceGateway(baseURL: "https://other", customHeaders: [key: "sk-citadel-keep"])
+    #expect(unrelated.rewritingGatewayKey(from: "sk-citadel-old", to: "sk-citadel-new") == unrelated)
+
+    // Blank or unchanged old secret is a no-op — never rewrites an unrelated blank.
+    let blank = WorkspaceGateway(baseURL: "https://gw", customHeaders: ["X-Other": ""])
+    #expect(blank.rewritingGatewayKey(from: "", to: "sk-citadel-new") == blank)
+    #expect(gateway.rewritingGatewayKey(from: "sk-citadel-old", to: "sk-citadel-old") == gateway)
+}
+
+@Test func gatewayRewritesCorveilKeyUnderAnyHeaderName() {
+    // The secret is matched by value, so a manual gateway that stored the same key
+    // under a differently-named header still rotates (mirrors LogSyncCollector's
+    // multi-name credential lookup).
+    let gateway = WorkspaceGateway(
+        baseURL: "https://gw", customHeaders: ["Authorization": "sk-citadel-old"])
+    let rotated = gateway.rewritingGatewayKey(from: "sk-citadel-old", to: "sk-citadel-new")
+    #expect(rotated.customHeaders == ["Authorization": "sk-citadel-new"])
+}
+
+@Test func propagateCorveilKeyRotationRewritesManagerAndWorkspaceGateways() {
+    let key = CorveilConnection.gatewayAPIKeyHeader
+    var config = AppConfig()
+    config.managerGateway = WorkspaceGateway(
+        baseURL: "https://gw", customHeaders: [key: "sk-citadel-old"])
+    var boundWorkspace = WorkspaceInfo(name: "bound")
+    boundWorkspace.gateway = WorkspaceGateway(baseURL: "https://gw", customHeaders: [key: "sk-citadel-old"])
+    var otherOrgWorkspace = WorkspaceInfo(name: "other")
+    otherOrgWorkspace.gateway = WorkspaceGateway(baseURL: "https://gw", customHeaders: [key: "sk-citadel-other"])
+    let noGateway = WorkspaceInfo(name: "none")
+    config.workspaces = [boundWorkspace, otherOrgWorkspace, noGateway]
+
+    config.propagateCorveilKeyRotation(from: "sk-citadel-old", to: "sk-citadel-new")
+
+    #expect(config.managerGateway?.customHeaders == [key: "sk-citadel-new"])
+    #expect(config.workspaces[0].gateway?.customHeaders == [key: "sk-citadel-new"])
+    // A workspace bound to a DIFFERENT org's key is untouched.
+    #expect(config.workspaces[1].gateway?.customHeaders == [key: "sk-citadel-other"])
+    // A workspace with no gateway stays nil (no crash, no spurious gateway).
+    #expect(config.workspaces[2].gateway == nil)
+}
+
+@Test func propagateCorveilKeyRotationIsNoOpForFirstMint() {
+    let key = CorveilConnection.gatewayAPIKeyHeader
+    var config = AppConfig()
+    config.managerGateway = WorkspaceGateway(baseURL: "https://gw", customHeaders: [key: "sk-citadel-keep"])
+    let before = config
+    // A first mint has no prior secret — a blank `from` must change nothing.
+    config.propagateCorveilKeyRotation(from: "", to: "sk-citadel-new")
+    #expect(config == before)
+}

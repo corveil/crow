@@ -652,6 +652,56 @@ extension CorveilConnection {
     }
 }
 
+extension WorkspaceGateway {
+    /// A copy of this gateway with any header carrying `oldSecret` rewritten to
+    /// `newSecret`, or `self` unchanged when it carries no such value
+    /// (corveil/crow#1124).
+    ///
+    /// A gateway derived from a Corveil org embeds the org's `sk-citadel-…` key
+    /// *inline* as its ``CorveilConnection/gatewayAPIKeyHeader`` value — there is no
+    /// live link back to the org — so when that key is rotated the stored gateway
+    /// keeps authenticating with the revoked value until it is rewritten here. The
+    /// same header is what `LogSyncCollector` reads for the upload credential, so one
+    /// rewrite propagates the rotation to both the AI-gateway header and the
+    /// log-upload credential.
+    ///
+    /// Matching is by header **value**, not name: the secret is high-entropy and
+    /// unique to the key, so this also catches a manual gateway that stored the same
+    /// key under a differently-named header (mirroring
+    /// ``LogSyncCollector``'s multi-name credential lookup). A blank `oldSecret`, or
+    /// one equal to `newSecret`, is a no-op — nothing to propagate, and matching an
+    /// empty value would rewrite unrelated blank headers.
+    public func rewritingGatewayKey(from oldSecret: String, to newSecret: String) -> WorkspaceGateway {
+        guard !oldSecret.isEmpty, oldSecret != newSecret,
+              customHeaders.values.contains(oldSecret)
+        else { return self }
+        var headers = customHeaders
+        for (name, value) in headers where value == oldSecret { headers[name] = newSecret }
+        return WorkspaceGateway(baseURL: baseURL, customHeaders: headers)
+    }
+}
+
+extension AppConfig {
+    /// Propagate a Corveil org key rotation across every stored gateway that embeds
+    /// the old key value — the Manager gateway and each workspace gateway
+    /// (corveil/crow#1124). The rotation itself lives in the connection's
+    /// `orgKeySecrets`; this carries the new value into the gateways derived from it
+    /// so neither the AI-gateway launch nor the reused log-upload credential is left
+    /// authenticating with the revoked key.
+    ///
+    /// A no-op when `oldSecret` is blank or unchanged (see
+    /// ``WorkspaceGateway/rewritingGatewayKey(from:to:)``), so it is safe to call on
+    /// a first mint (no prior secret) as well as a rotate.
+    public mutating func propagateCorveilKeyRotation(from oldSecret: String, to newSecret: String) {
+        guard !oldSecret.isEmpty, oldSecret != newSecret else { return }
+        managerGateway = managerGateway?.rewritingGatewayKey(from: oldSecret, to: newSecret)
+        for index in workspaces.indices {
+            workspaces[index].gateway =
+                workspaces[index].gateway?.rewritingGatewayKey(from: oldSecret, to: newSecret)
+        }
+    }
+}
+
 /// The health of a ``CorveilConnection``'s access token, as one of four states
 /// (CROW-1125). Drives the Integrations tab and `crow corveil status`: `.expired`
 /// and `.revoked` are the two that ask the user to **Reconnect**.
