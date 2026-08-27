@@ -311,3 +311,9 @@
 .backfill-status.status-new { color: var(--text-muted); }
 .backfill-empty { padding: 28px; text-align: center; color: var(--text-muted); font-size: 13px; }
 .backfill-note { font-size: 12px; color: var(--text-secondary); flex: 1 1 auto; }
+
+/* Integrations — Corveil card (CROW-1122) */
+.st-corveil-status { display: flex; align-items: center; gap: 8px; margin: 2px 0 12px; font-size: 12px; }
+.st-corveil-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); flex: 0 0 auto; }
+.st-corveil-dot.on { background: var(--green); }
+.st-corveil-status-text { color: var(--text-primary); }

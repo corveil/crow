@@ -38,6 +38,7 @@
     ['jobs', 'Jobs'],
     ['notifications', 'Notifications'],
     ['webaccess', 'Web access'],
+    ['integrations', 'Integrations'],
     ['about', 'About'],
   ];
 
@@ -179,6 +180,7 @@
     catch (_) { autostart = null; }
     dirty = false;
     subForm = null;
+    resetCorveilConnectState();
     activeTab = TABS.some(([k]) => k === tab) ? tab : 'general';
     if (typeof navigate === 'function') navigate({ view: 'settings', tab: activeTab });
     render();
@@ -317,6 +319,7 @@
     else if (activeTab === 'jobs') renderJobs(body);
     else if (activeTab === 'notifications') renderNotifications(body);
     else if (activeTab === 'webaccess') renderWebAccess(body);
+    else if (activeTab === 'integrations') renderIntegrations(body);
     else if (activeTab === 'about') renderAbout(body);
   }
 
@@ -1311,6 +1314,300 @@
     row.appendChild(mintBtn);
     body.appendChild(field('New token', row, 'Shown once. Applies immediately — no Save needed.'));
     body.appendChild(msg);
+  }
+
+  // ---- Integrations (CROW-1122) ------------------------------------------
+  //
+  // The Corveil integration card. The connection is authored ONLY through the
+  // local-only OAuth Connect flow (POST /integrations/corveil/connect) and cleared
+  // through the local-only POST /config/corveil-connection {clear:true} — never
+  // set-config, because the block holds OAuth tokens (SettingsSecrets). So the
+  // browser reads connection state from the stripped get-config (cfg.corveilConnection:
+  // OAuth token strings blanked, identity / base URL / org metadata kept) and mutates
+  // it through those two dedicated endpoints, exactly like the AI gateways and the
+  // web password. A proxied/remote session sees it read-only.
+
+  // Connect-flow UI state, module-level so a re-render (Refresh, tab switch,
+  // close/reopen) reconstructs the SAME disconnected card instead of dropping a
+  // fresh, enabled Connect over a poll that is still in flight (round-2 review).
+  // renderCorveilDisconnected derives the button's disabled state and the status
+  // copy from these, and the poller drives every change through render() — the
+  // card is a pure function of state, so nothing can desync from a stale closure.
+  let corveilPolling = false;      // a connect poll is in flight
+  let corveilConnectNote = '';     // status line under Connect (opened / timed-out / error)
+  let corveilAuthorizeURL = '';    // fallback sign-in link, when Connect returned one
+  // Reset the connect-flow state — called when Settings (re)opens so a new modal
+  // never inherits a prior attempt's polling flag or copy.
+  function resetCorveilConnectState() {
+    corveilPolling = false;
+    corveilConnectNote = '';
+    corveilAuthorizeURL = '';
+  }
+
+  function renderIntegrations(body) {
+    body.appendChild(group('Corveil'));
+    body.appendChild(el('div', 'st-help',
+      'Connect Crow to your Corveil account to provision AI-gateway keys and ship '
+      + 'session transcripts to the organizational knowledge graph.'));
+    renderCorveilCard(body);
+  }
+
+  // Connected = the block is present with a non-empty client id. The block reaches
+  // the browser only when a connection is stored, and the client id survives
+  // transport (only the OAuth token strings are stripped) — so it is the one
+  // always-present, required field that separates "connected" from "not".
+  function corveilConnected(conn) {
+    return !!(conn && (conn.clientID || '').trim());
+  }
+
+  // Re-read ONLY cfg.corveilConnection from a fresh get-config, leaving any unsaved
+  // edits on other tabs untouched and never marking the form dirty. The connection
+  // lives outside the Save flow (authored via local-only POSTs, restored verbatim on
+  // set-config), so this is how the tab reflects a connect/disconnect that completed
+  // out of band — the OAuth consent happens in a separate browser window.
+  async function refreshCorveilConnection() {
+    const res = await rpc('get-config');
+    let parsed = {};
+    try { parsed = JSON.parse((res && res.config) || '{}'); } catch (_) { parsed = {}; }
+    cfg.corveilConnection = parsed.corveilConnection || null;
+    return cfg.corveilConnection;
+  }
+
+  function renderCorveilCard(body) {
+    const conn = cfg.corveilConnection || null;
+    const connected = corveilConnected(conn);
+
+    const statusRow = el('div', 'st-corveil-status');
+    statusRow.appendChild(el('span', 'st-corveil-dot' + (connected ? ' on' : '')));
+    statusRow.appendChild(el('span', 'st-corveil-status-text',
+      connected ? corveilIdentityLine(conn) : 'Not connected.'));
+    body.appendChild(statusRow);
+
+    if (connected) renderCorveilConnected(body, conn);
+    else renderCorveilDisconnected(body, conn);
+  }
+
+  function corveilUserText(user) {
+    const name = ((user && user.name) || '').trim();
+    const email = ((user && user.email) || '').trim();
+    if (name && email) return name + ' (' + email + ')';
+    return name || email || '';
+  }
+  function corveilIdentityLine(conn) {
+    const t = corveilUserText(conn.connectedUser || {});
+    return t ? 'Connected as ' + t : 'Connected to Corveil.';
+  }
+
+  // Config dates arrive from get-config encoded by a default Swift JSONEncoder,
+  // whose .deferredToDate strategy emits a NUMBER of seconds since the 2001-01-01
+  // reference epoch — not unix milliseconds, and not ISO. Handing that straight to
+  // `new Date(n)` (which reads a bare number as unix ms) renders every date in
+  // January 1970 (CROW-1122 review). Convert the number from the Swift epoch here;
+  // also accept an ISO-8601 string defensively (the shape `crow corveil status`
+  // emits). Returns a Date, or null when the value is absent or unparseable.
+  const SWIFT_REFERENCE_EPOCH_MS = Date.UTC(2001, 0, 1); // 978307200000
+  function corveilParseDate(v) {
+    if (v == null || v === '') return null;
+    const d = typeof v === 'number'
+      ? new Date(SWIFT_REFERENCE_EPOCH_MS + v * 1000)
+      : new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function corveilOrgSub(org) {
+    const parts = [];
+    if (org.orgID && org.orgID !== org.orgName) parts.push(org.orgID);
+    if ((org.keyPrefix || '').trim()) parts.push('key ' + org.keyPrefix + '…');
+    const created = corveilParseDate(org.createdAt);
+    if (created) parts.push('provisioned ' + created.toLocaleDateString());
+    return parts.join(' · ') || '—';
+  }
+
+  function renderCorveilConnected(body, conn) {
+    // Identity + base URL, read-only — non-secret fields kept in the stripped
+    // config, shown the same way as the read-only dev-root path and gateway views.
+    const user = conn.connectedUser || {};
+    if (corveilUserText(user)) {
+      body.appendChild(textField('Signed in as', { v: corveilUserText(user) }, 'v', { readonly: true }));
+    }
+    body.appendChild(textField('Base URL', { v: conn.baseURL || '' }, 'v',
+      { readonly: true, help: 'The Corveil API endpoint this connection resolves against.' }));
+
+    // Client id + access-token expiry: useful, non-secret connection detail. The
+    // token VALUE never reaches the browser (stripped); only its expiry does.
+    const detail = [];
+    if ((conn.clientID || '').trim()) detail.push('Client ID ' + conn.clientID);
+    const exp = corveilParseDate(conn.oauth && conn.oauth.accessTokenExpiresAt);
+    if (exp) detail.push('access token expires ' + exp.toLocaleString());
+    if (detail.length) body.appendChild(el('div', 'st-perm-status', detail.join(' · ')));
+
+    // Organizations — the per-org gateway-key metadata (never key material; the
+    // sk-citadel-… value lives in the generated workspace gateway header, not here).
+    body.appendChild(group('Organizations'));
+    const orgs = conn.orgKeys || [];
+    if (!orgs.length) {
+      body.appendChild(el('div', 'st-empty', 'No organizations provisioned yet.'));
+    } else {
+      for (const org of orgs) {
+        const row = el('div', 'st-row');
+        const main = el('div', 'st-row-main');
+        main.appendChild(el('div', 'st-row-title', org.orgName || org.orgID || '(unnamed org)'));
+        main.appendChild(el('div', 'st-row-sub', corveilOrgSub(org)));
+        row.appendChild(main);
+        body.appendChild(row);
+      }
+    }
+
+    // Disconnect — local-only, like clearing a gateway.
+    body.appendChild(group('Connection'));
+    if (!isLocal) {
+      body.appendChild(readonlyNote(
+        'Disconnecting is available only from a local browser (on the machine running crowd).'));
+      return;
+    }
+    const msg = el('div', 'st-perm-status', '');
+    const btn = el('button', 'action-btn action-danger', 'Disconnect');
+    btn.type = 'button';
+    btn.onclick = async () => {
+      if (!await confirmModal(
+        'Disconnect from Corveil? Crow stops using this connection. The per-org gateway '
+        + 'keys are revoked separately on the Corveil side.',
+        { title: 'Disconnect from Corveil', okLabel: 'Disconnect', danger: true })) return;
+      btn.disabled = true; msg.textContent = 'Disconnecting…';
+      try {
+        await postConfig('/config/corveil-connection', { clear: true });
+        cfg.corveilConnection = null;
+        render();
+      } catch (e) {
+        msg.textContent = 'Failed: ' + (e.message || e);
+        btn.disabled = false;
+      }
+    };
+    body.appendChild(field('Disconnect', btn,
+      'Clears the stored connection on this machine. Applies immediately — no Save needed.'));
+    body.appendChild(msg);
+  }
+
+  function renderCorveilDisconnected(body, conn) {
+    // Connect authors OAuth tokens on the daemon host, so — like the web password
+    // and AI gateways — it is refused from a proxied/remote session (the POST's own
+    // gate). Show a read-only note rather than a dead button.
+    if (!isLocal) {
+      body.appendChild(readonlyNote(
+        'Connect to Corveil from a local browser (on the machine running crowd). '
+        + 'The sign-in stores OAuth tokens on that machine, so a remote session can’t start it.'));
+      return;
+    }
+
+    const msg = el('div', 'st-perm-status', corveilConnectNote);
+    const urlInput = el('input', 'st-input');
+    urlInput.type = 'text';
+    urlInput.placeholder = 'https://app.corveil.example';
+    urlInput.value = (conn && conn.baseURL) || '';
+    body.appendChild(field('Corveil base URL', urlInput,
+      'Your Corveil instance’s URL. Crow self-registers an OAuth client and opens your browser to sign in.'));
+
+    const btn = el('button', 'action-btn action-primary', 'Connect to Corveil');
+    btn.type = 'button';
+    // Disabled while a poll is in flight, so a re-render (Refresh / tab return /
+    // reopen) can never present a second, enabled Connect over a pending sign-in.
+    btn.disabled = corveilPolling;
+    btn.onclick = async () => {
+      const baseURL = urlInput.value.trim();
+      if (!baseURL) { corveilConnectNote = 'Enter your Corveil base URL.'; msg.textContent = corveilConnectNote; return; }
+      btn.disabled = true;
+      corveilConnectNote = 'Opening sign-in…';
+      corveilAuthorizeURL = '';
+      msg.textContent = corveilConnectNote;
+      try {
+        const res = await postConfig('/integrations/corveil/connect', { baseURL });
+        corveilConnectNote = 'A browser window opened to sign in to Corveil. '
+          + 'Complete it there — this updates automatically when you’re done.';
+        corveilAuthorizeURL = (res && res.authorizeURL) || '';
+        startCorveilConnectPoll();
+        // Re-render so the whole card reflects the in-flight poll uniformly
+        // (Connect disabled, waiting copy, fallback link) from module state.
+        render();
+      } catch (e) {
+        corveilConnectNote = 'Failed: ' + (e.message || e);
+        corveilAuthorizeURL = '';
+        msg.textContent = corveilConnectNote;
+        btn.disabled = false;
+      }
+    };
+    body.appendChild(field('Connect', btn, 'Applies immediately — no Save needed.'));
+    body.appendChild(msg);
+
+    // Auto-open is best-effort on the daemon host; offer the URL as a fallback.
+    // Rendered from module state so it survives a re-render while polling.
+    if (corveilAuthorizeURL) {
+      const fallback = el('div', 'st-perm-status');
+      fallback.appendChild(document.createTextNode('Didn’t see a window? '));
+      const a = el('a', null, 'Open the sign-in page');
+      a.href = corveilAuthorizeURL;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      fallback.appendChild(a);
+      body.appendChild(fallback);
+    }
+
+    // Manual fallback if the auto-poll window elapses (a slow sign-in). Safe to
+    // click during a poll — render() keeps Connect disabled until the poll ends.
+    const refresh = el('button', 'action-btn', 'Refresh status');
+    refresh.type = 'button';
+    refresh.onclick = async () => {
+      refresh.disabled = true;
+      try { await refreshCorveilConnection(); render(); }
+      catch (e) { corveilConnectNote = 'Could not refresh: ' + (e.message || e); msg.textContent = corveilConnectNote; refresh.disabled = false; }
+    };
+    body.appendChild(field(null, refresh));
+  }
+
+  // After Connect, the OAuth consent completes in a separate browser window and the
+  // daemon stores the tokens; this tab still holds the pre-connect config. Poll a
+  // fresh get-config until the connection appears (or the user leaves), then
+  // re-render — into the connected view on success, or back to an enabled Connect
+  // (with "still not connected" copy) on timeout. State lives entirely in the module
+  // vars above and the card is a pure function of them, so a mid-poll Refresh / tab
+  // switch can't leave a stale, stuck button behind.
+  function startCorveilConnectPoll() {
+    if (corveilPolling) return;
+    corveilPolling = true;
+    // Bind this poll to the modal instance that started it: a close+reopen replaces
+    // `backdrop` with a new element, and this poll must go inert rather than drive
+    // (or double up on) the fresh modal — which reset its own state on open.
+    const myBackdrop = backdrop;
+    let attempts = 0;
+    const tick = async () => {
+      // Stop if this modal closed/reopened, or the user left the Integrations tab.
+      // Clear the transient copy so a later return shows a clean, enabled card.
+      if (backdrop !== myBackdrop || activeTab !== 'integrations') {
+        if (backdrop === myBackdrop) { corveilPolling = false; corveilConnectNote = ''; corveilAuthorizeURL = ''; }
+        return;
+      }
+      attempts++;
+      try {
+        if (corveilConnected(await refreshCorveilConnection())) {
+          corveilPolling = false;
+          corveilConnectNote = '';
+          corveilAuthorizeURL = '';
+          render();
+          return;
+        }
+      } catch (_) { /* transient — keep polling */ }
+      if (attempts >= 24) {
+        // Consent + 2FA can outlast the poll window. Drop the flag and re-render:
+        // Connect comes back enabled and the copy points at Refresh.
+        corveilPolling = false;
+        corveilConnectNote = 'Still not connected. Finish the Corveil sign-in, then '
+          + 'click Refresh status — or Connect again.';
+        corveilAuthorizeURL = '';
+        render();
+        return;
+      }
+      setTimeout(tick, 2500);
+    };
+    setTimeout(tick, 2500);
   }
 
   function renderWorkspaces(body) {
