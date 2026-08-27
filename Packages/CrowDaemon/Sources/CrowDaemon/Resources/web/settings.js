@@ -38,6 +38,7 @@
     ['jobs', 'Jobs'],
     ['notifications', 'Notifications'],
     ['webaccess', 'Web access'],
+    ['integrations', 'Integrations'],
     ['about', 'About'],
   ];
 
@@ -317,6 +318,7 @@
     else if (activeTab === 'jobs') renderJobs(body);
     else if (activeTab === 'notifications') renderNotifications(body);
     else if (activeTab === 'webaccess') renderWebAccess(body);
+    else if (activeTab === 'integrations') renderIntegrations(body);
     else if (activeTab === 'about') renderAbout(body);
   }
 
@@ -1311,6 +1313,239 @@
     row.appendChild(mintBtn);
     body.appendChild(field('New token', row, 'Shown once. Applies immediately — no Save needed.'));
     body.appendChild(msg);
+  }
+
+  // ---- Integrations (CROW-1122) ------------------------------------------
+  //
+  // The Corveil integration card. The connection is authored ONLY through the
+  // local-only OAuth Connect flow (POST /integrations/corveil/connect) and cleared
+  // through the local-only POST /config/corveil-connection {clear:true} — never
+  // set-config, because the block holds OAuth tokens (SettingsSecrets). So the
+  // browser reads connection state from the stripped get-config (cfg.corveilConnection:
+  // OAuth token strings blanked, identity / base URL / org metadata kept) and mutates
+  // it through those two dedicated endpoints, exactly like the AI gateways and the
+  // web password. A proxied/remote session sees it read-only.
+
+  // Only one connect poll runs at a time — a second Connect click must not stack
+  // pollers that each call render().
+  let corveilPolling = false;
+
+  function renderIntegrations(body) {
+    body.appendChild(group('Corveil'));
+    body.appendChild(el('div', 'st-help',
+      'Connect Crow to your Corveil account to provision AI-gateway keys and ship '
+      + 'session transcripts to the organizational knowledge graph.'));
+    renderCorveilCard(body);
+  }
+
+  // Connected = the block is present with a non-empty client id. The block reaches
+  // the browser only when a connection is stored, and the client id survives
+  // transport (only the OAuth token strings are stripped) — so it is the one
+  // always-present, required field that separates "connected" from "not".
+  function corveilConnected(conn) {
+    return !!(conn && (conn.clientID || '').trim());
+  }
+
+  // Re-read ONLY cfg.corveilConnection from a fresh get-config, leaving any unsaved
+  // edits on other tabs untouched and never marking the form dirty. The connection
+  // lives outside the Save flow (authored via local-only POSTs, restored verbatim on
+  // set-config), so this is how the tab reflects a connect/disconnect that completed
+  // out of band — the OAuth consent happens in a separate browser window.
+  async function refreshCorveilConnection() {
+    const res = await rpc('get-config');
+    let parsed = {};
+    try { parsed = JSON.parse((res && res.config) || '{}'); } catch (_) { parsed = {}; }
+    cfg.corveilConnection = parsed.corveilConnection || null;
+    return cfg.corveilConnection;
+  }
+
+  function renderCorveilCard(body) {
+    const conn = cfg.corveilConnection || null;
+    const connected = corveilConnected(conn);
+
+    const statusRow = el('div', 'st-corveil-status');
+    statusRow.appendChild(el('span', 'st-corveil-dot' + (connected ? ' on' : '')));
+    statusRow.appendChild(el('span', 'st-corveil-status-text',
+      connected ? corveilIdentityLine(conn) : 'Not connected.'));
+    body.appendChild(statusRow);
+
+    if (connected) renderCorveilConnected(body, conn);
+    else renderCorveilDisconnected(body, conn);
+  }
+
+  function corveilUserText(user) {
+    const name = ((user && user.name) || '').trim();
+    const email = ((user && user.email) || '').trim();
+    if (name && email) return name + ' (' + email + ')';
+    return name || email || '';
+  }
+  function corveilIdentityLine(conn) {
+    const t = corveilUserText(conn.connectedUser || {});
+    return t ? 'Connected as ' + t : 'Connected to Corveil.';
+  }
+  function corveilOrgSub(org) {
+    const parts = [];
+    if (org.orgID && org.orgID !== org.orgName) parts.push(org.orgID);
+    if ((org.keyPrefix || '').trim()) parts.push('key ' + org.keyPrefix + '…');
+    if (org.createdAt) {
+      const d = new Date(org.createdAt);
+      if (!isNaN(d.getTime())) parts.push('provisioned ' + d.toLocaleDateString());
+    }
+    return parts.join(' · ') || '—';
+  }
+
+  function renderCorveilConnected(body, conn) {
+    // Identity + base URL, read-only — non-secret fields kept in the stripped
+    // config, shown the same way as the read-only dev-root path and gateway views.
+    const user = conn.connectedUser || {};
+    if (corveilUserText(user)) {
+      body.appendChild(textField('Signed in as', { v: corveilUserText(user) }, 'v', { readonly: true }));
+    }
+    body.appendChild(textField('Base URL', { v: conn.baseURL || '' }, 'v',
+      { readonly: true, help: 'The Corveil API endpoint this connection resolves against.' }));
+
+    // Client id + access-token expiry: useful, non-secret connection detail. The
+    // token VALUE never reaches the browser (stripped); only its expiry does.
+    const detail = [];
+    if ((conn.clientID || '').trim()) detail.push('Client ID ' + conn.clientID);
+    const exp = conn.oauth && conn.oauth.accessTokenExpiresAt;
+    if (exp) {
+      const d = new Date(exp);
+      if (!isNaN(d.getTime())) detail.push('access token expires ' + d.toLocaleString());
+    }
+    if (detail.length) body.appendChild(el('div', 'st-perm-status', detail.join(' · ')));
+
+    // Organizations — the per-org gateway-key metadata (never key material; the
+    // sk-citadel-… value lives in the generated workspace gateway header, not here).
+    body.appendChild(group('Organizations'));
+    const orgs = conn.orgKeys || [];
+    if (!orgs.length) {
+      body.appendChild(el('div', 'st-empty', 'No organizations provisioned yet.'));
+    } else {
+      for (const org of orgs) {
+        const row = el('div', 'st-row');
+        const main = el('div', 'st-row-main');
+        main.appendChild(el('div', 'st-row-title', org.orgName || org.orgID || '(unnamed org)'));
+        main.appendChild(el('div', 'st-row-sub', corveilOrgSub(org)));
+        row.appendChild(main);
+        body.appendChild(row);
+      }
+    }
+
+    // Disconnect — local-only, like clearing a gateway.
+    body.appendChild(group('Connection'));
+    if (!isLocal) {
+      body.appendChild(readonlyNote(
+        'Disconnecting is available only from a local browser (on the machine running crowd).'));
+      return;
+    }
+    const msg = el('div', 'st-perm-status', '');
+    const btn = el('button', 'action-btn action-danger', 'Disconnect');
+    btn.type = 'button';
+    btn.onclick = async () => {
+      if (!await confirmModal(
+        'Disconnect from Corveil? Crow stops using this connection. The per-org gateway '
+        + 'keys are revoked separately on the Corveil side.',
+        { title: 'Disconnect from Corveil', okLabel: 'Disconnect', danger: true })) return;
+      btn.disabled = true; msg.textContent = 'Disconnecting…';
+      try {
+        await postConfig('/config/corveil-connection', { clear: true });
+        cfg.corveilConnection = null;
+        render();
+      } catch (e) {
+        msg.textContent = 'Failed: ' + (e.message || e);
+        btn.disabled = false;
+      }
+    };
+    body.appendChild(field('Disconnect', btn,
+      'Clears the stored connection on this machine. Applies immediately — no Save needed.'));
+    body.appendChild(msg);
+  }
+
+  function renderCorveilDisconnected(body, conn) {
+    // Connect authors OAuth tokens on the daemon host, so — like the web password
+    // and AI gateways — it is refused from a proxied/remote session (the POST's own
+    // gate). Show a read-only note rather than a dead button.
+    if (!isLocal) {
+      body.appendChild(readonlyNote(
+        'Connect to Corveil from a local browser (on the machine running crowd). '
+        + 'The sign-in stores OAuth tokens on that machine, so a remote session can’t start it.'));
+      return;
+    }
+
+    const msg = el('div', 'st-perm-status', '');
+    const fallback = el('div', 'st-perm-status', '');
+    const urlInput = el('input', 'st-input');
+    urlInput.type = 'text';
+    urlInput.placeholder = 'https://app.corveil.example';
+    urlInput.value = (conn && conn.baseURL) || '';
+    body.appendChild(field('Corveil base URL', urlInput,
+      'Your Corveil instance’s URL. Crow self-registers an OAuth client and opens your browser to sign in.'));
+
+    const btn = el('button', 'action-btn action-primary', 'Connect to Corveil');
+    btn.type = 'button';
+    btn.onclick = async () => {
+      const baseURL = urlInput.value.trim();
+      if (!baseURL) { msg.textContent = 'Enter your Corveil base URL.'; return; }
+      btn.disabled = true; msg.textContent = 'Opening sign-in…'; fallback.textContent = '';
+      try {
+        const res = await postConfig('/integrations/corveil/connect', { baseURL });
+        msg.textContent = 'A browser window opened to sign in to Corveil. '
+          + 'Complete it there — this updates automatically when you’re done.';
+        // Auto-open is best-effort on the daemon host; offer the URL as a fallback.
+        if (res && res.authorizeURL) {
+          const a = el('a', null, 'Open the sign-in page');
+          a.href = res.authorizeURL;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          fallback.appendChild(document.createTextNode('Didn’t see a window? '));
+          fallback.appendChild(a);
+        }
+        pollForCorveilConnection();
+      } catch (e) {
+        msg.textContent = 'Failed: ' + (e.message || e);
+        btn.disabled = false;
+      }
+    };
+    body.appendChild(field('Connect', btn, 'Applies immediately — no Save needed.'));
+    body.appendChild(msg);
+    body.appendChild(fallback);
+
+    // Manual fallback if the auto-poll window elapses (a slow sign-in).
+    const refresh = el('button', 'action-btn', 'Refresh status');
+    refresh.type = 'button';
+    refresh.onclick = async () => {
+      refresh.disabled = true;
+      try { await refreshCorveilConnection(); render(); }
+      catch (e) { msg.textContent = 'Could not refresh: ' + (e.message || e); refresh.disabled = false; }
+    };
+    body.appendChild(field(null, refresh));
+  }
+
+  // After Connect, the OAuth consent completes in a separate browser window and the
+  // daemon stores the tokens; this tab still holds the pre-connect config. Poll a
+  // fresh get-config until the connection appears (or the user leaves), then
+  // re-render into the connected view. Bounded so a never-completed sign-in stops
+  // polling on its own; the Refresh button covers a sign-in slower than the window.
+  function pollForCorveilConnection() {
+    if (corveilPolling) return;
+    corveilPolling = true;
+    let attempts = 0;
+    const tick = async () => {
+      // Stop if the modal closed or the user navigated off the Integrations tab.
+      if (!backdrop || activeTab !== 'integrations') { corveilPolling = false; return; }
+      attempts++;
+      try {
+        if (corveilConnected(await refreshCorveilConnection())) {
+          corveilPolling = false;
+          render();
+          return;
+        }
+      } catch (_) { /* transient — keep polling */ }
+      if (attempts >= 24) { corveilPolling = false; return; }
+      setTimeout(tick, 2500);
+    };
+    setTimeout(tick, 2500);
   }
 
   function renderWorkspaces(body) {

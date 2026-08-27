@@ -6864,7 +6864,7 @@ const ROUTE_BOARDS = ['tickets', 'reviews', 'allowlist', 'scorecard'];
 // Mirrors TABS in settings.js. An unknown tab degrades to 'general' rather than
 // 404ing, so a link from an older/newer build still opens Settings.
 const ROUTE_SETTINGS_TABS = [
-  'general', 'automation', 'workspaces', 'jobs', 'notifications', 'webaccess', 'about',
+  'general', 'automation', 'workspaces', 'jobs', 'notifications', 'webaccess', 'integrations', 'about',
 ];
 
 // The exact hash we last wrote ourselves. `location.hash = …` fires hashchange
