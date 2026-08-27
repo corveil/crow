@@ -201,7 +201,19 @@ struct ParityGateTests {
             logSync: LogSyncConfig(
                 retentionDays: 30,
                 quietPeriodMinutes: 30,
-                maxUploadBytes: 8_000_000)
+                maxUploadBytes: 8_000_000),
+            corveilConnection: CorveilConnection(
+                baseURL: "https://corveil.example",
+                clientID: "crow-probe-client",
+                connectedUser: CorveilConnectedUser(id: "u1", email: "probe@corp.com", name: "Probe"),
+                orgKeys: [
+                    CorveilOrgKey(
+                        orgID: "org1", orgName: "Acme", keyID: "key1",
+                        keyPrefix: "sk-citadel-AbC", createdAt: Date())
+                ],
+                oauth: CorveilOAuthTokens(
+                    accessToken: "at", refreshToken: "rt",
+                    registrationAccessToken: "rat", accessTokenExpiresAt: Date()))
         )
     }
 

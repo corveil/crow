@@ -4,12 +4,14 @@ import Foundation
 ///
 /// The desktop app edits `AppConfig` in-process, so its credential fields never
 /// leave the machine. The web Settings modal, however, ships the whole config to
-/// a browser to render the form. Three fields hold secrets that must **not** be
+/// a browser to render the form. Several fields hold secrets that must **not** be
 /// sent as plaintext, and — per the product decision — are **desktop-only,
 /// read-only on the web**:
 ///   - `jiraCredential.tokenRef` (Jira API token — `op://` ref or plaintext)
 ///   - `managerGateway.customHeaders` values (AI-gateway auth headers)
 ///   - each `workspaces[].gateway.customHeaders` value (per-workspace gateway auth)
+///   - `corveilConnection.oauth` token strings (Corveil OAuth access / refresh /
+///     registration-access tokens — CROW-1118)
 ///
 /// So the web round-trip is deliberately trivial: **strip** the credential values
 /// on the way out (the browser shows names/URLs/username read-only but never the
@@ -52,6 +54,18 @@ public enum SettingsSecrets {
         // behavior knobs (retention / quiet period / upload cap) — no credential
         // and no opt-in — so there is nothing to strip. Both the opt-in and the
         // upload credential are the per-workspace gateway, handled above.
+        //
+        // Corveil connection (CROW-1118): blank the OAuth token strings but keep
+        // the rest of the block (base URL, client id, connected user, per-org key
+        // metadata, token expiry) so the read-only Integrations view can show
+        // what's connected without ever seeing a token. Like a gateway header
+        // value, only the secret is blanked, not the surrounding structure — the
+        // block still decodes unchanged in shape.
+        if c.corveilConnection != nil {
+            c.corveilConnection?.oauth.accessToken = ""
+            c.corveilConnection?.oauth.refreshToken = ""
+            c.corveilConnection?.oauth.registrationAccessToken = ""
+        }
         return c
     }
 
@@ -84,6 +98,14 @@ public enum SettingsSecrets {
         // `current` means a round-trip is a no-op regardless of what came back.
         result.mcpTokens = current?.mcpTokens ?? []
         result.managerGateway = current?.managerGateway
+        // Corveil connection (CROW-1118): authored only through the local-only
+        // Connect (OAuth) flow and its CLI verbs (corveil/crow#1120), never
+        // `set-config`. Restore the whole block from `current` — exactly like
+        // `managerGateway` above — so a browser can neither read the OAuth tokens
+        // (blanked by `strippedForTransport`) nor change or clear the connection
+        // through a config save. A nil `current` drops it, so a client can't
+        // introduce a forged connection when no config is stored yet.
+        result.corveilConnection = current?.corveilConnection
         // Session-log collector (CROW-1070): the `logSync` block is now ordinary,
         // non-secret behavior tuning, so — unlike the gateways/tokens above — it is
         // NOT restored from `current`; the browser's edited knobs round-trip

@@ -703,5 +703,118 @@ public enum ParityLedger {
                 secret never lands in config.json. Same local-only constraint as \
                 `jiraCredential.username`; no verb exists yet.
                 """),
+
+        // MARK: Exempt — Corveil connection (CROW-1118)
+        //
+        // The whole `corveilConnection` block is authored only through the
+        // local-only Connect (OAuth) flow and its CLI verbs (corveil/crow#1120),
+        // never `set-config` — the same local-only constraint as `managerGateway`
+        // / `jiraCredential`. The three OAuth token strings are additionally
+        // blanked by `SettingsSecrets` on the way to a browser and restored on the
+        // way back, so they never leave the machine and a web round-trip can't
+        // clear them. Verbs land in corveil/crow#1120; until then the block has no
+        // CLI surface at all.
+
+        .field(
+            "corveilConnection.baseURL",
+            noCLI: """
+                Corveil API base URL of the active Connect (OAuth) integration \
+                (CROW-1118). Authored only by the local-only Connect flow; CLI verbs \
+                land in corveil/crow#1120.
+                """),
+        .field(
+            "corveilConnection.clientID",
+            noCLI: """
+                OAuth client id Crow self-registered via Dynamic Client Registration \
+                (CROW-1118). Written only by the local-only Connect flow; no \
+                `set-config` path.
+                """),
+        .field(
+            "corveilConnection.connectedUser.id",
+            noCLI: """
+                Corveil user id behind the connection (CROW-1118). Fetched during the \
+                local-only Connect flow and shown read-only; no CLI verb yet \
+                (corveil/crow#1120).
+                """),
+        .field(
+            "corveilConnection.connectedUser.email",
+            noCLI: """
+                Connected Corveil user email (CROW-1118). Read-only display of \
+                connection identity, authored by the local-only Connect flow; verbs \
+                in corveil/crow#1120.
+                """),
+        .field(
+            "corveilConnection.connectedUser.name",
+            noCLI: """
+                Connected Corveil user display name (CROW-1118). Read-only display, \
+                authored by the local-only Connect flow; no `set-config` path \
+                (corveil/crow#1120).
+                """),
+        .field(
+            "corveilConnection.orgKeys[].orgID",
+            noCLI: """
+                Corveil org id for one auto-provisioned gateway key (CROW-1118). \
+                Populated by the local-only org-provisioning step (corveil/crow#1121); \
+                not user-settable.
+                """),
+        .field(
+            "corveilConnection.orgKeys[].orgName",
+            noCLI: """
+                Display name of a Corveil org with an auto-provisioned key \
+                (CROW-1118). Populated by the local-only Connect / provisioning flow; \
+                no CLI verb yet.
+                """),
+        .field(
+            "corveilConnection.orgKeys[].keyID",
+            noCLI: """
+                Id of the auto-provisioned per-org gateway key — the handle a \
+                disconnect revokes by (CROW-1118). Minted server-side; not \
+                user-settable (corveil/crow#1121).
+                """),
+        .field(
+            "corveilConnection.orgKeys[].keyPrefix",
+            noCLI: """
+                Display prefix of the auto-provisioned per-org key so the UI can tell \
+                keys apart (CROW-1118). Derived from the minted key; not \
+                independently settable.
+                """),
+        .field(
+            "corveilConnection.orgKeys[].createdAt",
+            noCLI: """
+                Mint timestamp of the per-org gateway key (CROW-1118). Stamped when \
+                the key is provisioned by the local-only flow (corveil/crow#1121); \
+                not user-settable.
+                """),
+        .field(
+            "corveilConnection.oauth.accessToken",
+            noCLI: """
+                User-scoped OAuth access token (secret). Blanked by \
+                `SettingsSecrets.strippedForTransport` and restored from the stored \
+                config on `set-config`, so it never reaches a browser and a round-trip \
+                can't clear it. Written only by the local-only Corveil OAuth client \
+                (corveil/crow#1120).
+                """),
+        .field(
+            "corveilConnection.oauth.refreshToken",
+            noCLI: """
+                OAuth refresh token (secret). Same secret-safe transport as the access \
+                token — stripped for a browser, restored on the way back — and written \
+                only by the local-only Corveil OAuth client (corveil/crow#1120).
+                """),
+        .field(
+            "corveilConnection.oauth.registrationAccessToken",
+            noCLI: """
+                RFC 7592 registration access token that manages Crow's own DCR client \
+                (secret). Stripped for transport and restored from the stored config; \
+                authored only by the local-only Corveil OAuth client \
+                (corveil/crow#1120).
+                """),
+        .field(
+            "corveilConnection.oauth.accessTokenExpiresAt",
+            noCLI: """
+                Access-token expiry that drives refresh (CROW-1118). Written with the \
+                tokens by the local-only Corveil OAuth client (corveil/crow#1120); \
+                read-only connection-health display, with no `set-config` write path.
+                """),
     ]
 }

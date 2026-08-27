@@ -29,6 +29,21 @@ import CrowCore
                 name: "grok-bot", prefix: "AbCdEfGh", hashB64: "TE9DQUwtVE9LRU4tSEFTSA==",
                 scopes: [.boardRead], expiresAt: Date(timeIntervalSince1970: 1_900_000_000)),
         ]
+        c.corveilConnection = CorveilConnection(
+            baseURL: "https://corveil.example",
+            clientID: "crow-client-id",
+            connectedUser: CorveilConnectedUser(id: "u1", email: "me@corp.com", name: "Me"),
+            orgKeys: [
+                CorveilOrgKey(
+                    orgID: "org1", orgName: "Acme", keyID: "key1",
+                    keyPrefix: "sk-citadel-AbC",
+                    createdAt: Date(timeIntervalSince1970: 1_800_000_000)),
+            ],
+            oauth: CorveilOAuthTokens(
+                accessToken: "CORVEIL-ACCESS-SECRET",
+                refreshToken: "CORVEIL-REFRESH-SECRET",
+                registrationAccessToken: "CORVEIL-REG-SECRET",
+                accessTokenExpiresAt: Date(timeIntervalSince1970: 1_900_000_000)))
         return c
     }
 
@@ -192,5 +207,80 @@ import CrowCore
         let incoming = SettingsSecrets.strippedForTransport(configWithSecrets())
         let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: nil)
         #expect(merged.mcpTokens.isEmpty)
+    }
+
+    // MARK: - Corveil connection (CROW-1118)
+
+    @Test func strippedBlanksCorveilOAuthTokensButKeepsTheRest() {
+        let stripped = SettingsSecrets.strippedForTransport(configWithSecrets())
+
+        // The three OAuth token strings are blanked…
+        #expect(stripped.corveilConnection?.oauth.accessToken == "")
+        #expect(stripped.corveilConnection?.oauth.refreshToken == "")
+        #expect(stripped.corveilConnection?.oauth.registrationAccessToken == "")
+        // …but everything the read-only Integrations view needs survives.
+        #expect(stripped.corveilConnection?.baseURL == "https://corveil.example")
+        #expect(stripped.corveilConnection?.clientID == "crow-client-id")
+        #expect(stripped.corveilConnection?.connectedUser.email == "me@corp.com")
+        #expect(stripped.corveilConnection?.orgKeys.first?.keyPrefix == "sk-citadel-AbC")
+        #expect(
+            stripped.corveilConnection?.oauth.accessTokenExpiresAt
+                == Date(timeIntervalSince1970: 1_900_000_000))
+    }
+
+    @Test func strippedCorveilTokensNeverAppearInTheSerializedConfig() throws {
+        let stripped = SettingsSecrets.strippedForTransport(configWithSecrets())
+        let text = try #require(String(data: JSONEncoder().encode(stripped), encoding: .utf8))
+        #expect(!text.contains("CORVEIL-ACCESS-SECRET"))
+        #expect(!text.contains("CORVEIL-REFRESH-SECRET"))
+        #expect(!text.contains("CORVEIL-REG-SECRET"))
+    }
+
+    @Test func preserveRestoresCorveilConnectionAndIgnoresBrowserEdits() {
+        // The connection is authored only through the local-only Connect flow, never
+        // `set-config`: a browser that tries to change ANY part of it — tokens or the
+        // non-secret display fields — is ignored, and the stored connection wins.
+        let current = configWithSecrets()
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        incoming.corveilConnection = CorveilConnection(
+            baseURL: "https://evil.example",
+            clientID: "attacker-client",
+            connectedUser: CorveilConnectedUser(id: "evil", email: "evil@corp.com", name: "Evil"),
+            oauth: CorveilOAuthTokens(
+                accessToken: "EVIL-ACCESS", refreshToken: "EVIL-REFRESH",
+                registrationAccessToken: "EVIL-REG"))
+
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.corveilConnection == current.corveilConnection)
+    }
+
+    @Test func preserveIgnoresBrowserClearingOfTheCorveilConnection() {
+        // The mirror image: a set-config that drops the connection must not
+        // disconnect. Disconnect is a local-only action, not a side effect of saving
+        // Settings.
+        let current = configWithSecrets()
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        incoming.corveilConnection = nil
+
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.corveilConnection == current.corveilConnection)
+    }
+
+    @Test func preserveWithNilCurrentDropsCorveilConnection() {
+        // No stored config to restore from — drop whatever the browser echoed rather
+        // than persist a (token-blanked) connection nobody authored locally.
+        let incoming = SettingsSecrets.strippedForTransport(configWithSecrets())
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: nil)
+        #expect(merged.corveilConnection == nil)
+    }
+
+    @Test func corveilConnectionSurvivesAStripPreserveRoundTripUntouched() {
+        // The ticket's headline acceptance: a config with a connection survives a
+        // `set-config` (strip → preserve) byte-for-byte, tokens included.
+        let current = configWithSecrets()
+        let merged = SettingsSecrets.preservingSecrets(
+            incoming: SettingsSecrets.strippedForTransport(current), current: current)
+        #expect(merged.corveilConnection == current.corveilConnection)
+        #expect(merged.corveilConnection?.oauth.accessToken == "CORVEIL-ACCESS-SECRET")
     }
 }
