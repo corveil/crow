@@ -5,8 +5,10 @@ import CrowCore
 /// `grok`) — xAI's official Rust coding-agent harness. Structurally mirrors
 /// `OpenCodeAgent`: Grok runs an interactive TUI, so remote control is
 /// `crow send` typing into the TUI (the agent-agnostic stdin path in
-/// `SessionService`) rather than a launch flag, and its initial prompt uses
-/// run-then-continue because any prompt argument forces headless mode.
+/// `SessionService`) rather than a launch flag. Seeded `.work` uses grok
+/// 1.0.5's positional `[PROMPT]` (interactive TUI from turn one);
+/// `.job`/`.review` keep run-then-continue because `--prompt-file` is
+/// single-turn *headless* and a "turn" is a full agentic loop (CROW-1144).
 ///
 /// Grok's hook schema is Claude/Cursor-compatible, so its state bridge is the
 /// good tier: per-worktree `.grok/hooks/crow.json` with the session UUID baked
@@ -14,10 +16,11 @@ import CrowCore
 /// Project hooks require folder trust, seeded for Crow-created worktrees by
 /// `GrokTrustSeeder` (never `.review` clones).
 ///
-/// All flags verified against `xai-org/grok-build@main` (2026-07-25). That repo
-/// is a periodic mirror of xAI's monorepo, closed to external PRs, so every
-/// flag is a version-pinned re-check target — see `GrokLaunchArgs`,
-/// `GrokSignalSource`, and `docs/agent-harness-matrix.md`.
+/// Flags re-probed against grok **1.0.5** (2026-08-27) for the launch-shape
+/// split (CROW-1144); originally pinned to `xai-org/grok-build@main`
+/// (2026-07-25). That repo is a periodic mirror of xAI's monorepo, closed to
+/// external PRs, so every flag is a version-pinned re-check target — see
+/// `GrokLaunchArgs`, `GrokSignalSource`, and `docs/agent-harness-matrix.md`.
 public struct GrokAgent: CodingAgent {
     public let kind: AgentKind = .grok
     public let displayName: String = "Grok Build"
@@ -86,21 +89,26 @@ public struct GrokAgent: CodingAgent {
 
         switch session.kind {
         case .work:
-            // Interactive TUI — the user types their prompt. No env prefix
-            // (Grok reads its creds from its own config), no `-c` (MVP `.work`
-            // doesn't auto-resume), no remote-control flag (remote control is
-            // `crow send` typing into the TUI — agent-agnostic). Crow Auto
-            // maps to `--always-approve` + hard `--deny` so a ticket that
-            // asks to open a PR can `gh pr create` without a second in-TUI
-            // `/always-approve` (CROW-1037). Auto off stays a bare `grok`.
+            // Unseeded interactive TUI — the user types their prompt. Seeded
+            // `.work` (workspace skill / handoff) goes through `launchCommand`,
+            // which uses positional `[PROMPT]` so the TUI is steerable from
+            // turn one (CROW-1144). No env prefix (Grok reads its creds from
+            // its own config), no `-c` (MVP `.work` doesn't auto-resume), no
+            // remote-control flag (remote control is `crow send` typing into
+            // the TUI — agent-agnostic). Crow Auto maps to `--always-approve`
+            // + hard `--deny` so a ticket that asks to open a PR can
+            // `gh pr create` without a second in-TUI `/always-approve`
+            // (CROW-1037). Auto off stays a bare `grok`.
             return GrokLaunchArgs.bareCommand(
                 binary: grokPath,
                 autoPermissionMode: autoPermissionMode
             )
         case .job, .review:
-            // First launch runs the prompt file headlessly, then chains into
-            // `-c` to resume in the interactive TUI (run-then-continue — any
-            // prompt arg forces headless). Subsequent restarts skip the headless
+            // Unattended: first launch runs the prompt file headlessly, then
+            // chains into `-c` to resume in the interactive TUI. `--prompt-file`
+            // is single-turn headless (a "turn" is the whole agentic loop),
+            // which is correct here — no mid-run steering — and wrong for
+            // `.work` (CROW-1144). Subsequent restarts skip the headless
             // re-run and resume the TUI only. `reviewPromptDispatched` gates both.
             //
             // Auto-permission is `.work`/`.job` only: reviews stay human-gated
@@ -156,11 +164,37 @@ public struct GrokAgent: CodingAgent {
         worktreePath: String,
         prompt: String
     ) async throws -> String {
+        // Kindless signature cannot prove this isn't `.review` / `.job`.
+        // `handoffAgent` calls the kind-aware overload below with the live
+        // `session.kind`. Fail closed to the *interactive* seed: the bug this
+        // closed (CROW-1144) was a `.work` session stuck behind headless
+        // `--prompt-file`, and a prompt past `argvPromptByteLimit` still
+        // falls back to the chained form.
         try await launcher.launchCommand(
             sessionID: sessionID,
             worktreePath: worktreePath,
             prompt: prompt,
-            binary: launchBinary() ?? "grok"
+            binary: launchBinary() ?? "grok",
+            seedInteractively: true
+        )
+    }
+
+    public func launchCommand(
+        sessionID: UUID,
+        worktreePath: String,
+        prompt: String,
+        sessionKind: SessionKind
+    ) async throws -> String {
+        // `.work` (and `.manager`) seed the interactive TUI via positional
+        // prompt. `.job` / `.review` stay headless `--prompt-file` then `-c`
+        // — unattended, and review inlines a skill body that would blow
+        // ARG_MAX as argv (CROW-1144).
+        try await launcher.launchCommand(
+            sessionID: sessionID,
+            worktreePath: worktreePath,
+            prompt: prompt,
+            binary: launchBinary() ?? "grok",
+            seedInteractively: sessionKind == .work || sessionKind == .manager
         )
     }
 

@@ -74,7 +74,7 @@ struct GrokAgentTests {
     }
 
     @Test func autoLaunchCommandJobSessionFirstLaunch() {
-        // First job launch runs headlessly (`-p`), then chains into `-c` (#859).
+        // First job launch runs headlessly (`--prompt-file`), then chains into `-c` (#859 / CROW-1144).
         let session = Session(name: "job", kind: .job, agentKind: .grok)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -218,7 +218,8 @@ struct GrokAgentTests {
     /// `defaults.binaries.grok` pin is ignored on `crow handoff-agent --agent
     /// grok` and the colliding `superagent-ai/grok-cli` can win (#861 review r8).
     /// Prove the launcher honors its `binary:` argument, shell-quoted so a spaced
-    /// override path stays intact.
+    /// override path stays intact. A small `.work` seed is positional (CROW-1144),
+    /// not `--prompt-file`.
     @Test func launcherHandoffCommandUsesPassedBinaryQuoted() async throws {
         let launcher = GrokLauncher()
         let cmd = try await launcher.launchCommand(
@@ -228,8 +229,62 @@ struct GrokAgentTests {
             binary: "/opt/my tools/grok"
         )
         #expect(cmd.contains("'/opt/my tools/grok'"))
+        #expect(cmd.contains("eval \"'/opt/my tools/grok' -- "))
+        #expect(!cmd.contains("--prompt-file"))
+        #expect(!cmd.contains(" -c"))
+    }
+
+    @Test func workHandoffSeedsInteractiveTUI() async throws {
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "do the thing",
+            sessionKind: .work)
+        #expect(cmd.contains("_CROW_P=$(< "))
+        #expect(cmd.contains(" -- $(printf '%q'"))
+        #expect(!cmd.contains("--prompt-file"))
+        #expect(!cmd.contains(" -c"))
+    }
+
+    @Test func reviewHandoffStaysHeadlessThenContinue() async throws {
+        // Unattended review: keep `--prompt-file` then `-c` so the inlined
+        // skill body never becomes argv (CROW-1144).
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "review this",
+            sessionKind: .review)
         #expect(cmd.contains("--prompt-file"))
         #expect(cmd.contains(" -c"))
+        #expect(!cmd.contains("_CROW_P="))
+    }
+
+    @Test func jobHandoffStaysHeadlessThenContinue() async throws {
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "run the job",
+            sessionKind: .job)
+        #expect(cmd.contains("--prompt-file"))
+        #expect(cmd.contains(" -c"))
+        #expect(!cmd.contains("_CROW_P="))
+    }
+
+    @Test func existentialDispatchSplitsWorkFromReview() async throws {
+        // `handoffAgent` holds the agent as `any CodingAgent`. Pin that the
+        // kind-aware override dispatches through the existential, not the
+        // protocol default that would always seed interactively.
+        let erased: any CodingAgent = GrokAgent()
+        let review = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "p",
+            sessionKind: .review)
+        #expect(review.contains("--prompt-file"))
+        let work = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "p",
+            sessionKind: .work)
+        #expect(work.contains("_CROW_P=$(< "))
+        #expect(!work.contains("--prompt-file"))
+    }
+
+    @Test func kindlessLaunchCommandSeedsInteractively() async throws {
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "p")
+        #expect(cmd.contains("_CROW_P=$(< "))
+        #expect(!cmd.contains("--prompt-file"))
     }
 
     // MARK: - Identity probe (CROW-911)
