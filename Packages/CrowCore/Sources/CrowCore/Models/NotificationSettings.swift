@@ -85,16 +85,21 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
         eventSettings[event] ?? EventNotificationConfig(soundName: event.defaultSound)
     }
 
-    /// Resolve a user-supplied sound name to its canonical `builtInSounds`
-    /// spelling, or nil when it isn't a built-in sound.
+    /// Resolve a user-supplied sound name to its canonical spelling, or nil
+    /// when it isn't a built-in and isn't in `customNames`.
     ///
     /// Single source of truth for the `--event-sound-name` rule: the CLI calls it
     /// for fast local feedback and the `notifications-set` handler calls it again
     /// as the authoritative check, so the two can't drift (CROW-813). Matching is
     /// case-insensitive so `crow notifications set --event-sound-name hero` works.
-    public static func canonicalSoundName(_ raw: String) -> String? {
+    /// Built-ins win over a custom name that collides (add-sound refuses that
+    /// collision, but a dropped file could still create one).
+    public static func canonicalSoundName(_ raw: String, customNames: [String] = []) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return builtInSounds.first { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+        if let builtIn = builtInSounds.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return builtIn
+        }
+        return customNames.first { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
     }
 }
 
@@ -109,7 +114,8 @@ public struct EventNotificationConfig: Codable, Sendable, Equatable {
     /// Whether to post a macOS system notification.
     public var systemNotificationEnabled: Bool
 
-    /// Name of the sound to play (macOS system sound name or path to custom file).
+    /// Sound to play: a built-in name (`Glass`, `Hero`, …) or a custom library
+    /// name. Bytes live in Application Support, not here.
     public var soundName: String
 
     public init(

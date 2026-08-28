@@ -276,16 +276,18 @@ crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixCheck
 Reads and writes `AppConfig.notifications` — the same settings as Settings → Notifications.
 
 ```
-crow notifications get [--event <name>]                → {"notifications":{globals, events, available_sounds, config_readable}}
+crow notifications get [--event <name>]                → {"notifications":{globals, events, available_sounds, custom_sounds, config_readable}}
 crow notifications set [--global-mute|--no-global-mute] [--sound-enabled|--no-sound-enabled]
                        [--system-notifications-enabled|--no-system-notifications-enabled]
 crow notifications set --event <name> [--event-enabled|--no-event-enabled]
                        [--event-sound-enabled|--no-event-sound-enabled]
                        [--event-system-notification-enabled|--no-event-system-notification-enabled]
                        [--event-sound-name <Sound>]     → {"notifications":{...},"saved":true}
+crow notifications add-sound <path> [--name NAME]      → {"sound":{name,file,url},"saved":true}
+crow notifications remove-sound <name>                 → {"removed":true,"name":"..."}
 ```
 
-Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. Sounds: the 14 built-ins listed under `available_sounds` (case-insensitive).
+Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. Sounds: the 14 built-ins listed under `available_sounds`, plus any custom files in `~/Library/Application Support/crow/sounds/` (`.wav` / `.mp3` / `.aiff`, 2 MB cap). `--event-sound-name` accepts either, case-insensitively. `add-sound` is local-only (it copies a host path); Settings → Notifications uploads via HTTP instead. Removing a custom sound keeps the name in config; playback falls back to a default if the file is gone.
 
 Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
 

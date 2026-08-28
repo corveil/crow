@@ -55,6 +55,14 @@ struct NotificationRPCSupportTests {
         #expect(throws: RPCError.self) { _ = try NotificationRPC.decodeSoundName(nil) }
     }
 
+    @Test func decodeSoundNameAcceptsCustomNames() throws {
+        #expect(try NotificationRPC.decodeSoundName(
+            .string("office-bell"), customNames: ["Office-Bell"]) == "Office-Bell")
+        #expect(throws: RPCError.self) {
+            _ = try NotificationRPC.decodeSoundName(.string("Nope"), customNames: ["Office-Bell"])
+        }
+    }
+
     // MARK: - settingsJSON
 
     @Test func settingsJSONListsEveryEventAsAnObject() throws {
@@ -65,6 +73,7 @@ struct NotificationRPCSupportTests {
         #expect(object["system_notifications_enabled"]?.boolValue == true)
         #expect(object["config_readable"]?.boolValue == true)
         #expect(object["available_sounds"]?.arrayValue?.count == NotificationSettings.builtInSounds.count)
+        #expect(object["custom_sounds"]?.arrayValue?.isEmpty == true)
 
         // An object keyed by raw value, NOT the flat alternating array that
         // JSONEncoder produces for a dictionary keyed by a non-CodingKey enum.
@@ -115,6 +124,17 @@ struct NotificationRPCSupportTests {
         let config = try #require(events["taskComplete"]?.objectValue)
 
         #expect(config["sound_name"]?.stringValue == "/Users/me/Sounds/custom.aiff")
+    }
+
+    @Test func settingsJSONMergesCustomSoundsIntoAvailable() throws {
+        let custom = CustomSound(name: "Office-Bell", file: "Office-Bell.wav", url: "/sounds/Office-Bell.wav")
+        let object = try #require(
+            NotificationRPC.settingsJSON(NotificationSettings(), customSounds: [custom]).objectValue)
+        let available = try #require(object["available_sounds"]?.arrayValue)
+        #expect(available.last == .string("Office-Bell"))
+        let listed = try #require(object["custom_sounds"]?.arrayValue)
+        #expect(listed.count == 1)
+        #expect(listed[0].objectValue?["url"]?.stringValue == "/sounds/Office-Bell.wav")
     }
 
     @Test func settingsJSONReportsUnreadableConfig() throws {

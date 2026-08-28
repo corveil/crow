@@ -20,8 +20,8 @@ let package = Package(
             dependencies: [
                 "CrowIPC",
                 // Lets `crow notifications` validate against the canonical
-                // NotificationEvent cases and builtInSounds instead of keeping
-                // its own copy of either list (CROW-813).
+                // NotificationEvent cases, builtInSounds, and the custom sound
+                // library instead of keeping its own copy (CROW-813 / CROW-1147).
                 "CrowCore",
                 "CrowCodex",
                 "CrowAutostart",

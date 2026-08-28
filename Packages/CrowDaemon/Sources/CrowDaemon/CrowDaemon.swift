@@ -496,11 +496,13 @@ public enum CrowDaemon {
             return makeEngineRouter(ctx)
         }
 
+        let soundLibrary = CustomSoundLibrary.live
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, tracker: tracker, allowList: allowList,
             sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler,
             rebuildScorecard: rebuildScorecard, versionUpdateService: versionUpdateService,
+            soundLibrary: soundLibrary,
             fallback: engineFallback)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. By
@@ -605,6 +607,8 @@ public enum CrowDaemon {
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).
         Artifacts.mount(on: httpRouter, boundHost: options.host)
+        CustomSoundRoutes.mount(
+            on: httpRouter, boundHost: options.host, library: soundLibrary)
         if let webDir = options.webDir {
             log("serving web UI live from \(webDir) (edit + refresh, no rebuild)")
         }

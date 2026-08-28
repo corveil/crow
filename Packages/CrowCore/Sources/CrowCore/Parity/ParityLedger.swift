@@ -156,6 +156,7 @@ public enum ParityLedger {
         "corveil-deselect-org",
         "corveil-detect-gateways",
         "corveil-link-gateway",
+        "notifications-add-sound",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -316,6 +317,8 @@ public enum ParityLedger {
         .write("version-update-check", cli: "version check"),
         .read("notifications-get", cli: "notifications get"),
         .write("notifications-set", cli: "notifications set"),
+        .write("notifications-add-sound", cli: "notifications add-sound"),
+        .write("notifications-remove-sound", cli: "notifications remove-sound"),
         .read(
             "get-config",
             noCLI: """

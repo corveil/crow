@@ -406,7 +406,7 @@ Notifications cascade — one fires only if `globalMute` is off, the matching gl
 - **`systemNotificationsEnabled`** (default: `true`) — global system-notification toggle.
 - **`eventSettings`** — per-event overrides, holding only the events you've actually changed. Any event you omit follows the current defaults, so leaving events out is the way to stay on Crow's defaults as they evolve. Neither Crow nor `crow notifications set` will backfill the rest.
 
-The twelve events are `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, and `configReloaded`. The 14 built-in sounds are `Basso`, `Blow`, `Bottle`, `Frog`, `Funk`, `Glass`, `Hero`, `Morse`, `Ping`, `Pop`, `Purr`, `Sosumi`, `Submarine`, and `Tink`.
+The twelve events are `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, and `configReloaded`. The 14 built-in sounds are `Basso`, `Blow`, `Bottle`, `Frog`, `Funk`, `Glass`, `Hero`, `Morse`, `Ping`, `Pop`, `Purr`, `Sosumi`, `Submarine`, and `Tink`. Custom sounds live as files in `~/Library/Application Support/crow/sounds/` (`.wav` / `.mp3` / `.aiff`, 2 MB); their names appear in `available_sounds` next to the built-ins. Per-event `soundName` stores that name as a reference — never the file bytes. A missing custom file falls back to a default at playback. Add via Settings → Notifications → Upload sound, `crow notifications add-sound <path>`, or by dropping a file into that directory.
 
 Three things to know before hand-editing:
 

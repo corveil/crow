@@ -1390,7 +1390,7 @@ The twelve events are `taskComplete`, `agentWaiting`, `reviewRequested`, `change
 
 ### `crow notifications get`
 
-Show the global toggles, every event's effective settings, the built-in sound names, and whether the config was readable. Events absent from `config.json` are reported with the defaults they will actually fire with.
+Show the global toggles, every event's effective settings, the built-in and custom sound names, and whether the config was readable. Events absent from `config.json` are reported with the defaults they will actually fire with.
 
 ```bash
 crow notifications get
@@ -1418,6 +1418,9 @@ Returns:
       }
     },
     "available_sounds": ["Basso", "Blow", "..."],
+    "custom_sounds": [
+      {"name": "Office-Bell", "file": "Office-Bell.wav", "url": "/sounds/Office-Bell.wav"}
+    ],
     "config_readable": true
   }
 }
@@ -1444,7 +1447,7 @@ crow notifications set --event checksFailing --event-sound-name Hero --no-event-
 | `--event-enabled` / `--no-event-enabled`   | no       | Whether this event notifies at all                              |
 | `--event-sound-enabled` / `--no-…`         | no       | Whether this event plays a sound                                |
 | `--event-system-notification-enabled` / `--no-…` | no | Whether this event posts a system notification                  |
-| `--event-sound-name`                       | no       | Sound for this event — a built-in name, matched case-insensitively |
+| `--event-sound-name`                       | no       | Sound for this event — a built-in or custom name, matched case-insensitively |
 
 Returns the resulting settings in the same shape as `get`, plus `"saved": true`.
 
@@ -1452,9 +1455,28 @@ Notes:
 
 - Every toggle is a `--flag` / `--no-flag` pair; **omitting** it leaves the stored value alone. `--flag --no-flag` together is rejected rather than silently resolved.
 - The global toggle is `--system-notifications-enabled` (plural) and the per-event one is `--event-system-notification-enabled` (singular). The flag names mirror the config field names, which differ the same way.
-- `--event-sound-name` accepts only the built-in sounds listed under `available_sounds`, matching the Settings sound picker. A config that already stores a custom sound path keeps it — reads never validate — but the CLI won't set a new one.
+- `--event-sound-name` accepts the names listed under `available_sounds` (the 14 built-ins plus any custom sounds in the library), matching the Settings sound picker. A config that already stores a missing custom name or a leftover file path keeps it — reads never validate — and playback falls back to a default until you pick another sound.
 - Only the event you name is written to `config.json`. Events you never touch stay absent and keep following the current defaults — a globals-only `set` leaves `eventSettings` alone entirely.
 - Each write seeds the entry from the event's real default before applying your flags, so `set` never has to be told a sound just to change a toggle. Hand-editing has no such help: an event entry written without `soundName` falls back to `Glass` rather than that event's default (see [configuration.md](configuration.md#notifications)).
+
+### `crow notifications add-sound`
+
+Copy a `.wav`, `.mp3`, or `.aiff` file (up to 2 MB) into Crow's sound library (`~/Library/Application Support/crow/sounds/`). Local-only — the daemon reads a path on the host. The Settings tab uploads bytes over HTTP instead.
+
+```bash
+crow notifications add-sound ~/Music/office-bell.wav
+crow notifications add-sound ~/Music/ding.wav --name "Office Bell"
+```
+
+The stem (or `--name`) becomes the value `--event-sound-name` and the Settings picker accept. Dropping a valid file into the sounds directory also lists it on the next `get`.
+
+### `crow notifications remove-sound`
+
+Delete a custom sound from the library by name. Events that still reference it keep the name in `config.json`; playback falls back to a default until you pick another.
+
+```bash
+crow notifications remove-sound Office-Bell
+```
 
 ---
 

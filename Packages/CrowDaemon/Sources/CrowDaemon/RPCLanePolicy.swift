@@ -121,6 +121,8 @@ enum RPCLanePolicy {
         "ui-set": .fixed(.config),
         "terminal-set": .fixed(.config),
         "notifications-set": .fixed(.config),
+        "notifications-add-sound": .fixed(.config),
+        "notifications-remove-sound": .fixed(.config),
         "workspace-add": .fixed(.config),
         "workspace-edit": .fixed(.config),
         "workspace-remove": .fixed(.config),
