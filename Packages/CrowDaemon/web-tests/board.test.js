@@ -125,6 +125,22 @@ check('#900 (old payload) degrades: no badges/byline/desc', (() => {
 })());
 check('Go to Session on linked card (#42)', /Go to Session/.test(board.textContent));
 check('card-actions wraps buttons on the right', q('.card-actions').length === 3);
+check('unlinked cards use a Start Working split-button', q('.split-btn').length === 2);
+check('split primary reads Start Working', [...q('.split-btn-main')].every((b) => b.textContent === 'Start Working'));
+check('no Exploring badge without linked_session_is_explore', q('.explore-badge').length === 0);
+
+console.log('\nStart Exploring split (CROW-1149):');
+payload.issues[1].linked_session_is_explore = true;
+render();
+check('Exploring badge on linked explore session', [...q('.explore-badge')].some((b) => b.textContent === 'Exploring'));
+check('Go to Session still shown on explore-linked card', /Go to Session/.test(board.textContent));
+payload.issues[1].linked_session_is_explore = false;
+render();
+const chev = q('.split-btn-chevron')[0];
+chev.onclick({ stopPropagation() {} });
+check('chevron opens a Start Exploring menu', [...q('.ctx-item')].some((n) => n.textContent === 'Start Exploring'));
+check('menu also offers Start Working', [...q('.ctx-item')].some((n) => n.textContent === 'Start Working'));
+[...q('.ctx-menu')].forEach((n) => n.remove());
 
 console.log('\nSort by title (A–Z):');
 T.ticketSort = 'title_asc'; render();

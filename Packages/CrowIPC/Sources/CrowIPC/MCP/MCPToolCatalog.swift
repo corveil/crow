@@ -380,7 +380,7 @@ public enum MCPToolCatalog {
         "id", "name", "status", "kind", "agent_kind", "locked", "auto_merge",
         "ticket_title", "ticket_url", "ticket_state", "provider", "review_author",
         "org_goal", "repo", "branch", "worktree_path", "activity", "attention",
-        "attention_since",
+        "attention_since", "is_explore",
     ]
 
     /// Every `list-tickets` field except `body`.
@@ -388,6 +388,7 @@ public enum MCPToolCatalog {
         "id", "number", "title", "state", "url", "repo", "provider", "pr_number",
         "pr_url", "updated_at", "project_status", "labels", "author", "created_at",
         "comments_count", "pr_state", "checks", "linked_session_id",
+        "linked_session_is_explore",
     ]
 
     // MARK: - Helpers

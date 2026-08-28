@@ -22,7 +22,35 @@ All `crow`, `gh`, `glab`, and `git worktree` commands require `dangerouslyDisabl
 
 This skill activates when:
 - User invokes `/crow-workspace` command
+- User invokes `/crow-workspace --explore <url>` (exploration / bootstrap-only session)
 - User asks to "set up crow workspace" or "start working on" a feature in Crow
+- User asks to "start exploring" a ticket in Crow
+
+## Explore mode (`--explore`)
+
+When the invocation includes `--explore` (the board's **Start Exploring**,
+`crow explore-issue`, or a `crow:explore` auto-pickup), run the **same**
+worktree / session / terminal setup as a normal workspace, but:
+
+1. **Seed prompt** — use the **Explore Prompt Template** below, *not* the
+   implement/build First Prompt Template. The agent maps and explains the
+   ticket area and **stops**. No edits, no commits, no push, no PR.
+2. **Pass `--explore` to `setup.sh`** — that stamps the session `isExplore`
+   (the board/sidebar "Exploring" badge) and skips auto-assign + In Progress
+   board transitions. Exploring is not claiming the ticket as work.
+3. **Distinct worktree/branch/session names** so a later **Start Working** on
+   the same ticket can still create the normal feature branch:
+   - Worktree: `{devRoot}/{workspace}/{repo}-{ticket_number}-explore-{brief_slug}`
+   - Branch: `feature/{repo}-{ticket_number}-explore-{brief_slug}`
+   - Session name: `{repo}-{ticket_number}-explore-{slug}`
+4. **Do not attach to an existing PR's branch.** If a PR already exists, mention
+   it in the prompt as context only. A throwaway explore branch from
+   `{base_branch}` keeps the real PR branch free for a later work session.
+5. **Do not** pass `--pr-number` / `--pr-url` / `--pr-branch` to `setup.sh` in
+   explore mode.
+
+`--explore` is a launch **mode**, not a new session kind. The session is still
+`kind=work`.
 
 ## Configuration
 
@@ -363,7 +391,13 @@ PROMPT
   --primary
 ```
 
-If an existing PR was detected, also pass:
+**Explore mode** — add `--explore` (implies skip-assign + skip-project-status):
+
+```
+  --explore
+```
+
+If an existing PR was detected **and this is not explore mode**, also pass:
 ```
   --pr-number {pr_number} \
   --pr-url "{pr_url}" \
@@ -490,6 +524,60 @@ Fill the `## Custom Instructions` block with `{custom_instructions}` — the
 substitute `defaults` or another workspace's text). If `{custom_instructions}` is
 empty, `null`, or absent, **omit the entire `## Custom Instructions` heading and
 body** so the prompt has no such section.
+
+## Explore Prompt Template
+
+Use this template **instead of** First Prompt Template when `--explore` is set.
+Same Workspace Context table, Ticket block, comment embedding, and Custom
+Instructions rules as above. The Instructions section is the difference:
+
+~~~markdown
+# Workspace Context
+
+| Repository | Path | Branch | Description |
+|------------|------|--------|-------------|
+| my-app | /Users/name/Dev/MyOrg/my-app-45-explore-jwt | feature/my-app-45-explore-jwt-validation | Auth gateway service |
+
+## Ticket
+
+**{ticket_title}** — {ticket_url}
+
+{ticket_body_verbatim}
+
+### Comments
+
+{rendered_comments_or_no_comments_marker}
+
+---
+
+If you need fresher ticket data later, re-fetch with (all gh/glab commands MUST use dangerouslyDisableSandbox: true — they will fail with TLS certificate errors otherwise, and will prompt for approval):
+
+```bash
+gh issue view {ticket_url} --comments
+# Fallback if the above returns empty output (see issue #295):
+gh api repos/{owner}/{repo}/issues/{number}
+gh api repos/{owner}/{repo}/issues/{number}/comments
+```
+
+## Instructions
+
+This is an **exploration** session. Map and explain the codebase against the ticket, then stop. Do **not** edit files, do **not** commit, do **not** push, and do **not** open a pull request. Leave the working tree clean.
+
+1. Study the ticket above — it has been pre-fetched and embedded. Only re-run gh/glab if you need fresher data; those calls use dangerouslyDisableSandbox: true and will prompt for approval.
+2. Locate the code, tests, and surrounding modules the ticket would touch.
+3. Explain how the current implementation works, what would need to change to satisfy the ticket, and any risks, gaps, or open questions.
+4. Stop when you have a clear map. No build output is expected.
+
+## Custom Instructions
+
+{custom_instructions}
+~~~
+
+If an existing PR was found for this ticket, add an **Existing Pull Request**
+section (same embedding rules as the work template) **between** Ticket and
+Instructions, and note that this explore session is **not** checked out on that
+branch — inspect it with `gh pr diff` / `gh pr view` rather than committing onto
+it.
 
 On step 6, substitute the real ticket number into `{number}` in the PR body (same substitution as `{base_branch}`) so the body reads e.g. `Closes #654` — the closing keyword with the real number is what makes GitHub link the PR to the issue and auto-close it on merge into the default branch. When no ticket number is available, drop the `--body` and fall back to `gh pr create --fill`.
 

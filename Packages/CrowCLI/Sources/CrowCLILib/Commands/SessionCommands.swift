@@ -17,12 +17,17 @@ public struct NewSession: ParsableCommand {
     @Option(name: .long, help: "Session kind: work (default) or manager") var kind: String?
     @Option(name: .long, help: "Agent kind (e.g. claude-code). Defaults to the configured default agent.")
     var agent: String?
+    @Flag(name: .long, help: "Mark this as an exploration session (read/explain only; no build)")
+    var explore: Bool = false
 
     public init() {}
 
     public func validate() throws {
         if let kind, !["work", "manager"].contains(kind) {
             throw ValidationError("kind must be one of: work, manager")
+        }
+        if explore, kind == "manager" {
+            throw ValidationError("--explore is only valid for work sessions")
         }
     }
 
@@ -32,6 +37,7 @@ public struct NewSession: ParsableCommand {
         if let agent, !agent.isEmpty {
             params["agent_kind"] = .string(agent)
         }
+        if explore { params["explore"] = .bool(true) }
         let result = try rpc("new-session", params: params)
         printJSON(result)
     }

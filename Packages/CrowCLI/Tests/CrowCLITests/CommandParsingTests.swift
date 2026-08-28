@@ -50,6 +50,23 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     }
 }
 
+@Test func newSessionParsesExploreFlag() throws {
+    let cmd = try NewSession.parse(["--name", "explore-ticket", "--explore"])
+    #expect(cmd.explore == true)
+    try cmd.validate()
+}
+
+@Test func newSessionExploreDefaultsOff() throws {
+    let cmd = try NewSession.parse(["--name", "feature"])
+    #expect(cmd.explore == false)
+}
+
+@Test func newSessionRejectsExploreOnManagerKind() {
+    #expect(throws: (any Error).self) {
+        _ = try NewSession.parse(["--name", "Manager 2", "--kind", "manager", "--explore"])
+    }
+}
+
 @Test func setStatusParsesArgs() throws {
     let cmd = try SetStatus.parse(["--session", validUUID, "active"])
     #expect(cmd.session == validUUID)

@@ -282,6 +282,12 @@ check('no "+N" when nothing is hidden', r.row.querySelectorAll('.label-pill').le
 r = render({ has_pr: false }, {});
 check('no label row when the session has no labels', !r.row.querySelector('.label-row'));
 
+console.log('\nExploring badge (CROW-1149):');
+r = render({ has_pr: false }, { is_explore: true, ticket_badge: 'Issue #42' });
+check('Exploring badge on explore session', [...r.row.querySelectorAll('.explore-badge')].some((b) => b.textContent === 'Exploring'));
+r = render({ has_pr: false }, { is_explore: false, ticket_badge: 'Issue #42' });
+check('no Exploring badge on a work session', r.row.querySelectorAll('.explore-badge').length === 0);
+
 T.hideDetails = true;
 r = render({ has_pr: false }, { labels: LABELS });
 check('hidden under hideSessionDetails', !r.row.querySelector('.label-row'));

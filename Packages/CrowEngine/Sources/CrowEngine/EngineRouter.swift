@@ -359,6 +359,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         "org_goal": s.orgGoal.map { .string($0) } ?? .null,
                         "ticket_priority": s.ticketPriority.map { .string($0.rawValue) } ?? .null,
                         "alignment_weight": .double(s.alignmentWeight),
+                        "is_explore": .bool(s.isExplore),
                         // ⚠️ REDACTION. `get-session` is NOT in
                         // `RPCWebSocketHandler.localOnlyDenial`, so a remote /rpc
                         // peer reads this. These fields therefore match
@@ -411,6 +412,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // Fold .unknown into .backlog so the web's pipeline buckets
                         // line up with issueCount(for:) (AppState.effectiveStatus).
                         let status = issue.projectStatus == .unknown ? TicketStatus.backlog : issue.projectStatus
+                        let linked = capturedAppState.linkedSession(for: issue)
                         return .object([
                             "id": .string(issue.id),
                             "number": .int(issue.number),
@@ -431,7 +433,8 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                             "comments_count": issue.commentsCount.map { .int($0) } ?? .null,
                             "pr_state": issue.prState.map { .string($0) } ?? .null,
                             "checks": issue.checksState.map { .object(["state": .string($0), "failed": .array((issue.failedCheckNames ?? []).map { .string($0) })]) } ?? .null,
-                            "linked_session_id": capturedAppState.linkedSession(for: issue).map { .string($0.id.uuidString) } ?? .null,
+                            "linked_session_id": linked.map { .string($0.id.uuidString) } ?? .null,
+                            "linked_session_is_explore": linked.map { .bool($0.isExplore) } ?? .null,
                         ])
                     }
                     var counts: [String: JSONValue] = [:]

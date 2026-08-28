@@ -38,10 +38,12 @@ public final class IssueTracker {
     /// Callback for new review request notifications (set by AppDelegate).
     public var onNewReviewRequests: (([ReviewRequest]) -> Void)?
 
-    /// Fires when a newly assigned issue carries the auto-create label and
-    /// has no existing session. Wired in AppDelegate to dispatch the
-    /// work-on-issue flow and post a notification.
-    public var onAutoCreateRequest: ((AssignedIssue) -> Void)?
+    /// Fires when a newly assigned issue carries the auto-create label
+    /// (`crow:auto`) or the explore label (`crow:explore`) and has no existing
+    /// session. Wired to dispatch the work-on-issue / explore-issue flow and
+    /// post a notification. The kind says which seed prompt to dispatch;
+    /// `crow:auto` wins when both labels are present (CROW-1149).
+    public var onAutoCreateRequest: ((AssignedIssue, AutoCreateKind) -> Void)?
 
     /// Callback fired on every successful review-request refresh with the full
     /// post-cross-reference snapshot (including the first fetch). Used by the
@@ -148,7 +150,22 @@ public final class IssueTracker {
     /// Label that triggers the auto-create flow when present on an open
     /// assigned issue. Removed after a successful dispatch (best-effort) so
     /// the trigger is one-shot and visible across machines.
-    static let autoCreateLabel = "crow:auto"
+    /// `nonisolated` so BoardPoller's pure helpers (and their tests) can
+    /// read it without hopping to the main actor.
+    nonisolated static let autoCreateLabel = "crow:auto"
+
+    /// Label that triggers an exploration session instead of a build
+    /// (CROW-1149). Same pickup / strip semantics as `autoCreateLabel`. When
+    /// both labels are present, `crow:auto` wins (implementation is the
+    /// stronger intent) and both are stripped.
+    nonisolated static let exploreCreateLabel = "crow:explore"
+
+    /// Which seed prompt the auto-create watcher should dispatch. Nested on
+    /// the tracker so BoardPoller / the daemon share one vocabulary.
+    public enum AutoCreateKind: String, Sendable, Equatable {
+        case work
+        case explore
+    }
 
 
     /// Last observed `PRStatus` per session. Ephemeral (not persisted across

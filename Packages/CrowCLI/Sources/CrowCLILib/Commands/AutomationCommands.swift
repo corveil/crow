@@ -30,7 +30,7 @@ public struct Automation: ParsableCommand {
         abstract: "View or change the automation settings",
         discussion: """
         The Settings → Automation toggles: which sessions launch in auto \
-        permission mode, whether Crow watches for crow:auto / crow:merge labels, \
+        permission mode, whether Crow watches for crow:auto / crow:explore / crow:merge labels, \
         and whether it responds to changes-requested reviews and failed checks on \
         your behalf.
 
@@ -140,7 +140,7 @@ struct AutomationWatcherArgs: ParsableArguments {
 
     @Option(
         name: .customLong("auto-create-watcher-enabled"),
-        help: "Auto-launch a workspace for crow:auto labeled issues (true or false)")
+        help: "Auto-launch a workspace for crow:auto / crow:explore labeled issues (true or false)")
     var autoCreateWatcherEnabled: Bool?
 
     @Option(

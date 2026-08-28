@@ -249,7 +249,7 @@ crow get-state                        → the daemon's ENTIRE state snapshot; la
 
 ### Board & Workflow Commands
 
-The CLI half of the web Ticket Board / Reviews board buttons — drive the board without a browser. The three read/refresh verbs need only a provider-configured daemon; the four session-spawning verbs additionally need tmux on the daemon host.
+The CLI half of the web Ticket Board / Reviews board buttons — drive the board without a browser. The three read/refresh verbs need only a provider-configured daemon; the session-spawning verbs additionally need tmux on the daemon host.
 
 ```
 crow list-tickets                               → {issues:[...], counts:{...}, done_last_24h:N, loading:bool}
@@ -257,6 +257,8 @@ crow list-reviews                               → {reviews:[...], loading:bool
 crow refresh-tickets                            → {"ok":true}   (awaits the poll; see note below)
 crow work-on-issue --url "..."                  → {"ok":true}   (types /crow-workspace <url> into the Manager)
 crow batch-work-on-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
+crow explore-issue --url "..."                  → {"ok":true}   (types /crow-workspace --explore <url> into the Manager)
+crow batch-explore-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
 crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
 crow create-manager [--agent claude-code|cursor|codex|opencode]           → {"session_id":"<uuid>","name":"Manager N"}
 crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixChecks|mergePR|reReview
@@ -266,6 +268,7 @@ crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixCheck
 - `list-tickets` / `list-reviews` print the board payload verbatim — filter with `jq`. A ticket with `linked_session_id: null` (or a review with `review_session_id: null`) is one nothing is working yet.
 - Each review carries a `group` — `in_review`, `not_approved_yet`, `waiting_on_author`, or `recently_completed` — matching the web board's four sections exactly (one payload, one rule). `group_order` is the display order, `group_counts` counts **every** group including empty ones, and `group_announces_new_request` says which groups may chime `reviewRequested` (the last two never do — they fill when work *leaves* your queue). Reviewing clears GitHub's pending request, so anything you have already answered is invisible to `review-requested:@me` and reaches the board through a separate `reviewed-by:@me` pair of searches: `waiting_on_author` is every open PR whose last word from you was CHANGES_REQUESTED or COMMENTED (no time limit — the ball is with the author, however long that takes), and `recently_completed` is a 24-hour tail of PRs that merged or closed, plus ones you approved that haven't merged yet. `recently_completed` includes PRs someone else approved and merged after your review, and its rows are never offered for review (`kickoff_action` is always `skip`). `waiting_on_author` rows are suppressed the same way — no Start Review button, not tickable in the board's batch mode — but only while the PR's `head_ref_oid` still matches `viewer_last_reviewed_head_sha`, the head your last verdict was submitted against. When the author pushes without re-requesting you the PR stays under that heading with something genuinely new in it, so the action flips back to `create`; an unfetched SHA on either side also keeps the button, since suppressing claims there is nothing to look at and a partial fetch cannot support that claim. Anything still in the requested queue is `not_approved_yet` no matter what you decided last round — a PR re-requested after your verdict is asking for something, so it never hides under a finished heading. `hidden_by_filters` counts requested reviews that `ignoreReviewLabels`/`excludeReviewRepos` hid — a non-zero value with an empty board means the filters, not GitHub.
 - `work-on-issue` URLs become terminal keystrokes, so they must be `http(s)` with no whitespace or control characters. `start-review` URLs go to `git clone` and are not checked that way.
+- `explore-issue` / `batch-explore-issues` are the Start Exploring siblings: same URL rules, same RPCs with `explore: true`, so the Manager runs `/crow-workspace --explore` (or the batch form). The session is still `kind=work`, tagged `isExplore`.
 - `batch-work-on-issues` sends `--url` values first, then the lines of `--urls-file`. Bad URLs come back in `rejected` instead of failing the batch.
 - `quick-action` returns `dispatched:false` + `reason` with a **zero** exit code when the session has no agent terminal or no linked PR — branch on `dispatched`, not the exit code.
 - `refresh-tickets` awaits the poll, so a following `list-tickets` sees the new data. It returns `{"ok":true}` without polling when a refresh is already in flight or the provider is rate-limited.

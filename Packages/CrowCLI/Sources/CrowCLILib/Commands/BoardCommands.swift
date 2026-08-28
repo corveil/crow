@@ -88,6 +88,79 @@ public struct BatchWorkOnIssues: ParsableCommand {
     }
 }
 
+/// `crow explore-issue` — types `/crow-workspace --explore <url>` into the
+/// primary Manager terminal. Same worktree/session bootstrap as
+/// `work-on-issue`, but seeded with a read/explain-only prompt (CROW-1149).
+/// Same behavior as the board's "Start Exploring" action.
+public struct ExploreIssue: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "explore-issue",
+        abstract: "Start exploring a ticket (types /crow-workspace --explore into the Manager)"
+    )
+
+    @Option(name: .long, help: "Ticket / issue URL") var url: String
+
+    public init() {}
+
+    public func validate() throws {
+        try validateIssueURL(url)
+    }
+
+    public func run() throws {
+        let result = try rpc("work-on-issue", params: [
+            "url": .string(url),
+            "explore": .bool(true),
+        ], timeoutSeconds: boardTimeout)
+        printJSON(result)
+    }
+}
+
+/// `crow batch-explore-issues` — types ONE `/crow-batch-workspace --explore <url…>`
+/// line so the Manager runs the parallel batch skill once in explore mode.
+/// Same behavior as the board's "Start Exploring (N)" action.
+public struct BatchExploreIssues: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "batch-explore-issues",
+        abstract: "Start exploring several tickets in one batch",
+        discussion: """
+        URLs are sent in order: every --url first, then the lines of --urls-file. \
+        Malformed URLs are not rejected locally — the daemon drops them into the \
+        `rejected` array and starts the rest, so one bad ticket can't block the batch.
+        """
+    )
+
+    @Option(name: .long, parsing: .singleValue, help: "Ticket / issue URL (repeatable)")
+    var url: [String] = []
+    @Option(name: .customLong("urls-file"),
+            help: "Read newline-delimited URLs from a file; '-' reads stdin")
+    var urlsFile: String?
+
+    public init() {}
+
+    public func validate() throws {
+        guard !url.isEmpty || urlsFile != nil else {
+            throw ValidationError("At least one --url or --urls-file is required.")
+        }
+        if urlsFile == nil, try BoardArgs.urlList(url: url, urlsFile: nil).isEmpty {
+            throw ValidationError("--url must not be blank.")
+        }
+    }
+
+    public func run() throws {
+        let urls = try BoardArgs.urlList(url: url, urlsFile: urlsFile)
+        guard !urls.isEmpty else {
+            throw ValidationError("No URLs to send — --urls-file was empty.")
+        }
+        let result = try rpc("batch-work-on-issues",
+                             params: [
+                                "urls": .array(urls.map { .string($0) }),
+                                "explore": .bool(true),
+                             ],
+                             timeoutSeconds: boardTimeout)
+        printJSON(result)
+    }
+}
+
 /// `crow start-review` — clones the PR, scaffolds the review skill and spawns a
 /// review session. Same behavior as the Reviews board's "Start Review" button.
 public struct StartReview: ParsableCommand {

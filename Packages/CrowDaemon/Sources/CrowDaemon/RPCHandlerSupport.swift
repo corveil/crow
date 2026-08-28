@@ -42,6 +42,22 @@ func isSafeIssueURL(_ url: String) -> Bool {
     return !url.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
 }
 
+/// The Manager slash-command the board / `crow:auto` / `crow:explore` watcher
+/// types to bootstrap a session (CROW-1149). `explore` selects the read-only
+/// seed (`/crow-workspace --explore` / `/crow-batch-workspace --explore`);
+/// otherwise the existing implement/build path. Flag precedes URLs so a
+/// ticket URL cannot be mistaken for it. Newline-terminated because
+/// `TerminalRouter.send` turns newlines into Enter.
+func workspaceLaunchCommand(urls: [String], explore: Bool) -> String {
+    if urls.count == 1 {
+        return explore
+            ? "/crow-workspace --explore \(urls[0])\n"
+            : "/crow-workspace \(urls[0])\n"
+    }
+    let prefix = explore ? "/crow-batch-workspace --explore " : "/crow-batch-workspace "
+    return prefix + urls.joined(separator: " ") + "\n"
+}
+
 /// The `session.status` transitions behind `mark-in-review` / `complete-session`
 /// / `set-session-active` (and their `crow` verbs, CROW-816).
 ///

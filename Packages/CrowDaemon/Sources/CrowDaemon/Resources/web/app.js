@@ -1957,6 +1957,11 @@ function sessionRow(s) {
     }
     badges.appendChild(tb);
   }
+  if (s.is_explore) {
+    const exp = el('span', 'explore-badge', 'Exploring');
+    exp.title = 'Exploration session — read/explain only, no build';
+    badges.appendChild(exp);
+  }
   // Light org-goal indicator (#723) — glyph only to keep the card compact; the
   // full goal text lives in the tooltip and the detail header.
   if (s.org_goal) {
@@ -3239,6 +3244,7 @@ function renderHeader(s) {
   const badge = el('span', 'status-badge', s.status);
   badge.style.color = STATUS_COLOR[s.status] || 'var(--text-muted)';
   top.appendChild(badge);
+  if (s.is_explore) top.appendChild(el('span', 'explore-badge', 'Exploring'));
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));
@@ -4435,17 +4441,58 @@ function boardEmpty(msg) {
 // A spawning action (Start Working / Start Review): disable the button, let the
 // new session surface via the sidebar poll.
 async function spawnAction(btn, method, params, label) {
-  btn.disabled = true;
+  const split = btn.closest && btn.closest('.split-btn');
+  const buttons = split ? [...split.querySelectorAll('button')] : [btn];
+  buttons.forEach((b) => { b.disabled = true; });
   const orig = btn.textContent;
   btn.textContent = 'Starting…';
   try {
     await rpc(method, params);
     btn.textContent = 'Started ✓';
   } catch (e) {
-    btn.disabled = false;
+    buttons.forEach((b) => { b.disabled = false; });
     btn.textContent = orig;
     alertModal(label + ' failed: ' + (e.message || e));
   }
+}
+
+// Split-button for Start Working / Start Exploring (CROW-1149). Primary click
+// runs `onPrimary`; the chevron opens a ctx-menu of the same actions.
+function startActionsSplit(primaryLabel, onPrimary, items) {
+  const wrap = el('div', 'split-btn');
+  const main = el('button', 'action-btn action-primary split-btn-main', primaryLabel);
+  main.type = 'button';
+  main.onclick = (e) => { e.stopPropagation(); onPrimary(main); };
+  const chev = el('button', 'action-btn action-primary split-btn-chevron', '▾');
+  chev.type = 'button';
+  chev.title = 'More start actions';
+  chev.setAttribute('aria-label', 'More start actions');
+  chev.setAttribute('aria-haspopup', 'menu');
+  chev.onclick = (e) => {
+    e.stopPropagation();
+    closeContextMenu();
+    const menu = el('div', 'ctx-menu');
+    for (const item of items) {
+      const row = el('div', 'ctx-item', item.label);
+      if (item.title) row.title = item.title;
+      row.onclick = (ev) => {
+        ev.stopPropagation();
+        closeContextMenu();
+        item.onClick(main);
+      };
+      menu.appendChild(row);
+    }
+    document.body.appendChild(menu);
+    const rect = chev.getBoundingClientRect();
+    const x = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8);
+    const y = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
+    menu.style.left = Math.max(4, x) + 'px';
+    menu.style.top = Math.max(4, y) + 'px';
+    armContextMenuClose();
+  };
+  wrap.appendChild(main);
+  wrap.appendChild(chev);
+  return wrap;
 }
 
 // -- Ticket Board --
@@ -4570,9 +4617,15 @@ function renderTicketBoard(root) {
     const n = selectedIssueIDs.size;
     bar.appendChild(el('span', 'bulk-count', n + ' ticket' + (n === 1 ? '' : 's') + ' selected'));
     bar.appendChild(el('div', 'bulk-spacer'));
-    const start = el('button', 'action-btn action-primary', 'Start Working (' + n + ')');
-    start.onclick = () => startWorkingSelected(start);
-    bar.appendChild(start);
+    bar.appendChild(startActionsSplit(
+      'Start Working (' + n + ')',
+      (btn) => startSelected(btn, false),
+      [
+        { label: 'Start Working (' + n + ')', title: 'Worktree + implement/build prompt',
+          onClick: (btn) => startSelected(btn, false) },
+        { label: 'Start Exploring (' + n + ')', title: 'Same setup, read/explain-only prompt',
+          onClick: (btn) => startSelected(btn, true) },
+      ]));
     root.appendChild(bar);
   }
 
@@ -4711,13 +4764,22 @@ function ticketCard(i) {
   actions.appendChild(openLinkButton('View Issue', i.url));
   if (i.pr_url) actions.appendChild(openLinkButton('View PR', i.pr_url));
   if (i.linked_session_id) {
+    if (i.linked_session_is_explore) {
+      actions.appendChild(el('span', 'explore-badge', 'Exploring'));
+    }
     const go = el('button', 'action-btn', 'Go to Session');
     go.onclick = () => selectSession(i.linked_session_id);
     actions.appendChild(go);
   } else if (!selecting) {
-    const work = el('button', 'action-btn action-primary', 'Start Working');
-    work.onclick = () => spawnAction(work, 'work-on-issue', { url: i.url }, 'Start Working');
-    actions.appendChild(work);
+    actions.appendChild(startActionsSplit(
+      'Start Working',
+      (btn) => spawnAction(btn, 'work-on-issue', { url: i.url }, 'Start Working'),
+      [
+        { label: 'Start Working', title: 'Worktree + implement/build prompt',
+          onClick: (btn) => spawnAction(btn, 'work-on-issue', { url: i.url }, 'Start Working') },
+        { label: 'Start Exploring', title: 'Same setup, read/explain-only prompt — no edits, no PR',
+          onClick: (btn) => spawnAction(btn, 'work-on-issue', { url: i.url, explore: true }, 'Start Exploring') },
+      ]));
   }
   foot.appendChild(actions);
   card.appendChild(foot);
@@ -4778,24 +4840,29 @@ function toggleIssueSelect(url) {
   renderBoard();
 }
 
-// Batch "Start Working (N)": ONE batch-work-on-issues call with every selected
-// ticket, so the Manager runs a single `/crow-batch-workspace url1 url2 …` (the
-// batch skill sets them up in parallel) instead of N separate `/crow-workspace`
-// submissions (#752). Then clear selection and exit selection mode.
-async function startWorkingSelected(btn) {
+// Batch "Start Working (N)" / "Start Exploring (N)": ONE batch-work-on-issues
+// call with every selected ticket. Explore mode passes `explore: true` so the
+// Manager runs `/crow-batch-workspace --explore …` (CROW-1149). Then clear
+// selection and exit selection mode.
+async function startSelected(btn, explore) {
   const urls = ((boardData.tickets && boardData.tickets.issues) || [])
     .filter((i) => !i.linked_session_id && selectedIssueIDs.has(i.url))
     .map((i) => i.url);
   if (!urls.length) return;
-  btn.disabled = true;
+  const split = btn.closest && btn.closest('.split-btn');
+  const buttons = split ? [...split.querySelectorAll('button')] : [btn];
+  buttons.forEach((b) => { b.disabled = true; });
   btn.textContent = 'Starting…';
+  const label = explore ? 'Start Exploring' : 'Start Working';
   let problem = '';
   try {
-    const res = await rpc('batch-work-on-issues', { urls });
+    const params = { urls };
+    if (explore) params.explore = true;
+    const res = await rpc('batch-work-on-issues', params);
     const rejected = (res && res.rejected) || [];
     if (rejected.length) problem = rejected.length + ' ticket(s) could not be started.';
   } catch (e) {
-    problem = 'Start Working failed: ' + (e.message || e);
+    problem = label + ' failed: ' + (e.message || e);
   }
   selectedIssueIDs.clear();
   ticketSelectionMode = false;

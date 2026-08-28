@@ -41,6 +41,7 @@ PRIMARY=false
 SKIP_LAUNCH=false
 SKIP_ASSIGN=false
 SKIP_PROJECT_STATUS=false
+EXPLORE=false
 BASE_BRANCH=""
 
 # Runtime state
@@ -411,6 +412,7 @@ Optional:
   --skip-launch              Skip agent launch
   --skip-assign              Skip auto-assign
   --skip-project-status      Skip project status mutation
+  --explore                  Exploration session (read/explain seed; skips assign + board status)
   --help                     Show this help
 EOF
   exit 0
@@ -450,6 +452,7 @@ parse_args() {
       --skip-launch)       SKIP_LAUNCH=true; shift ;;
       --skip-assign)       SKIP_ASSIGN=true; shift ;;
       --skip-project-status) SKIP_PROJECT_STATUS=true; shift ;;
+      --explore)           EXPLORE=true; shift ;;
       --help)              usage ;;
       *)                   die "parse_args" "Unknown argument: $1" ;;
     esac
@@ -478,6 +481,17 @@ parse_args() {
       claude-code|cursor|codex|opencode|grok|muse) ;;
       *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode | grok | muse)" ;;
     esac
+  fi
+
+  # Explore sessions must not claim the ticket as in-progress work, and must
+  # not attach to an existing PR branch (CROW-1149). The skill is told not to
+  # pass --pr-*; clearing here is defense in depth.
+  if [[ "$EXPLORE" == "true" ]]; then
+    SKIP_ASSIGN=true
+    SKIP_PROJECT_STATUS=true
+    PR_BRANCH=""
+    PR_URL=""
+    PR_NUMBER=""
   fi
 }
 
@@ -789,7 +803,9 @@ create_session() {
   if [[ -z "$SESSION_ID" ]]; then
     log "Creating session: $SESSION_NAME"
     local result
-    if ! result=$("$CROW_BIN" new-session --name "$SESSION_NAME" 2>&1); then
+    local ns_args=("$CROW_BIN" new-session --name "$SESSION_NAME")
+    [[ "$EXPLORE" == "true" ]] && ns_args+=(--explore)
+    if ! result=$("${ns_args[@]}" 2>&1); then
       die "new_session" "crow new-session failed: $result"
     fi
     SESSION_ID=$(json_val "session_id" <<< "$result")

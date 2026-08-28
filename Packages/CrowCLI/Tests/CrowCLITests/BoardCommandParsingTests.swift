@@ -63,6 +63,32 @@ private let prURL = "https://github.com/corveil/crow/pull/842"
     #expect(cmd.url == ["not-a-url", issueURL])
 }
 
+@Test func exploreIssueParsesURL() throws {
+    let cmd = try ExploreIssue.parse(["--url", issueURL])
+    #expect(cmd.url == issueURL)
+}
+
+@Test func exploreIssueRejectsUnsafeURLs() {
+    for bad in ["", "not-a-url", "ftp://example.com/x", "https://ex.com/a b"] {
+        #expect(throws: (any Error).self) {
+            _ = try ExploreIssue.parse(["--url", bad])
+        }
+    }
+}
+
+@Test func batchExploreIssuesCollectsRepeatedURLsInOrder() throws {
+    let cmd = try BatchExploreIssues.parse([
+        "--url", issueURL, "--url", "https://github.com/corveil/crow/issues/818",
+    ])
+    #expect(cmd.url == [issueURL, "https://github.com/corveil/crow/issues/818"])
+}
+
+@Test func batchExploreIssuesRequiresAtLeastOneSource() {
+    #expect(throws: (any Error).self) {
+        _ = try BatchExploreIssues.parse([])
+    }
+}
+
 // MARK: start-review
 
 @Test func startReviewParsesURL() throws {
@@ -157,6 +183,10 @@ private let prURL = "https://github.com/corveil/crow/pull/842"
     #expect(work is WorkOnIssue)
     let batch = try CrowCommand.parseAsRoot(["batch-work-on-issues", "--url", issueURL])
     #expect(batch is BatchWorkOnIssues)
+    let explore = try CrowCommand.parseAsRoot(["explore-issue", "--url", issueURL])
+    #expect(explore is ExploreIssue)
+    let batchExplore = try CrowCommand.parseAsRoot(["batch-explore-issues", "--url", issueURL])
+    #expect(batchExplore is BatchExploreIssues)
     let review = try CrowCommand.parseAsRoot(["start-review", "--url", prURL])
     #expect(review is StartReview)
     let manager = try CrowCommand.parseAsRoot(["create-manager"])

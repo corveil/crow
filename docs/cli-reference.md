@@ -65,13 +65,17 @@ Create a new session.
 
 ```bash
 crow new-session --name "feature-name"
+crow new-session --name "crow-1149-explore-jwt" --explore
 ```
 
-| Flag     | Required | Description   |
-| -------- | -------- | ------------- |
-| `--name` | yes      | Session name  |
+| Flag        | Required | Description                                                                 |
+| ----------- | -------- | --------------------------------------------------------------------------- |
+| `--name`    | yes      | Session name                                                                |
+| `--kind`    | no       | `work` (default) or `manager`                                               |
+| `--agent`   | no       | Agent kind; defaults to the configured default                              |
+| `--explore` | no       | Stamp the session as exploration (read/explain only). Invalid with `--kind manager`. |
 
-Returns `{"session_id": "<uuid>", "name": "..."}`.
+Returns `{"session_id": "<uuid>", "name": "..."}`. The `isExplore` tag is what the board/sidebar "Exploring" badge reads. `setup.sh --explore` passes this flag.
 
 ### `crow rename-session`
 
@@ -94,7 +98,7 @@ crow select-session --session <uuid>
 
 ### `crow list-sessions`
 
-Print all sessions.
+Print all sessions. Each row includes `is_explore` (`true` when launched with Start Exploring / `crow:explore`).
 
 ```bash
 crow list-sessions
@@ -106,7 +110,7 @@ crow list-sessions
 crow get-session --session <uuid>
 ```
 
-Returns full session details: id, name, status, agent, ticket metadata, timestamps, lock state, and org-goal/alignment fields. (Worktrees, terminals and links have their own verbs — `crow list-worktrees`, `crow list-terminals`, `crow list-links`.)
+Returns full session details: id, name, status, agent, ticket metadata, timestamps, lock state, org-goal/alignment fields, and `is_explore` (true when launched with Start Exploring / `crow:explore`). (Worktrees, terminals and links have their own verbs — `crow list-worktrees`, `crow list-terminals`, `crow list-links`.)
 
 It also reports which gateway the session launches with, so a rejected credential can be traced without starting a session:
 
@@ -982,7 +986,7 @@ crow corveil link-gateway --manager --org org1 --org-name "Acme"
 
 ## Automation Commands
 
-Settings → Automation: which sessions launch in auto permission mode, whether Crow watches for `crow:auto` / `crow:merge` labels, and whether it responds to changes-requested reviews and failed checks on your behalf.
+Settings → Automation: which sessions launch in auto permission mode, whether Crow watches for `crow:auto` / `crow:explore` / `crow:merge` labels, and whether it responds to changes-requested reviews and failed checks on your behalf.
 
 The tab also renders three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos). Those are `AppConfig.defaults` fields and are written by [`crow defaults set`](#crow-defaults-get--set) — one writer, one set of list semantics. `crow automation get` echoes them read-only so the tab still reads as a whole from one call.
 
@@ -1013,7 +1017,7 @@ crow automation set --manager-auto-permission-mode false && crow restart-manager
 | Flag                            | Default | Description                                                              |
 | ------------------------------- | ------- | ------------------------------------------------------------------------ |
 | `--attribution-trailers`        | `true`  | Write a per-worktree hook adding a `Crow-Session: <uuid>` commit trailer  |
-| `--auto-create-watcher-enabled` | `false` | Auto-launch a workspace for issues assigned to you labeled `crow:auto`    |
+| `--auto-create-watcher-enabled` | `false` | Auto-launch a workspace for issues assigned to you labeled `crow:auto` or `crow:explore` |
 | `--auto-merge-watcher-enabled`  | `false` | Auto-merge Crow-authored PRs labeled `crow:merge`                         |
 
 **Auto-respond** — Crow acts on a PR's behalf without you asking: three of these type an instruction into the session's agent terminal, one calls the host API directly.
@@ -1677,7 +1681,7 @@ Prerequisites differ by verb:
 
 - `list-tickets` / `list-reviews` need a provider-configured tracker. Without one they return an empty board rather than failing. **No tmux required.**
 - `refresh-tickets` needs a provider-configured tracker and errors without one. **No tmux required.**
-- `work-on-issue`, `batch-work-on-issues`, `start-review`, and `create-manager` spawn or drive sessions, so they need tmux on the daemon host.
+- `work-on-issue`, `batch-work-on-issues`, `explore-issue`, `batch-explore-issues`, `start-review`, and `create-manager` spawn or drive sessions, so they need tmux on the daemon host.
 - `quick-action` needs either the Crow desktop app or tmux on the daemon host.
 
 ### `crow list-tickets`
@@ -1690,7 +1694,7 @@ crow list-tickets | jq '.issues[] | select(.project_status == "In Progress")'
 crow list-tickets | jq -r '.issues[] | select(.linked_session_id == null) | .url'
 ```
 
-Returns `{"issues": [...], "counts": {"Backlog": N, "Ready": N, "In Progress": N, "In Review": N, "Done": N, "All": N}, "done_last_24h": N, "loading": bool}`. Each issue carries `id`, `number`, `title`, `state`, `url`, `repo`, `provider`, `pr_number`, `pr_url`, `updated_at`, `project_status`, `labels`, `body`, `author`, `created_at`, `comments_count`, `pr_state`, `checks`, and `linked_session_id` (`null` when no session is working it — the same field the web uses to decide whether to offer "Start Working").
+Returns `{"issues": [...], "counts": {"Backlog": N, "Ready": N, "In Progress": N, "In Review": N, "Done": N, "All": N}, "done_last_24h": N, "loading": bool}`. Each issue carries `id`, `number`, `title`, `state`, `url`, `repo`, `provider`, `pr_number`, `pr_url`, `updated_at`, `project_status`, `labels`, `body`, `author`, `created_at`, `comments_count`, `pr_state`, `checks`, `linked_session_id` (`null` when no session is working it — the same field the web uses to decide whether to offer "Start Working"), and `linked_session_is_explore` (`true` when that session was launched with Start Exploring / `crow:explore`).
 
 ### `crow list-reviews`
 
@@ -1727,6 +1731,20 @@ crow work-on-issue --url "https://github.com/corveil/crow/issues/817"
 
 The URL must be an `http(s)` URL with no whitespace or control characters — it becomes terminal keystrokes, and `crow send` semantics turn a newline into an Enter press. Returns `{"ok": true}`; the session appears once the Manager agent has set it up.
 
+### `crow explore-issue`
+
+Start exploring a ticket. Types `/crow-workspace --explore <url>` into the primary Manager terminal — identical to the board's "Start Exploring" action. Same worktree/session bootstrap as `work-on-issue`, but seeded with a read/explain-only prompt (no edits, no PR, no In Progress board move).
+
+```bash
+crow explore-issue --url "https://github.com/corveil/crow/issues/1149"
+```
+
+| Flag    | Required | Description         |
+| ------- | -------- | ------------------- |
+| `--url` | yes      | Ticket / issue URL  |
+
+Same URL safety rules as `work-on-issue`. Returns `{"ok": true}`.
+
 ### `crow batch-work-on-issues`
 
 Batch counterpart of `work-on-issue`: types one `/crow-batch-workspace <url1> <url2> …` line so the Manager runs the parallel batch skill once instead of N sequential submissions.
@@ -1746,6 +1764,14 @@ gh issue list -R corveil/crow --json url --jq '.[].url' \
 URLs are sent in order: every `--url` first, then the file's lines (blank lines dropped). Malformed URLs are **not** rejected locally — the daemon drops them into `rejected` and starts the rest, so one bad ticket can't block the batch. Duplicates are deduped server-side.
 
 Returns `{"ok": true, "sent": N, "rejected": ["..."]}`. Check `rejected` — a non-empty array is a partial success, not a failure.
+
+### `crow batch-explore-issues`
+
+Batch counterpart of `explore-issue`: types one `/crow-batch-workspace --explore <url1> <url2> …` line. Same flags and `rejected` contract as `batch-work-on-issues`.
+
+```bash
+crow batch-explore-issues --url "https://github.com/o/r/issues/1" --url "https://github.com/o/r/issues/2"
+```
 
 ### `crow start-review`
 

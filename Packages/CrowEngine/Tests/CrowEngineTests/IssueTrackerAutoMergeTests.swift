@@ -211,6 +211,47 @@ struct IssueTrackerAutoMergeTests {
         #expect(!IssueTracker.canRunAutoCreate(enabled: false, hasHandler: false))
     }
 
+    // MARK: - autoCreateKind (CROW-1149 — crow:auto wins over crow:explore)
+
+    private func labeledIssue(_ names: [String]) -> AssignedIssue {
+        AssignedIssue(
+            id: "github:acme/api#1", number: 1, title: "T",
+            state: "open", url: "https://github.com/acme/api/issues/1",
+            repo: "acme/api",
+            labels: names.map { LabelInfo(name: $0) },
+            provider: .github)
+    }
+
+    @Test func autoCreateKindIsNilWithoutTriggerLabels() {
+        #expect(IssueTracker.autoCreateKind(for: labeledIssue(["bug"])) == nil)
+        #expect(IssueTracker.autoCreateKind(for: labeledIssue([])) == nil)
+    }
+
+    @Test func autoCreateKindWorkFromCrowAuto() {
+        #expect(IssueTracker.autoCreateKind(for: labeledIssue(["crow:auto"])) == .work)
+        #expect(IssueTracker.autoCreateKind(for: labeledIssue(["CROW:AUTO"])) == .work)
+    }
+
+    @Test func autoCreateKindExploreFromCrowExplore() {
+        #expect(IssueTracker.autoCreateKind(for: labeledIssue(["crow:explore"])) == .explore)
+        #expect(IssueTracker.autoCreateKind(for: labeledIssue(["Crow:Explore"])) == .explore)
+    }
+
+    @Test func autoCreateKindAutoWinsWhenBothLabelsPresent() {
+        let both = labeledIssue(["crow:explore", "crow:auto"])
+        #expect(IssueTracker.autoCreateKind(for: both) == .work)
+        #expect(IssueTracker.autoCreateLabelsToStrip(on: both).sorted()
+            == ["crow:auto", "crow:explore"].sorted())
+    }
+
+    @Test func autoCreateLabelsToStripOnlyPresentTriggers() {
+        #expect(IssueTracker.autoCreateLabelsToStrip(on: labeledIssue(["crow:auto"]))
+            == ["crow:auto"])
+        #expect(IssueTracker.autoCreateLabelsToStrip(on: labeledIssue(["crow:explore"]))
+            == ["crow:explore"])
+        #expect(IssueTracker.autoCreateLabelsToStrip(on: labeledIssue(["bug"])).isEmpty)
+    }
+
     // MARK: - shouldUpdateBranchBeforeMerge (BEHIND base)
 
     @Test func updatesBranchWhenBehindBase() {

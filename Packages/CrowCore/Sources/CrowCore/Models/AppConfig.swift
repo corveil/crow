@@ -45,11 +45,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// Opt-in: defaults to false (CROW-299).
     public var autoMergeWatcherEnabled: Bool
     /// When true, the IssueTracker dispatches `/crow-workspace` to the
-    /// Manager terminal for assigned open issues labeled `crow:auto`.
-    /// Opt-in: defaults to false (CROW-312). The label is still stripped
-    /// after a successful dispatch so the trigger remains one-shot per
-    /// issue. While disabled, the label is left alone so a later opt-in
-    /// can still pick up previously-labeled issues.
+    /// Manager terminal for assigned open issues labeled `crow:auto`, or
+    /// `/crow-workspace --explore` for `crow:explore` (CROW-1149). Opt-in:
+    /// defaults to false (CROW-312). Trigger labels are stripped after a
+    /// successful dispatch so the claim remains one-shot per issue. While
+    /// disabled, labels are left alone so a later opt-in can still pick
+    /// up previously-labeled issues. `crow:auto` wins when both are present.
     public var autoCreateWatcherEnabled: Bool
     public var cleanup: CleanupConfig
     /// Periodic check against `corveil/crow` `main` to surface when this build

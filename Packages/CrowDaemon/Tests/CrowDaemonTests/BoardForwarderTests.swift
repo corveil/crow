@@ -83,6 +83,21 @@ import CrowPersistence
         #expect(!isSafeIssueURL("https://example.com/x\u{7F}"))        // DEL
     }
 
+    @Test func workspaceLaunchCommandWorkVsExplore() {
+        #expect(workspaceLaunchCommand(urls: ["https://github.com/o/r/issues/1"], explore: false)
+            == "/crow-workspace https://github.com/o/r/issues/1\n")
+        #expect(workspaceLaunchCommand(urls: ["https://github.com/o/r/issues/1"], explore: true)
+            == "/crow-workspace --explore https://github.com/o/r/issues/1\n")
+        #expect(workspaceLaunchCommand(
+            urls: ["https://github.com/o/r/issues/1", "https://github.com/o/r/issues/2"],
+            explore: false)
+            == "/crow-batch-workspace https://github.com/o/r/issues/1 https://github.com/o/r/issues/2\n")
+        #expect(workspaceLaunchCommand(
+            urls: ["https://github.com/o/r/issues/1", "https://github.com/o/r/issues/2"],
+            explore: true)
+            == "/crow-batch-workspace --explore https://github.com/o/r/issues/1 https://github.com/o/r/issues/2\n")
+    }
+
     /// Params validation is reached only once tmux is available; with the app
     /// down the applicationError guard fires first (same ordering as
     /// `work-on-issue`), which `boardActionsErrorWhenAppDown` already pins.

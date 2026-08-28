@@ -7,7 +7,7 @@ import CrowProvider
 /// The board poll, extracted from `IssueTracker` (CROW-1094). Owns the
 /// consolidated GitHub GraphQL query, the stale-PR follow-up fetch, the
 /// GitLab / Jira assigned-issue fetches, PR-record dedup, and the auto-create
-/// (`crow:auto`) dispatch. Stateless except for the auto-create in-flight /
+/// (`crow:auto` / `crow:explore`) dispatch. Stateless except for the auto-create in-flight /
 /// log-rate-limit bookkeeping; reaches the shared warnings + rate-limit sink,
 /// the auto-create callback/toggle, `appState`, `providerManager`, and the
 /// shared `JSONStore` through an unowned back-reference to the tracker.
@@ -35,10 +35,10 @@ final class BoardPoller {
 
     // MARK: - Auto-create on assign
     /// Dispatches `onAutoCreateRequest` for open assigned issues carrying the
-    /// `crow:auto` label, then asynchronously strips the label so the trigger
-    /// is one-shot and visible across machines. Issues that already have an
-    /// active session are treated as "work picked up elsewhere" — we still
-    /// strip the stale label but don't re-dispatch.
+    /// `crow:auto` or `crow:explore` label, then asynchronously strips the
+    /// trigger label(s) so the claim is one-shot and visible across machines.
+    /// Issues that already have an active session are treated as "work picked
+    /// up elsewhere" — we still strip the stale label but don't re-dispatch.
     ///
     /// No-op when the global `autoCreateWatcherEnabled` setting is off
     /// (CROW-312). The label is intentionally left in place while disabled
@@ -47,9 +47,10 @@ final class BoardPoller {
     /// Also a no-op when no `onAutoCreateRequest` handler is wired: since
     /// CROW-782 the *provider* is armed even on a daemon with no tmux (and so no
     /// Manager terminal to spawn into), and dispatching into a nil callback here
-    /// would strip `crow:auto` anyway — permanently burning the one-shot trigger
-    /// for a workspace that was never created (review #787). Same contract as
-    /// the disabled case: leave the label, pick it up once a host can act.
+    /// would strip `crow:auto` / `crow:explore` anyway — permanently burning the
+    /// one-shot trigger for a workspace that was never created (review #787).
+    /// Same contract as the disabled case: leave the label, pick it up once a
+    /// host can act.
     func detectAutoCreateCandidates(issues: [AssignedIssue]) {
         guard Self.canRunAutoCreate(enabled: owner.autoCreateWatcherEnabledProvider(),
                                     hasHandler: owner.onAutoCreateRequest != nil) else {
@@ -64,39 +65,65 @@ final class BoardPoller {
         }
 
         for issue in issues where issue.state == "open" {
-            let labeled = issue.labels.contains { $0.name.caseInsensitiveCompare(IssueTracker.autoCreateLabel) == .orderedSame }
-            guard labeled else { continue }
+            guard let kind = Self.autoCreateKind(for: issue) else { continue }
             guard !autoCreateInFlight.contains(issue.url) else { continue }
 
             if appState.linkedSession(for: issue) != nil {
                 // Stale label — work already picked up elsewhere. Best-effort cleanup.
-                Task { [weak self] in await self?.removeAutoCreateLabel(from: issue) }
+                Task { [weak self] in await self?.removeAutoCreateLabels(from: issue) }
                 continue
             }
 
             autoCreateInFlight.insert(issue.url)
-            owner.onAutoCreateRequest?(issue)
-            Task { [weak self] in await self?.removeAutoCreateLabel(from: issue) }
+            owner.onAutoCreateRequest?(issue, kind)
+            Task { [weak self] in await self?.removeAutoCreateLabels(from: issue) }
         }
     }
 
     /// Whether the auto-create sweep may run — i.e. whether stripping `crow:auto`
-    /// (which the sweep always does after dispatch) is justified. Requires BOTH
-    /// the config opt-in AND a wired handler: dispatching into a nil callback
-    /// still burns the one-shot label without creating anything (review #787).
-    /// Pure so the rule is unit-testable without an `IssueTracker`.
+    /// / `crow:explore` (which the sweep always does after dispatch) is justified.
+    /// Requires BOTH the config opt-in AND a wired handler: dispatching into a
+    /// nil callback still burns the one-shot label without creating anything
+    /// (review #787). Pure so the rule is unit-testable without an `IssueTracker`.
     nonisolated static func canRunAutoCreate(enabled: Bool, hasHandler: Bool) -> Bool {
         enabled && hasHandler
     }
 
-    /// Say (hourly at most) that `crow:auto` issues are waiting but nothing can
-    /// act on them — the enabled-but-undispatchable state a no-tmux daemon is in.
-    /// Silent when there's nothing labeled, so a normal headless daemon with no
-    /// pending auto-create work doesn't log at all.
+    /// Which seed to dispatch for a labeled issue. `crow:auto` wins when both
+    /// trigger labels are present — implementation is the stronger intent
+    /// (CROW-1149). Nil when neither label is on the issue. Pure so the
+    /// precedence rule is unit-testable without an `IssueTracker`.
+    nonisolated static func autoCreateKind(for issue: AssignedIssue) -> IssueTracker.AutoCreateKind? {
+        if hasTriggerLabel(issue, IssueTracker.autoCreateLabel) { return .work }
+        if hasTriggerLabel(issue, IssueTracker.exploreCreateLabel) { return .explore }
+        return nil
+    }
+
+    /// Trigger labels actually present on `issue` — both, when both were
+    /// applied. Stripping the pair together prevents `crow:explore` from
+    /// sitting around after `crow:auto` already claimed the ticket.
+    nonisolated static func autoCreateLabelsToStrip(on issue: AssignedIssue) -> [String] {
+        var labels: [String] = []
+        if hasTriggerLabel(issue, IssueTracker.autoCreateLabel) {
+            labels.append(IssueTracker.autoCreateLabel)
+        }
+        if hasTriggerLabel(issue, IssueTracker.exploreCreateLabel) {
+            labels.append(IssueTracker.exploreCreateLabel)
+        }
+        return labels
+    }
+
+    nonisolated static func hasTriggerLabel(_ issue: AssignedIssue, _ name: String) -> Bool {
+        issue.labels.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    /// Say (hourly at most) that `crow:auto` / `crow:explore` issues are waiting
+    /// but nothing can act on them — the enabled-but-undispatchable state a
+    /// no-tmux daemon is in. Silent when there's nothing labeled, so a normal
+    /// headless daemon with no pending auto-create work doesn't log at all.
     private func logAutoCreateUndispatchableIfDue(issues: [AssignedIssue]) {
         let waiting = issues.filter { issue in
-            issue.state == "open"
-                && issue.labels.contains { $0.name.caseInsensitiveCompare(IssueTracker.autoCreateLabel) == .orderedSame }
+            issue.state == "open" && Self.autoCreateKind(for: issue) != nil
         }
         guard !waiting.isEmpty else { return }
         let now = Date()
@@ -107,10 +134,12 @@ final class BoardPoller {
             + "wired (no Manager terminal — is tmux available?); leaving the label in place")
     }
 
-    /// Best-effort removal of the auto-create label. Failure is logged and
+    /// Best-effort removal of the trigger label(s). Failure is logged and
     /// otherwise ignored — the in-memory `autoCreateInFlight` + active-session
     /// dedup keeps duplicate spawns at bay until the label is gone.
-    private func removeAutoCreateLabel(from issue: AssignedIssue) async {
+    private func removeAutoCreateLabels(from issue: AssignedIssue) async {
+        let toRemove = Self.autoCreateLabelsToStrip(on: issue)
+        guard !toRemove.isEmpty else { return }
         // issue.id format for GitLab: "gitlab:host:org/repo#number". Need the
         // host segment to pick the right `GITLAB_HOST` for the backend.
         let host: String?
@@ -126,9 +155,9 @@ final class BoardPoller {
         }
         let backend = providerManager.taskBackend(for: issue.provider, host: host)
         do {
-            try await backend.setLabels(url: issue.url, add: [], remove: [IssueTracker.autoCreateLabel])
+            try await backend.setLabels(url: issue.url, add: [], remove: toRemove)
         } catch {
-            print("[IssueTracker] failed to remove \(IssueTracker.autoCreateLabel) from \(issue.url): \(error.localizedDescription)")
+            print("[IssueTracker] failed to remove \(toRemove.joined(separator: ", ")) from \(issue.url): \(error.localizedDescription)")
         }
     }
 
@@ -718,6 +747,14 @@ extension IssueTracker {
 
     nonisolated static func canRunAutoCreate(enabled: Bool, hasHandler: Bool) -> Bool {
         BoardPoller.canRunAutoCreate(enabled: enabled, hasHandler: hasHandler)
+    }
+
+    nonisolated static func autoCreateKind(for issue: AssignedIssue) -> AutoCreateKind? {
+        BoardPoller.autoCreateKind(for: issue)
+    }
+
+    nonisolated static func autoCreateLabelsToStrip(on issue: AssignedIssue) -> [String] {
+        BoardPoller.autoCreateLabelsToStrip(on: issue)
     }
 }
 
