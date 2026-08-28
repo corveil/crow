@@ -290,11 +290,16 @@ public enum QuickActionPrompts {
 
         let syncHint: String
         let reviewHint: String
+        // CROW-960: checkout restores attacker-controlled harness config into
+        // the live session. Re-strip immediately after sync (after `git pull`
+        // on GitLab), matching crow-review-pr Step 1. The command string is
+        // shared with the skill so the two paths cannot drift.
+        let restripHint = "Then immediately re-strip restored harness config with `\(ReviewCloneRestrip.workingTreeRmCommand)` (working-tree only; do not git rm)."
         if codeBackend.provider == .gitlab {
-            syncHint = "Run `\(cli) mr checkout \(prURL)` (then `git pull`) to sync your local checkout to the author's latest head."
+            syncHint = "Run `\(cli) mr checkout \(prURL)` (then `git pull`) to sync your local checkout to the author's latest head. \(restripHint)"
             reviewHint = "Post a fresh verdict with `\(cli) mr note`/approval per the crow-review-pr skill — never a bare comment."
         } else {
-            syncHint = "Run `\(cli) pr checkout \(prURL)` to sync your local checkout to the author's latest head."
+            syncHint = "Run `\(cli) pr checkout \(prURL)` to sync your local checkout to the author's latest head. \(restripHint)"
             reviewHint = "Post a fresh verdict with `\(cli) pr review \(prURL) --request-changes` or `--approve` (never `--comment`), following the crow-review-pr skill's format and verdict rules."
         }
 

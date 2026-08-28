@@ -116,6 +116,35 @@ struct ReReviewPromptTests {
         #expect(prompt.contains("do NOT modify code, commit, or push"))
         #expect(prompt.hasSuffix("\n"))
     }
+
+    /// CROW-960: a head-advancing re-review is the same restore as the skill's
+    /// `gh pr checkout`. The prompt must re-strip immediately after sync, using
+    /// the shared command so it cannot drift from crow-review-pr Step 1.
+    @Test func restripsHarnessConfigAfterCheckout() throws {
+        let github = QuickActionPrompts.build(
+            action: .reReview,
+            codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
+            prURL: "https://github.com/corveil/crow/pull/753",
+            prNumber: 753,
+            lastReviewedHeadSha: nil
+        )
+        #expect(github.contains(ReviewCloneRestrip.workingTreeRmCommand))
+        #expect(github.contains("do not git rm"))
+        // Re-strip is after checkout, still one line.
+        #expect(!github.dropLast().contains("\n"))
+
+        let gitlab = QuickActionPrompts.build(
+            action: .reReview,
+            codeBackend: FakeCodeBackend(provider: .gitlab, cliName: "glab"),
+            prURL: "https://gitlab.example.com/org/repo/-/merge_requests/45",
+            prNumber: 45,
+            lastReviewedHeadSha: nil
+        )
+        // GitLab syncs with checkout then `git pull`; the rm must follow both.
+        let pullRange = try #require(gitlab.range(of: "git pull"))
+        let rmRange = try #require(gitlab.range(of: ReviewCloneRestrip.workingTreeRmCommand))
+        #expect(pullRange.lowerBound < rmRange.lowerBound)
+    }
 }
 
 /// A manual quick action must report whether it actually reached the agent so
