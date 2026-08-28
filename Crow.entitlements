@@ -2,9 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- No Hardened Runtime exceptions are required: the terminal renders via
-         xterm.js in WKWebView (JS/JIT runs in the out-of-process WebContent
-         process under Apple-provided entitlements), so the app needs no
-         unsigned-executable-memory, library-validation, or JIT exceptions. -->
+    <!-- Hardened-runtime entitlements for signed crow/crowd (ADR 0021).
+         No exceptions: the binaries do not JIT, and they exec tmux/git/agents
+         as child processes rather than dlopen'ing unsigned code. An empty
+         dict is a valid entitlements file and is what notarization wants when
+         nothing extra is required. -->
 </dict>
 </plist>

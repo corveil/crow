@@ -32,7 +32,7 @@ make build
 > the Swift build. Use `swift build` only for quick iteration after the
 > initial build.
 
-**Note:** Code signing is not required for development. Unsigned builds work normally for local testing. Official releases are signed and notarized automatically via GitHub Actions.
+**Note:** Code signing is not required for development. Unsigned builds work normally for local testing. Official GitHub Releases are signed and notarized automatically via GitHub Actions ([docs/macos-release-signing.md](docs/macos-release-signing.md)).
 
 ### Running Tests
 
