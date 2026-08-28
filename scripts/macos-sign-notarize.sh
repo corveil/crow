@@ -189,6 +189,9 @@ sign_tree() {
   fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
+    # Identifier is basename-only. Today's tree is crow + crowd plus resource
+    # bundles with no Mach-O; if a future bundle ships embedded binaries this
+    # will collide on duplicate names and should switch to a path-relative id.
     base="$(basename "$f")"
     case "$base" in
       crow)  id="com.corveil.crow" ;;
