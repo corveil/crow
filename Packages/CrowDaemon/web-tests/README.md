@@ -200,6 +200,15 @@ surviving a poll, a new SHA re-showing, the `setItem`-throws path with stale
 storage, no-SHA session dismiss resetting when a SHA arrives, `getItem` throws
 not blocking render or in-memory dismiss, and RPC failure hiding the banner.
 
+## `grid.test.js` — Session grid (CROW-1153)
+
+Drives `gridRoster` / pin helpers / `renderSessionGrid` against mock sessions.
+Coverage: column count (1 / 2×2 / 3×3 / 4×4), pinned-first roster with
+active auto-fill and activity sort, pin persist + reorder in `localStorage`,
+the Grid nav pill, Pin/Unpin on the session menu, `#/grid` routing, empty
+state copy, and cell DOM (pinned class, name, column count). Snapshot
+painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
+
 ## Run
 
 ```sh

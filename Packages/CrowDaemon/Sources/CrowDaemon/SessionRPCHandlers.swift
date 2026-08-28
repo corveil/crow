@@ -7,7 +7,8 @@ import CrowTerminal
 import Foundation
 
 /// Session CRUD, terminal/agent ops, host GUI launch, and session-local
-/// reads (`list-agents`, `list-artifacts`, `get-session-terminal-preview`).
+/// reads (`list-agents`, `list-artifacts`, `get-session-terminal-preview`,
+/// `list-session-terminal-snapshots`).
 ///
 /// Extracted from `makeCommandRouter`'s dictionary literal (CROW-1134).
 func makeSessionHandlers(
@@ -527,6 +528,36 @@ func makeSessionHandlers(
                 return ["preview": .null]
             }
             return ["preview": .string(preview)]
+        },
+        // Visible-pane ANSI snapshots for the session grid (CROW-1153). Batch
+        // so a 16-cell wall is one RPC, not sixteen; capped at the grid page
+        // size. Best-effort per id — a missing pane is `null`, not an error.
+        "list-session-terminal-snapshots": { params in
+            let rawIDs = params["session_ids"]?.arrayValue ?? []
+            let ids = rawIDs.compactMap { $0.stringValue.flatMap(UUID.init(uuidString:)) }
+                .prefix(16)
+            guard let cockpit else {
+                var empty: [String: JSONValue] = [:]
+                for id in ids { empty[id.uuidString] = .null }
+                return ["snapshots": .object(empty)]
+            }
+            var snapshots: [String: JSONValue] = [:]
+            for id in ids {
+                let windowIndex: Int? = await MainActor.run {
+                    appState.terminalWatchWindowIndex(for: id)
+                }
+                guard let index = windowIndex,
+                      let pane = cockpit.snapshotPane(windowIndex: index) else {
+                    snapshots[id.uuidString] = .null
+                    continue
+                }
+                snapshots[id.uuidString] = .object([
+                    "snapshot": .string(pane.snapshot),
+                    "cols": .int(pane.cols),
+                    "rows": .int(pane.rows),
+                ])
+            }
+            return ["snapshots": .object(snapshots)]
         },
     ]
     return handlers

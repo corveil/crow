@@ -2,6 +2,14 @@ import CrowCore
 import CrowTerminal
 import Foundation
 
+/// One visible-pane capture for a session-grid cell (CROW-1153). `snapshot` is
+/// already framed for xterm.js (home + clear + CRLF), matching `replayFrame`.
+struct GridPaneSnapshot: Sendable, Equatable {
+    var snapshot: String
+    var cols: Int
+    var rows: Int
+}
+
 /// Bridges the daemon to the tmux "cockpit" that holds every session's
 /// terminals — one tmux window per `SessionTerminal` (CROW-581).
 ///
@@ -17,6 +25,8 @@ struct TerminalCockpit: Sendable {
     let controller: TmuxController
     /// When set, `previewText` delegates here instead of calling tmux (unit tests).
     private let previewCapture: (@Sendable (Int) -> String?)?
+    /// When set, `snapshotPane` delegates here instead of calling tmux (unit tests).
+    private let snapshotCapture: (@Sendable (Int) -> GridPaneSnapshot?)?
 
     init?(devRoot: String) {
         guard let tmux = Self.resolveTmuxBinary() else { return nil }
@@ -25,14 +35,19 @@ struct TerminalCockpit: Sendable {
         let socketPath = Self.appTmuxSocketPath()
         controller = TmuxController(tmuxBinary: tmux, socketPath: socketPath, sessionName: Self.sessionName)
         previewCapture = nil
+        snapshotCapture = nil
         ensureSession()
     }
 
     /// Stub cockpit for handler tests — no tmux server required.
-    init(previewCapture: @escaping @Sendable (Int) -> String?) {
+    init(
+        previewCapture: @escaping @Sendable (Int) -> String?,
+        snapshotCapture: (@Sendable (Int) -> GridPaneSnapshot?)? = nil
+    ) {
         controller = TmuxController(
             tmuxBinary: "/bin/false", socketPath: "/dev/null", sessionName: Self.sessionName)
         self.previewCapture = previewCapture
+        self.snapshotCapture = snapshotCapture
     }
 
     /// Adopt the app's cockpit if it's already running; otherwise create a bare
@@ -205,6 +220,30 @@ struct TerminalCockpit: Sendable {
             seq += "\(esc)[?\(mode)h"
         }
         return seq.isEmpty ? nil : seq
+    }
+
+    /// ANSI snapshot of a cockpit window's *visible* frame for the session grid
+    /// (CROW-1153). Does not attach a PTY — capture-pane is read-only — so a
+    /// 16-cell wall cannot SIGWINCH the shared agent window. Best-effort.
+    func snapshotPane(windowIndex: Int) -> GridPaneSnapshot? {
+        if let snapshotCapture { return snapshotCapture(windowIndex) }
+        let target = "\(Self.sessionName):\(windowIndex)"
+        guard let raw = try? controller.captureVisiblePane(target: target, escapes: true) else {
+            return nil
+        }
+        let framed = String(data: Self.replayFrame(from: raw), encoding: .utf8) ?? raw
+        var cols = 80
+        var rows = 24
+        if let dim = try? controller.displayMessage(
+            target: target, format: "#{pane_width} #{pane_height}")
+        {
+            let parts = dim.split(whereSeparator: { $0.isWhitespace })
+            if parts.count >= 2, let c = Int(parts[0]), let r = Int(parts[1]), c > 0, r > 0 {
+                cols = min(c, 400)
+                rows = min(r, 200)
+            }
+        }
+        return GridPaneSnapshot(snapshot: framed, cols: cols, rows: rows)
     }
 
     /// Capture the last `previewLines` rows of a cockpit window as plain text for

@@ -278,6 +278,14 @@ public enum ParityLedger {
                 highlighted card (CROW-976). No CLI verb — the switcher is \
                 browser-only and fetches on demand.
                 """),
+        .read(
+            "list-session-terminal-snapshots",
+            noCLI: """
+                Web session-grid snapshots (CROW-1153): a batch of capture-pane \
+                visible frames for up to 16 cells. No CLI verb — the grid is a \
+                browser watch wall and polling a pane from a shell is `tmux \
+                capture-pane`.
+                """),
 
         // Settings
         // `defaults-get` is deliberately un-gated on `/rpc`; `defaults-set` is

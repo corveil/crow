@@ -593,6 +593,18 @@ public final class AppState {
         return terms.first(where: { $0.tmuxBinding != nil })?.tmuxBinding?.windowIndex
     }
 
+    /// tmux window index for the session-grid watch cell (CROW-1153).
+    /// Prefers the managed agent terminal (the pane the coding agent lives
+    /// in) when it has a binding; Managers carry no `isManaged` flag, so
+    /// they fall through to ``terminalPreviewWindowIndex``.
+    public func terminalWatchWindowIndex(for sessionID: UUID) -> Int? {
+        let terms = terminals(for: sessionID)
+        if let managed = terms.first(where: { $0.isManaged && $0.tmuxBinding != nil }) {
+            return managed.tmuxBinding?.windowIndex
+        }
+        return terminalPreviewWindowIndex(for: sessionID)
+    }
+
     /// Whether a session has a managed Claude Code terminal that quick
     /// actions can be dispatched into. The dispatcher in AppDelegate
     /// re-checks the surface state before sending; this is the lighter
