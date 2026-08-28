@@ -58,3 +58,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0019 | [MCP is a third client, not a mirror of the RPC surface](./0019-read-only-mcp-server.md) | Accepted | 2026-08-13 |
 | 0020 | [Corveil is a first-class integration, not a manual gateway](./0020-first-class-corveil-integration.md) | Accepted | 2026-08-27 |
 | 0021 | [Signed + notarized macOS CLI releases](./0021-signed-notarized-macos-releases.md) | Accepted | 2026-08-28 |
+| 0022 | [Session grid cells are read-only capture-pane snapshots](./0022-session-grid-snapshots.md) | Accepted | 2026-08-28 |

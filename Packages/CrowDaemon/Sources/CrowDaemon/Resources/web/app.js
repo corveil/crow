@@ -46,6 +46,8 @@ const RPC_TIMEOUTS_MS = {
   'refresh-allowlist': 60000,
   'mark-issue-done': 60000,
   'add-merge-label': 60000,
+  // 16 capture-pane snapshots for the session grid (CROW-1153).
+  'list-session-terminal-snapshots': 45000,
 };
 function rpcTimeoutFor(method) {
   const ms = RPC_TIMEOUTS_MS[method];
@@ -1050,8 +1052,18 @@ let liveById = {};
 // Boards (Ticket Board / Reviews / Allowlist), mirroring the desktop's
 // full-pane boards. Served by `crowd` off its own IssueTracker/AllowListService
 // (CROW-581 M-C), so they populate whether or not the desktop app is running.
-let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | 'scorecard' | null
+let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | 'scorecard' | 'grid' | null
 const boardData = { tickets: null, reviews: null, allowlist: null, scorecard: null };
+
+// Session grid (CROW-1153): an ordered per-browser pin list. Pinned ids lead
+// the wall; remaining slots auto-fill with active/in-review sessions. Caps at
+// 16 cells per page so a cell stays large enough to read.
+const GRID_PAGE_SIZE = 16;
+const GRID_PINS_KEY = 'crow.grid.pins';
+let gridPinnedIds = [];
+let gridPage = 0;
+let gridPollTimer = null;
+const gridTerms = new Map(); // sessionId → { term, host, lastSnap, cols, rows }
 
 // Last-known sidebar layout (sessions + ticket/review badge counts) so first
 // paint isn't blank while /rpc connects (CROW-613).
@@ -1075,6 +1087,8 @@ function purgeSharedBrowserCaches() {
   clearSidebarCache();
   notifHistory = [];
   try { localStorage.removeItem(NOTIF_HISTORY_KEY); } catch (_) {}
+  try { localStorage.removeItem(GRID_PINS_KEY); } catch (_) {}
+  gridPinnedIds = [];
 }
 function restoreSidebarCache() {
   try {
@@ -1280,6 +1294,7 @@ async function refreshSessions() {
       return; // showEmptyDetail renders the sidebar itself
     }
     renderSidebar();
+    if (changed && selectedBoard === 'grid') renderBoard();
   } catch (_) { /* transient — next poll retries */ }
 }
 
@@ -1296,6 +1311,7 @@ async function refreshLive() {
     const s = sessions.find((x) => x.id === selectedId);
     if (s) renderHeader(s);
   }
+  if (selectedBoard === 'grid') updateGridCellHeaders();
 }
 
 function liveFor(id) { return liveById[id] || {}; }
@@ -1315,6 +1331,7 @@ function sidebarSignature() {
     sessionsLoaded, sidebarCacheHit, sessions, liveById, selectedId, selectedBoard,
     selectionMode, [...selectedSessionIDs],
     uiConfig.hideSessionDetails,
+    gridPinnedIds,
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
@@ -1641,13 +1658,14 @@ function sidebarIconColumn() {
 }
 
 // Left sidebar-top stack (CROW-917): the Tickets card over two nav-pill rows —
-// row 1 Reviews · Allowlist · Scorecard, row 2 the full-width Manager pill.
+// row 1 Grid · Reviews · Allowlist · Scorecard, row 2 the full-width Manager pill.
 function sidebarLeftStack() {
   const wrap = el('div', 'sidebar-left');
   wrap.appendChild(ticketsCard());
 
-  // Row 1: Reviews · Allowlist · Scorecard (each its own non-wrapping flex line).
+  // Row 1: Grid · Reviews · Allowlist · Scorecard (each its own non-wrapping flex line).
   const row1 = el('div', 'nav-pills-row');
+  row1.appendChild(navPill('Grid', selectedBoard === 'grid', () => selectBoard('grid')));
   const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
   const unseen = (boardData.reviews && boardData.reviews.unseen) || 0;
   if (unseen) rev.appendChild(el('span', 'pill-badge', String(unseen)));
@@ -1850,6 +1868,8 @@ const ICONS = {
   terminal: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5"/><path d="M8 9.5h3"/>',
   comment: '<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>',
   bell: '<path d="M4.5 7a3.5 3.5 0 0 1 7 0c0 3 1 4 1.5 4.5H3C3.5 11 4.5 10 4.5 7Z"/><path d="M6.6 13a1.6 1.6 0 0 0 2.8 0"/>',
+  pin: '<path d="M8 2.2c.7 0 1.3.3 1.7.8.4.5.5 1.1.4 1.7-.2 1.1-1.1 2.1-2.1 3.6v3.2M8 2.2c-.7 0-1.3.3-1.7.8-.4.5-.5 1.1-.4 1.7.2 1.1 1.1 2.1 2.1 3.6"/><path d="M5.4 6.4h5.2"/>',
+  grid: '<rect x="2.5" y="2.5" width="4.6" height="4.6" rx=".8"/><rect x="8.9" y="2.5" width="4.6" height="4.6" rx=".8"/><rect x="2.5" y="8.9" width="4.6" height="4.6" rx=".8"/><rect x="8.9" y="8.9" width="4.6" height="4.6" rx=".8"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');
@@ -1924,6 +1944,12 @@ function sessionRow(s) {
   top.appendChild(lead);
 
   const trail = el('div', 'row-trail');
+  if (isGridPinned(s.id)) {
+    const pinMark = icon('pin', 11);
+    pinMark.classList.add('row-pin');
+    pinMark.title = 'Pinned to the session grid';
+    trail.appendChild(pinMark);
+  }
   if (s.locked) trail.appendChild(el('span', 'lock', '🔒'));
   // The auto-merge ⛙ used to live here, untinted and structurally divorced from
   // the PR pill. It now lives IN the pill (see prAutoMergeGlyph), where a color
@@ -2289,6 +2315,10 @@ function sessionMenuItems(s) {
   // Copy-link items first — available for any session with an issue and/or PR.
   if (s.ticket_url) items.push({ label: 'Copy issue link', action: () => copyToClipboard(s.ticket_url) });
   if (prUrl) items.push({ label: 'Copy PR link', action: () => copyToClipboard(prUrl) });
+  items.push({
+    label: isGridPinned(s.id) ? 'Unpin from grid' : 'Pin to grid',
+    action: () => toggleGridPin(s.id),
+  });
   if (s.ticket_url || prUrl) items.push({ sep: true });
   // Org-goal tagging (#723) — any non-manager session can ladder its work up to
   // an org KPI/goal. Managers are excluded from PR/issue tracking, so no goal.
@@ -2495,6 +2525,8 @@ function showEmptyDetail(msg, opts) {
   document.getElementById('detail-header').innerHTML = '';
   document.getElementById('tabbar').innerHTML = '';
   document.getElementById('board').innerHTML = '';
+  document.getElementById('board').classList.remove('session-grid-board');
+  leaveGridView();
 
   const empty = document.getElementById('detail-empty');
   if (empty) {
@@ -3138,6 +3170,8 @@ async function selectSession(id, opts) {
   app.classList.add('has-selection');
   app.classList.remove('board-active', 'mobile-show-sidebar', 'route-missing'); // leave board, reveal terminal on mobile
   document.getElementById('board').innerHTML = '';
+  document.getElementById('board').classList.remove('session-grid-board');
+  leaveGridView();
   renderSidebar();
   renderHeader(sessions.find((x) => x.id === id));
   ensureTerminal();
@@ -3673,6 +3707,10 @@ async function deleteSession(id, name) {
   try {
     await rpc('delete-session', { session_id: id });
     sessions = sessions.filter((x) => x.id !== id);
+    if (isGridPinned(id)) {
+      gridPinnedIds = gridPinnedIds.filter((x) => x !== id);
+      persistGridPins();
+    }
     // `replace`: the session is gone, so Back must not offer to return to its
     // not-found card (review).
     if (selectedId === id) { navigate({ view: 'home' }, { replace: true }); showHome(); }
@@ -3887,6 +3925,7 @@ function selectBoard(key) {
   document.getElementById('tabbar').innerHTML = '';
   renderSidebar();
   renderBoard();       // instant paint (may be stale/empty)…
+  if (key === 'grid') return;
   // Allowlist is manual-refresh-only (never polled), so a plain list read
   // returns nothing until the app has scanned. Kick a scan on open so the
   // section populates without the user having to click Refresh (CROW-593).
@@ -3935,11 +3974,368 @@ async function refreshBoard(key) {
 
 function renderBoard() {
   const root = document.getElementById('board');
+  if (selectedBoard === 'grid') {
+    renderSessionGrid(root);
+    return;
+  }
+  leaveGridView();
+  root.classList.remove('session-grid-board');
   root.innerHTML = '';
   if (selectedBoard === 'tickets') renderTicketBoard(root);
   else if (selectedBoard === 'reviews') renderReviewBoard(root);
   else if (selectedBoard === 'allowlist') renderAllowlist(root);
   else if (selectedBoard === 'scorecard') renderScorecard(root);
+}
+
+// ---------------------------------------------------------------------------
+// Session grid (CROW-1153)
+//
+// A watch wall of up to 16 session cells. Cells are READ-ONLY capture-pane
+// snapshots painted into a small xterm.js instance — not live PTY attaches —
+// because tmux `window-size latest` would let a tiny cell SIGWINCH the shared
+// agent window (ADR 0022). Click a cell to expand into the full session.
+// ---------------------------------------------------------------------------
+function loadGridPins() {
+  try {
+    const raw = localStorage.getItem(GRID_PINS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    gridPinnedIds = Array.isArray(parsed)
+      ? parsed.filter((id) => typeof id === 'string' && id)
+      : [];
+  } catch (_) {
+    gridPinnedIds = [];
+  }
+}
+
+function persistGridPins() {
+  try { localStorage.setItem(GRID_PINS_KEY, JSON.stringify(gridPinnedIds)); }
+  catch (_) { /* quota / private mode */ }
+}
+
+function isGridPinned(id) { return gridPinnedIds.indexOf(id) !== -1; }
+
+function toggleGridPin(id) {
+  if (isGridPinned(id)) gridPinnedIds = gridPinnedIds.filter((x) => x !== id);
+  else gridPinnedIds = gridPinnedIds.concat([id]);
+  persistGridPins();
+  lastSidebarSig = null;
+  renderSidebar();
+  if (selectedBoard === 'grid') renderBoard();
+}
+
+function moveGridPin(id, dir) {
+  const i = gridPinnedIds.indexOf(id);
+  if (i < 0) return;
+  const j = i + dir;
+  if (j < 0 || j >= gridPinnedIds.length) return;
+  const next = gridPinnedIds.slice();
+  const tmp = next[i]; next[i] = next[j]; next[j] = tmp;
+  gridPinnedIds = next;
+  persistGridPins();
+  if (selectedBoard === 'grid') renderBoard();
+}
+
+function gridActivityRank(s) {
+  if (s.attention) return 0;
+  switch (s.activity) {
+    case 'working': return 1;
+    case 'waiting': return 2;
+    case 'done': return 3;
+    default: return 4;
+  }
+}
+
+function gridIsWatchable(s) {
+  return s.status === 'active' || s.status === 'inReview';
+}
+
+// Pinned first (user order), then auto-fill active/in-review sessions sorted
+// by activity. Completed/archived sessions stay off the wall unless pinned.
+function gridRoster(list, pins) {
+  const src = list || sessions;
+  const order = pins || gridPinnedIds;
+  const byId = new Map();
+  for (const s of src) byId.set(s.id, s);
+  const out = [];
+  const seen = new Set();
+  for (const id of order) {
+    const s = byId.get(id);
+    if (!s) continue;
+    out.push(s);
+    seen.add(id);
+  }
+  const rest = src.filter((s) => !seen.has(s.id) && gridIsWatchable(s));
+  rest.sort((a, b) => {
+    const ra = gridActivityRank(a) - gridActivityRank(b);
+    if (ra) return ra;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+  return out.concat(rest);
+}
+
+function gridColsForCount(n) {
+  if (n <= 1) return 1;
+  if (n <= 4) return 2;
+  if (n <= 9) return 3;
+  return 4;
+}
+
+function gridVisibleSessions() {
+  const roster = gridRoster();
+  const pages = Math.max(1, Math.ceil(roster.length / GRID_PAGE_SIZE) || 1);
+  if (gridPage > pages - 1) gridPage = pages - 1;
+  if (gridPage < 0) gridPage = 0;
+  const start = gridPage * GRID_PAGE_SIZE;
+  return {
+    roster: roster,
+    pages: pages,
+    visible: roster.slice(start, start + GRID_PAGE_SIZE),
+  };
+}
+
+function leaveGridView() {
+  stopGridPolling();
+  disposeUnusedGridTerms([]);
+  const root = document.getElementById('board');
+  if (root) delete root.dataset.gridKey;
+}
+
+function stopGridPolling() {
+  if (gridPollTimer) { clearInterval(gridPollTimer); gridPollTimer = null; }
+}
+
+function startGridPolling() {
+  if (gridPollTimer) return;
+  gridPollTimer = setInterval(() => {
+    if (selectedBoard !== 'grid') { stopGridPolling(); return; }
+    if (typeof document !== 'undefined' && document.hidden) return;
+    refreshGridSnapshots();
+  }, 800);
+}
+
+function disposeGridTerm(id) {
+  const pane = gridTerms.get(id);
+  if (!pane) return;
+  try { if (pane.ro) pane.ro.disconnect(); } catch (_) {}
+  try { if (pane.term && pane.term.dispose) pane.term.dispose(); } catch (_) {}
+  gridTerms.delete(id);
+}
+
+function disposeUnusedGridTerms(keepIds) {
+  const keep = new Set(keepIds);
+  for (const id of [...gridTerms.keys()]) {
+    if (!keep.has(id)) disposeGridTerm(id);
+  }
+}
+
+function renderSessionGrid(root) {
+  root.classList.add('session-grid-board');
+  const { visible, pages, roster } = gridVisibleSessions();
+  const visIds = visible.map((s) => s.id);
+  disposeUnusedGridTerms(visIds);
+
+  const gridKey = visIds.join(',') + '/' + pages + '/' + gridPage + '/' + gridPinnedIds.join(',');
+  if (root.dataset.gridKey === gridKey && root.querySelector('.session-grid')) {
+    updateGridCellHeaders();
+    startGridPolling();
+    return;
+  }
+  root.dataset.gridKey = gridKey;
+
+  // Detach term hosts before wiping so xterm instances survive a rebuild.
+  for (const pane of gridTerms.values()) {
+    if (pane.host && pane.host.parentElement) pane.host.parentElement.removeChild(pane.host);
+  }
+
+  root.innerHTML = '';
+  const head = el('div', 'board-head');
+  head.appendChild(el('div', 'board-title', 'Session grid'));
+  const meta = el('div', 'grid-meta',
+    roster.length
+      ? (visible.length + ' of ' + roster.length + ' session' + (roster.length === 1 ? '' : 's'))
+      : '');
+  head.appendChild(meta);
+  if (pages > 1) {
+    const pager = el('div', 'grid-pager');
+    const prev = el('button', 'action-btn', '‹');
+    prev.type = 'button';
+    prev.title = 'Previous page';
+    prev.disabled = gridPage === 0;
+    prev.onclick = () => { gridPage -= 1; renderBoard(); };
+    const next = el('button', 'action-btn', '›');
+    next.type = 'button';
+    next.title = 'Next page';
+    next.disabled = gridPage >= pages - 1;
+    next.onclick = () => { gridPage += 1; renderBoard(); };
+    pager.appendChild(prev);
+    pager.appendChild(el('span', 'grid-page-label', (gridPage + 1) + ' / ' + pages));
+    pager.appendChild(next);
+    head.appendChild(pager);
+  }
+  root.appendChild(head);
+
+  if (!visible.length) {
+    root.appendChild(boardEmpty('No sessions to watch. Pin a session from the sidebar menu, or start one.'));
+    stopGridPolling();
+    return;
+  }
+
+  const cols = gridColsForCount(visible.length);
+  const rows = Math.max(1, Math.ceil(visible.length / cols));
+  const grid = el('div', 'session-grid');
+  grid.style.setProperty('--grid-cols', String(cols));
+  grid.style.setProperty('--grid-rows', String(rows));
+  for (const s of visible) grid.appendChild(gridCell(s));
+  root.appendChild(grid);
+  startGridPolling();
+  refreshGridSnapshots();
+}
+
+function gridCell(s) {
+  const pinned = isGridPinned(s.id);
+  const cell = el('div', 'grid-cell' + (pinned ? ' pinned' : ''));
+  cell.dataset.sessionId = s.id;
+  const head = gridCellHeader(s);
+  cell.appendChild(head);
+  const hostWrap = el('div', 'grid-term');
+  hostWrap.title = 'Open ' + (s.name || 'session');
+  hostWrap.onclick = () => selectSession(s.id);
+  const existing = gridTerms.get(s.id);
+  if (existing && existing.host) {
+    hostWrap.appendChild(existing.host);
+  } else {
+    const host = el('div', 'grid-term-host');
+    hostWrap.appendChild(host);
+    mountGridTerm(s.id, host);
+  }
+  observeGridTerm(s.id, hostWrap);
+  cell.appendChild(hostWrap);
+  return cell;
+}
+
+function gridCellHeader(s) {
+  const pinned = isGridPinned(s.id);
+  const ind = activityIndicator(s);
+  const head = el('div', 'grid-cell-head');
+  const nameBtn = el('button', 'grid-cell-name', s.name || 'session');
+  nameBtn.type = 'button';
+  nameBtn.title = s.name || 'Open session';
+  nameBtn.onclick = (e) => { e.stopPropagation(); selectSession(s.id); };
+  const dot = el('span', 'grid-cell-dot' + (ind.pulse ? ' pulse' : ''));
+  dot.style.background = ind.color;
+  const badge = el('span', 'grid-cell-badge', ind.label || s.status || '');
+  badge.style.color = ind.color;
+  const actions = el('div', 'grid-cell-actions');
+  if (pinned) {
+    const left = el('button', 'grid-cell-btn', '‹');
+    left.type = 'button';
+    left.title = 'Move earlier';
+    left.onclick = (e) => { e.stopPropagation(); moveGridPin(s.id, -1); };
+    const right = el('button', 'grid-cell-btn', '›');
+    right.type = 'button';
+    right.title = 'Move later';
+    right.onclick = (e) => { e.stopPropagation(); moveGridPin(s.id, 1); };
+    actions.appendChild(left);
+    actions.appendChild(right);
+  }
+  const pinBtn = el('button', 'grid-cell-btn' + (pinned ? ' on' : ''), '');
+  pinBtn.type = 'button';
+  pinBtn.title = pinned ? 'Unpin from grid' : 'Pin to grid';
+  pinBtn.appendChild(icon('pin', 12));
+  pinBtn.onclick = (e) => { e.stopPropagation(); toggleGridPin(s.id); };
+  actions.appendChild(pinBtn);
+  head.appendChild(dot);
+  head.appendChild(nameBtn);
+  if (badge.textContent) head.appendChild(badge);
+  head.appendChild(actions);
+  return head;
+}
+
+function updateGridCellHeaders() {
+  const root = document.getElementById('board');
+  if (!root) return;
+  for (const cell of root.querySelectorAll('.grid-cell')) {
+    const s = sessions.find((x) => x.id === cell.dataset.sessionId);
+    if (!s) continue;
+    const old = cell.querySelector('.grid-cell-head');
+    const next = gridCellHeader(s);
+    if (old) cell.replaceChild(next, old);
+  }
+}
+
+function mountGridTerm(sessionId, host) {
+  if (typeof Terminal !== 'function') {
+    gridTerms.set(sessionId, { term: null, host: host, lastSnap: '', cols: 0, rows: 0 });
+    return;
+  }
+  const term = new Terminal({
+    cursorBlink: false,
+    disableStdin: true,
+    fontSize: 11,
+    fontFamily: DEFAULT_TERM_FONT,
+    theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+    scrollback: 0,
+    allowTransparency: true,
+  });
+  term.open(host);
+  gridTerms.set(sessionId, { term: term, host: host, lastSnap: '', cols: 0, rows: 0 });
+}
+
+function observeGridTerm(sessionId, wrap) {
+  const pane = gridTerms.get(sessionId);
+  if (!pane || !window.ResizeObserver) return;
+  try { if (pane.ro) pane.ro.disconnect(); } catch (_) {}
+  pane.ro = new ResizeObserver(() => scaleGridTerm(sessionId));
+  pane.ro.observe(wrap);
+}
+
+function scaleGridTerm(sessionId) {
+  const pane = gridTerms.get(sessionId);
+  if (!pane || !pane.term || !pane.host) return;
+  const cell = pane.host.parentElement;
+  const screen = pane.host.querySelector('.xterm') || pane.term.element;
+  if (!cell || !screen) return;
+  const cw = cell.clientWidth || 1;
+  const ch = cell.clientHeight || 1;
+  const tw = screen.offsetWidth || pane.term.element.offsetWidth || 1;
+  const th = screen.offsetHeight || pane.term.element.offsetHeight || 1;
+  const s = Math.min(cw / tw, ch / th);
+  screen.style.transformOrigin = 'top left';
+  screen.style.transform = 'scale(' + s + ')';
+}
+
+async function refreshGridSnapshots() {
+  if (selectedBoard !== 'grid') return;
+  const { visible } = gridVisibleSessions();
+  if (!visible.length) return;
+  const ids = visible.map((s) => s.id);
+  let res;
+  try {
+    res = await rpc('list-session-terminal-snapshots', { session_ids: ids });
+  } catch (_) { return; }
+  if (selectedBoard !== 'grid') return;
+  const snaps = (res && res.snapshots) || {};
+  for (const id of ids) {
+    const row = snaps[id];
+    if (!row || typeof row.snapshot !== 'string') continue;
+    paintGridSnapshot(id, row);
+  }
+}
+
+function paintGridSnapshot(id, row) {
+  const pane = gridTerms.get(id);
+  if (!pane) return;
+  if (row.snapshot === pane.lastSnap) return;
+  pane.lastSnap = row.snapshot;
+  const cols = Math.max(1, Number(row.cols) || 80);
+  const rows = Math.max(1, Number(row.rows) || 24);
+  if (pane.term) {
+    try {
+      if (pane.term.cols !== cols || pane.term.rows !== rows) pane.term.resize(cols, rows);
+      pane.term.write(row.snapshot);
+    } catch (_) { /* xterm not ready */ }
+    scaleGridTerm(id);
+  }
 }
 
 // ===== Scorecard (ADR 0008 web parity, #721) =====
@@ -6972,13 +7368,13 @@ function showWizard(defaultDevRoot) {
 //   #/                                   home / empty state
 //   #/sessions/:sessionId
 //   #/sessions/:sessionId/t/:terminalId
-//   #/tickets  #/reviews  #/allowlist  #/scorecard
+//   #/tickets  #/reviews  #/allowlist  #/scorecard  #/grid
 //   #/settings/:tab
 //
 // Only the addressable view lives in the URL — scroll position, open menus,
 // selection mode and board filters stay out of it on purpose.
 // ---------------------------------------------------------------------------
-const ROUTE_BOARDS = ['tickets', 'reviews', 'allowlist', 'scorecard'];
+const ROUTE_BOARDS = ['tickets', 'reviews', 'allowlist', 'scorecard', 'grid'];
 // Mirrors TABS in settings.js. An unknown tab degrades to 'general' rather than
 // 404ing, so a link from an older/newer build still opens Settings.
 const ROUTE_SETTINGS_TABS = [
@@ -7150,6 +7546,7 @@ document.getElementById('back-to-sidebar').onclick = () => {
 try {
   restoreSidebarCache();
   restoreNotifHistory();
+  loadGridPins();
   renderSidebar();
 } catch (_) {
   clearSidebarCache();

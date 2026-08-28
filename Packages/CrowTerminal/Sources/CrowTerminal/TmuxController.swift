@@ -445,6 +445,17 @@ public struct TmuxController: Sendable {
         return try run(args, timeout: max(TmuxController.defaultTimeout, 10.0))
     }
 
+    /// Visible pane only (no `-S` history). Used by the session-grid snapshot
+    /// (CROW-1153): a watch wall must not attach a PTY, because `window-size
+    /// latest` would let a tiny cell SIGWINCH the shared agent window. The
+    /// current frame is small, so the default CLI budget is enough.
+    public func captureVisiblePane(target: String, escapes: Bool = true) throws -> String {
+        var args = ["capture-pane", "-p"]
+        if escapes { args.append("-e") }
+        args.append(contentsOf: ["-t", target])
+        return try run(args, timeout: TmuxController.defaultTimeout)
+    }
+
     /// `tmux display-message -p -t <target> <format>`. Used by the readiness
     /// timeout diagnostics to read `#{pane_pid}` and `#{pane_current_command}`
     /// for the wedged window (issue #256).

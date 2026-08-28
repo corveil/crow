@@ -48,7 +48,7 @@ The web client routes on the URL **fragment**. Routes are:
 #/                                   home / empty state
 #/sessions/:sessionId
 #/sessions/:sessionId/t/:terminalId
-#/tickets  #/reviews  #/allowlist  #/scorecard
+#/tickets  #/reviews  #/allowlist  #/scorecard  #/grid
 #/settings/:tab
 ```
 

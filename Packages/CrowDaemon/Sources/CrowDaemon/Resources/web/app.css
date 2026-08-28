@@ -232,6 +232,7 @@ body {
 .agent { color: var(--gold); font-size: 12px; }
 .name { color: var(--text-primary); font-weight: 600; font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lock { font-size: 10px; opacity: 0.7; }
+.row-pin { color: var(--gold-dark); display: inline-flex; }
 .subtle { color: var(--text-secondary); font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--text-muted); font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta-agent:hover { color: var(--gold); }
@@ -983,7 +984,7 @@ body.update-banner-visible #back-to-sidebar {
 .tk-dot { width: 7px; height: 7px; border-radius: 50%; }
 .tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* Left-column nav rows (CROW-917): row 1 Reviews/Allowlist/Scorecard, row 2 the
+/* Left-column nav rows (CROW-917): row 1 Grid/Reviews/Allowlist/Scorecard, row 2 the
    full-width Manager pill. Each .nav-pills-row is its own non-wrapping flex line so
    groups never reflow; the "+" and Select buttons live in the right icon column. */
 .nav-pills-row { display: flex; gap: 6px; }
@@ -1713,3 +1714,90 @@ body.update-banner-visible #back-to-sidebar {
 }
 .score-empty-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .score-empty-msg { font-size: 13px; max-width: 460px; line-height: 1.5; }
+
+/* ---- Session grid (CROW-1153) ---- */
+#app.board-active #board.session-grid-board {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 10px 12px 12px;
+}
+.session-grid-board .board-head { flex: 0 0 auto; margin-bottom: 8px; }
+.grid-meta { color: var(--text-secondary); font-size: 12px; }
+.grid-pager { display: flex; align-items: center; gap: 8px; }
+.grid-page-label { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.session-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(var(--grid-cols, 2), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--grid-rows, 2), minmax(0, 1fr));
+}
+.grid-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.grid-cell.pinned { border-color: rgba(179, 142, 70, 0.45); }
+.grid-cell-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.grid-cell-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+}
+.grid-cell-dot.pulse { animation: crow-pulse 1.5s ease-in-out infinite; }
+.grid-cell-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none; border: 0; padding: 0;
+  color: var(--gold);
+  font: inherit; font-weight: 700; font-size: 12px;
+  text-align: left; cursor: pointer;
+}
+.grid-cell-name:hover { color: var(--text-primary); }
+.grid-cell-badge {
+  flex: 0 0 auto;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.grid-cell-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.grid-cell-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border-radius: 5px; cursor: pointer;
+  background: transparent; border: 1px solid transparent;
+  color: var(--text-secondary);
+}
+.grid-cell-btn:hover { color: var(--gold); border-color: var(--border-subtle); }
+.grid-cell-btn.on { color: var(--gold); }
+.grid-term {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: #1e1e1e;
+  cursor: pointer;
+}
+.grid-term-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.grid-term-host .xterm { pointer-events: none; }
