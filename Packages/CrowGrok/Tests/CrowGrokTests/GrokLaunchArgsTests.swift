@@ -135,4 +135,74 @@ struct GrokLaunchArgsTests {
         #expect(!cmd.contains("--permission-mode auto"))
         #expect(!cmd.contains("--yolo"))
     }
+
+    // MARK: - Interactive .work seed (CROW-1144)
+
+    @Test func argvPromptByteLimitIs128KiB() {
+        #expect(GrokLaunchArgs.argvPromptByteLimit == 128 * 1024)
+    }
+
+    @Test func promptFitsArgvAcceptsTicketSizedSeeds() {
+        #expect(GrokLaunchArgs.promptFitsArgv("do the thing"))
+        #expect(GrokLaunchArgs.promptFitsArgv(String(repeating: "a", count: 128 * 1024)))
+        #expect(!GrokLaunchArgs.promptFitsArgv(String(repeating: "a", count: 128 * 1024 + 1)))
+    }
+
+    @Test func interactiveSeedCommandUsesEvalPositionalWithEndOfOptions() {
+        let cmd = GrokLaunchArgs.interactiveSeedCommand(
+            binary: "/opt/homebrew/bin/grok",
+            promptPath: "/tmp/wt/crow-prompt.md"
+        )
+        // Prompt stays in the file until the target shell expands it — no
+        // `--prompt-file` (that's headless) and no `$(cat …)`. `--` so a
+        // hyphen-leading seed isn't parsed as a clap flag (grok 1.0.5).
+        #expect(cmd == "_CROW_P=$(< '/tmp/wt/crow-prompt.md'); "
+            + "eval \"'/opt/homebrew/bin/grok' -- $(printf '%q' \"$_CROW_P\")\"\n")
+        #expect(!cmd.contains("--prompt-file"))
+        #expect(!cmd.contains(" -c"))
+        #expect(!cmd.contains("$(cat"))
+        #expect(!cmd.contains(" -p "))
+    }
+
+    @Test func interactiveSeedCommandPutsAutoFlagsBeforeEndOfOptions() {
+        let cmd = GrokLaunchArgs.interactiveSeedCommand(
+            binary: "grok",
+            promptPath: "/tmp/p.md",
+            autoPermissionMode: true
+        )
+        #expect(cmd.contains("eval \"'grok' --always-approve"))
+        #expect(cmd.contains("--deny 'Bash(rm -rf /)'"))
+        #expect(cmd.contains(" -- $(printf '%q'"))
+        #expect(!cmd.contains("--prompt-file"))
+    }
+
+    @Test func interactiveSeedCommandShellQuotesBinaryAndPath() {
+        let cmd = GrokLaunchArgs.interactiveSeedCommand(
+            binary: "/opt/my tools/grok",
+            promptPath: "/tmp/my worktree/crow-prompt.md"
+        )
+        #expect(cmd.contains("_CROW_P=$(< '/tmp/my worktree/crow-prompt.md')"))
+        #expect(cmd.contains("eval \"'/opt/my tools/grok' -- "))
+    }
+
+    @Test func workSeedCommandPicksInteractiveWhenPromptFits() {
+        let cmd = GrokLaunchArgs.workSeedCommand(
+            binary: "grok",
+            promptPath: "/tmp/p.md",
+            promptUTF8Count: 80
+        )
+        #expect(cmd.contains("_CROW_P=$(< '/tmp/p.md')"))
+        #expect(!cmd.contains("--prompt-file"))
+        #expect(!cmd.contains(" -c"))
+    }
+
+    @Test func workSeedCommandFallsBackToHeadlessWhenPromptExceedsArgv() {
+        let cmd = GrokLaunchArgs.workSeedCommand(
+            binary: "grok",
+            promptPath: "/tmp/p.md",
+            promptUTF8Count: GrokLaunchArgs.argvPromptByteLimit + 1
+        )
+        #expect(cmd == "'grok' --prompt-file '/tmp/p.md'; 'grok' -c\n")
+        #expect(!cmd.contains("_CROW_P="))
+    }
 }

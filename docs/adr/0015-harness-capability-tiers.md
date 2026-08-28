@@ -137,6 +137,23 @@ deliberate, documented gaps (full grid in the
 > opened the PR. Deny still wins over always-approve, so the `rm -rf /`
 > literals stay. Reviews stay human-gated. Auto off is still bare `grok`.
 >
+> **Amendment (2026-08-27, CROW-1144):** Grok's *launch shape* is split by
+> session kind. The 2026-07-25 probe claimed every way to pass a prompt —
+> including a positional — forced headless mode, so Crow chained
+> `grok --prompt-file <path>; grok -c` for every seeded launch, including
+> `.work`. That is **false for grok 1.0.5**: `-p`/`--prompt-file` are
+> single-turn *headless* (a "turn" is a full agentic loop run to completion,
+> not a quick one-shot), and positional `[PROMPT]` is *"Initial prompt for
+> the interactive session"*. Lived failure: a Grok `.work` session seeded
+> from a ticket ran the whole task headlessly, so the operator never got a
+> steerable TUI (`grok -c` only starts after the headless leg exits — or
+> never, if it stalls waiting for input). Seeded `.work` now uses
+> `grok -- "<prompt>"` (argv-bounded at 128 KiB; overflow falls back to the
+> headless chain). Unattended `.job`/`.review` keep `--prompt-file` then
+> `-c` — jobs need `crow send` follow-ups and reviews need a human-gated
+> `gh pr review` in the resumed TUI. The "one turn and exits" doc-comment
+> on `GrokLaunchArgs` is retired.
+>
 > **Amendment (2026-08-14, #1033):** a seventh harness — **Muse Code** (Meta's
 > `muse` CLI) — joined as an explicit **Tier-2 / experimental** target, the
 > same class as Antigravity (#860): a real, driveable CLI that lands below the

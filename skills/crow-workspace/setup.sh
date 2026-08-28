@@ -1443,24 +1443,38 @@ launch_grok() {
       die "launch_agent" "grok binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.grok in config.json (note: 'grok' collides with superagent-ai/grok-cli — pin xAI's Grok Build there)"
   fi
   log "Resolved grok binary: $bin"
-  # Grok: any prompt arg forces headless mode, so headless `--prompt-file`
-  # consumes the prompt, then `; -c` resumes the same session in the interactive
-  # TUI with a fresh terminal stdin. `--prompt-file` (not `-p "$(cat …)"`) so a
-  # large prompt never becomes a giant argv or rides a subshell (#861). Brace
-  # group keeps both commands gated on a successful `cd`. Mirrors the
-  # *no-auto-flags* form of GrokLaunchArgs.firstLaunchChainedCommand: this
-  # `/crow-workspace` path only ever launches `.work` (interactive, no
-  # auto-permission flags), so there is deliberately NO `|| { [ $? -eq 2 ] && … }`
-  # exit-2 fallback here — that fallback only guards the `--permission-mode auto` /
-  # `--deny` legs, which are emitted solely on `.job`/`.review` launches from the
-  # app, never from this script. Shell-quoting DOES match Swift exactly: unlike
-  # the peers, `$bin`/`$prompt_path`/`$WORKTREE_PATH` are POSIX single-quoted via
-  # `posix_quote` because `grok` collides with superagent-ai/grok-cli, so pinning a
-  # (possibly spaced) `defaults.binaries.grok` is the *expected* config here. Single
-  # quotes (not double) so a `$`/backtick/`\` in the pinned path is preserved
-  # literally rather than re-expanded when `crow new-terminal --command` pastes it —
-  # exact parity with Swift's `GrokLaunchArgs.shellQuote` (#861 review r10).
-  local launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && { $(posix_quote "$bin") --prompt-file $(posix_quote "$prompt_path"); $(posix_quote "$bin") -c; }"
+  # Grok 1.0.5 positional [PROMPT] seeds the *interactive* TUI
+  # (`grok "fix the bug"`). `--prompt-file` / `-p` are single-turn headless
+  # and a "turn" is the whole agentic loop, so the old
+  # `--prompt-file; grok -c` chain blocked the TUI until the entire ticket
+  # finished (CROW-1144). This `/crow-workspace` path only ever launches
+  # `.work`, so we seed via `eval_prompt_launch` — same argv form as
+  # Claude/Cursor/Codex — with `--` because grok 1.0.5 clap says to pass a
+  # hyphen-leading operand as `-- --bogus`.
+  #
+  # ARG_MAX guard (128 KiB = GrokLaunchArgs.argvPromptByteLimit — keep in
+  # lockstep): a seed past that falls back to the headless chain rather
+  # than a `command too long` abort. Ticket prompts are small; the fallback
+  # is the safety valve, not the happy path.
+  #
+  # Shell-quoting matches Swift exactly: `$bin`/`$prompt_path`/`$WORKTREE_PATH`
+  # are POSIX single-quoted via `posix_quote` because `grok` collides with
+  # superagent-ai/grok-cli, so pinning a (possibly spaced)
+  # `defaults.binaries.grok` is the *expected* config here. Single quotes
+  # (not double) so a `$`/backtick/`\` in the pinned path is preserved
+  # literally rather than re-expanded when `crow new-terminal --command`
+  # pastes it — exact parity with Swift's `GrokLaunchArgs.shellQuote`
+  # (#861 review r10). No auto-permission flags (this path has never
+  # emitted them; Crow Auto on `.work` is `autoLaunchCommand` / a restart).
+  local size
+  size=$(wc -c < "$prompt_path" | tr -d '[:space:]')
+  local launch_cmd
+  if [[ "${size:-0}" -le 131072 ]]; then
+    launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && $(eval_prompt_launch "$(posix_quote "$bin") --" "$prompt_path")"
+  else
+    log "Grok work seed is ${size} bytes (>128KiB); falling back to headless --prompt-file"
+    launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && { $(posix_quote "$bin") --prompt-file $(posix_quote "$prompt_path"); $(posix_quote "$bin") -c; }"
+  fi
   create_agent_terminal "Grok Build" "$launch_cmd"
 }
 

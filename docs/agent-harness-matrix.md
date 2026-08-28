@@ -40,7 +40,7 @@ capabilities, update this table in the same PR.
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
-| Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
+| Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ positional `[PROMPT]` (`.work` seed, CROW-1144); run-then-`-c` (`.job`/`.review`) | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ | ⚠️ trust seed only (`--trust-workspace`, per-launch, withheld from `.review`) |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) | ❌ unverified (documented slash set has no `/rename`; opt-out `nil`) |
 | Interactive TUI uses alt screen (`smcup`) | ✅ Claude Code requests it | ❌ inline renderer — unified 50k scrollback like a shell (CROW-1010) | ❌ **verified** inline (`alternate_on=0`, 0.141.0, CROW-1001) | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default |
@@ -722,11 +722,19 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
 - **OpenCode:** **run-then-`--continue`** — headless `opencode run "$prompt"`
   consumes the prompt reliably, then `; opencode --continue` opens the TUI with a
   fresh stdin so `crow send` keeps working (#547).
-- **Grok:** **run-then-`-c`** — headless `grok --prompt-file <path>` consumes the
-  prompt (any prompt arg forces headless), then `; grok -c` resumes the same
-  session in the TUI with a fresh stdin. Uses `--prompt-file` (not `-p "$prompt"`)
-  so a large inlined review-skill body never becomes a giant argv or rides a
-  subshell (#861). `.job`/`.review` only; `.work` launches `grok` bare.
+- **Grok:** **split by kind (CROW-1144, grok 1.0.5).** Seeded `.work` (workspace
+  skill / handoff) uses positional `[PROMPT]` — *"Initial prompt for the
+  interactive session"* — via `evalPromptLaunch` with `--`, so the TUI is
+  steerable from turn one. Guarded at 128 KiB (`GrokLaunchArgs.argvPromptByteLimit`);
+  a larger seed falls back to the headless chain rather than `ARG_MAX`. Unattended
+  `.job`/`.review` keep **run-then-`-c`**: headless `grok --prompt-file <path>`
+  then `; grok -c`. `--prompt-file` (not `-p "$prompt"`) so a large inlined
+  review-skill body never becomes argv (#861). The 2026-07-25 probe's claim that
+  even a positional prompt forced headless is **false for 1.0.5** — only `-p` /
+  `--prompt-file` / `--prompt-json` are headless, and a "turn" is a full agentic
+  loop, which is why chaining `-c` behind `--prompt-file` blocked every Grok
+  `.work` TUI. Unseeded `.work` (restart / no ticket seed) still launches `grok`
+  bare.
 - **Antigravity:** `agy -p "$prompt"` for job/review (path shell-quoted); the
   tmux PTY means the non-TTY `-p` stdout-drop doesn't bite. Restart resumes with
   `-c`. `.work` launches `agy` bare (#902).
@@ -740,16 +748,20 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
   **needs-eval** against a real binary. `muse exec --session-id` exists but
   is unused: Crow does not capture the exec session id.
 
-`ShellLaunchArgs.evalPromptLaunch` builds every one of these except Grok's, whose
-prompt is read from a path and so never becomes argv. Its `endOfOptions` flag adds
-a literal `--` before the prompt so a body starting with `-` arrives as an operand
-instead of an option (CROW-968). It is **opt-in per harness, deliberately not a
-global default** — `--` is a convention, not a guarantee, and a parser that treated
-a bare `--` as a prompt word would corrupt every launch on that harness. Enabled
-today for **Cursor only** (both `CursorAgent.autoLaunchCommand` and
-`CursorLauncher.launchCommand`), verified against the installed binary:
-`agent --list-models --bogus` errors, `agent --list-models -- --bogus` parses
-clean. Check the CLI before enabling it anywhere else.
+`ShellLaunchArgs.evalPromptLaunch` builds Claude, Cursor, Codex, OpenCode,
+Antigravity, and **Grok's seeded `.work`** (positional `[PROMPT]`, CROW-1144).
+Grok `.job`/`.review` still read the prompt from a path (`--prompt-file`) and
+so never become argv. Its `endOfOptions` flag adds a literal `--` before the
+prompt so a body starting with `-` arrives as an operand instead of an option
+(CROW-968). It is **opt-in per harness, deliberately not a global default** —
+`--` is a convention, not a guarantee, and a parser that treated a bare `--`
+as a prompt word would corrupt every launch on that harness. Enabled today for
+**Cursor** (both `CursorAgent.autoLaunchCommand` and `CursorLauncher.launchCommand`)
+and **Grok's `.work` seed** (`GrokLaunchArgs.interactiveSeedCommand`). Cursor
+verified against the installed binary: `agent --list-models --bogus` errors,
+`agent --list-models -- --bogus` parses clean. Grok 1.0.5 clap: `grok --bogus`
+errors with tip *"use '-- --bogus'"*. Check the CLI before enabling it anywhere
+else.
 
 ### Gateway env / trust seed / telemetry
 
@@ -1011,11 +1023,12 @@ against current upstream CLIs.
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
 | Antigravity review-clone strip list exhaustiveness: is any project-scope config `agy` reads **outside** `.agents/` + `.gemini/` still uncovered? | `agy` **v1.1.7**; Crow's MCP bridge is deferred (no writer to confirm the read path), and `AntigravityLaunchArgs` notes approval posture is governed by `settings.json` modes | `stripAntigravityConfigFromReviewClone` | 2026-07-28 (#902 r7) — the strip now removes `.agents/` **and** `.gemini/` **defensively** (a project `.gemini/settings.json` could carry `mcpServers`/`always-proceed`; `GEMINI_CONFIG_HOME` default `~/.gemini/config` is only the *user*-scope home). So the question is no longer "is the strip sufficient" but "is the strip **list exhaustive**" — confirm no other project-scope surface on the manual pass before promoting out of Tier-2 |
 | Antigravity hook re-read timing: does `agy` read `.agents/hooks.json` **once at process start**, or per-event? | `agy` **v1.1.7** — unverified; assumed start-only | `prepareWorktreeForAgentLaunch` (launch-time strip) | 2026-07-28 (#902) — the launch-time strip mitigates a hook restored *between* launches. If `agy` re-reads per-event, a mid-session restore (SKILL's `gh pr checkout` fast-forwards → silently restores `.agents/`) would fire unmitigated, since no strip re-runs mid-session and there is no trust gate behind it. Confirm on the manual pass before promoting out of Tier-2 |
-| **Entire Grok flag set** — hooks event names, `-p`/`--single`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-07-26 — verified against repo source (`crates/codegen/xai-grok-*`), not blog posts |
+| **Entire Grok flag set** — hooks event names, `-p`/`--single`, `--prompt-file`, positional `[PROMPT]`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | grok **1.0.5** (2026-08-27); originally `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-08-27 (CROW-1144) — `--help` on 1.0.5: positional = interactive seed; `-p`/`--prompt-file` = single-turn headless. Re-probe the positional-vs-headless split on each bump |
 | Grok session-log layout + directory-name encoding — `<$GROK_HOME or ~/.grok>/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`, dir name = abs cwd percent-encoded over the RFC 3986 **unreserved** set (`/`→`%2F`, dashes preserved — *not* `NON_ALPHANUMERIC`, which would escape them) | `xai-org/grok-build` (same closed upstream mirror → churn likely); layout captured on a real tree in **#1090 (2026-08-21)** | `GrokAgent.logSources` / `GrokSessionDir` / `GrokHome` · `BackfillScanner.reconstructGrok` | 2026-08-24 (CROW-1098) — a mismatched encoding silently collects nothing (never misattributes); re-confirm the dash-preserving scheme on a Grok version bump |
 | Grok `grok` binary collides with community `superagent-ai/grok-cli` | **Identity probe** at registration (`grok --help`/`--version` vs grok-build flag markers) greys out the foreign `grok`; explicit `defaults.binaries.grok` pin bypasses it. Decision is pure `AgentDiscovery.evaluate`; probe markers (`--prompt-file`, `--prompt-json`, `--permission-mode`, `--always-approve`) are the same upstream flag set as the row above — re-verify together | `GrokAgent.identityMarkers` / `verifyBinaryIdentity` · `AgentDiscovery.evaluate` | 2026-07-26 (CROW-911) |
 | Cursor's legacy `agent` alias collides with grok-build's `~/.grok/bin/agent` (fired in the field) | Prefer the unambiguous **`cursor-agent`** via a token-major PATH walk (order-independent), plus the same **identity probe** on a bare `agent` match. Markers (`--approve-mcps`, `--trust`, `CURSOR_API_KEY`, `CURSOR_API_ENDPOINT`) are the flags this adapter passes — re-verify with `CursorLaunchArgs` on each Cursor CLI baseline bump. CROW-1058 then closed the two gaps that let it fire again: discovery **probes every** candidate instead of stopping at the first (so a genuine `cursor-agent` behind grok-build's `agent` still registers), and launch reads the **verified path** (`launchBinary()` / `VerifiedBinaries`) instead of re-walking PATH — with the unverified fallback narrowed to the unambiguous `cursor-agent`, never the alias | `CursorAgent.identityMarkers` / `verifyBinaryIdentity` · `BinaryTokenResolver` · `BinaryIdentityProbe` · `VerifiedBinaries` / `launchBinary()` | 2026-08-19 (CROW-1058) — Cursor CLI baseline `2026.08.04-aaa8809` |
 | Grok **`--permission-mode auto` now exists** — the #859 probe reported it absent; current docs show it *and* `--always-approve`. Crow Auto maps to `--always-approve` + `--deny` on `.work`/`.job` (CROW-1037): Grok's classifier `auto` still gates `gh pr create`, which is not Claude-equivalent. Reviews stay human-gated. Re-probe `--always-approve`/`--yolo` with the rest of the flag set | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-08-15 (CROW-1037; was 2026-07-26) |
+| Grok positional `[PROMPT]` is the **interactive** seed; `--prompt-file`/`-p` are single-turn *headless* and a "turn" is a full agentic loop — so `.work` must not chain `; grok -c` behind `--prompt-file` | grok **1.0.5** (the 2026-07-25 probe claimed positional = headless; **false** on 1.0.5 `--help`) | `GrokLaunchArgs.interactiveSeedCommand` / `workSeedCommand` / `skills/crow-workspace/setup.sh` `launch_grok` | 2026-08-27 (CROW-1144) — re-probe positional vs `--prompt-file` on each grok bump; argv overflow still falls back to the headless chain at 128 KiB |
 | Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |
 | Grok double-fire: only the **global** `~/.claude`/`~/.cursor` hook configs Grok also discovers (its compat scanning) firing alongside `.grok/hooks/crow.json` — dedup deferred (genuinely user-controlled config, no Crow session UUID, not RCE; unlike Codex's *Crow-written* global double-fire, which CROW-1060 closed by dropping the global writer — Crow can't delete configs the user owns). *Project* compat sources are handled: stripped on `.review` clones (`stripGrokConfigFromReviewClone`, RCE) and neutralized on `.work`/`.job` handoff + warm-adopt (`stripPriorCompatHooksForGrokHandoff` + session-own adopt write, #861 r9-r10). The Grok-**Manager** devRoot case stays a documented limitation (`writeManagerHookConfig`). | — (empirical, #859) | `GrokHookConfigWriter` / `SessionService` | 2026-07-27 |
 | **Entire Muse flag set** — `exec` / `--prompt-file` / `resume` / `--session-id` / `--disable-approval` / `--yolo` / `--disable-sandbox` / `--trust-workspace` / `--sandbox-network` / `--subagent-worktree-isolation` / hook event names | Official docs **2026-08-14** (https://dev.meta.ai/docs/muse-code/); **no local `muse --help`** (installer is Meta-auth-gated) | `MuseAgent` / `MuseLaunchArgs` / `MuseHookConfigWriter` / `MuseSignalSource` | 2026-08-14 (#1033) — **needs-eval** against a real binary before promoting out of Tier-2 |

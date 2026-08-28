@@ -6,11 +6,12 @@ import CrowCore
 /// first preamble, workspace table, ticket-fetch instructions — without any
 /// Claude-specific slash commands.
 ///
-/// The auto-launch path (`GrokAgent.autoLaunchCommand`) builds its own
-/// run-then-continue command from the pre-written prompt file, so this type is
-/// the parity placeholder a follow-up will use for a Grok-flavored
-/// `crow-workspace` skill (Jira MCP bridge is deferred to Phase B — the ticket
-/// fetch falls back to `acli`, like Codex).
+/// The auto-launch path (`GrokAgent.autoLaunchCommand`) builds `.job`/`.review`
+/// run-then-continue commands from the pre-written prompt file. Seeded `.work`
+/// (this type's `launchCommand`, plus `setup.sh` `launch_grok`) uses grok
+/// 1.0.5's positional `[PROMPT]` so the TUI is steerable from turn one
+/// (CROW-1144). Jira MCP bridge is deferred to Phase B — the ticket fetch
+/// falls back to `acli`, like Codex.
 public actor GrokLauncher {
     public init() {}
 
@@ -72,9 +73,15 @@ public actor GrokLauncher {
         return lines.joined(separator: "\n")
     }
 
-    /// Write `prompt` to a temp file and return the launch command. Runs the
-    /// prompt headlessly, then chains into `-c` so the session stays resident
-    /// with a fresh terminal stdin (see `GrokLaunchArgs`).
+    /// Write `prompt` to a temp file and return the launch command.
+    ///
+    /// When `seedInteractively` is true (`.work` / kindless fail-closed), grok
+    /// 1.0.5's positional `[PROMPT]` opens the TUI immediately and runs the
+    /// prompt there. A seed past `GrokLaunchArgs.argvPromptByteLimit` falls
+    /// back to the headless `--prompt-file` then `-c` chain so we never hit
+    /// `ARG_MAX` (CROW-1144). When `seedInteractively` is false (`.job` /
+    /// `.review` handoff), always use the chained form — unattended, and
+    /// review inlines a skill body too large for argv.
     ///
     /// `binary` is the resolved `grok` path — the caller passes
     /// `GrokAgent.findBinary()`, which is override-aware (`defaults.binaries.grok`)
@@ -84,18 +91,38 @@ public actor GrokLauncher {
     /// launch the wrong `grok` on the handoff path — the same reason
     /// `CursorLauncher.launchCommand` receives `CursorAgent.findBinary()` (#861
     /// review round 8). Defaults to `"grok"` only as a last resort.
-    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String, binary: String = "grok") throws -> String {
+    public func launchCommand(
+        sessionID: UUID,
+        worktreePath: String,
+        prompt: String,
+        binary: String = "grok",
+        seedInteractively: Bool = true
+    ) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-grok-\(sessionID.uuidString)-prompt.md")
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
+        let cd = "cd \(Self.shellEscape(worktreePath)) && "
+        if seedInteractively {
+            let inner = GrokLaunchArgs.workSeedCommand(
+                binary: binary,
+                promptPath: promptPath.path,
+                promptUTF8Count: prompt.utf8.count
+            ).trimmingCharacters(in: .newlines)
+            // Interactive eval is a single statement (like Cursor/Claude);
+            // the chained ARG_MAX fallback is two statements, so brace-group it.
+            if GrokLaunchArgs.promptFitsArgv(prompt) {
+                return cd + inner + "\n"
+            }
+            return cd + "{ \(inner); }\n"
+        }
         let inner = GrokLaunchArgs.firstLaunchChainedCommand(
             binary: binary,
             promptPath: promptPath.path,
             autoPermissionMode: false
         ).trimmingCharacters(in: .newlines)
-        return "cd \(Self.shellEscape(worktreePath)) && { \(inner); }\n"
+        return cd + "{ \(inner); }\n"
     }
 
     private static func shellEscape(_ str: String) -> String {

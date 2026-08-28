@@ -32,6 +32,10 @@ public enum ShellLaunchArgs {
     /// - **Cursor** (`agent`, commander): `agent --list-models --bogus` →
     ///   `error: unknown option '--bogus'`; `agent --list-models -- --bogus`
     ///   parses clean. Enabled at both Cursor call sites.
+    /// - **Grok Build** (`grok` 1.0.5, clap): `grok --bogus` → `error:
+    ///   unexpected argument '--bogus' found` with tip *"to pass '--bogus' as
+    ///   a value, use '-- --bogus'"*. Enabled on the `.work` interactive-seed
+    ///   path (`GrokLaunchArgs.interactiveSeedCommand`, CROW-1144).
     public static func evalPromptLaunch(
         prefix: String,
         promptPath: String,
