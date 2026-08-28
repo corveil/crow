@@ -130,6 +130,18 @@ for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.templa
         "do not post"
 done
 
+# CROW-960: `gh pr checkout` restores attacker-controlled harness config into
+# a live review session. Both halves must re-strip immediately after checkout
+# (working-tree `rm`, never `git rm`) so Cursor/Grok/Antigravity/Claude/Muse/
+# Codex close in one place rather than four per-adapter changes.
+# shellcheck disable=SC2016  # the rm command is a literal needle, not expansion
+for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.template; do
+    require "$f" \
+        "CROW-960" \
+        "rm -rf -- .cursor .grok .agents .gemini .muse .codex .mcp.json .claude/settings.json .claude/settings.local.json" \
+        "Do **not** \`git rm\`"
+done
+
 if [ "$fail" -ne 0 ]; then
     echo "check-workspace-custom-instructions: FAILED (see #683)" >&2
     exit 1

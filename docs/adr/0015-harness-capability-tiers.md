@@ -96,6 +96,20 @@ deliberate, documented gaps (full grid in the
 > `~/.cursor/projects/<slug>/.workspace-trusted` containing `"trustMethod":
 > "cli-flag"` — the same saved decision the dialog records on accept.
 
+> **Amendment (2026-08-28, CROW-960):** the launch-path strip above still leaves
+> a **current-session** window. The review skill's `gh pr checkout` (and a
+> head-advancing re-review) restores the PR head *after* the agent is already
+> up, so attacker-controlled `.cursor/` / `.grok/` / `.agents/` /
+> `.claude/settings*.json` / `.mcp.json` (plus `.gemini/` / `.muse/` / `.codex/`)
+> sit on disk and live until the *next* `prepareWorktreeForAgentLaunch`. That
+> window is shared by every harness — not a CROW-954 regression; CROW-954 only
+> made Cursor's half unattended from t=0. The close is **in the review skill**
+> (and the re-review prompt), immediately after checkout: a working-tree `rm`
+> of the union of every harness strip surface, one place rather than four
+> per-adapter changes. The launch-path gate remains the next-process backstop
+> if the agent skips that step. Inspect stripped paths that appear in the PR
+> via `git show HEAD:<path>` / `gh pr diff` — they are gone from disk by design.
+
 > **Amendment (2026-07-28, #902):** Antigravity's **review** gap — recorded as a
 > Tier-2 deferral (its `autoLaunchCommand(.review)` returned `nil`, so a review
 > session assigned to it never launched) — **closes**. Review now dispatches the

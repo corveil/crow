@@ -201,6 +201,9 @@ final class AgentLaunchController {
     ///     clone's `.cursor/` (`shouldStripCursorReviewClone`, CROW-954): now that
     ///     Cursor seeds `--trust` on review, no folder-trust dialog stands behind
     ///     the strip either, so it joins the every-launch set for the same reason.
+    ///     CROW-960 also re-strips in the review skill (and the re-review prompt)
+    ///     immediately after checkout, which closes the *current* session; this
+    ///     gate remains the next-process backstop if the agent skips that step.
     ///  2. **Seed** the agent's folder trust (Claude and — via the per-launch
     ///     `--trust` flag, not this step — Cursor on every kind; Codex/Grok on
     ///     everything but `.review`), gated via `shouldSeedFolderTrust`.
