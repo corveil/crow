@@ -4438,11 +4438,21 @@ function boardEmpty(msg) {
   return el('div', 'board-empty', msg);
 }
 
+// Split-button host for a start control. A chevron ctx-item is *not* inside
+// `.split-btn` (the menu lives on `document.body`); the opener stashes the
+// host on the menu as `_splitBtn` so we still disable both halves.
+function startActionHost(el) {
+  const split = (el && el.closest && el.closest('.split-btn'))
+    || (el && el.closest && el.closest('.ctx-menu') && el.closest('.ctx-menu')._splitBtn)
+    || null;
+  const buttons = split ? [...split.querySelectorAll('button')] : (el ? [el] : []);
+  return { split, buttons };
+}
+
 // A spawning action (Start Working / Start Review): disable the button, let the
 // new session surface via the sidebar poll.
 async function spawnAction(btn, method, params, label) {
-  const split = btn.closest && btn.closest('.split-btn');
-  const buttons = split ? [...split.querySelectorAll('button')] : [btn];
+  const { buttons } = startActionHost(btn);
   buttons.forEach((b) => { b.disabled = true; });
   const orig = btn.textContent;
   btn.textContent = 'Starting…';
@@ -4457,7 +4467,9 @@ async function spawnAction(btn, method, params, label) {
 }
 
 // Split-button for Start Working / Start Exploring (CROW-1149). Primary click
-// runs `onPrimary`; the chevron opens a ctx-menu of the same actions.
+// runs `onPrimary`; the chevron opens a ctx-menu of the same actions. Menu
+// rows receive `onClick(row)` — not the primary button — so choosing
+// Explore shows Starting… / Started ✓ on that row (review #1152).
 function startActionsSplit(primaryLabel, onPrimary, items) {
   const wrap = el('div', 'split-btn');
   const main = el('button', 'action-btn action-primary split-btn-main', primaryLabel);
@@ -4472,13 +4484,19 @@ function startActionsSplit(primaryLabel, onPrimary, items) {
     e.stopPropagation();
     closeContextMenu();
     const menu = el('div', 'ctx-menu');
+    menu._splitBtn = wrap;
     for (const item of items) {
       const row = el('div', 'ctx-item', item.label);
       if (item.title) row.title = item.title;
       row.onclick = (ev) => {
         ev.stopPropagation();
-        closeContextMenu();
-        item.onClick(main);
+        // Keep the menu mounted so the chosen row can show Starting… —
+        // closing it first would drop the only element whose label matches
+        // the action (the primary still reads Start Working).
+        [...menu.querySelectorAll('.ctx-item')].forEach((n) => {
+          n.style.pointerEvents = 'none';
+        });
+        item.onClick(row);
       };
       menu.appendChild(row);
     }
@@ -4849,8 +4867,7 @@ async function startSelected(btn, explore) {
     .filter((i) => !i.linked_session_id && selectedIssueIDs.has(i.url))
     .map((i) => i.url);
   if (!urls.length) return;
-  const split = btn.closest && btn.closest('.split-btn');
-  const buttons = split ? [...split.querySelectorAll('button')] : [btn];
+  const { buttons } = startActionHost(btn);
   buttons.forEach((b) => { b.disabled = true; });
   btn.textContent = 'Starting…';
   const label = explore ? 'Start Exploring' : 'Start Working';

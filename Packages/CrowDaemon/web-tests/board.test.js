@@ -140,6 +140,22 @@ const chev = q('.split-btn-chevron')[0];
 chev.onclick({ stopPropagation() {} });
 check('chevron opens a Start Exploring menu', [...q('.ctx-item')].some((n) => n.textContent === 'Start Exploring'));
 check('menu also offers Start Working', [...q('.ctx-item')].some((n) => n.textContent === 'Start Working'));
+(() => {
+  let sent = null;
+  const prevRpc = T.rpc;
+  T.rpc = (method, params) => { sent = { method, params }; return new Promise(() => {}); };
+  const exploreItem = [...q('.ctx-item')].find((n) => n.textContent === 'Start Exploring');
+  exploreItem.onclick({ stopPropagation() {} });
+  check('explore from menu shows Starting on the chosen row', exploreItem.textContent === 'Starting…');
+  check('explore from menu leaves the Start Working primary labeled',
+    [...q('.split-btn-main')].some((b) => b.textContent === 'Start Working'));
+  check('explore RPC fires with explore: true',
+    sent && sent.method === 'work-on-issue' && sent.params && sent.params.explore === true);
+  const split = q('.split-btn')[0];
+  check('split is disabled while explore starts',
+    split && [...split.querySelectorAll('button')].every((b) => b.disabled));
+  T.rpc = prevRpc;
+})();
 [...q('.ctx-menu')].forEach((n) => n.remove());
 
 console.log('\nSort by title (A–Z):');
