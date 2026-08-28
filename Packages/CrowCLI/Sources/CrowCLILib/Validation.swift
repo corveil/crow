@@ -59,16 +59,43 @@ func validateJobName(_ value: String) throws {
     }
 }
 
-/// Validate that a notification sound is one of the built-in sounds, matching
-/// the Settings UI's sound picker (which only offers those). Delegates to
+/// Validate that a notification sound is a built-in or a custom library name.
+/// Custom names are read from the live sounds directory so a name the daemon
+/// will accept also passes here. Delegates to
 /// `NotificationSettings.canonicalSoundName` — the same predicate the
 /// `notifications-set` handler enforces with — so the two can't drift.
 ///
-/// - Throws: `ValidationError` listing the built-in sounds when unmatched.
-func validateNotificationSound(_ value: String) throws {
-    guard NotificationSettings.canonicalSoundName(value) != nil else {
-        throw ValidationError("'\(value)' is not a built-in sound. Expected one of: \(NotificationSettings.builtInSounds.joined(separator: ", "))")
+/// - Throws: `ValidationError` listing built-ins (and custom names when any
+///   exist) when unmatched.
+func validateNotificationSound(_ value: String, customNames: [String]? = nil) throws {
+    let names = customNames ?? CustomSoundLibrary.live.names
+    guard NotificationSettings.canonicalSoundName(value, customNames: names) != nil else {
+        let extras = names.isEmpty ? "" : "; custom: \(names.joined(separator: ", "))"
+        throw ValidationError("'\(value)' is not an available sound. Expected one of: \(NotificationSettings.builtInSounds.joined(separator: ", "))\(extras)")
     }
+}
+
+/// Resolve `crow notifications add-sound` to an absolute readable path and
+/// check the extension locally. Tilde-expanded and relative-to-cwd, matching
+/// `--binary`: the daemon receives an absolute path and does not share the
+/// caller's working directory.
+///
+/// - Throws: `ValidationError` for a missing file or unsupported extension.
+func resolvedSoundFilePath(_ value: String) throws -> String {
+    var path = value.trimmingCharacters(in: .whitespaces)
+    if path == "~" || path.hasPrefix("~/") {
+        path = NSString(string: path).expandingTildeInPath
+    }
+    let url = URL(fileURLWithPath: path).standardizedFileURL
+    var isDir: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+        throw ValidationError("'\(value)' is not a readable file.")
+    }
+    let ext = url.pathExtension.lowercased()
+    guard CustomSoundLibrary.allowedExtensions.contains(ext) else {
+        throw ValidationError("'\(value)' is not a supported sound. Expected .wav, .mp3, or .aiff.")
+    }
+    return url.path
 }
 
 /// Validate that at least one optional field is provided for set-ticket.

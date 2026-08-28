@@ -399,6 +399,13 @@ async function loadUIConfig() {
     uiConfig.wheelScrollLines = Math.max(1, Number(t.wheelScrollLines) || 3);
     uiConfig.agentWheelNotches = Math.max(1, Number(t.agentWheelNotches) || 1);
     uiConfig.notifications = parseNotificationSettings(cfg.notifications);
+    try {
+      const nr = await rpc('notifications-get');
+      const custom = (nr && nr.notifications && nr.notifications.custom_sounds) || [];
+      if (window.crowSound && window.crowSound.setCustomSounds) {
+        window.crowSound.setCustomSounds(custom);
+      }
+    } catch (_) { /* custom sounds stay empty; built-in synth still works */ }
     // Presence of the (secret-stripped) webAuth block means a web password is set.
     uiConfig.webPasswordSet = !!cfg.webAuth;
     // Host capability: whether the VS Code `code` CLI is installed. Gates the
@@ -530,6 +537,7 @@ const SOUND_TONES = {
 
 const crowSound = (() => {
   let ctx = null;
+  let customByName = {}; // lowercased name → url
   function ensure() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
@@ -537,7 +545,7 @@ const crowSound = (() => {
     if (ctx.state === 'suspended') ctx.resume(); // no-op once unlocked
     return ctx;
   }
-  function play(name) {
+  function playSynth(name) {
     const c = ensure();
     if (!c) return;
     const recipe = SOUND_TONES[name] || SOUND_TONES._default;
@@ -554,8 +562,33 @@ const crowSound = (() => {
       osc.start(t0); osc.stop(t0 + dur + 0.03);
     }
   }
-  return { play, unlock: ensure };
+  function playFile(url, fallbackName) {
+    try {
+      const audio = new Audio(url);
+      audio.onerror = () => playSynth(fallbackName || 'Glass');
+      const p = audio.play();
+      if (p && p.catch) p.catch(() => playSynth(fallbackName || 'Glass'));
+    } catch (_) {
+      playSynth(fallbackName || 'Glass');
+    }
+  }
+  function play(name, fallbackName) {
+    const url = customByName[String(name || '').toLowerCase()];
+    if (url) { playFile(url, fallbackName || 'Glass'); return; }
+    // Built-in names synthesize; a missing/deleted custom file falls back
+    // to the event default (or Glass) rather than a generic beep.
+    if (SOUND_TONES[name]) { playSynth(name); return; }
+    playSynth(fallbackName || 'Glass');
+  }
+  function setCustomSounds(list) {
+    customByName = {};
+    for (const s of list || []) {
+      if (s && s.name && s.url) customByName[String(s.name).toLowerCase()] = s.url;
+    }
+  }
+  return { play, unlock: ensure, setCustomSounds };
 })();
+window.crowSound = crowSound;
 
 // Web Audio starts suspended until a user gesture (autoplay policy) — unlock on
 // the first interaction so event chimes play thereafter.
@@ -583,7 +616,8 @@ function playEventSound(event, key) {
   const now = Date.now();
   if (_lastSoundAt[k] && now - _lastSoundAt[k] < 2000) return;
   _lastSoundAt[k] = now;
-  crowSound.play(cfg.soundName || DEFAULT_EVENT_SOUND[event] || 'Glass');
+  crowSound.play(cfg.soundName || DEFAULT_EVENT_SOUND[event] || 'Glass',
+    DEFAULT_EVENT_SOUND[event] || 'Glass');
 }
 
 // Manual test hook. crowTestSound() plays each event once (staggered);

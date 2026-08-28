@@ -11,7 +11,8 @@ import Foundation
 /// Extracted from `makeCommandRouter`'s dictionary literal (CROW-1134).
 func makeSettingsHandlers(
     versionUpdateService: VersionUpdateService?,
-    devRoot: String
+    devRoot: String,
+    soundLibrary: CustomSoundLibrary = .live
 ) -> [String: CommandRouter.Handler] {
     // The explicit annotation is load-bearing, not decoration: a large
     // dictionary of closures without a contextual type blows Swift's
@@ -292,7 +293,8 @@ func makeSettingsHandlers(
                 let event = try params["event"].map { try NotificationRPC.decodeEvent($0) }
                 let (config, readable) = loadConfigReportingReadability(devRoot: devRoot)
                 return ["notifications": NotificationRPC.settingsJSON(
-                    config.notifications, only: event, configReadable: readable)]
+                    config.notifications, only: event, configReadable: readable,
+                    customSounds: soundLibrary.list())]
             }
         },
         "notifications-set": { params in
@@ -304,8 +306,9 @@ func makeSettingsHandlers(
                 let eventEnabled = params["event_enabled"]?.boolValue
                 let eventSoundEnabled = params["event_sound_enabled"]?.boolValue
                 let eventSystemEnabled = params["event_system_notification_enabled"]?.boolValue
+                let customNames = soundLibrary.names
                 let eventSoundName = try params["event_sound_name"].map {
-                    try NotificationRPC.decodeSoundName($0)
+                    try NotificationRPC.decodeSoundName($0, customNames: customNames)
                 }
 
                 let hasEventField = eventEnabled != nil || eventSoundEnabled != nil
@@ -350,8 +353,61 @@ func makeSettingsHandlers(
                     return config.notifications
                 }
                 return [
-                    "notifications": NotificationRPC.settingsJSON(settings, only: event),
+                    "notifications": NotificationRPC.settingsJSON(
+                        settings, only: event, customSounds: soundLibrary.list()),
                     "saved": .bool(true),
+                ]
+            }
+        },
+
+        // Custom notification sounds (CROW-1147). Files live under Application
+        // Support, not in config.json — add copies a host path (CLI, local-only);
+        // remove deletes by name (web Settings + CLI). The web upload itself is
+        // HTTP POST /sounds, because a sound can exceed the 1 MB /rpc frame.
+        "notifications-add-sound": { params in
+            try await mapRPCError {
+                guard let raw = params["path"]?.stringValue,
+                      !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw RPCError.invalidParams("path required")
+                }
+                let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard path.hasPrefix("/") else {
+                    throw RPCError.invalidParams(
+                        "path must be absolute (it is resolved by the daemon, not your shell)")
+                }
+                let name = params["name"]?.stringValue
+                do {
+                    let sound = try soundLibrary.add(
+                        from: URL(fileURLWithPath: path), requestedName: name)
+                    let (config, _) = loadConfigReportingReadability(devRoot: devRoot)
+                    return [
+                        "sound": NotificationRPC.customSoundJSON(sound),
+                        "notifications": NotificationRPC.settingsJSON(
+                            config.notifications, customSounds: soundLibrary.list()),
+                        "saved": .bool(true),
+                    ]
+                } catch let error as CustomSoundError {
+                    throw RPCError.invalidParams(error.localizedDescription)
+                }
+            }
+        },
+        "notifications-remove-sound": { params in
+            try await mapRPCError {
+                guard let raw = params["name"]?.stringValue,
+                      !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw RPCError.invalidParams("name required")
+                }
+                do {
+                    try soundLibrary.remove(name: raw)
+                } catch let error as CustomSoundError {
+                    throw RPCError.invalidParams(error.localizedDescription)
+                }
+                let (config, _) = loadConfigReportingReadability(devRoot: devRoot)
+                return [
+                    "removed": .bool(true),
+                    "name": .string(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+                    "notifications": NotificationRPC.settingsJSON(
+                        config.notifications, customSounds: soundLibrary.list()),
                 ]
             }
         },

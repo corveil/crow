@@ -166,6 +166,7 @@ enum StaticAssets {
         // today, but explicit so a future default-src tightening can't break install.
         "manifest-src 'self'",
         "connect-src 'self'",
+        "media-src 'self'",
         "worker-src 'self' blob:",
         "object-src 'none'",
         "base-uri 'none'",

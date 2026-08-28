@@ -166,6 +166,14 @@ import Testing
     #expect(NotificationSettings.canonicalSoundName("/System/Library/Sounds/Glass.aiff") == nil)
 }
 
+@Test func canonicalSoundNameAcceptsCustomNames() {
+    #expect(NotificationSettings.canonicalSoundName("Office-Bell", customNames: ["Office-Bell"]) == "Office-Bell")
+    #expect(NotificationSettings.canonicalSoundName("office-bell", customNames: ["Office-Bell"]) == "Office-Bell")
+    #expect(NotificationSettings.canonicalSoundName("Nope", customNames: ["Office-Bell"]) == nil)
+    // Built-ins still win when a custom name collides.
+    #expect(NotificationSettings.canonicalSoundName("glass", customNames: ["Glass-Custom"]) == "Glass")
+}
+
 // MARK: - builtInSounds
 
 @Test func builtInSoundsNonEmpty() {

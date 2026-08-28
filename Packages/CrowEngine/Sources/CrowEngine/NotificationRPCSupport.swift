@@ -21,24 +21,40 @@ public enum NotificationRPC {
         return event
     }
 
-    /// Resolve a sound name to its canonical `builtInSounds` spelling.
+    /// Resolve a sound name to its canonical built-in spelling, or to a custom
+    /// library name from `customNames`.
     ///
-    /// The Settings UI's sound picker only offers the built-ins, so the CLI is
-    /// held to the same set. Note this is a *write*-side rule only —
-    /// `settingsJSON` echoes a stored custom `soundName` untouched, since the
-    /// model documents that field as "system sound name or path to custom file".
+    /// Write-side only — `settingsJSON` echoes a stored `soundName` untouched,
+    /// including a path leftover from before custom sounds were a first-class
+    /// library, so a missing file never fails a read.
     ///
-    /// - Throws: `RPCError.invalidParams` listing the built-ins when unmatched.
-    public static func decodeSoundName(_ value: JSONValue?) throws -> String {
+    /// - Throws: `RPCError.invalidParams` listing built-ins (and custom names
+    ///   when any exist) when unmatched.
+    public static func decodeSoundName(
+        _ value: JSONValue?,
+        customNames: [String] = []
+    ) throws -> String {
         guard let raw = value?.stringValue else {
             throw RPCError.invalidParams("event_sound_name must be a string")
         }
-        guard let canonical = NotificationSettings.canonicalSoundName(raw) else {
+        guard let canonical = NotificationSettings.canonicalSoundName(raw, customNames: customNames) else {
+            let extras = customNames.isEmpty
+                ? ""
+                : "; custom: \(customNames.joined(separator: ", "))"
             throw RPCError.invalidParams(
-                "'\(raw)' is not a built-in sound. Expected one of: \(NotificationSettings.builtInSounds.joined(separator: ", "))"
+                "'\(raw)' is not an available sound. Expected one of: \(NotificationSettings.builtInSounds.joined(separator: ", "))\(extras)"
             )
         }
         return canonical
+    }
+
+    /// One custom-sound record as RPC JSON (`name` / `file` / `url`).
+    public static func customSoundJSON(_ sound: CustomSound) -> JSONValue {
+        .object([
+            "name": .string(sound.name),
+            "file": .string(sound.file),
+            "url": .string(sound.url),
+        ])
     }
 
     /// Canonical notification-settings JSON for RPC responses: snake_case
@@ -62,7 +78,8 @@ public enum NotificationRPC {
     public static func settingsJSON(
         _ settings: NotificationSettings,
         only: NotificationEvent? = nil,
-        configReadable: Bool = true
+        configReadable: Bool = true,
+        customSounds: [CustomSound] = []
     ) -> JSONValue {
         let events = only.map { [$0] } ?? NotificationEvent.allCases
         var eventsObject: [String: JSONValue] = [:]
@@ -75,12 +92,15 @@ public enum NotificationRPC {
                 "sound_name": .string(config.soundName),
             ])
         }
+        let available = NotificationSettings.builtInSounds.map { JSONValue.string($0) }
+            + customSounds.map { .string($0.name) }
         return .object([
             "global_mute": .bool(settings.globalMute),
             "sound_enabled": .bool(settings.soundEnabled),
             "system_notifications_enabled": .bool(settings.systemNotificationsEnabled),
             "events": .object(eventsObject),
-            "available_sounds": .array(NotificationSettings.builtInSounds.map { .string($0) }),
+            "available_sounds": .array(available),
+            "custom_sounds": .array(customSounds.map(customSoundJSON)),
             "config_readable": .bool(configReadable),
         ])
     }

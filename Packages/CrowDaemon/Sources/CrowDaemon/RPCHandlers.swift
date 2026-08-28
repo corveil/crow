@@ -48,6 +48,7 @@ func makeCommandRouter(
     // (so `corveil-disconnect` can invalidate it) and the provisioning verbs.
     // Injectable so a test can observe the invalidation; one per router otherwise.
     corveilOrgCache: CorveilOrgListCache = CorveilOrgListCache(),
+    soundLibrary: CustomSoundLibrary = .live,
     fallback: CommandRouter? = nil
 ) -> CommandRouter {
     // Serializes review kickoffs (see start-review) — one per router instance.
@@ -78,7 +79,9 @@ func makeCommandRouter(
             jobScheduler: jobScheduler, tracker: tracker, devRoot: devRoot)
     ) { existing, _ in existing }
     handlers.merge(
-        makeSettingsHandlers(versionUpdateService: versionUpdateService, devRoot: devRoot)
+        makeSettingsHandlers(
+            versionUpdateService: versionUpdateService, devRoot: devRoot,
+            soundLibrary: soundLibrary)
     ) { existing, _ in existing }
     handlers.merge(makeWorkspaceHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeMCPTokenHandlers(devRoot: devRoot)) { existing, _ in existing }

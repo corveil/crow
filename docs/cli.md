@@ -98,7 +98,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow new-session`](#crow-new-session) | Create a new session |
 | [`crow new-terminal`](#crow-new-terminal) | Create a terminal tab inside Crow (tmux) |
 | [`crow notifications`](#crow-notifications) | Read and write notification settings |
+| [`crow notifications add-sound`](#crow-notifications-add-sound) | Add a custom notification sound |
 | [`crow notifications get`](#crow-notifications-get) | Show notification settings |
+| [`crow notifications remove-sound`](#crow-notifications-remove-sound) | Remove a custom notification sound |
 | [`crow notifications set`](#crow-notifications-set) | Change notification settings |
 | [`crow open-in-vscode`](#crow-open-in-vscode) | Open the session's worktree in VS Code on the host |
 | [`crow open-terminal`](#crow-open-terminal) | Open a macOS Terminal.app window at the session's worktree (host GUI) |
@@ -1510,12 +1512,29 @@ crow new-terminal --session <session> --cwd <cwd> [--name <name>] [--command <co
 Read and write notification settings.
 
 ```
-crow notifications <get|set>
+crow notifications <get|set|add-sound|remove-sound>
 ```
 
 Notifications cascade: a notification fires only if globalMute is off, the matching global category toggle is on, AND the per-event toggle is on. Global flags apply to every event; the --event-* flags apply to the single event named by --event.
 
-Subcommands: [`get`](#crow-notifications-get), [`set`](#crow-notifications-set).
+Subcommands: [`get`](#crow-notifications-get), [`set`](#crow-notifications-set), [`add-sound`](#crow-notifications-add-sound), [`remove-sound`](#crow-notifications-remove-sound).
+
+---
+
+## `crow notifications add-sound`
+
+Add a custom notification sound.
+
+```
+crow notifications add-sound <path> [--name <name>]
+```
+
+Copies a .wav, .mp3, or .aiff file into Crow's sound library (~/Library/Application Support/crow/sounds/). The stem becomes the name shown in Settings and accepted by --event-sound-name. Dropping a file into that directory also works — get lists whatever is there.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| _(positional)_ | `<path>` | yes | Path to a .wav, .mp3, or .aiff file |
+| `--name` | `<name>` | no | Display name (defaults to the file's name) |
 
 ---
 
@@ -1527,11 +1546,27 @@ Show notification settings.
 crow notifications get [--event <event>]
 ```
 
-Lists the global toggles, every event's effective settings, and the built-in sound names. Events absent from config.json are reported with the defaults they will actually fire with. --event narrows the event list to one entry; the global toggles are always included, since they can be the reason an event never fires.
+Lists the global toggles, every event's effective settings, the built-in sound names, and any custom sounds in the library. Events absent from config.json are reported with the defaults they will actually fire with. --event narrows the event list to one entry; the global toggles are always included, since they can be the reason an event never fires.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--event` | `<event>` | no | Restrict the event list to one event. Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. |
+
+---
+
+## `crow notifications remove-sound`
+
+Remove a custom notification sound.
+
+```
+crow notifications remove-sound <name>
+```
+
+Deletes the file from the sound library. Events that still name it keep the reference in config.json; playback falls back to a default until you pick another sound.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| _(positional)_ | `<name>` | yes | Custom sound name (as listed by notifications get) |
 
 ---
 
@@ -1543,7 +1578,7 @@ Change notification settings.
 crow notifications set [--global-mute|--no-global-mute] [--sound-enabled|--no-sound-enabled] [--system-notifications-enabled|--no-system-notifications-enabled] [--event <event>] [--event-enabled|--no-event-enabled] [--event-sound-enabled|--no-event-sound-enabled] [--event-system-notification-enabled|--no-event-system-notification-enabled] [--event-sound-name <event-sound-name>]
 ```
 
-Only the provided flags change; everything else keeps its value. Each toggle takes a --flag / --no-flag pair. The --event-* flags require --event and apply to that event alone. --event-sound-name accepts the built-in sounds listed by `crow notifications get` (case-insensitive).
+Only the provided flags change; everything else keeps its value. Each toggle takes a --flag / --no-flag pair. The --event-* flags require --event and apply to that event alone. --event-sound-name accepts a built-in or custom sound listed by `crow notifications get` (case-insensitive).
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -1554,7 +1589,7 @@ Only the provided flags change; everything else keeps its value. Each toggle tak
 | `--event-enabled`, `--no-event-enabled` | — | no | Whether this event notifies at all |
 | `--event-sound-enabled`, `--no-event-sound-enabled` | — | no | Whether this event plays a sound |
 | `--event-system-notification-enabled`, `--no-event-system-notification-enabled` | — | no | Whether this event posts a system notification |
-| `--event-sound-name` | `<event-sound-name>` | no | Sound for this event (a built-in sound name) |
+| `--event-sound-name` | `<event-sound-name>` | no | Sound for this event (a built-in or custom sound name) |
 
 ---
 

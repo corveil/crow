@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 import Testing
 import CrowCore
 @testable import CrowCLILib
@@ -11,6 +12,25 @@ import CrowCore
     #expect(get is NotificationsGet)
     let set = try Notifications.parseAsRoot(["set", "--global-mute"])
     #expect(set is NotificationsSet)
+    let wav = try writeTempWav()
+    defer { try? FileManager.default.removeItem(at: wav) }
+    let add = try Notifications.parseAsRoot(["add-sound", wav.path])
+    #expect(add is NotificationsAddSound)
+    let remove = try Notifications.parseAsRoot(["remove-sound", "Office-Bell"])
+    #expect(remove is NotificationsRemoveSound)
+}
+
+/// A tiny on-disk .wav so `add-sound` parse can satisfy `validate()` (existence
+/// + extension). Magic bytes are the daemon's job.
+private func writeTempWav() throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("crow-cli-sound-\(UUID().uuidString).wav")
+    try Data("RIFF".utf8).write(to: url) // contents unused at parse time
+    // Pad so it's not empty; extension is what validate checks.
+    var data = Data("RIFF".utf8)
+    data.append(Data(repeating: 0, count: 12))
+    try data.write(to: url)
+    return url
 }
 
 // MARK: - get
@@ -188,6 +208,42 @@ private func setParseError(_ args: [String]) -> String {
 }
 
 @Test func validateNotificationSoundRejectsUnknown() {
-    #expect(throws: (any Error).self) { try validateNotificationSound("Nope") }
-    #expect(throws: (any Error).self) { try validateNotificationSound("") }
+    #expect(throws: (any Error).self) { try validateNotificationSound("Nope", customNames: []) }
+    #expect(throws: (any Error).self) { try validateNotificationSound("", customNames: []) }
+}
+
+@Test func validateNotificationSoundAcceptsCustomNames() throws {
+    try validateNotificationSound("Office-Bell", customNames: ["Office-Bell"])
+    try validateNotificationSound("office-bell", customNames: ["Office-Bell"])
+}
+
+// MARK: - add-sound / remove-sound
+
+@Test func notificationsAddSoundParsesPathAndName() throws {
+    let wav = try writeTempWav()
+    defer { try? FileManager.default.removeItem(at: wav) }
+    let cmd = try NotificationsAddSound.parse([wav.path, "--name", "Office Bell"])
+    #expect(cmd.path == wav.path)
+    #expect(cmd.name == "Office Bell")
+}
+
+@Test func notificationsAddSoundRejectsMissingFile() {
+    #expect(throws: (any Error).self) {
+        _ = try NotificationsAddSound.parse(["/no/such/crow-sound.wav"])
+    }
+}
+
+@Test func notificationsAddSoundRejectsUnsupportedExtension() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("crow-cli-sound-\(UUID().uuidString).txt")
+    try Data("x".utf8).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    #expect(throws: (any Error).self) {
+        _ = try NotificationsAddSound.parse([url.path])
+    }
+}
+
+@Test func notificationsRemoveSoundParsesName() throws {
+    let cmd = try NotificationsRemoveSound.parse(["Office-Bell"])
+    #expect(cmd.name == "Office-Bell")
 }

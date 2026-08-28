@@ -877,7 +877,8 @@ import CrowPersistence
         // routing is the whole point of the probe (CROW-593).
         #expect(!MW.isAuthExempt(path: "/auth/check"))
         for path in ["/", "/index.html", "/app.js", "/rpc",
-                     "/config/web-password", "/config/manager-gateway"] {
+                     "/config/web-password", "/config/manager-gateway",
+                     "/sounds", "/sounds/chime.wav"] {
             #expect(!MW.isAuthExempt(path: path), "\(path) must be gated")
         }
     }
@@ -913,6 +914,7 @@ import CrowPersistence
             "default-src 'self'",
             "script-src 'self' 'wasm-unsafe-eval'",   // xterm's Sixel wasm, no arbitrary eval
             "connect-src 'self'",                      // same-origin /rpc + /terminal WS only
+            "media-src 'self'",                        // custom notification sounds (CROW-1147)
             "object-src 'none'",
             "base-uri 'none'",
             "frame-ancestors 'none'",                  // no clickjacking
@@ -1311,6 +1313,20 @@ import CrowPersistence
             "global_mute": .bool(true),
         ])
         #expect(RPCWebSocketHandler.localOnlyDenial(for: set, devRoot: devRoot) == nil)
+
+        // remove-sound deletes a named library file — same trust as set.
+        let remove = JSONRPCRequest(id: 3, method: "notifications-remove-sound", params: [
+            "name": .string("Office-Bell"),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: remove, devRoot: devRoot) == nil)
+
+        // add-sound copies a host path, so it stays local-only. The web upload
+        // is POST /sounds, not this RPC.
+        let add = JSONRPCRequest(id: 4, method: "notifications-add-sound", params: [
+            "path": .string("/tmp/ding.wav"),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: add, devRoot: devRoot)
+            == "notifications-add-sound is local-only")
     }
 
     @Test func agentRPCsAreAllowedRemotely() throws {

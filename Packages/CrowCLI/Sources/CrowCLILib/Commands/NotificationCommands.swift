@@ -26,7 +26,10 @@ public struct Notifications: ParsableCommand {
         on. Global flags apply to every event; the --event-* flags apply to the \
         single event named by --event.
         """,
-        subcommands: [NotificationsGet.self, NotificationsSet.self]
+        subcommands: [
+            NotificationsGet.self, NotificationsSet.self,
+            NotificationsAddSound.self, NotificationsRemoveSound.self,
+        ]
     )
 
     public init() {}
@@ -37,11 +40,12 @@ public struct NotificationsGet: ParsableCommand {
         commandName: "get",
         abstract: "Show notification settings",
         discussion: """
-        Lists the global toggles, every event's effective settings, and the \
-        built-in sound names. Events absent from config.json are reported with \
-        the defaults they will actually fire with. --event narrows the event \
-        list to one entry; the global toggles are always included, since they \
-        can be the reason an event never fires.
+        Lists the global toggles, every event's effective settings, the \
+        built-in sound names, and any custom sounds in the library. Events \
+        absent from config.json are reported with the defaults they will \
+        actually fire with. --event narrows the event list to one entry; the \
+        global toggles are always included, since they can be the reason an \
+        event never fires.
         """
     )
 
@@ -65,8 +69,9 @@ public struct NotificationsSet: ParsableCommand {
         discussion: """
         Only the provided flags change; everything else keeps its value. Each \
         toggle takes a --flag / --no-flag pair. The --event-* flags require \
-        --event and apply to that event alone. --event-sound-name accepts the \
-        built-in sounds listed by `crow notifications get` (case-insensitive).
+        --event and apply to that event alone. --event-sound-name accepts a \
+        built-in or custom sound listed by `crow notifications get` \
+        (case-insensitive).
         """
     )
 
@@ -95,7 +100,7 @@ public struct NotificationsSet: ParsableCommand {
     @Flag(inversion: .prefixedNo, exclusivity: .exclusive,
           help: "Whether this event posts a system notification")
     var eventSystemNotificationEnabled: Bool?
-    @Option(name: .customLong("event-sound-name"), help: "Sound for this event (a built-in sound name)")
+    @Option(name: .customLong("event-sound-name"), help: "Sound for this event (a built-in or custom sound name)")
     var eventSoundName: String?
 
     public init() {}
@@ -142,6 +147,77 @@ public struct NotificationsSet: ParsableCommand {
         // so the RPC stays self-sufficient for non-CLI callers.
         if let eventSoundName { params["event_sound_name"] = .string(eventSoundName) }
         let result = try rpc("notifications-set", params: params)
+        printJSON(result)
+    }
+}
+
+public struct NotificationsAddSound: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "add-sound",
+        abstract: "Add a custom notification sound",
+        discussion: """
+        Copies a .wav, .mp3, or .aiff file into Crow's sound library \
+        (~/Library/Application Support/crow/sounds/). The stem becomes the \
+        name shown in Settings and accepted by --event-sound-name. Dropping a \
+        file into that directory also works — get lists whatever is there.
+        """
+    )
+
+    @Argument(help: "Path to a .wav, .mp3, or .aiff file")
+    var path: String
+
+    @Option(name: .long, help: "Display name (defaults to the file's name)")
+    var name: String?
+
+    public init() {}
+
+    public func validate() throws {
+        _ = try resolvedSoundFilePath(path)
+        if let name {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard CustomSoundLibrary.sanitizeStem(trimmed) != nil else {
+                throw ValidationError("--name is empty or contains no usable characters.")
+            }
+        }
+    }
+
+    public func run() throws {
+        var params: [String: JSONValue] = ["path": .string(try resolvedSoundFilePath(path))]
+        if let name {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { params["name"] = .string(trimmed) }
+        }
+        let result = try rpc("notifications-add-sound", params: params)
+        printJSON(result)
+    }
+}
+
+public struct NotificationsRemoveSound: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "remove-sound",
+        abstract: "Remove a custom notification sound",
+        discussion: """
+        Deletes the file from the sound library. Events that still name it keep \
+        the reference in config.json; playback falls back to a default until \
+        you pick another sound.
+        """
+    )
+
+    @Argument(help: "Custom sound name (as listed by notifications get)")
+    var name: String
+
+    public init() {}
+
+    public func validate() throws {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ValidationError("name must not be blank.")
+        }
+    }
+
+    public func run() throws {
+        let result = try rpc("notifications-remove-sound", params: [
+            "name": .string(name.trimmingCharacters(in: .whitespacesAndNewlines)),
+        ])
         printJSON(result)
     }
 }

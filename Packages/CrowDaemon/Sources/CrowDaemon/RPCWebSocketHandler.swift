@@ -254,11 +254,13 @@ enum RPCWebSocketHandler {
     /// are likewise un-gated (same jobs-array surface; today only the CLI, which is
     /// always local, uses them).
     ///
-    /// `notifications-get` / `notifications-set` are un-gated for the same reason
-    /// (CROW-813): they read and write `AppConfig.notifications`, which carries no
-    /// secrets and is already remotely editable through un-gated `set-config` —
-    /// Settings → Notifications is a core web surface. Gating only the CLI's path
-    /// to it would be inconsistent, not safer.
+    /// `notifications-get` / `notifications-set` / `notifications-remove-sound`
+    /// are un-gated for the same reason (CROW-813 / CROW-1147): they read and
+    /// write `AppConfig.notifications` (or delete a named library file), which
+    /// carries no secrets and is already remotely editable through un-gated
+    /// `set-config` — Settings → Notifications is a core web surface. Gating
+    /// only the CLI's path to it would be inconsistent, not safer.
+    /// `notifications-add-sound` *is* gated: it copies a host filesystem path.
     ///
     /// The tmux-maintenance methods (`restart-manager`, `restart-tmux-server`,
     /// `reload-tmux-config`, `launch-agent`, `retry-readiness`) are also NOT gated,
@@ -386,6 +388,12 @@ enum RPCWebSocketHandler {
             // connection verbs above. Both are gated so the whole migration surface
             // stays part of the one local-only Corveil connection surface.
             return "Corveil gateway migration is local-only"
+        case "notifications-add-sound":
+            // Copies a file from a path on the daemon host into the sound library
+            // (CROW-1147). A remote `/rpc` peer must not read arbitrary host
+            // paths. The web Settings upload uses `POST /sounds` instead, which
+            // carries bytes rather than a path.
+            return "notifications-add-sound is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

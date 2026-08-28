@@ -20,13 +20,14 @@ import CrowPersistence
     }
 
     @MainActor
-    private func router(devRoot: String) -> CommandRouter {
+    private func router(devRoot: String, soundLibrary: CustomSoundLibrary = .temporary()) -> CommandRouter {
         makeCommandRouter(
             appState: AppState(),
             store: JSONStore.temporary(),
             git: GitManager(),
             devRoot: devRoot,
-            cockpit: nil)
+            cockpit: nil,
+            soundLibrary: soundLibrary)
     }
 
     private func notifications(_ result: [String: JSONValue]?) throws -> [String: JSONValue] {
@@ -323,5 +324,106 @@ import CrowPersistence
 
         #expect(resp.error != nil)
         #expect(try String(contentsOf: configURL, encoding: .utf8) == corrupt)
+    }
+
+    // MARK: - custom sounds (CROW-1147)
+
+    @Test func getListsCustomSoundsNextToBuiltIns() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let lib = CustomSoundLibrary.temporary()
+        defer { try? FileManager.default.removeItem(at: lib.directory) }
+        _ = try lib.add(data: NotificationTestAudio.wav, filename: "office.wav", requestedName: "Office-Bell")
+
+        let resp = await router(devRoot: devRoot, soundLibrary: lib)
+            .handle(request: JSONRPCRequest(id: 1, method: "notifications-get"))
+
+        #expect(resp.error == nil)
+        let object = try notifications(resp.result)
+        let available = try #require(object["available_sounds"]?.arrayValue)
+        #expect(available.contains(.string("Glass")))
+        #expect(available.contains(.string("Office-Bell")))
+        let custom = try #require(object["custom_sounds"]?.arrayValue)
+        #expect(custom.count == 1)
+        #expect(custom[0].objectValue?["name"]?.stringValue == "Office-Bell")
+        #expect(custom[0].objectValue?["url"]?.stringValue == "/sounds/Office-Bell.wav")
+    }
+
+    @Test func setAcceptsACustomSoundName() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let lib = CustomSoundLibrary.temporary()
+        defer { try? FileManager.default.removeItem(at: lib.directory) }
+        _ = try lib.add(data: NotificationTestAudio.wav, filename: "office.wav", requestedName: "Office-Bell")
+
+        let resp = await router(devRoot: devRoot, soundLibrary: lib).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-set", params: [
+                "event": .string("taskComplete"),
+                "event_sound_name": .string("office-bell"),
+            ]))
+
+        #expect(resp.error == nil)
+        let stored = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(stored.notifications.eventSettings[.taskComplete]?.soundName == "Office-Bell")
+    }
+
+    @Test func addSoundCopiesIntoTheLibrary() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let lib = CustomSoundLibrary.temporary()
+        defer { try? FileManager.default.removeItem(at: lib.directory) }
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("crow-add-\(UUID().uuidString).wav")
+        try NotificationTestAudio.wav.write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        let resp = await router(devRoot: devRoot, soundLibrary: lib).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-add-sound", params: [
+                "path": .string(source.path),
+                "name": .string("Desk Bell"),
+            ]))
+
+        #expect(resp.error == nil)
+        #expect(resp.result?["saved"]?.boolValue == true)
+        #expect(resp.result?["sound"]?.objectValue?["name"]?.stringValue == "Desk-Bell")
+        #expect(lib.sound(named: "Desk-Bell") != nil)
+    }
+
+    @Test func addSoundRejectsRelativePath() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let resp = await router(devRoot: devRoot).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-add-sound", params: ["path": .string("ding.wav")]))
+        #expect(resp.error != nil)
+    }
+
+    @Test func removeSoundDeletesTheFile() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let lib = CustomSoundLibrary.temporary()
+        defer { try? FileManager.default.removeItem(at: lib.directory) }
+        _ = try lib.add(data: NotificationTestAudio.wav, filename: "gone.wav", requestedName: "Gone")
+
+        let resp = await router(devRoot: devRoot, soundLibrary: lib).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-remove-sound", params: ["name": .string("gone")]))
+
+        #expect(resp.error == nil)
+        #expect(resp.result?["removed"]?.boolValue == true)
+        #expect(lib.list().isEmpty)
+    }
+}
+
+/// Minimal RIFF/WAVE bytes for route tests. Sniffed by `CustomSoundLibrary`, not played.
+enum NotificationTestAudio {
+    static var wav: Data {
+        var d = Data()
+        d.append(contentsOf: Array("RIFF".utf8))
+        d.append(contentsOf: [36, 0, 0, 0])
+        d.append(contentsOf: Array("WAVE".utf8))
+        d.append(contentsOf: Array("fmt ".utf8))
+        d.append(contentsOf: [16, 0, 0, 0, 1, 0, 1, 0, 0x44, 0xAC, 0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0])
+        d.append(contentsOf: Array("data".utf8))
+        d.append(contentsOf: [0, 0, 0, 0])
+        return d
     }
 }
