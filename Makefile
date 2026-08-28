@@ -89,7 +89,7 @@ help:
 	@echo "  check      Verify all build and runtime prerequisites"
 	@echo "  test       Run all package tests, then the parity gates"
 	@echo "  coverage   Run all package tests with coverage → coverage/coverage-summary.{json,md}"
-	@echo "  parity     Run just the source-level drift gates (catalogs + CLI/RPC parity)"
+	@echo "  parity     Run just the source-level drift gates (catalogs + CLI/RPC parity + signing helpers)"
 	@echo "  docs       Regenerate docs/cli.md from the CLI's ArgumentParser metadata"
 	@echo "  install    Symlink crow + crowd into ~/.local/bin (override BINDIR=, CONFIG=release)"
 	@echo "  uninstall  Remove installed crow + crowd symlinks"
@@ -165,6 +165,8 @@ parity:
 	@./scripts/check-cli-parity.sh
 	@echo "==> Checking for banned NSLog (CROW-874)..."
 	@./scripts/check-no-nslog.sh
+	@echo "==> macos-sign-notarize helpers (CROW-1150)..."
+	@./scripts/macos-sign-notarize_test.sh
 
 # Regenerate the CLI reference from the commands themselves (CROW-808). Run
 # after adding or changing a subcommand — a stale docs/cli.md fails CrowCLI's

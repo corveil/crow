@@ -196,3 +196,6 @@ jobs:
 
       - name: Check scripts
         run: shellcheck scripts/*.sh
+
+      - name: macos-sign-notarize unit tests
+        run: bash scripts/macos-sign-notarize_test.sh
