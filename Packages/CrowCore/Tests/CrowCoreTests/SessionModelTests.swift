@@ -224,6 +224,40 @@ import Testing
     #expect(Session(name: "review", kind: .review).isManager == false)
 }
 
+@Test func sessionDefaultsIsExploreFalse() {
+    #expect(Session(name: "work").isExplore == false)
+}
+
+@Test func sessionRoundTripsIsExplore() throws {
+    let session = Session(name: "explore-ticket", isExplore: true)
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(Session.self, from: data)
+    #expect(decoded.isExplore == true)
+}
+
+@Test func sessionBackwardCompatDecodingWithoutIsExplore() throws {
+    // Persisted state.json predating CROW-1149 has no `isExplore`. Decode
+    // must succeed and default to false so legacy work sessions stay builds.
+    let id = UUID()
+    let date = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let dateStr = formatter.string(from: date)
+    let json: [String: Any] = [
+        "id": id.uuidString,
+        "name": "legacy",
+        "status": "active",
+        "kind": "work",
+        "createdAt": dateStr,
+        "updatedAt": dateStr,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let session = try decoder.decode(Session.self, from: data)
+    #expect(session.isExplore == false)
+}
+
 // MARK: - Ticket Badge Label (CROW-463)
 
 @Test func ticketBadgeLabelGitHubUsesNumber() {

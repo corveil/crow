@@ -70,4 +70,19 @@ import CrowPersistence
             #expect(row["ticket_state"] == JSONValue.null)
         }
     }
+
+    @Test @MainActor func emitsIsExplore() async {
+        let appState = AppState()
+        let explore = Session(name: "explore-one", isExplore: true)
+        let work = Session(name: "work-one")
+        appState.sessions = [explore, work]
+
+        let resp = await router(appState).handle(request: JSONRPCRequest(id: 1, method: "list-sessions"))
+        #expect(resp.error == nil)
+        let rows = sessions(resp.result)
+        let exploreRow = rows.first { $0["id"]?.stringValue == explore.id.uuidString }
+        let workRow = rows.first { $0["id"]?.stringValue == work.id.uuidString }
+        #expect(exploreRow?["is_explore"]?.boolValue == true)
+        #expect(workRow?["is_explore"]?.boolValue == false)
+    }
 }

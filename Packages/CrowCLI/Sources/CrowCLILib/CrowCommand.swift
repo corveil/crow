@@ -31,6 +31,8 @@ public struct CrowCommand: ParsableCommand {
             SetGoal.self,
             WorkOnIssue.self,
             BatchWorkOnIssues.self,
+            ExploreIssue.self,
+            BatchExploreIssues.self,
             StartReview.self,
             CreateManager.self,
             RefreshTickets.self,

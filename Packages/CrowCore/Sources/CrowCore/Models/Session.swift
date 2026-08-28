@@ -89,6 +89,14 @@ public struct Session: Identifiable, Codable, Sendable {
     // field (CROW-593).
     public var reviewAuthor: String?
 
+    // Whether this work session was launched in explore mode (CROW-1149): same
+    // worktree/session/terminal bootstrap as a build, but seeded with a
+    // read/explain-only prompt — no edits, no PR, no board transition. Kept as
+    // a tag on `.work` rather than a new `SessionKind` so agent resolution,
+    // link matching, and cleanup stay on the existing work path. Defaults to
+    // `false`; legacy sessions decode as not-explore.
+    public var isExplore: Bool
+
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
@@ -166,7 +174,8 @@ public struct Session: Identifiable, Codable, Sendable {
         agentSessionEndedAt: Date? = nil,
         orgGoal: String? = nil,
         ticketPriority: TicketPriority? = nil,
-        reviewAuthor: String? = nil
+        reviewAuthor: String? = nil,
+        isExplore: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -190,6 +199,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.orgGoal = orgGoal
         self.ticketPriority = ticketPriority
         self.reviewAuthor = reviewAuthor
+        self.isExplore = isExplore
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -232,6 +242,7 @@ public struct Session: Identifiable, Codable, Sendable {
         orgGoal = try container.decodeIfPresent(String.self, forKey: .orgGoal)
         ticketPriority = try container.decodeIfPresent(TicketPriority.self, forKey: .ticketPriority)
         reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
+        isExplore = try container.decodeIfPresent(Bool.self, forKey: .isExplore) ?? false
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.

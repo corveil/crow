@@ -31,6 +31,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow backfill`](#crow-backfill) | Reconcile and upload historical on-disk session transcripts |
 | [`crow backfill scan`](#crow-backfill-scan) | List on-disk sessions with reconstructed metadata and upload status |
 | [`crow backfill upload`](#crow-backfill-upload) | Upload selected historical sessions (idempotent) |
+| [`crow batch-explore-issues`](#crow-batch-explore-issues) | Start exploring several tickets in one batch |
 | [`crow batch-work-on-issues`](#crow-batch-work-on-issues) | Start working on several tickets in one batch |
 | [`crow cleanup`](#crow-cleanup) | View or change automatic session cleanup |
 | [`crow cleanup get`](#crow-cleanup-get) | Show the current cleanup settings |
@@ -55,6 +56,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow defaults set`](#crow-defaults-set) | Change workspace and automation defaults |
 | [`crow delete-session`](#crow-delete-session) | Delete a session |
 | [`crow edit-link`](#crow-edit-link) | Edit a link's label, URL, or type in place |
+| [`crow explore-issue`](#crow-explore-issue) | Start exploring a ticket (types /crow-workspace --explore into the Manager) |
 | [`crow gateway`](#crow-gateway) | Manage AI gateways (local-only) |
 | [`crow gateway clear`](#crow-gateway-clear) | Remove a gateway |
 | [`crow gateway get`](#crow-gateway-get) | Show a gateway's base URL and header names |
@@ -273,7 +275,7 @@ View or change the automation settings.
 crow automation <get|set>
 ```
 
-The Settings → Automation toggles: which sessions launch in auto permission mode, whether Crow watches for crow:auto / crow:merge labels, and whether it responds to changes-requested reviews and failed checks on your behalf.
+The Settings → Automation toggles: which sessions launch in auto permission mode, whether Crow watches for crow:auto / crow:explore / crow:merge labels, and whether it responds to changes-requested reviews and failed checks on your behalf.
 
 --jobs-auto-permission-mode is included here so all five permission modes read and write as one group, even though the web UI renders that one under the Jobs tab.
 
@@ -321,7 +323,7 @@ The tab's three board-filter lists (excluded review repos, ignored review labels
 | `--coder-view-auto-permission-mode` | `<coder-view-auto-permission-mode>` | no | Launch new work coder views in auto permission mode (true or false) |
 | `--jobs-auto-permission-mode` | `<jobs-auto-permission-mode>` | no | Run scheduled jobs in auto permission mode (true or false) |
 | `--attribution-trailers` | `<attribution-trailers>` | no | Add a Crow-Session trailer to commits in new worktrees (true or false) |
-| `--auto-create-watcher-enabled` | `<auto-create-watcher-enabled>` | no | Auto-launch a workspace for crow:auto labeled issues (true or false) |
+| `--auto-create-watcher-enabled` | `<auto-create-watcher-enabled>` | no | Auto-launch a workspace for crow:auto / crow:explore labeled issues (true or false) |
 | `--auto-merge-watcher-enabled` | `<auto-merge-watcher-enabled>` | no | Auto-merge Crow-authored PRs labeled crow:merge (true or false) |
 | `--respond-to-changes-requested` | `<respond-to-changes-requested>` | no | Type a fix-it instruction into the session on a changes-requested review (true or false) |
 | `--respond-to-failed-checks` | `<respond-to-failed-checks>` | no | Type a fix-it instruction into the session when CI checks fail (true or false) |
@@ -439,6 +441,23 @@ Choose sessions with repeated --session <uid> (UIDs come from `crow backfill sca
 | `--session` | `<session>` _(repeatable)_ | no | A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence. |
 | `--all-high-confidence` | — | no | Upload every not-yet-uploaded high-confidence session in this workspace |
 | `--all` | — | no | Upload every not-yet-uploaded session in this workspace |
+
+---
+
+## `crow batch-explore-issues`
+
+Start exploring several tickets in one batch.
+
+```
+crow batch-explore-issues [--url <url> ...] [--urls-file <urls-file>]
+```
+
+URLs are sent in order: every --url first, then the lines of --urls-file. Malformed URLs are not rejected locally — the daemon drops them into the `rejected` array and starts the rest, so one bad ticket can't block the batch.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--url` | `<url>` _(repeatable)_ | no | Ticket / issue URL (repeatable) |
+| `--urls-file` | `<urls-file>` | no | Read newline-delimited URLs from a file; '-' reads stdin |
 
 ---
 
@@ -853,6 +872,20 @@ crow edit-link --session <session> [--id <id>] [--url <url>] [--label <label>] [
 | `--label` | `<label>` | no | New label |
 | `--new-url` | `<new-url>` | no | New URL |
 | `--type` | `<type>` | no | New link type: ticket, pr, repo, custom |
+
+---
+
+## `crow explore-issue`
+
+Start exploring a ticket (types /crow-workspace --explore into the Manager).
+
+```
+crow explore-issue --url <url>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--url` | `<url>` | yes | Ticket / issue URL |
 
 ---
 
@@ -1478,7 +1511,7 @@ Revoke by --id (from `crow mcp token list`), or by --name when only one token ca
 Create a new session.
 
 ```
-crow new-session --name <name> [--kind <kind>] [--agent <agent>]
+crow new-session --name <name> [--kind <kind>] [--agent <agent>] [--explore]
 ```
 
 | Flag | Value | Required | Description |
@@ -1486,6 +1519,7 @@ crow new-session --name <name> [--kind <kind>] [--agent <agent>]
 | `--name` | `<name>` | yes | Session name |
 | `--kind` | `<kind>` | no | Session kind: work (default) or manager |
 | `--agent` | `<agent>` | no | Agent kind (e.g. claude-code). Defaults to the configured default agent. |
+| `--explore` | — | no | Mark this as an exploration session (read/explain only; no build) |
 
 ---
 

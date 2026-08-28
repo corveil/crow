@@ -238,9 +238,9 @@ This will:
 
 - Pipeline view showing issues by project board status
 - Click a status to filter the list
-- "Start Working" button creates a workspace directly from an issue
-- Issues linked to active sessions show a navigation button
-- Scriptable from the CLI: `crow list-tickets`, `crow work-on-issue`, `crow batch-work-on-issues`, `crow start-review`, and `crow quick-action` drive the same actions as the board buttons (see the [CLI Reference](docs/cli-reference.md))
+- "Start Working" / "Start Exploring" split-button creates a workspace from an issue (explore is read/explain only)
+- Issues linked to active sessions show a navigation button; explore sessions carry an Exploring badge
+- Scriptable from the CLI: `crow list-tickets`, `crow work-on-issue`, `crow explore-issue`, `crow batch-work-on-issues`, `crow start-review`, and `crow quick-action` drive the same actions as the board buttons (see the [CLI Reference](docs/cli-reference.md))
 
 ### Jira tasks + GitHub code (cross-backend workspaces)
 
@@ -291,7 +291,7 @@ Backend (GitHub code ⇒ GitHub issues, as before).
 
 Crow can drive a ticket from assignment to merged with minimal manual steps. Toggles live under **Settings → Automation**; full walkthrough in [docs/automation.md](docs/automation.md).
 
-- **Auto-create workspace** when an issue assigned to you is labeled `crow:auto`
+- **Auto-create workspace** when an issue assigned to you is labeled `crow:auto` (or an exploration session when labeled `crow:explore`)
 - **Auto-suggest opening a PR** if a session completes with no PR linked
 - **Auto-start review sessions** for opted-in workspaces when a PR becomes reviewable
 - **Auto-respond** to changes-requested reviews and failed CI checks (off by default)

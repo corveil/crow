@@ -60,7 +60,7 @@
     reviewRequested: 'Someone requested your review on a PR.',
     changesRequested: 'A reviewer requested changes on your PR.',
     checksFailing: 'CI checks started failing on your PR.',
-    autoWorkspaceCreated: 'Crow auto-created a workspace for a crow:auto-labeled issue.',
+    autoWorkspaceCreated: 'Crow auto-created a workspace for a crow:auto / crow:explore labeled issue.',
     autoMergeEnabled: 'Crow enabled auto-merge on a crow:merge-labeled PR.',
     autoMergeBlocked: "Crow gave up auto-merging a crow:merge PR — e.g. the repo has GitHub's \"Allow auto-merge\" off.",
     autoRebasePushed: 'Crow rebased a PR branch onto its base and force-pushed.',
@@ -879,8 +879,8 @@
       'Writes a per-worktree settings.local.json adding a Crow-Session: <uuid> trailer. New worktrees only.'));
 
     body.appendChild(group('Auto-launch workspaces'));
-    body.appendChild(toggleField('Auto-launch workspaces for crow:auto labeled issues', cfg, 'autoCreateWatcherEnabled',
-      'The Manager detects assigned issues tagged crow:auto and runs /crow-workspace automatically. Off by default.'));
+    body.appendChild(toggleField('Auto-launch workspaces for crow:auto / crow:explore labeled issues', cfg, 'autoCreateWatcherEnabled',
+      'The Manager detects assigned issues tagged crow:auto or crow:explore and runs /crow-workspace (or --explore) automatically. Off by default.'));
 
     body.appendChild(group('Auto-merge'));
     body.appendChild(toggleField('Enable crow:merge auto-merge for Crow-authored PRs', cfg, 'autoMergeWatcherEnabled',

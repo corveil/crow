@@ -873,15 +873,20 @@ public enum CrowDaemon {
 
         // crow:auto — run /crow-workspace on the Manager for a newly-labeled
         // assigned issue (the tracker strips the label after, so once-only).
-        tracker.onAutoCreateRequest = { issue in
+        tracker.onAutoCreateRequest = { issue, kind in
             guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
                 log("crow:auto: Manager terminal not ready; dropped \(issue.url)")
                 return
             }
-            TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issue.url)\n")
+            TerminalRouter.send(
+                managerTerminal,
+                text: workspaceLaunchCommand(urls: [issue.url], explore: kind == .explore))
             // No session exists yet — key the notification on the issue URL.
+            let exploring = kind == .explore
             notify(.autoWorkspaceCreated, key: issue.url,
-                   title: "Auto-creating workspace — \(issue.repo)",
+                   title: exploring
+                    ? "Auto-creating exploration — \(issue.repo)"
+                    : "Auto-creating workspace — \(issue.repo)",
                    body: "#\(issue.number): \(issue.title)")
         }
 

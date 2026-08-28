@@ -740,6 +740,23 @@ body.update-banner-visible #back-to-sidebar {
 .card-foot .card-actions .action-btn { margin-left: 0; }
 .open-link-btn { text-decoration: none; }
 
+/* CROW-1149: Start Working / Start Exploring split button. */
+.split-btn { display: inline-flex; align-items: stretch; }
+.split-btn .split-btn-main {
+  border-top-right-radius: 0; border-bottom-right-radius: 0;
+}
+.split-btn .split-btn-chevron {
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  border-left-color: rgba(16, 36, 15, 0.28);
+  padding-left: 8px; padding-right: 8px;
+}
+.split-btn .split-btn-chevron:hover { filter: brightness(1.08); }
+.explore-badge {
+  padding: 2px 9px; border-radius: 10px; font-size: 10px; font-weight: 600;
+  color: var(--blue); border: 1px solid rgba(10, 132, 255, 0.4);
+  background: var(--bg-card); white-space: nowrap;
+}
+
 /* #751 inline PR state + CI checks badges (JS sets color + border-color). */
 .pr-state-badge, .checks-badge {
   padding: 2px 9px; border-radius: 10px; font-size: 10px; font-weight: 600;

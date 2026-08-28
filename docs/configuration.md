@@ -331,7 +331,7 @@ The twelve booleans behind **Settings → Automation**, editable there or from t
 | `coderViewAutoPermissionMode`                | `false` | Newly launched work coder views                                   |
 | `jobsAutoPermissionMode`                     | `true`  | The next scheduled job run (Settings renders it on the Jobs tab) |
 | `attributionTrailers`                        | `true`  | Newly created worktrees (installs the commit-trailer hook)       |
-| `autoCreateWatcherEnabled`                   | `false` | The `crow:auto` issue watcher                                     |
+| `autoCreateWatcherEnabled`                   | `false` | The `crow:auto` / `crow:explore` issue watcher                    |
 | `autoMergeWatcherEnabled`                    | `false` | The `crow:merge` PR watcher                                       |
 | `autoRespond.respondToChangesRequested`      | `true`  | Changes-requested reviews                                         |
 | `autoRespond.respondToFailedChecks`          | `false` | Failed CI checks                                                  |

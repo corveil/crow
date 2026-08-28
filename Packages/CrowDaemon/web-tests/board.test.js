@@ -125,6 +125,38 @@ check('#900 (old payload) degrades: no badges/byline/desc', (() => {
 })());
 check('Go to Session on linked card (#42)', /Go to Session/.test(board.textContent));
 check('card-actions wraps buttons on the right', q('.card-actions').length === 3);
+check('unlinked cards use a Start Working split-button', q('.split-btn').length === 2);
+check('split primary reads Start Working', [...q('.split-btn-main')].every((b) => b.textContent === 'Start Working'));
+check('no Exploring badge without linked_session_is_explore', q('.explore-badge').length === 0);
+
+console.log('\nStart Exploring split (CROW-1149):');
+payload.issues[1].linked_session_is_explore = true;
+render();
+check('Exploring badge on linked explore session', [...q('.explore-badge')].some((b) => b.textContent === 'Exploring'));
+check('Go to Session still shown on explore-linked card', /Go to Session/.test(board.textContent));
+payload.issues[1].linked_session_is_explore = false;
+render();
+const chev = q('.split-btn-chevron')[0];
+chev.onclick({ stopPropagation() {} });
+check('chevron opens a Start Exploring menu', [...q('.ctx-item')].some((n) => n.textContent === 'Start Exploring'));
+check('menu also offers Start Working', [...q('.ctx-item')].some((n) => n.textContent === 'Start Working'));
+(() => {
+  let sent = null;
+  const prevRpc = T.rpc;
+  T.rpc = (method, params) => { sent = { method, params }; return new Promise(() => {}); };
+  const exploreItem = [...q('.ctx-item')].find((n) => n.textContent === 'Start Exploring');
+  exploreItem.onclick({ stopPropagation() {} });
+  check('explore from menu shows Starting on the chosen row', exploreItem.textContent === 'Starting…');
+  check('explore from menu leaves the Start Working primary labeled',
+    [...q('.split-btn-main')].some((b) => b.textContent === 'Start Working'));
+  check('explore RPC fires with explore: true',
+    sent && sent.method === 'work-on-issue' && sent.params && sent.params.explore === true);
+  const split = q('.split-btn')[0];
+  check('split is disabled while explore starts',
+    split && [...split.querySelectorAll('button')].every((b) => b.disabled));
+  T.rpc = prevRpc;
+})();
+[...q('.ctx-menu')].forEach((n) => n.remove());
 
 console.log('\nSort by title (A–Z):');
 T.ticketSort = 'title_asc'; render();

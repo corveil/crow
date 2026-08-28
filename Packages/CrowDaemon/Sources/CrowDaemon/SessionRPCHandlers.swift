@@ -40,13 +40,15 @@ func makeSessionHandlers(
             }
             let requestedAgentKind = params["agent_kind"]?.stringValue
                 .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
+            let isExplore = params["explore"]?.boolValue == true
             return await MainActor.run {
                 // Registry gate (CROW-593; #834), matching the app's new-session
                 // surface: honor the requested kind only if registered, else the
                 // configured default — no unregistered kind persists here either.
                 let agentKind = AgentRegistry.shared.registeredKind(requestedAgentKind)
                     ?? appState.agentKind(for: .work)
-                let session = Session(name: name, kind: .work, agentKind: agentKind)
+                let session = Session(name: name, kind: .work, agentKind: agentKind,
+                                      isExplore: isExplore)
                 appState.sessions.append(session)
                 store.mutate { $0.sessions.append(session) }
                 return [
@@ -93,6 +95,10 @@ func makeSessionHandlers(
                         // client was dead payload. A future consumer (scorecard
                         // / session strip) can add them back alongside its use.
                         "org_goal": session.orgGoal.map { .string($0) } ?? .null,
+                        // Explore-mode tag (CROW-1149) — drives the board/sidebar
+                        // "Exploring" badge so a bootstrap-only session isn't
+                        // mistaken for a build. Additive; older clients ignore it.
+                        "is_explore": .bool(session.isExplore),
                         // Project-board "In Review" permission gate — mirrors the
                         // retired native `canSetProjectStatus(for:)` (GitHub/Jira
                         // yes, GitLab no). Gates the web "In Review" button (CROW-749).
