@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // Sidebar grouping/dedup regression tests (CROW-877). Runs the REAL app.js in a
 // jsdom VM and drives `groupSessions` directly — the pure section-assignment
@@ -10,8 +11,7 @@ const epilogue = `
   groupSessions(list){ return groupSessions(list); },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body>

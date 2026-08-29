@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-1023: the alt-buffer detection latches server-side only AFTER an
 // alt-buffer agent launches and enters the alt screen — several seconds after
@@ -25,7 +26,6 @@ const epilogue = `
   ALT_LATCH_POLL_MAX,
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
 
 const dom = new JSDOM(
   `<!doctype html><html><body><div id="terminal"></div></body></html>`,
@@ -53,7 +53,7 @@ const realGet = window.document.getElementById.bind(window.document);
 window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
 
 const ctx = dom.getInternalVMContext();
-try { vm.runInContext(fs.readFileSync(APP_JS, 'utf8') + epilogue, ctx, { filename: 'app.js' }); }
+try { vm.runInContext(loadClientSource() + epilogue, ctx, { filename: 'app.js' }); }
 catch (e) { console.log('[load warn]', e.message); }
 const T = ctx.__t;
 if (!T) { console.log('FATAL: epilogue did not run (app.js threw before it)'); process.exit(2); }

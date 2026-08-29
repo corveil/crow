@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import CrowDaemon
 
-/// Drift guard for the notification center served out of `Resources/web/app.js`
-/// (CROW-909). There's no JS test runner in this repo, so — like
+/// Drift guard for the notification center served out of `Resources/web/notifications.js`
+/// and `sidebar.js` (CROW-909 / CROW-1155). There's no JS test runner in this repo, so — like
 /// `WebTerminalAssetTests` — these pin the non-obvious invariants of the feature
-/// against the `app.js` source a reviewer actually edits. The bugs each one
+/// against the classic client source a reviewer actually edits. The bugs each one
 /// guards were all live at first review (PR #910): a detached-anchor mispositon,
 /// a poisoned-cache render wedge, a multi-tab last-writer-wins clobber, and a
 /// dedup gap.
@@ -26,6 +26,16 @@ import Testing
         }
         let url = try #require(found, "could not locate Resources/web/\(name)")
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Every classic client script in `index.html` order (CROW-1155). Function
+    /// greps follow the split; a collision across files is the same silent-win
+    /// bug as two `function foo(` in the old monolith.
+    private static func webClientJS(includingSettings: Bool = false) throws -> String {
+        let names = includingSettings
+            ? StaticAssets.uiJavaScriptFiles
+            : StaticAssets.uiJavaScriptFiles.filter { $0 != "settings.js" }
+        return try names.map { try webAsset($0) }.joined(separator: "\n")
     }
 
     /// The body of a top-level `function <name>(` … `\n}` block, so an assertion
@@ -62,7 +72,7 @@ import Testing
     /// — the one chokepoint the whole feature hangs off. If this call is dropped,
     /// nothing is ever recorded and the bell stays permanently empty.
     @Test func emitEventRecordsToTheCenter() throws {
-        let body = try Self.functionBody("emitEvent", in: Self.webAsset("app.js"))
+        let body = try Self.functionBody("emitEvent", in: Self.webClientJS())
         #expect(
             body.contains("recordNotification(event, key, detail)"),
             "emitEvent must append to the history, not just play the sound/banner")
@@ -75,7 +85,7 @@ import Testing
     /// viewport corner instead of under the bell — and that path fires exactly
     /// when the badge is showing, i.e. the normal reason to open it.
     @Test func panelMeasuresAnchorBeforeTheSeenMarkingRepaint() throws {
-        let body = String(try Self.functionBody("openNotificationPanel", in: Self.webAsset("app.js")))
+        let body = String(try Self.functionBody("openNotificationPanel", in: Self.webClientJS()))
         let measure = try #require(body.range(of: "getBoundingClientRect("), "panel must measure the anchor")
         let repaint = try #require(body.range(of: "renderSidebar()"), "panel must repaint after marking seen")
         #expect(
@@ -89,7 +99,7 @@ import Testing
     /// sidebarSignature → every renderSidebar, and the sidebar stays dead until
     /// the key is cleared by hand.
     @Test func restoreFiltersPoisonedEntries() throws {
-        let body = try Self.functionBody("restoreNotifHistory", in: Self.webAsset("app.js"))
+        let body = try Self.functionBody("restoreNotifHistory", in: Self.webClientJS())
         #expect(
             body.contains("typeof e === 'object'"),
             "restore must filter to plain objects so a poisoned array can't wedge the render")
@@ -118,7 +128,7 @@ import Testing
     /// concurrent tab), and a `storage` listener must re-sync this tab. Without
     /// both, tabs silently drop each other's entries and the badge re-inflates.
     @Test func recordReReadsAndTabsStayInSync() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         let body = try Self.functionBody("recordNotification", in: source)
         #expect(
             body.contains("restoreNotifHistory();"),
@@ -132,7 +142,7 @@ import Testing
     /// window — a flapping poll or repeated server push produced duplicate popups
     /// there, and would produce duplicate rows here.
     @Test func recordDedupsWithinTwoSeconds() throws {
-        let body = try Self.functionBody("recordNotification", in: Self.webAsset("app.js"))
+        let body = try Self.functionBody("recordNotification", in: Self.webClientJS())
         #expect(
             body.contains("_lastRecordAt[k]") && body.contains("< 2000"),
             "record must carry the same 2s per-(key,event) dedup as the sibling channels")
@@ -142,7 +152,7 @@ import Testing
     /// `sidebarSignature` or an appended notification never repaints the badge
     /// (the signature guard would short-circuit the render).
     @Test func unreadCountIsInTheSidebarSignature() throws {
-        let body = try Self.functionBody("sidebarSignature", in: Self.webAsset("app.js"))
+        let body = try Self.functionBody("sidebarSignature", in: Self.webClientJS())
         #expect(
             body.contains("notifUnreadCount()"),
             "sidebarSignature must include the unread count so the badge repaints")
@@ -152,7 +162,7 @@ import Testing
     /// `url` after an http(s) scheme test, so `javascript:`/`data:` keys can never
     /// reach window.open, and the open severs the opener. Both must hold.
     @Test func externalOpenIsSchemeGuardedAndOpenerSevered() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         let classify = try Self.functionBody("classifyNotification", in: source)
         #expect(
             classify.contains(#"/^https?:\/\//.test(key)"#),
@@ -171,7 +181,7 @@ import Testing
     /// from being an XSS vector.
     @Test func panelBuildsRowsWithoutInnerHTML() throws {
         let body = Self.stripComments(String(
-            try Self.functionBody("openNotificationPanel", in: Self.webAsset("app.js"))))
+            try Self.functionBody("openNotificationPanel", in: Self.webClientJS())))
         #expect(
             !body.contains("innerHTML"),
             "the panel must not use innerHTML — user/server strings go through el()'s textContent")
@@ -184,7 +194,7 @@ import Testing
     /// menu opener must arm through the shared helper, and closeContextMenu must
     /// remove the handle — so no site is left on the leaky pattern.
     @Test func outsideClickCloserIsRemovableNotOnce() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         #expect(
             !source.contains("closeContextMenu, { once: true }"),
             "no menu may arm the outside-click close as a leaky { once: true } listener")
@@ -203,7 +213,7 @@ import Testing
     /// shared browser can open the bell and read the previous user's workspace.
     /// One helper drops both keys; both the logout and cookie-death paths call it.
     @Test func authBoundariesPurgeTheNotificationHistory() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         let helper = try Self.functionBody("purgeSharedBrowserCaches", in: source)
         #expect(
             helper.contains("clearSidebarCache()") && helper.contains("removeItem(NOTIF_HISTORY_KEY)"),
@@ -225,7 +235,7 @@ import Testing
     /// rule stay bypassed (the log isn't an interruption); this only pins the two
     /// master gates.
     @Test func recordHonorsGlobalMuteAndThePerEventToggle() throws {
-        let body = try Self.functionBody("recordNotification", in: Self.webAsset("app.js"))
+        let body = try Self.functionBody("recordNotification", in: Self.webClientJS())
         #expect(body.contains("N.globalMute"), "record must respect global mute")
         #expect(
             body.contains("cfg.enabled === false"),
@@ -238,7 +248,7 @@ import Testing
     /// directly), and the scheduler must use a microtask so onServerNotify still
     /// paints within the turn.
     @Test func recordCoalescesTheSidebarRepaint() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         let body = try Self.functionBody("recordNotification", in: source)
         #expect(
             body.contains("scheduleNotifRepaint()"),
@@ -260,7 +270,7 @@ import Testing
     /// function names. (A per-function assertion can't catch it — `functionBody`
     /// matches the first declaration, i.e. the dead one.)
     @Test func noDuplicateTopLevelFunctionNames() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS(includingSettings: true)
         var counts: [String: Int] = [:]
         for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {
             // Top-level declarations start at column 0 — nested/method functions and
@@ -279,7 +289,7 @@ import Testing
         let dups = counts.filter { $0.value > 1 }.keys.sorted()
         #expect(
             dups.isEmpty,
-            "duplicate top-level function name(s) in app.js — in a classic <script> the later declaration silently wins for every call: \(dups)")
+            "duplicate top-level function name(s) across classic client scripts — in a classic <script> the later declaration silently wins for every call: \(dups)")
     }
 
     /// Third-round Yellow 2: restoreNotifHistory must treat a MISSING key as
@@ -289,7 +299,7 @@ import Testing
     /// re-creating the key logout just dropped. The `notifRelTime` rename must have
     /// landed too (no lingering epoch-ms call to the ISO `relTime`).
     @Test func restoreTreatsMissingKeyAsEmptyAndTimestampUsesTheRenamedHelper() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         #expect(
             try Self.functionBody("restoreNotifHistory", in: source)
                 .contains("if (!raw) { notifHistory = []; return; }"),

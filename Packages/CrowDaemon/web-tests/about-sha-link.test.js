@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { WEB, loadClientSource } = require('./load-client');
 
 // CROW-1030 behaviour test: the build SHA in Settings → About is a link to that
 // commit on corveil/crow, and an unlinkable stamp stays inert text.
@@ -15,8 +16,6 @@ const { JSDOM } = require('jsdom');
 //
 // Loader shape follows router.test.js / version-banner.test.js: run the real
 // app.js + settings.js under jsdom against mocks.
-const WEB = __dirname + '/../Sources/CrowDaemon/Resources/web/';
-const APP_JS = WEB + 'app.js';
 const SETTINGS_JS = WEB + 'settings.js';
 
 const epilogue = `
@@ -69,7 +68,7 @@ function load(version) {
   window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
 
   const ctx = dom.getInternalVMContext();
-  const src = fs.readFileSync(APP_JS, 'utf8') + epilogue + fs.readFileSync(SETTINGS_JS, 'utf8');
+  const src = loadClientSource() + epilogue + fs.readFileSync(SETTINGS_JS, 'utf8');
   try {
     vm.runInContext(src, ctx, { filename: 'app+settings.js' });
   } catch (e) {

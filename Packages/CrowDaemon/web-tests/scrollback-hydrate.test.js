@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-934: the shell-scrollback re-sync. tmux collapses pane redraws for a slow
 // client (the browser), so the local xterm buffer holds far fewer lines than the
@@ -31,8 +32,7 @@ const epilogue = `
   set lastHydrateAt(v){ lastHydrateAt = v; },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body><div id="terminal"></div></body></html>`,

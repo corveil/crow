@@ -2,7 +2,7 @@
 #
 # Run the `crowd` daemon for local development, serving the *frozen* web UI baked
 # into crowd's resource bundle at build time — the same asset source as `make
-# run`'s sidecar. Web UI edits (index.html/app.css/app.js) require a rebuild to
+# run`'s sidecar. Web UI edits (`index.html`/`app.css`/the classic client scripts) require a rebuild to
 # be picked up; there is no live-from-source refresh loop.
 #
 # By default this builds `crowd` once and runs a stable daemon that a browser,

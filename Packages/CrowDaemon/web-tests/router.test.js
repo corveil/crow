@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-936 behaviour test: hash-based URL routing. Runs the REAL app.js under
 // jsdom and drives the router against mocks — same loader shape as
@@ -62,8 +63,7 @@ const epilogue = `
 };
 `;
 
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 // Mirrors the containers app.js touches in index.html — #detail-empty matters
 // here because the not-found state writes into .empty-msg / .empty-sub.
@@ -520,9 +520,8 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     eq('ROUTE_SETTINGS_TABS matches settings.js TABS', T.ROUTE_SETTINGS_TABS(), tabs);
 
     // Same for boards: selectedBoard's declared union is the source of truth.
-    const appSrc = fs.readFileSync(
-      __dirname + '/../Sources/CrowDaemon/Resources/web/app.js', 'utf8');
-    const decl = appSrc.match(/let selectedBoard = null; \/\/ ([^\n]+)/);
+    const clientSrc = loadClientSource();
+    const decl = clientSrc.match(/let selectedBoard = null; \/\/ ([^\n]+)/);
     const boards = decl
       ? decl[1].split('|').map((s) => s.trim().replace(/'/g, '')).filter((s) => s !== 'null')
       : [];

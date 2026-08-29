@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { WEB, loadClientSource } = require('./load-client');
 
 // CROW-1124 behaviour test: picking a Corveil org for a WORKSPACE auto-enables its
 // session-log upload, and that opt-in survives Cancel + a later Save. Runs the real
@@ -15,8 +16,6 @@ const { JSDOM } = require('jsdom');
 // clobbers the opt-in the pick just turned on. It also pins that the client honors the
 // POST's `log_sync_enabled` (single source of truth) rather than inferring enablement,
 // so a server that declines to enable is respected.
-const WEB = __dirname + '/../Sources/CrowDaemon/Resources/web/';
-const APP_JS = WEB + 'app.js';
 const SETTINGS_JS = WEB + 'settings.js';
 
 const epilogue = `
@@ -106,7 +105,7 @@ function load({ config, logSyncEnabled }) {
   window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
 
   const ctx = dom.getInternalVMContext();
-  const src = fs.readFileSync(APP_JS, 'utf8') + epilogue + fs.readFileSync(SETTINGS_JS, 'utf8');
+  const src = loadClientSource() + epilogue + fs.readFileSync(SETTINGS_JS, 'utf8');
   try {
     vm.runInContext(src, ctx, { filename: 'app+settings.js' });
   } catch (e) {

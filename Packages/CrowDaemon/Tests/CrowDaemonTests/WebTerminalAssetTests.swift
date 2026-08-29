@@ -5,7 +5,7 @@ import Testing
 /// Drift guard for the terminal surfaces served out of `Resources/web`.
 ///
 /// There are two xterm.js setups in that directory — the app's inline terminal
-/// (`app.js` → `ensureTerminal`) and the standalone single-terminal page
+/// (`terminal.js` → `ensureTerminal`) and the standalone single-terminal page
 /// (`terminal.html`). #776: the inline one shipped WITHOUT the mouse-mode
 /// swallow that `terminal.html` has carried since CROW-581, so the agent TUI's
 /// mouse tracking stayed live in the app and every mouse move yanked a
@@ -31,6 +31,20 @@ import Testing
         }
         let url = try #require(found, "could not locate Resources/web/\(name)")
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Every classic client script in `index.html` order (CROW-1155). The old
+    /// monolith's function greps follow the split this way.
+    private static func webClientJS() throws -> String {
+        try StaticAssets.uiJavaScriptFiles
+            .filter { $0 != "settings.js" }
+            .map { try webAsset($0) }
+            .joined(separator: "\n")
+    }
+
+    /// `app.js` in a parameterized surface pair means the whole classic client.
+    private static func surfaceSource(_ asset: String) throws -> String {
+        asset == "app.js" ? try webClientJS() : try webAsset(asset)
     }
 
     /// The single line declaring the swallowed-mode set. Anchoring the per-mode
@@ -96,7 +110,7 @@ import Testing
     /// the mode reachable.
     @Test(arguments: ["app.js", "terminal.html"])
     func swallowsMouseTrackingModes(asset: String) throws {
-        let source = try Self.webAsset(asset)
+        let source = try Self.surfaceSource(asset)
         #expect(
             source.contains("MOUSE_MODES"),
             "\(asset) must keep the mouse-mode swallow (#776)")
@@ -126,7 +140,7 @@ import Testing
     /// Asserted as the positive shape rather than the absence of a string, so
     /// reintroducing a bail with different wording still fails (review).
     @Test func wheelHandlerOwnsTheEventAndRoutesBySurface() throws {
-        let body = try Self.functionBody("enableWheelScroll", in: Self.webAsset("app.js"))
+        let body = try Self.functionBody("enableWheelScroll", in: Self.webClientJS())
         #expect(
             body.contains("appOwnsScroll()"),
             "the wheel must route by surface ownership, not unconditionally")
@@ -150,7 +164,7 @@ import Testing
     /// the alternate buffer per-window and a buffer-type-only check would be
     /// permanently false (the trap the #822 prototype fell into).
     @Test func scrollOwnershipConsultsTheDaemonSuppliedSurfaceKind() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         let body = try Self.functionBody("appOwnsScroll", in: source)
         // The daemon flag must be consulted FIRST and must be able to answer
         // `false`. There is one shared xterm across tabs, and agent surfaces now
@@ -206,7 +220,7 @@ import Testing
     /// Asserted on source shape because driving `refreshTerminals` needs a live
     /// RPC socket; the jsdom suite covers the routing this feeds.
     @Test func refreshTerminalsRebindsTheActiveTerminalToTheFreshRow() throws {
-        let body = try Self.functionBody("refreshTerminals", in: Self.webAsset("app.js"))
+        let body = try Self.functionBody("refreshTerminals", in: Self.webClientJS())
         #expect(
             body.contains("pendingTerminalId && terminals.find(")
                 && body.contains("t.id === (activeTerminal && activeTerminal.id)"),
@@ -226,7 +240,7 @@ import Testing
     /// still self-heals. The jsdom suite drives the branch; this pins the
     /// routing so a later edit can't silently send agents back through reload.
     @Test func attachWindowSwitchesAgentSurfacesInPlace() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         let attach = try Self.functionBody("attachWindow", in: source)
         #expect(
             attach.contains("activeSurfaceIsAgent()") && attach.contains("switchAgentWindow("),
@@ -255,7 +269,7 @@ import Testing
     /// agents (`verifyScrollbackAfterAttach`) because that path resizes first.
     /// Scrollback stays at 50k — do not re-introduce the #1008/#1009 cap.
     @Test func inlineAgentSkipsMidSessionHydrateWithoutCappingScrollback() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         let capture = Self.stripComments(String(try Self.functionBody("fireScrollbackCapture", in: source)))
         #expect(
             capture.contains("if (activeSurfaceIsAgent()) return;"),
@@ -284,7 +298,7 @@ import Testing
     /// select text in an agent window — and xterm.js defaults it to false, so it
     /// must be set explicitly or the ⌥-drag escape hatch silently does nothing.
     @Test func mouseSwallowIsConditionalWithASelectionEscapeHatch() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         #expect(
             try Self.functionBody("swallowMouseMode", in: source).contains("activeSurfaceIsAgent()"),
             "the swallow must be conditional on the surface kind")
@@ -311,7 +325,7 @@ import Testing
     /// Asserted on both surfaces because they carry separate implementations of
     /// the same handler (the drift this suite exists to prevent).
     @Test func keyHandlersLeavePasteToTheBrowserAndCancelWhatTheyDoHandle() throws {
-        let appJS = try Self.webAsset("app.js")
+        let appJS = try Self.webClientJS()
         let body = Self.stripComments(String(try Self.functionBody("handleTerminalKey", in: appJS)))
         #expect(
             !body.contains("pasteIntoTerminal"),
@@ -363,7 +377,7 @@ import Testing
     /// `e.key === 'Enter'`, so the loose form passes on the unfixed file.
     @Test(arguments: ["app.js", "terminal.html"])
     func modifiedEnterIsDistinguishableFromPlainEnter(asset: String) throws {
-        let code = Self.stripComments(try Self.webAsset(asset))
+        let code = Self.stripComments(try Self.surfaceSource(asset))
         #expect(
             code.contains(#"sendToPTY('\x1b[13;2u')"#),
             "\(asset) must SEND CSI-u for Shift+Enter, not a bare \\r (CROW-916)")
@@ -391,7 +405,7 @@ import Testing
     /// clipped-rows half of the bug, silently.
     @Test(arguments: ["app.js", "terminal.html"])
     func terminalSurfacesRefitAgainstTheVisualViewport(asset: String) throws {
-        let code = Self.stripComments(try Self.webAsset(asset))
+        let code = Self.stripComments(try Self.surfaceSource(asset))
         #expect(
             code.contains("CrowViewportAddon.CrowViewportAddon("),
             "\(asset) must construct the visual-viewport addon (CROW-988)")
@@ -451,7 +465,7 @@ import Testing
     /// later `*after*`, swallowing the region this registration lives in — a
     /// hazard only *negative* guards need to bear.
     @Test func bothTerminalSurfacesOpenTheirMenuOnLongPress() throws {
-        let appJS = try Self.webAsset("app.js")
+        let appJS = try Self.webClientJS()
         #expect(
             appJS.contains("wrap.addEventListener('contextmenu', showTerminalMenu)"),
             "app.js must keep the desktop right-click path on #terminal-wrap")
@@ -477,7 +491,7 @@ import Testing
     /// dismisses the menu it just opened.
     @Test(arguments: ["app.js", "terminal.html"])
     func longPressIsStillSingleFingeredAndHeld(asset: String) throws {
-        let code = try Self.webAsset(asset)
+        let code = try Self.surfaceSource(asset)
         #expect(
             code.contains("}, 500)"),
             "\(asset)'s long-press must be held, not instant")
@@ -522,7 +536,7 @@ import Testing
     /// where the API is missing — and Cmd+V still pastes, natively.
     @Test(arguments: ["app.js", "terminal.html"])
     func clipboardWritesAlwaysDeliverAndReadsAreGuarded(asset: String) throws {
-        let source = try Self.webAsset(asset)
+        let source = try Self.surfaceSource(asset)
         #expect(
             source.contains("navigator.clipboard && navigator.clipboard.writeText"),
             "\(asset) must feature-detect writeText before using it")
@@ -542,7 +556,7 @@ import Testing
     /// scanning state — the load-bearing half of the fix, since the allowlist is
     /// never cached and would otherwise flash "empty" during the CROW-593 scan.
     @Test func emptyBoardsDropTheStaleDesktopAppHint() throws {
-        let source = try Self.webAsset("app.js")
+        let source = try Self.webClientJS()
         #expect(
             !Self.stripComments(source).contains("desktop app to be running"),
             "the stale 'requires the Crow desktop app' board hint must stay deleted (CROW-907)")
@@ -573,7 +587,7 @@ import Testing
     /// and `.action-btn` ever take `nav-selecting`. (Supersedes CROW-913's
     /// nav-row-vs-tools-stack pinning, which this PR reverses.)
     @Test func selectToggleLivesInIconColumnNotTheLeftStack() throws {
-        let js = try Self.webAsset("app.js")
+        let js = try Self.webClientJS()
         // Anchor on the behaviour (selectionMode), not the icon name: a Select
         // toggle re-added to the left stack with any glyph should still fail.
         #expect(
@@ -625,7 +639,7 @@ import Testing
         // Pin the append, not the `el('button', 'nav-plus', …)` construction: the
         // regression the review names is the "+" being built but not rendered, so a
         // `contains("'nav-plus'")` would miss a dropped appendChild (also mutation-checked).
-        let js = try Self.webAsset("app.js")
+        let js = try Self.webClientJS()
         let iconCol = try Self.functionBody("sidebarIconColumn", in: js)
         #expect(
             iconCol.contains("col.appendChild(plus)"),
@@ -721,7 +735,7 @@ import Testing
         // raw-file `contains` would false-pass off the prose once a declaration
         // is deleted (mutation-checked, like the CROW-924 pins above).
         let css = Self.stripComments(try Self.webAsset("app.css"))
-        let appJS = Self.stripComments(try Self.webAsset("app.js"))
+        let appJS = Self.stripComments(try Self.webClientJS())
 
         // 1. Sidebar and board are back to scrolling without a gutter. Scoped to
         // the rule body so this fails if the hide migrates to some other pane

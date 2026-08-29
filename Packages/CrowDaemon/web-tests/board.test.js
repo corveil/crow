@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // Expose the module's const/let state (not vm global props) via an epilogue
 // evaluated in app.js's own top-level lexical scope.
@@ -38,8 +39,7 @@ globalThis.__t.setEmitEventSpy = (function(){
   return function(fn){ emitEvent = fn || real; };
 })();
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body>

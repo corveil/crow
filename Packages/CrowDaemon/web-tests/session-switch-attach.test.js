@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-1035: switching to a Claude / Cursor session must NOT take the #673
 // full reload (new PTY at 24×80 → SIGWINCH → capture-pane replay). That path
@@ -30,7 +31,6 @@ const epilogue = `
   TERM_BUFFER_CLEAR,
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
 
 const dom = new JSDOM(
   `<!doctype html><html><body>
@@ -75,7 +75,7 @@ window.document.getElementById = (id) => realGet(id) || window.document.createEl
 
 const ctx = dom.getInternalVMContext();
 try {
-  vm.runInContext(fs.readFileSync(APP_JS, 'utf8') + epilogue, ctx, { filename: 'app.js' });
+  vm.runInContext(loadClientSource() + epilogue, ctx, { filename: 'app.js' });
 } catch (e) {
   console.log('[load warn]', e.message);
 }

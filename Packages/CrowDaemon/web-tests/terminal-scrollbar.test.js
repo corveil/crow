@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-1020: the terminal's history scrollbar. xterm 6 scrolls through a VS Code
 // scrollable element built with `vertical: ScrollbarVisibility.Auto`, so its
@@ -23,8 +24,7 @@ const epilogue = `
   set term(v){ term = v; },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body><div id="terminal-wrap"><div id="terminal"></div></div></body></html>`,

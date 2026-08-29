@@ -269,11 +269,11 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 | Review session auto-start        | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
 | Auto-merge watcher (`crow:merge`)| `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
 | Auto re-request review            | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoReRequestReview`, `autoReReviewSkipReason`, `agentSettled`) + `PRStatus.changesRequestedState` + `CodeBackend.requestReviewers` |
-| Auto-merge verdict → UI          | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`AutoMergeSkipReason.state`, `publishAutoMergeVerdict`) → `Packages/CrowDaemon/Sources/CrowDaemon/SnapshotRPCHandlers.swift` (`list-sessions-live` → `auto_merge_state`) → `.../web/app.js` (`PR_AUTOMERGE_GLYPH`, `prAutoMergeGlyph`) |
+| Auto-merge verdict → UI          | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`AutoMergeSkipReason.state`, `publishAutoMergeVerdict`) → `Packages/CrowDaemon/Sources/CrowDaemon/SnapshotRPCHandlers.swift` (`list-sessions-live` → `auto_merge_state`) → `.../web/sidebar.js` (`PR_AUTOMERGE_GLYPH`, `prAutoMergeGlyph`) |
 | Direct-merge fallback            | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`shouldDirectMerge`, `directMergeGatesPass`, `performDirectMerge`) + `CodeBackend.mergeNow` |
 | Automation notification push     | `Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift` (`wireTrackerAutomations`) + `EventHub.notifyFrame`             |
 | Notification events + defaults   | `Packages/CrowCore/Sources/CrowCore/Models/NotificationEvent.swift`                                                       |
-| Chime / browser notification     | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` (`onServerNotify`, `emitEvent`)                             |
+| Chime / browser notification     | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/notifications.js` (`onServerNotify`, `emitEvent`)                             |
 
 ## See also
 

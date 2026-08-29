@@ -88,6 +88,18 @@
   <script src="/xterm/xterm-addon-webgl.js"></script>
   <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
   <script src="/xterm/xterm-addon-crow-viewport.js"></script>
+  <!-- CROW-1155: classic scripts in dependency order. app.js is the boot
+       assembler (shared state lives in the earlier files). settings.js last. -->
+  <script src="/rpc.js"></script>
+  <script src="/notifications.js"></script>
+  <script src="/sidebar.js"></script>
+  <script src="/switcher.js"></script>
+  <script src="/session.js"></script>
+  <script src="/grid.js"></script>
+  <script src="/boards.js"></script>
+  <script src="/terminal.js"></script>
+  <script src="/setup.js"></script>
+  <script src="/router.js"></script>
   <script src="/app.js"></script>
   <script src="/settings.js"></script>
 </body>

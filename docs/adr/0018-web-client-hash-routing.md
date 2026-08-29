@@ -15,7 +15,8 @@ Adding routing meant first choosing where the route lives, and the two options a
 interchangeable here.
 
 `crowd` serves the web UI from `StaticAssets.mount` as a set of **exact literal paths** — `/`,
-`/index.html`, `/login`, `/app.js`, `/app.css`, `/settings.js`, `/settings.css`, `/brand.svg`,
+`/index.html`, `/login`, `/app.js`, `/app.css`, the CROW-1155 concern scripts (`/rpc.js`,
+`/notifications.js`, …), `/settings.js`, `/settings.css`, `/brand.svg`,
 `/version.json`, `/terminal.html`, `/xterm/:file` — plus `/artifacts/:session/:file`, `/autostart`,
 and `/auth/*` from their own mounters. There is no wildcard, no catch-all, and no `FileMiddleware`.
 Hummingbird answers anything unmatched with a bare 404.
@@ -52,9 +53,10 @@ The web client routes on the URL **fragment**. Routes are:
 #/settings/:tab
 ```
 
-The router lives in `app.js` (`parseRoute` / `routeToHash` / `navigate` / `applyRoute` /
-`onHashChange`) — not a separate file, because `script-src 'self'` forbids inline bootstrapping and
-because the router has to read and write `app.js`'s own selection state.
+The router lives in `router.js` (`parseRoute` / `routeToHash` / `navigate` / `applyRoute` /
+`onHashChange`) — a classic script loaded before the `app.js` boot assembler. `script-src 'self'`
+forbids inline bootstrapping, and the router reads and writes the shared selection state declared
+in `sidebar.js`.
 
 Routed navigation goes **through the existing selection functions** (`selectSession`, `selectBoard`,
 `switchTerminal`, `openSettings`) rather than beside them, so a URL and a click cannot disagree.
@@ -114,7 +116,7 @@ Moving to History routing later is a contained change — swap `location.hash` f
   websocket upgrades, has to preserve the filename-keyed CSP, and still leaves the Tauri
   `location.reload()` path 404ing. Real cost, no user-visible gain beyond a prettier URL.
 - **A routing library (react-router et al.):** rejected — there is no bundler, no module system and no
-  framework; `index.html` loads two classic scripts. A ~150-line router is smaller than the toolchain
+  framework; `index.html` loads classic scripts in order. A ~150-line router is smaller than the toolchain
   needed to install one.
 - **Persist the last view in `localStorage` instead:** rejected — it restores *your* place on reload
   but gives no shareable link, no Back/Forward, and no bookmarking, which is most of the ask.
@@ -127,7 +129,8 @@ Moving to History routing later is a contained change — swap `location.hash` f
 - Related ADRs: [0010](./0010-retire-the-macos-app.md) (the web UI is the only client — so this is
   the only routing model there is), [0009](./0009-crowd-sole-authority-clients-only.md) (`crowd` is
   the authority; routing is pure client state)
-- Code: `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` (router + selection hooks),
+- Code: `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/router.js` (router),
+  `…/Resources/web/sidebar.js` (selection state), `…/Resources/web/app.js` (boot),
   `…/Resources/web/settings.js` (tab routing), `…/Resources/web/login.html` (fragment survives login),
   `Packages/CrowDaemon/Sources/CrowDaemon/StaticAssets.swift` (the literal-path route table this
   decision is shaped by — unchanged)

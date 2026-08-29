@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-1006: long-press → terminal context menu on touch devices. xterm draws
 // into a canvas that xterm.css marks `user-select: none`, so a phone has no
@@ -9,16 +10,15 @@ const { JSDOM } = require('jsdom');
 //
 // Drives the real boot-time registration in Resources/web/app.js against a fake
 // xterm, synthesised touch events, and a controllable clock. Same harness shape
-// as touch-scroll.test.js: an epilogue evaluated in app.js's own top-level
-// lexical scope exposes the module-scope bindings the menu reads.
+// as touch-scroll.test.js: an epilogue evaluated in the concatenated client's
+// top-level lexical scope exposes the module-scope bindings the menu reads.
 const epilogue = `
 ;globalThis.__t = {
   set term(v){ term = v; },
   set activeTerminal(v){ activeTerminal = v; },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body>

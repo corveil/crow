@@ -1,11 +1,12 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // #824 / ADR-0013: the per-surface hybrid scroll model. Drives the real
-// enableWheelScroll + swallowMouseMode from Resources/web/app.js against a fake
+// enableWheelScroll + swallowMouseMode from Resources/web/terminal.js against a fake
 // xterm + PTY socket. Same harness shape as touch-scroll.test.js — an epilogue
-// evaluated in app.js's own top-level lexical scope exposes the module-scope
+// evaluated in the concatenated client's top-level lexical scope exposes the module-scope
 // bindings we need (which is why swallowMouseMode lives at module scope rather
 // than nested inside ensureTerminal).
 const epilogue = `
@@ -22,8 +23,7 @@ const epilogue = `
   get uiConfig(){ return uiConfig; },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body><div id="terminal"></div></body></html>`,
