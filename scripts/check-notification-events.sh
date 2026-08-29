@@ -5,7 +5,7 @@
 # agreement at build time — this does, cheaply, in CI and locally.
 #
 #   - Swift enum cases      → Packages/CrowCore/Sources/CrowCore/Models/NotificationEvent.swift
-#   - client dispatch list  → .../web/app.js         (ALL_EVENTS = base ++ AUTOMATION_EVENTS)
+#   - client dispatch list  → .../web/notifications.js (ALL_EVENTS = base ++ AUTOMATION_EVENTS)
 #   - Settings tab list     → .../web/settings.js    (EVENT_ORDER)
 #
 # Exit non-zero (with a diff) if any of the three disagree on the set of events.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENUM="$ROOT/Packages/CrowCore/Sources/CrowCore/Models/NotificationEvent.swift"
-APP="$ROOT/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js"
+APP="$ROOT/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/notifications.js"
 SETTINGS="$ROOT/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/settings.js"
 
 # Swift: `case fooBar` lines inside the enum (skip the computed `isAutomationEvent`
@@ -22,7 +22,7 @@ swift_events() {
   grep -oE '^    case [a-zA-Z]+$' "$ENUM" | awk '{print $2}' | sort
 }
 
-# app.js: the base literal array concatenated with AUTOMATION_EVENTS.
+# notifications.js: the base literal array concatenated with AUTOMATION_EVENTS.
 app_events() {
   node -e '
     const fs = require("fs");
@@ -47,7 +47,7 @@ settings_events() {
 
 status=0
 if ! diff <(swift_events) <(app_events) >/tmp/notif-app.diff 2>&1; then
-  echo "MISMATCH: NotificationEvent.swift vs app.js (< Swift, > app.js):" >&2
+  echo "MISMATCH: NotificationEvent.swift vs notifications.js (< Swift, > notifications.js):" >&2
   cat /tmp/notif-app.diff >&2
   status=1
 fi

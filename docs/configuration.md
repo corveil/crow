@@ -454,7 +454,7 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 
 ## Terminal Readiness
 
-`TerminalReadiness` (`Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41`) tracks how far each managed terminal has progressed through startup. The sidebar dot in `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` reflects the current state:
+`TerminalReadiness` (`Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41`) tracks how far each managed terminal has progressed through startup. The sidebar dot in `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/sidebar.js` reflects the current state:
 
 1. **Gray dot (`uninitialized`)** — `XTermSurfaceView` exists but `createSurface()` has not been called yet.
 2. **Yellow dot (`surfaceCreated`)** — the xterm.js surface exists and the shell process (`PTYProcess`) is spawning.

@@ -4,15 +4,24 @@ import Foundation
 import Hummingbird
 import NIOCore
 
-/// Serves the web UI (`/`, `/app.css`, `/app.js`) from the daemon's own
-/// resource bundle and the xterm.js 6.0.0 assets (`/xterm/*`) straight out of
-/// `CrowTerminal`'s bundle — so the browser reuses the exact same xterm build
-/// as the macOS app instead of duplicating it (CROW-581).
+/// Serves the web UI (`/`, `/app.css`, `/app.js` and the CROW-1155 concern
+/// scripts) from the daemon's own resource bundle and the xterm.js 6.0.0 assets
+/// (`/xterm/*`) straight out of `CrowTerminal`'s bundle — so the browser reuses
+/// the exact same xterm build as the macOS app instead of duplicating it
+/// (CROW-581).
 ///
 /// When `webDir` is set (`--web-dir` / `CROW_WEB_DIR`), the UI files are read
 /// live from that source directory instead of the compiled bundle — edit +
 /// refresh, no rebuild.
 enum StaticAssets {
+    /// Classic client scripts in `index.html` load order (CROW-1155). Exact
+    /// literal paths — `crowd` has no catch-all. `settings.js` is last.
+    static let uiJavaScriptFiles = [
+        "rpc.js", "notifications.js", "sidebar.js", "switcher.js", "session.js",
+        "grid.js", "boards.js", "terminal.js", "setup.js", "router.js", "app.js",
+        "settings.js",
+    ]
+
     static func mount(on router: Router<CrowHTTPContext>, webDir: String? = nil) {
         router.get("/") { req, _ in webResponse("index.html", webDir: webDir, request: req) }
         router.get("/index.html") { req, _ in webResponse("index.html", webDir: webDir, request: req) }
@@ -20,10 +29,14 @@ enum StaticAssets {
         // also serves it as the fallback for unauthenticated navigational GETs.
         router.get("/login") { req, _ in webResponse("login.html", webDir: webDir, request: req) }
         router.get("/app.css") { req, _ in webResponse("app.css", webDir: webDir, request: req) }
-        router.get("/app.js") { req, _ in webResponse("app.js", webDir: webDir, request: req) }
-        // Web Settings modal assets (CROW-581) — split out of app.css/app.js.
+        // Classic client scripts (CROW-1155). Each is an exact literal path with
+        // the CROW-1024 revalidate policy; `webResponse` already sets `revalidate`.
+        for name in uiJavaScriptFiles {
+            let file = name
+            router.get("/\(file)") { req, _ in webResponse(file, webDir: webDir, request: req) }
+        }
+        // Web Settings modal stylesheet (CROW-581) — split out of app.css.
         router.get("/settings.css") { req, _ in webResponse("settings.css", webDir: webDir, request: req) }
-        router.get("/settings.js") { req, _ in webResponse("settings.js", webDir: webDir, request: req) }
         router.get("/brand.svg") { req, _ in webResponse("brand.svg", webDir: webDir, request: req) }
         // Web app manifest + install icons (CROW-1073) so Chrome installs Crow as a
         // standalone app with the Crow mark instead of a page screenshot. The manifest

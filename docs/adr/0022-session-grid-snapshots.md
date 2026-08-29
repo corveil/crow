@@ -52,7 +52,7 @@ Grid cells are **read-only snapshots**, not live PTY mirrors.
 
 **Easier:** 16 cells cannot resize or type into the shared cockpit; the connection
 limiter is untouched; the grid is a layout around the existing xterm component
-rather than a fork of `terminal.html` / `app.js`'s interactive surface; pin state
+rather than a fork of `terminal.html` / `terminal.js`'s interactive surface; pin state
 is per browser user, which is the right grain for remote web access.
 
 **Harder / must live with:** cells update on the poll, not per PTY byte, so a
@@ -68,7 +68,7 @@ ADR, not a grid-cell flag.
   `window-size latest`, and 16 extra `tmux attach` clients hit the connection
   limiter and the fd budget.
 - **iframes of `/terminal.html`:** rejected — that page is a debug surface that
-  already drifts from `app.js` (mouse-mode swallow, no `agent_surface`), and it
+  already drifts from `terminal.js` (mouse-mode swallow, no `agent_surface`), and it
   would still attach 16 PTYs.
 - **Pins in `AppConfig`:** rejected for v1 — the daemon config is per-machine,
   not per remote web user; `localStorage` matches "persists per user" under
@@ -80,6 +80,6 @@ ADR, not a grid-cell flag.
 
 - Ticket: https://github.com/corveil/crow/issues/1153
 - Related ADRs: [0001](./0001-tmux-only-terminal-backend.md), [0010](./0010-retire-the-macos-app.md), [0018](./0018-web-client-hash-routing.md)
-- Code: `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` (`renderSessionGrid`),
+- Code: `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/grid.js` (`renderSessionGrid`),
   `SessionRPCHandlers.swift` (`list-session-terminal-snapshots`),
   `TerminalCockpit.snapshotPane`

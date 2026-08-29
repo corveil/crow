@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-979 regression tests for the header's ↻ Reload button. Before it, the only
 // route to `reloadTerminal()` was the terminal's right-click menu — which a touch
@@ -37,7 +38,6 @@ const epilogue = `
   SCROLLBACK_HEAL_MAX,
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
 const APP_CSS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.css';
 
 const dom = new JSDOM(
@@ -91,7 +91,7 @@ window.document.getElementById = (id) => realGet(id) || window.document.createEl
 
 const ctx = dom.getInternalVMContext();
 try {
-  vm.runInContext(fs.readFileSync(APP_JS, 'utf8') + epilogue, ctx, { filename: 'app.js' });
+  vm.runInContext(loadClientSource() + epilogue, ctx, { filename: 'app.js' });
 } catch (e) {
   console.log('[load warn]', e.message);
 }

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-1153 session grid: roster/pin/pagination/layout helpers and the Grid
 // nav pill, driven against the real app.js under jsdom. Snapshot painting
@@ -41,8 +42,7 @@ const epilogue = `
   },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const MARKUP = `<!doctype html><html><body>
   <div id="app">

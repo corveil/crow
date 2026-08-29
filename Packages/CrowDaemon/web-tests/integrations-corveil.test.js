@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { WEB, loadClientSource } = require('./load-client');
 
 // CROW-1122 behaviour test: Settings → Integrations Corveil card. Runs the real
 // app.js + settings.js under jsdom against mocks, the same loader shape as
@@ -19,8 +20,6 @@ const { JSDOM } = require('jsdom');
 //      Connect; the poll timeout must re-enable Connect; a completed sign-in must
 //      flip to the connected view. Driven with a controllable setTimeout so the
 //      24 × 2.5s poll runs deterministically.
-const WEB = __dirname + '/../Sources/CrowDaemon/Resources/web/';
-const APP_JS = WEB + 'app.js';
 const SETTINGS_JS = WEB + 'settings.js';
 
 const epilogue = `
@@ -116,7 +115,7 @@ function load({ config, local }) {
   window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
 
   const ctx = dom.getInternalVMContext();
-  const src = fs.readFileSync(APP_JS, 'utf8') + epilogue + fs.readFileSync(SETTINGS_JS, 'utf8');
+  const src = loadClientSource() + epilogue + fs.readFileSync(SETTINGS_JS, 'utf8');
   try {
     vm.runInContext(src, ctx, { filename: 'app+settings.js' });
   } catch (e) {

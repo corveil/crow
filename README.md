@@ -100,7 +100,7 @@ gh auth refresh -s project,read:org,repo
 
 `crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` on startup — open that URL in your browser. The first screen guides you through any remaining setup.
 
-For local daemon development, `make daemon-run` runs `crowd` serving the frozen web UI baked into the compiled bundle — the same asset source as `make run`. Web UI edits (`index.html`/`app.css`/`app.js`) need a rebuild to be picked up:
+For local daemon development, `make daemon-run` runs `crowd` serving the frozen web UI baked into the compiled bundle — the same asset source as `make run`. Web UI edits (`index.html`/`app.css`/the classic client scripts) need a rebuild to be picked up:
 
 ```bash
 make daemon-run                      # stable daemon at http://127.0.0.1:8787
@@ -159,7 +159,7 @@ crow-desktop/src-tauri/target/debug/Crow
 
 ### Iterating with the window open
 
-The `make run` window spawns `crowd` as a sidecar that serves the web UI from the compiled bundle (frozen assets), so web/UI edits (`index.html`/`app.css`/`app.js`) need a `make daemon` rebuild to show up — the same asset source across every dev path. The rebuild re-copies the assets into the bundle and `crowd` reads them per request, so a plain ⌘R picks them up (no daemon restart needed for web-only edits; a Swift change does need a restart, since Swift can't hot-swap).
+The `make run` window spawns `crowd` as a sidecar that serves the web UI from the compiled bundle (frozen assets), so web/UI edits (`index.html`/`app.css`/the classic client scripts) need a `make daemon` rebuild to show up — the same asset source across every dev path. The rebuild re-copies the assets into the bundle and `crowd` reads them per request, so a plain ⌘R picks them up (no daemon restart needed for web-only edits; a Swift change does need a restart, since Swift can't hot-swap).
 
 Run a standalone `crowd` separately only when you want a daemon that **outlives the window** or is shared by several clients (a browser tab + the window at once). Because the window reuses a crowd already on `:8787` and leaves it running on quit, they compose cleanly:
 

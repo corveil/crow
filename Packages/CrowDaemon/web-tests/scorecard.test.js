@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-983: the Manager card is metered like a work week — chips, an
 // efficiency grade, and per-Manager grouping — while staying visibly out of
@@ -14,8 +15,7 @@ const epilogue = `
   groupManagerWeeks(w){ return groupManagerWeeks(w); },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body>

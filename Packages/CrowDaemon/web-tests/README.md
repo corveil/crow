@@ -1,7 +1,8 @@
 # Web UI tests
 
 Headless [jsdom](https://github.com/jsdom/jsdom) regression tests for the web
-UI. They load the **real** `Resources/web/app.js` and drive its functions
+UI. They load the **real** classic client scripts from `Resources/web/` (concatenated
+in `index.html` order by `load-client.js`) and drive their functions
 against mocks — no running daemon required — then assert the result.
 
 ## `board.test.js` — Ticket Board (CROW-751)
@@ -210,6 +211,10 @@ state copy, and cell DOM (pinned class, name, column count). Snapshot
 painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
 
 ## Run
+
+Tests must not evaluate a single concern file in isolation: `load-client.js`
+concatenates every classic script in `index.html` order (settings.js optional)
+so `let`/`const` bindings stay shared, matching the browser.
 
 ```sh
 cd Packages/CrowDaemon/web-tests

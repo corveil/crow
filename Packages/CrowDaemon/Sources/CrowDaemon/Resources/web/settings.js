@@ -8,7 +8,7 @@
 // via local-only POSTs (SecretRoutes) and shown read-only from a remote/proxied
 // session (CROW-593).
 //
-// Depends on globals from app.js: `el(tag, className, text)` and `rpc()`.
+// Depends on globals from the classic client scripts: `el(tag, className, text)` and `rpc()`.
 (function () {
   let cfg = null;          // working copy of AppConfig (parsed)
   let devRoot = '';

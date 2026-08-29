@@ -876,9 +876,11 @@ import CrowPersistence
         // unauthenticated remote peer gets 401 rather than a blanket 204. That
         // routing is the whole point of the probe (CROW-593).
         #expect(!MW.isAuthExempt(path: "/auth/check"))
-        for path in ["/", "/index.html", "/app.js", "/rpc",
+        var gated = ["/", "/index.html", "/rpc",
                      "/config/web-password", "/config/manager-gateway",
-                     "/sounds", "/sounds/chime.wav"] {
+                     "/sounds", "/sounds/chime.wav"]
+        gated.append(contentsOf: StaticAssets.uiJavaScriptFiles.map { "/" + $0 })
+        for path in gated {
             #expect(!MW.isAuthExempt(path: path), "\(path) must be gated")
         }
     }
@@ -903,7 +905,9 @@ import CrowPersistence
         #expect(StaticAssets.appliesCSP(to: "index.html"))
         // login.html has an inline script; terminal.html is a debug page; the
         // static assets don't render provider data — none carry the CSP.
-        for name in ["login.html", "terminal.html", "app.js", "app.css", "settings.js", "brand.svg"] {
+        var names = ["login.html", "terminal.html", "app.css", "brand.svg"]
+        names.append(contentsOf: StaticAssets.uiJavaScriptFiles)
+        for name in names {
             #expect(!StaticAssets.appliesCSP(to: name), "\(name) must not carry the CSP")
         }
     }

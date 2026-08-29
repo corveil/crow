@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // CROW-956 regression tests for the /rpc close path. `crowd` caps an inbound
 // WebSocket message and can only refuse an over-limit one by closing the socket
@@ -21,8 +22,7 @@ const epilogue = `
   rpcState,
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body>

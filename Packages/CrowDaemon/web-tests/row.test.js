@@ -1,6 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
+const { loadClientSource } = require('./load-client');
 
 // Sidebar session-row regression tests (CROW-773) — PR-pill status glyphs,
 // the crow:merge indicator, and ticket-label pills. Same loader shape as
@@ -14,8 +15,7 @@ const epilogue = `
   set hideDetails(v){ uiConfig.hideSessionDetails = v; },
 };
 `;
-const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
-const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
+const appjs = loadClientSource() + epilogue;
 
 const dom = new JSDOM(
   `<!doctype html><html><body>

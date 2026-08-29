@@ -24,12 +24,13 @@ struct StaticAssetsCacheTests {
         return Application(router: router)
     }
 
-    @Test("app.js is served with Cache-Control: no-cache and a strong ETag")
-    func appJSRevalidates() async throws {
+    @Test("Every UI JS file is served with Cache-Control: no-cache and a strong ETag",
+          arguments: StaticAssets.uiJavaScriptFiles)
+    func uiJSRevalidates(file: String) async throws {
         try await makeApp().test(.router) { client in
-            try await client.execute(uri: "/app.js", method: .get) { response in
-                #expect(response.status == .ok)
-                #expect(response.headers[.cacheControl] == "no-cache")
+            try await client.execute(uri: "/\(file)", method: .get) { response in
+                #expect(response.status == .ok, "\(file) should be served")
+                #expect(response.headers[.cacheControl] == "no-cache", "\(file) must revalidate (CROW-1024)")
                 let etag = try #require(response.headers[.eTag])
                 // A strong validator: quoted, and more than just the empty quotes.
                 #expect(etag.hasPrefix("\"") && etag.hasSuffix("\""))
@@ -71,6 +72,33 @@ struct StaticAssetsCacheTests {
                 #expect(response.headers[.eTag] != nil)
             }
         }
+    }
+
+    @Test("index.html loads every UI JS file in StaticAssets.uiJavaScriptFiles order")
+    func indexHTMLScriptOrderMatchesTheRouteTable() throws {
+        // Walk up to Resources/web/index.html — same lookup as WebTerminalAssetTests.
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var found: URL?
+        for _ in 0..<10 {
+            let candidate = dir.appendingPathComponent(
+                "Sources/CrowDaemon/Resources/web/index.html")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                found = candidate
+                break
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        let html = try String(contentsOf: try #require(found), encoding: .utf8)
+        let pattern = try NSRegularExpression(pattern: #"<script src="/([^"]+\.js)"></script>"#)
+        let ns = html as NSString
+        var names: [String] = []
+        pattern.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match, match.numberOfRanges >= 2 else { return }
+            let name = ns.substring(with: match.range(at: 1))
+            if !name.hasPrefix("xterm/") { names.append(name) }
+        }
+        #expect(names == StaticAssets.uiJavaScriptFiles,
+                "index.html script order must match the StaticAssets route table (CROW-1155)")
     }
 
     @Test("index.html keeps its CSP alongside the new cache headers")
