@@ -186,8 +186,8 @@ when the user cancels.
 
 Loads the real `app.js` at a deep-link `url:` to exercise the cold-load path —
 jsdom's `url` option is what makes `location.hash` real at boot. The Settings
-assertions additionally load the real `settings.js` into the same context, the
-way `index.html` does, so `openSettings` / `setSettingsTab` are the shipped
+assertions additionally load the real settings scripts (`settings-*.js` + `settings.js`) into the
+same context, the way `index.html` does, so `openSettings` / `setSettingsTab` are the shipped
 implementations rather than stubs — the tab-routing bug they guard (a re-entry
 that silently reset `dirty`) is invisible to a stub.
 
@@ -213,7 +213,7 @@ painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
 ## Run
 
 Tests must not evaluate a single concern file in isolation: `load-client.js`
-concatenates every classic script in `index.html` order (settings.js optional)
+concatenates every classic script in `index.html` order (settings.js and settings-*.js optional)
 so `let`/`const` bindings stay shared, matching the browser.
 
 ```sh

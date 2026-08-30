@@ -16,7 +16,8 @@ interchangeable here.
 
 `crowd` serves the web UI from `StaticAssets.mount` as a set of **exact literal paths** — `/`,
 `/index.html`, `/login`, `/app.js`, `/app.css`, the CROW-1155 concern scripts (`/rpc.js`,
-`/notifications.js`, …), `/settings.js`, `/settings.css`, `/brand.svg`,
+`/notifications.js`, …), the CROW-1160 Settings tab scripts (`/settings-general.js`, …) plus the
+Settings shell `/settings.js`, `/settings.css`, `/brand.svg`,
 `/version.json`, `/terminal.html`, `/xterm/:file` — plus `/artifacts/:session/:file`, `/autostart`,
 and `/auth/*` from their own mounters. There is no wildcard, no catch-all, and no `FileMiddleware`.
 Hummingbird answers anything unmatched with a bare 404.
@@ -131,7 +132,7 @@ Moving to History routing later is a contained change — swap `location.hash` f
   the authority; routing is pure client state)
 - Code: `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/router.js` (router),
   `…/Resources/web/sidebar.js` (selection state), `…/Resources/web/app.js` (boot),
-  `…/Resources/web/settings.js` (tab routing), `…/Resources/web/login.html` (fragment survives login),
+  `…/Resources/web/settings.js` (tab routing; tab bodies in `settings-*.js`, CROW-1160), `…/Resources/web/login.html` (fragment survives login),
   `Packages/CrowDaemon/Sources/CrowDaemon/StaticAssets.swift` (the literal-path route table this
   decision is shaped by — unchanged)
 - Test: `Packages/CrowDaemon/web-tests/router.test.js`, run in CI by the `parity` job

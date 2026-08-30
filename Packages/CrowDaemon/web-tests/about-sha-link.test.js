@@ -1,7 +1,6 @@
-const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
-const { WEB, loadClientSource } = require('./load-client');
+const { loadClientSource, loadSettingsSource } = require('./load-client');
 
 // CROW-1030 behaviour test: the build SHA in Settings → About is a link to that
 // commit on corveil/crow, and an unlinkable stamp stays inert text.
@@ -15,8 +14,7 @@ const { WEB, loadClientSource } = require('./load-client');
 //      is inspected, rather than asserting on the helper alone.
 //
 // Loader shape follows router.test.js / version-banner.test.js: run the real
-// app.js + settings.js under jsdom against mocks.
-const SETTINGS_JS = WEB + 'settings.js';
+// app.js + settings scripts under jsdom against mocks.
 
 const epilogue = `
 ;globalThis.__t = {
@@ -68,7 +66,7 @@ function load(version) {
   window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
 
   const ctx = dom.getInternalVMContext();
-  const src = loadClientSource() + epilogue + fs.readFileSync(SETTINGS_JS, 'utf8');
+  const src = loadClientSource() + epilogue + loadSettingsSource();
   try {
     vm.runInContext(src, ctx, { filename: 'app+settings.js' });
   } catch (e) {

@@ -34,7 +34,7 @@ import Testing
     private static func webClientJS(includingSettings: Bool = false) throws -> String {
         let names = includingSettings
             ? StaticAssets.uiJavaScriptFiles
-            : StaticAssets.uiJavaScriptFiles.filter { $0 != "settings.js" }
+            : StaticAssets.uiJavaScriptFiles.filter { $0 != "settings.js" && !$0.hasPrefix("settings-") }
         return try names.map { try webAsset($0) }.joined(separator: "\n")
     }
 
