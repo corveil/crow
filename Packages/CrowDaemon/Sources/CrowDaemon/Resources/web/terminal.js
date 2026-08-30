@@ -437,9 +437,10 @@ function ensureTerminal() {
   enableFileDrop(document.getElementById('terminal'));
   window.addEventListener('resize', fitTerminal);
   // #667: on regaining focus/visibility, this surface reclaims ownership of the
-  // shared tmux window size (re-asserts even if unchanged) — so "window-size
-  // latest" converges to "the surface you most recently focused." Registered
-  // once (ensureTerminal is `if (term) return` guarded).
+  // shared tmux window size — so "window-size latest" converges to "the surface
+  // you most recently focused." Same-size reclaim uses `if_needed` so it does
+  // not SIGWINCH the agent (CROW-1162). Registered once (ensureTerminal is
+  // `if (term) return` guarded).
   window.addEventListener('focus', takeTerminalOwnership);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) takeTerminalOwnership();
@@ -924,9 +925,18 @@ function applyTermFit() {
   if (term.cols === lastTermCols && term.rows === lastTermRows) return;
   lastTermCols = term.cols;
   lastTermRows = term.rows;
-  if (termWs && termWs.readyState === WebSocket.OPEN) {
-    termWs.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
-  }
+  sendTermResize(false);
+}
+
+// Push cols/rows to the PTY. `ifNeeded` (CROW-1162) asks the daemon to skip the
+// ioctl when the tmux window is already this size, so a tab-refocus can reclaim
+// `window-size latest` without a same-size SIGWINCH. Ordinary fits (the grid
+// actually changed) always ioctl.
+function sendTermResize(ifNeeded) {
+  if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
+  const msg = { type: 'resize', rows: term.rows, cols: term.cols };
+  if (ifNeeded) msg.if_needed = true;
+  termWs.send(JSON.stringify(msg));
 }
 
 // Coalesce a burst of resize/observer events into a single fit per frame. Used
@@ -942,13 +952,24 @@ function fitTerminal() {
 // #667: on regaining focus, re-assert this surface's size so it becomes tmux's
 // "latest" client and reclaims the shared window size from whatever background
 // surface last touched it — even if this surface's own grid didn't change (which
-// applyTermFit's lastTermCols/lastTermRows dedup would otherwise swallow). Reset
-// the dedup, then fit; the reset + the visible/focused state let applyTermFit
-// send the resize frame. Wired to window `focus` and document `visibilitychange`.
+// applyTermFit's lastTermCols/lastTermRows dedup would otherwise swallow).
+//
+// CROW-1162: do NOT reset the dedup and force a same-size ioctl. TIOCSWINSZ
+// always becomes tmux MSG_RESIZE, which redraws the client and SIGWINCHes the
+// agent TUI even when cols/rows are unchanged. Fit locally; if the grid moved,
+// send a real resize; if it didn't, send `if_needed` so the daemon ioctl's only
+// when the *window* (another surface) actually differs. Wired to window `focus`
+// and document `visibilitychange`.
 function takeTerminalOwnership() {
-  lastTermCols = 0;
-  lastTermRows = 0;
-  applyTermFit();
+  if (!term || !fitAddon) return;
+  if (document.hidden || !document.hasFocus()) return;
+  const node = document.getElementById('terminal');
+  if (!node || !node.isConnected || node.clientWidth < 1 || node.clientHeight < 1) return;
+  try { fitAddon.fit(); } catch (_) { return; }
+  const same = term.cols === lastTermCols && term.rows === lastTermRows;
+  lastTermCols = term.cols;
+  lastTermRows = term.rows;
+  sendTermResize(same);
 }
 
 // Same leading sequence as `TerminalCockpit.replayFrame` (CROW-606): home, clear
@@ -1292,6 +1313,10 @@ function switchAgentWindow(win) {
   // and no new PTY, so this stays clear of the CROW-1035 caret jump and CROW-1048
   // chrome stacking a full reload would reintroduce; a same-size switch fits to
   // identical cols/rows, so applyTermFit sends no SIGWINCH (#637).
+  //
+  // CROW-1162: this is the same coalesced `fitTerminal` the container
+  // ResizeObserver uses, so a post-switch layout settle does not double-fire a
+  // PTY resize — both collapse to one applyTermFit per animation frame.
   fitTerminal();
   updateTerminalScrollbar();
   // Do not arm CROW-1027 here. In-place switch has no new PTY and no

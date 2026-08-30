@@ -26,6 +26,14 @@ const epilogue = `
   updateTerminalScrollbar(){ return updateTerminalScrollbar(); },
   get fitScheduled(){ return fitScheduled; },
   set fitScheduled(v){ fitScheduled = v; },
+  get lastTermCols(){ return lastTermCols; },
+  set lastTermCols(v){ lastTermCols = v; },
+  get lastTermRows(){ return lastTermRows; },
+  set lastTermRows(v){ lastTermRows = v; },
+  get fitAddon(){ return fitAddon; },
+  set fitAddon(v){ fitAddon = v; },
+  applyTermFit(){ return applyTermFit(); },
+  takeTerminalOwnership(){ return takeTerminalOwnership(); },
   SCROLLBACK_HEAL_MS,
   SCROLLBACK_HEAL_MAX,
   TERM_BUFFER_CLEAR,
@@ -228,6 +236,58 @@ console.log('\nCROW-1091: switching in a surface with no history leaves no stale
   T.attachWindow(claude.window);
   check('the stale scrollbar class is cleared on switch', !wrap.classList.contains('has-scrollback'));
   check('still an in-place select-window', selectWindowCount(sock) === 1);
+}
+
+function resizePayloads(sock) {
+  return sock.sent.map((d) => {
+    try { return JSON.parse(d); } catch (_) { return null; }
+  }).filter((m) => m && m.type === 'resize');
+}
+
+function armFitSurface(cols, rows) {
+  const node = window.document.getElementById('terminal');
+  Object.defineProperty(node, 'clientWidth', { configurable: true, value: 800 });
+  Object.defineProperty(node, 'clientHeight', { configurable: true, value: 600 });
+  window.document.hasFocus = () => true;
+  Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => false });
+  const t = fakeTerm();
+  t.cols = cols;
+  t.rows = rows;
+  T.term = t;
+  T.fitAddon = { fit() {} };
+  T.lastTermCols = cols;
+  T.lastTermRows = rows;
+  return openSocket();
+}
+
+console.log('\nCROW-1162: tab refocus reclaims ownership without a same-size SIGWINCH:');
+{
+  const sock = armFitSurface(120, 40);
+  T.takeTerminalOwnership();
+  const resizes = resizePayloads(sock);
+  check('same-size refocus still sends a resize frame (so the daemon can become latest)', resizes.length === 1);
+  check('the frame is marked if_needed so the daemon can skip the ioctl', resizes[0].if_needed === true);
+  check('cols/rows are unchanged', resizes[0].cols === 120 && resizes[0].rows === 40);
+  check('dedup counters were not zeroed', T.lastTermCols === 120 && T.lastTermRows === 40);
+}
+
+console.log('\nCROW-1162: refocus after a real geometry change still SIGWINCHes:');
+{
+  const sock = armFitSurface(120, 40);
+  T.term.cols = 100;
+  T.term.rows = 30;
+  T.takeTerminalOwnership();
+  const resizes = resizePayloads(sock);
+  check('changed size sends a resize', resizes.length === 1);
+  check('changed size is a hard ioctl, not if_needed', resizes[0].if_needed === undefined);
+  check('payload is the new grid', resizes[0].cols === 100 && resizes[0].rows === 30);
+}
+
+console.log('\nCROW-1162: an ordinary same-size applyTermFit still sends nothing:');
+{
+  const sock = armFitSurface(80, 24);
+  T.applyTermFit();
+  check('deduped fit is silent', resizePayloads(sock).length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

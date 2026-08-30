@@ -109,9 +109,39 @@ function gridVisibleSessions() {
 
 function leaveGridView() {
   stopGridPolling();
-  disposeUnusedGridTerms([]);
   const root = document.getElementById('board');
   if (root) delete root.dataset.gridKey;
+  // CROW-1162: disposing up to 16 xterm instances is heavy. Do it after the
+  // live session attach paints, not on the same turn as `selectSession`.
+  scheduleGridTeardown();
+}
+
+function cancelGridTeardown() {
+  gridTeardownGen += 1;
+  if (gridTeardownTimer != null) {
+    clearTimeout(gridTeardownTimer);
+    gridTeardownTimer = null;
+  }
+}
+
+function scheduleGridTeardown() {
+  const gen = ++gridTeardownGen;
+  if (gridTeardownTimer != null) {
+    clearTimeout(gridTeardownTimer);
+    gridTeardownTimer = null;
+  }
+  const ids = [...gridTerms.keys()];
+  const tearDown = () => {
+    gridTeardownTimer = null;
+    if (gen !== gridTeardownGen) return;
+    if (selectedBoard === 'grid') return;
+    for (const id of ids) disposeGridTerm(id);
+  };
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(tearDown, { timeout: 400 });
+  } else {
+    gridTeardownTimer = setTimeout(tearDown, 0);
+  }
 }
 
 function stopGridPolling() {
@@ -124,7 +154,7 @@ function startGridPolling() {
     if (selectedBoard !== 'grid') { stopGridPolling(); return; }
     if (typeof document !== 'undefined' && document.hidden) return;
     refreshGridSnapshots();
-  }, 800);
+  }, GRID_POLL_MS);
 }
 
 function disposeGridTerm(id) {
@@ -143,6 +173,7 @@ function disposeUnusedGridTerms(keepIds) {
 }
 
 function renderSessionGrid(root) {
+  cancelGridTeardown();
   root.classList.add('session-grid-board');
   const { visible, pages, roster } = gridVisibleSessions();
   const visIds = visible.map((s) => s.id);
@@ -279,7 +310,7 @@ function updateGridCellHeaders() {
 
 function mountGridTerm(sessionId, host) {
   if (typeof Terminal !== 'function') {
-    gridTerms.set(sessionId, { term: null, host: host, lastSnap: '', cols: 0, rows: 0 });
+    gridTerms.set(sessionId, { term: null, host: host, lastSnap: '', cols: 0, rows: 0, lastScale: NaN });
     return;
   }
   const term = new Terminal({
@@ -292,14 +323,21 @@ function mountGridTerm(sessionId, host) {
     allowTransparency: true,
   });
   term.open(host);
-  gridTerms.set(sessionId, { term: term, host: host, lastSnap: '', cols: 0, rows: 0 });
+  gridTerms.set(sessionId, { term: term, host: host, lastSnap: '', cols: 0, rows: 0, lastScale: NaN });
 }
 
 function observeGridTerm(sessionId, wrap) {
   const pane = gridTerms.get(sessionId);
   if (!pane || !window.ResizeObserver) return;
   try { if (pane.ro) pane.ro.disconnect(); } catch (_) {}
-  pane.ro = new ResizeObserver(() => scaleGridTerm(sessionId));
+  pane.ro = new ResizeObserver(() => {
+    if (pane.scaleScheduled) return;
+    pane.scaleScheduled = true;
+    requestAnimationFrame(() => {
+      pane.scaleScheduled = false;
+      scaleGridTerm(sessionId);
+    });
+  });
   pane.ro.observe(wrap);
 }
 
@@ -314,6 +352,8 @@ function scaleGridTerm(sessionId) {
   const tw = screen.offsetWidth || pane.term.element.offsetWidth || 1;
   const th = screen.offsetHeight || pane.term.element.offsetHeight || 1;
   const s = Math.min(cw / tw, ch / th);
+  if (pane.lastScale === s) return;
+  pane.lastScale = s;
   screen.style.transformOrigin = 'top left';
   screen.style.transform = 'scale(' + s + ')';
 }
@@ -345,7 +385,10 @@ function paintGridSnapshot(id, row) {
   const rows = Math.max(1, Number(row.rows) || 24);
   if (pane.term) {
     try {
-      if (pane.term.cols !== cols || pane.term.rows !== rows) pane.term.resize(cols, rows);
+      if (pane.term.cols !== cols || pane.term.rows !== rows) {
+        pane.term.resize(cols, rows);
+        pane.lastScale = NaN;
+      }
       pane.term.write(row.snapshot);
     } catch (_) { /* xterm not ready */ }
     scaleGridTerm(id);

@@ -11,6 +11,7 @@ const { loadClientSource } = require('./load-client');
 const epilogue = `
 ;globalThis.__t = {
   GRID_PAGE_SIZE: () => GRID_PAGE_SIZE,
+  GRID_POLL_MS: () => GRID_POLL_MS,
   gridColsForCount: (n) => gridColsForCount(n),
   gridRoster: (list, pins) => gridRoster(list, pins),
   gridActivityRank: (s) => gridActivityRank(s),
@@ -42,6 +43,9 @@ const epilogue = `
   parseRoute: (h) => parseRoute(h),
   routeToHash: (r) => routeToHash(r),
   GRID_PINS_KEY: () => GRID_PINS_KEY,
+  leaveGridView(){ return leaveGridView(); },
+  scaleGridTerm: (id) => scaleGridTerm(id),
+  get gridTerms(){ return gridTerms; },
   spySelectSession(sink) {
     selectSession = async function (id, opts) { sink.push({ id, opts: opts || null }); };
   },
@@ -92,9 +96,13 @@ function load() {
     return { send() {}, close() {},
       set onopen(v) {}, set onmessage(v) {}, set onclose(v) {}, set onerror(v) {} };
   };
-  window.setInterval = () => 0;
-  window.setTimeout = () => 0;
-  window.requestAnimationFrame = () => 0;
+  window.__timeouts = [];
+  window.__intervals = [];
+  window.setInterval = (fn, ms) => { window.__intervals.push({ fn, ms }); return window.__intervals.length; };
+  window.setTimeout = (fn, ms) => { window.__timeouts.push({ fn, ms: ms || 0 }); return window.__timeouts.length; };
+  window.clearTimeout = (id) => { if (id > 0) window.__timeouts[id - 1] = null; };
+  window.requestAnimationFrame = (fn) => { fn(); return 1; };
+  window.requestIdleCallback = undefined;
   const realGet = window.document.getElementById.bind(window.document);
   window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
   const ctx = dom.getInternalVMContext();
@@ -180,6 +188,50 @@ console.log('\npage size:');
 {
   const T = load();
   check('page size is 16', T.GRID_PAGE_SIZE() === 16);
+  check('poll interval is 1500ms (CROW-1162)', T.GRID_POLL_MS() === 1500);
+}
+
+console.log('\nCROW-1162: leaveGridView defers xterm dispose off the attach path:');
+{
+  const T = load();
+  let disposed = 0;
+  T.gridTerms.set('keep', {
+    term: { dispose() { disposed += 1; } },
+    host: T.document.createElement('div'),
+    lastSnap: '',
+    ro: { disconnect() {} },
+  });
+  T.selectedBoard = 'tickets';
+  T.leaveGridView();
+  check('terms survive the selectSession turn', T.gridTerms.has('keep') && disposed === 0);
+  for (const t of T.window.__timeouts) { if (t) t.fn(); }
+  check('dispose runs on the deferred turn', disposed === 1 && !T.gridTerms.has('keep'));
+}
+
+console.log('\nCROW-1162: scaleGridTerm skips an unchanged transform:');
+{
+  const T = load();
+  const host = T.document.createElement('div');
+  const wrap = T.document.createElement('div');
+  wrap.appendChild(host);
+  Object.defineProperty(wrap, 'clientWidth', { value: 200 });
+  Object.defineProperty(wrap, 'clientHeight', { value: 100 });
+  const screen = T.document.createElement('div');
+  screen.className = 'xterm';
+  host.appendChild(screen);
+  Object.defineProperty(screen, 'offsetWidth', { value: 400 });
+  Object.defineProperty(screen, 'offsetHeight', { value: 200 });
+  T.gridTerms.set('scaled', {
+    term: { element: screen, cols: 80, rows: 24 },
+    host: host,
+    lastSnap: '',
+    lastScale: NaN,
+  });
+  T.scaleGridTerm('scaled');
+  check('first scale writes the transform', screen.style.transform === 'scale(0.5)');
+  screen.style.transform = 'scale(9)'; // poison: a skip must not rewrite
+  T.scaleGridTerm('scaled');
+  check('second scale with the same ratio is a no-op', screen.style.transform === 'scale(9)');
 }
 
 console.log('\nnav pill:');

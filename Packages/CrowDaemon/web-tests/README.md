@@ -87,7 +87,7 @@ and opening ours; and non-keydown / unmodified keys passing through untouched.
 
 ## `session-switch-attach.test.js` — agent tab/session switch (CROW-1035)
 
-Drives `attachWindow` against a fake xterm + a live `/terminal` socket. Coverage: switching to a Claude (alt-buffer) or Cursor (inline agent) surface is in-place — no new WebSocket, `clearTermBuffer` + `select-window` with `replay: false` on the existing socket, neither agent class arms the CROW-1027 heal on that path (no PTY resize; a second replay stacks Cursor chrome, CROW-1048); a plain shell still takes the #673 full reload; re-clicking the attached window is a no-op; a missing socket only records `attachedWindow`. Connect/reload still heals a one-screen attach (`terminal-reload.test.js`).
+Drives `attachWindow` against a fake xterm + a live `/terminal` socket. Coverage: switching to a Claude (alt-buffer) or Cursor (inline agent) surface is in-place — no new WebSocket, `clearTermBuffer` + `select-window` with `replay: false` on the existing socket, neither agent class arms the CROW-1027 heal on that path (no PTY resize; a second replay stacks Cursor chrome, CROW-1048); a plain shell still takes the #673 full reload; re-clicking the attached window is a no-op; a missing socket only records `attachedWindow`. Connect/reload still heals a one-screen attach (`terminal-reload.test.js`). CROW-1162: tab refocus sends `if_needed` rather than zeroing the fit dedup, so a same-size reclaim does not SIGWINCH; a real geometry change still ioctl's; an ordinary same-size `applyTermFit` stays silent.
 
 ## `terminal-reload.test.js` — header ↻ Reload button (CROW-979)
 
@@ -207,14 +207,15 @@ Drives `gridRoster` / pin helpers / `renderSessionGrid` against mock sessions.
 Coverage: column count (1 / 2×2 / 3×3 / 4×4), pinned-first roster with
 active auto-fill and activity sort, pin persist + reorder in `localStorage`,
 the Grid nav pill, Pin/Unpin on the session menu, `#/grid` routing, empty
-state copy, and cell DOM (pinned class, name, column count). CROW-1163:
+state copy, and cell DOM (pinned class, name, column count). CROW-1162: poll
+interval is 1500 ms, `leaveGridView` defers xterm dispose off the live-attach
+turn, and `scaleGridTerm` skips an unchanged CSS scale. CROW-1163:
 grid-cell clicks pass `{ fromGrid: true }`, `selectSession` sets/clears
 `sessionCameFromGrid`, the `‹ Grid` header control renders only then, and
 Escape returns to `#/grid` from app chrome — never while the xterm textarea
 has focus, while a lightbox is open, in place of closing a context menu, or
 when the session switcher is bound to an Escape prefix (`esc+tab`).
 Snapshot painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
-
 ## Run
 
 Tests must not evaluate a single concern file in isolation: `load-client.js`

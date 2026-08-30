@@ -798,4 +798,36 @@ import Testing
                 "the \(token.dropLast()) token app.js reads for xterm's slider must be defined (CROW-1020)")
         }
     }
+
+    /// CROW-1162: tab refocus must not reset the fit dedup and force a same-size
+    /// SIGWINCH. Ownership reclaim goes through `sendTermResize(same)` so the
+    /// daemon can skip the ioctl when the window already matches.
+    @Test func takeTerminalOwnershipReclaimsWithoutZeroingDedup() throws {
+        let source = try Self.webClientJS()
+        let body = Self.stripComments(String(try Self.functionBody("takeTerminalOwnership", in: source)))
+        #expect(
+            !body.contains("lastTermCols = 0"),
+            "zeroing the dedup re-sends a same-size resize on every tab focus (CROW-1162)")
+        #expect(
+            body.contains("sendTermResize(same)"),
+            "same-size reclaim must still tell the daemon (if_needed) so another surface's size can be taken back")
+        let send = Self.stripComments(String(try Self.functionBody("sendTermResize", in: source)))
+        #expect(
+            send.contains("if_needed"),
+            "the reclaim frame must carry if_needed so TerminalWebSocket can skip TIOCSWINSZ")
+    }
+
+    /// CROW-1162: an empty Manager tab bar must keep its 34px slot. Collapsing it
+    /// with `:empty { display:none }` is a real row of agent TUI geometry on
+    /// every Manager ↔ work switch.
+    @Test func emptyTabbarKeepsItsSlot() throws {
+        let css = Self.stripComments(try Self.webAsset("app.css"))
+        let empty = try Self.ruleBody(openedBy: "#tabbar:empty {", in: css)
+        #expect(
+            empty.contains("display: flex"),
+            "an empty #tabbar must remain in flex layout so Manager chrome matches work (CROW-1162)")
+        #expect(
+            !empty.contains("display: none"),
+            "display:none on :empty is the Manager ↔ work SIGWINCH (CROW-1162)")
+    }
 }
