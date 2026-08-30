@@ -207,8 +207,12 @@ Drives `gridRoster` / pin helpers / `renderSessionGrid` against mock sessions.
 Coverage: column count (1 / 2×2 / 3×3 / 4×4), pinned-first roster with
 active auto-fill and activity sort, pin persist + reorder in `localStorage`,
 the Grid nav pill, Pin/Unpin on the session menu, `#/grid` routing, empty
-state copy, and cell DOM (pinned class, name, column count). Snapshot
-painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
+state copy, and cell DOM (pinned class, name, column count). CROW-1163:
+grid-cell clicks pass `{ fromGrid: true }`, `selectSession` sets/clears
+`sessionCameFromGrid`, the `‹ Grid` header control renders only then, and
+Escape returns to `#/grid` from app chrome — never while the xterm textarea
+has focus, while a lightbox is open, or in place of closing a context menu.
+Snapshot painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
 
 ## Run
 
