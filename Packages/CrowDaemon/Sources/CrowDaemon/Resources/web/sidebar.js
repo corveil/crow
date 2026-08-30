@@ -26,6 +26,10 @@ const boardData = { tickets: null, reviews: null, allowlist: null, scorecard: nu
 // the wall; remaining slots auto-fill with active/in-review sessions. Caps at
 // 16 cells per page so a cell stays large enough to read.
 const GRID_PAGE_SIZE = 16;
+// CROW-1162: 16 xterm paints on an 800 ms cadence contended with the live
+// session's fit/reflow. 1500 ms is still a watch wall, just not a main-thread
+// storm; the first paint on enter is still immediate (`refreshGridSnapshots`).
+const GRID_POLL_MS = 1500;
 const GRID_PINS_KEY = 'crow.grid.pins';
 let gridPinnedIds = [];
 let gridPage = 0;
@@ -36,6 +40,8 @@ let gridPage = 0;
 // "from the grid".
 let sessionCameFromGrid = false;
 let gridPollTimer = null;
+let gridTeardownGen = 0;
+let gridTeardownTimer = null;
 const gridTerms = new Map(); // sessionId → { term, host, lastSnap, cols, rows }
 
 // Last-known sidebar layout (sessions + ticket/review badge counts) so first

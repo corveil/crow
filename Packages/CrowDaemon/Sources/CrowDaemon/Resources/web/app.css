@@ -414,7 +414,9 @@ body {
   padding: 0 8px;
   min-height: 34px;
 }
-#tabbar:empty { display: none; }
+/* CROW-1162: keep the 34px slot even with no tabs (Manager). Collapsing it
+   on Manager ↔ work switches is a real row of TUI geometry → SIGWINCH. */
+#tabbar:empty { display: flex; }
 .tab {
   display: flex;
   align-items: center;

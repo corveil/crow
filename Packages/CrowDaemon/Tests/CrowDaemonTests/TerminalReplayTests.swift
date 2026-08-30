@@ -86,4 +86,19 @@ import Testing
         let text = TerminalCockpit.plainPreviewText(from: "line1\n\u{1b}[31mred\u{1b}[0m\n\n")
         #expect(text == "line1\nred")
     }
+
+    /// CROW-1162: `if_needed` resize skips the PTY ioctl when the window is
+    /// already this size. Parsing is the gate; garbage / zeros must not skip.
+    @Test func parseColsRowsAcceptsPositivePairs() {
+        #expect(TerminalCockpit.parseColsRows("120 40").map { [$0.cols, $0.rows] } == [120, 40])
+        #expect(TerminalCockpit.parseColsRows("  80\t24\n").map { [$0.cols, $0.rows] } == [80, 24])
+    }
+
+    @Test func parseColsRowsRejectsGarbage() {
+        #expect(TerminalCockpit.parseColsRows("") == nil)
+        #expect(TerminalCockpit.parseColsRows("120") == nil)
+        #expect(TerminalCockpit.parseColsRows("0 40") == nil)
+        #expect(TerminalCockpit.parseColsRows("-1 24") == nil)
+        #expect(TerminalCockpit.parseColsRows("wide tall") == nil)
+    }
 }

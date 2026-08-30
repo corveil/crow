@@ -87,9 +87,21 @@ enum TerminalWebSocket {
                         case "resize":
                             // Floor at 1×1 so a zero/negative request can't drive a
                             // degenerate tmux resize (CROW-581 review).
+                            let rows = max(1, control.rows ?? 24)
+                            let cols = max(1, control.cols ?? 80)
+                            // CROW-1162: a tab-refocus sends `if_needed` to reclaim
+                            // `window-size latest` without a same-size TIOCSWINSZ
+                            // (which always SIGWINCHes the agent TUI). Skip the
+                            // ioctl when the window is already this size; if
+                            // another surface reshaped it, fall through.
+                            if control.if_needed == true,
+                               let current = cockpit.windowSize(group: group),
+                               current.cols == cols, current.rows == rows {
+                                break
+                            }
                             pty.resize(
-                                rows: UInt16(clamping: max(1, control.rows ?? 24)),
-                                cols: UInt16(clamping: max(1, control.cols ?? 80)))
+                                rows: UInt16(clamping: rows),
+                                cols: UInt16(clamping: cols))
                         case "select-window":
                             // Switch this browser's grouped view to the window; other
                             // clients (incl. the desktop app) keep their own view.
@@ -166,4 +178,8 @@ private struct TerminalControl: Decodable {
     /// switches send this — the live attach already has the frame and replay
     /// races it (CROW-1035). Omitted or `true` keeps connect/reload/heal behavior.
     let replay: Bool?
+    /// When `true`, skip the PTY ioctl if the tmux window is already this size
+    /// so a tab-refocus can reclaim `window-size latest` without a same-size
+    /// SIGWINCH (CROW-1162). Omitted/`false` always resizes (ordinary fit).
+    let if_needed: Bool?
 }

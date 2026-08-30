@@ -674,18 +674,17 @@ async function refreshTerminals() {
 function renderTabs() {
   const bar = document.getElementById('tabbar');
   bar.innerHTML = '';
-  // #680: managers are a single terminal — no tabs, no "+", no "×". Leaving
-  // #tabbar empty lets the `#tabbar:empty { display:none }` rule (app.css)
-  // collapse it so no empty strip sits above the manager terminal. (This also
-  // moots the stale-tab naming bug: a renamed manager session has no tab to go
-  // stale, since tabs are labeled from the terminal name, not the session name.)
+  // #680: managers are a single terminal — no tabs, no "+", no "×". The bar
+  // stays empty so there is no stale tab label, but CROW-1162 keeps the 34px
+  // slot (`#tabbar:empty { display:flex }`) so Manager ↔ work switches don't
+  // SIGWINCH the agent by collapsing/expanding the tab strip.
   const sel = sessions.find((x) => x.id === selectedId);
   if (sel && sel.kind === 'manager') {
     // #680: managers have no tabs. But the Manager window is a common CROW-804
     // "stuck alt-screen / 5000-line" case, and with no tab there'd be no ⚠ or
     // Recreate. Surface a slim warning strip with a Recreate action when the
-    // Manager terminal is degraded; otherwise leave #tabbar empty so it stays
-    // collapsed. Recreate routes through restartManager (SessionService).
+    // Manager terminal is degraded; otherwise leave #tabbar empty (the slot
+    // still reserves 34px). Recreate routes through restartManager (SessionService).
     const degraded = terminals.find((t) => t.scrollback_degraded);
     if (degraded) {
       const strip = el('div', 'degraded-strip');

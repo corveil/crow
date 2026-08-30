@@ -131,6 +131,27 @@ struct TerminalCockpit: Sendable {
         _ = try? controller.run(["select-window", "-t", "\(group):\(index)"])
     }
 
+    /// Current window size of a grouped view, for CROW-1162's `if_needed` resize
+    /// (skip the PTY ioctl when the window is already the requested size).
+    func windowSize(group: String) -> (cols: Int, rows: Int)? {
+        guard let raw = try? controller.displayMessage(
+            target: group, format: "#{window_width} #{window_height}")
+        else { return nil }
+        return Self.parseColsRows(raw)
+    }
+
+    /// Parse `"cols rows"` from `display-message`. Pure so the skip-ioctl gate
+    /// is unit-testable without tmux.
+    static func parseColsRows(_ raw: String) -> (cols: Int, rows: Int)? {
+        let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+        guard parts.count >= 2,
+              let cols = Int(parts[0]), let rows = Int(parts[1]),
+              cols > 0, rows > 0
+        else { return nil }
+        return (cols, rows)
+    }
+
     /// How many lines of pane history to replay on (re)connect. Wired to
     /// `TmuxBackend.scrollbackHistoryLimit` — the same value baked into the tmux
     /// `history-limit` (crow-tmux.conf) and the xterm.js client scrollback
@@ -235,13 +256,11 @@ struct TerminalCockpit: Sendable {
         var cols = 80
         var rows = 24
         if let dim = try? controller.displayMessage(
-            target: target, format: "#{pane_width} #{pane_height}")
+            target: target, format: "#{pane_width} #{pane_height}"),
+           let parsed = Self.parseColsRows(dim)
         {
-            let parts = dim.split(whereSeparator: { $0.isWhitespace })
-            if parts.count >= 2, let c = Int(parts[0]), let r = Int(parts[1]), c > 0, r > 0 {
-                cols = min(c, 400)
-                rows = min(r, 200)
-            }
+            cols = min(parsed.cols, 400)
+            rows = min(parsed.rows, 200)
         }
         return GridPaneSnapshot(snapshot: framed, cols: cols, rows: rows)
     }
