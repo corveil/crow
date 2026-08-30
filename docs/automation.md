@@ -260,7 +260,7 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 
 | Concern                          | File                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Settings tab UI                  | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/settings.js`                                     |
+| Settings tab UI                  | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/settings.js` (shell) + `settings-*.js` (tab bodies, CROW-1160) |
 | CLI verb (`crow automation`)     | `Packages/CrowCLI/Sources/CrowCLILib/Commands/AutomationCommands.swift`                                |
 | `automation-*` RPC handlers      | `Packages/CrowDaemon/Sources/CrowDaemon/SettingsRPCHandlers.swift` + `Packages/CrowEngine/Sources/CrowEngine/SettingsRPCSupport.swift` (`SettingsRPC.automationJSON`, `ListPatch`) |
 | Persisted toggles                | `Packages/CrowCore/Sources/CrowCore/Models/AppConfig.swift` (`ConfigDefaults`, `AutoRespondSettings`) |

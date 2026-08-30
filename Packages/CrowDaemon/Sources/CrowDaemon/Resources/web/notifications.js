@@ -87,7 +87,7 @@ function parseNotificationSettings(n) {
   };
 }
 
-// Web Audio tone recipes — kept in sync with settings.js previewSound so an
+// Web Audio tone recipes — kept in sync with settings-notifications.js previewSound so an
 // event chime is the exact tone the user auditioned in Settings.
 const SOUND_TONES = {
   Basso: [{ freq: 147, type: 'sawtooth', dur: 0.22 }],

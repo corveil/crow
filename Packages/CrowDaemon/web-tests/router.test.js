@@ -1,7 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
-const { loadClientSource } = require('./load-client');
+const { loadClientSource, loadSettingsSource } = require('./load-client');
 
 // CROW-936 behaviour test: hash-based URL routing. Runs the REAL app.js under
 // jsdom and drives the router against mocks — same loader shape as
@@ -119,9 +119,7 @@ function load(url, seed) {
 // nothing about the behaviour that actually regressed.
 function loadWithSettings(url) {
   const T = load(url);
-  const settingsSrc = fs.readFileSync(
-    __dirname + '/../Sources/CrowDaemon/Resources/web/settings.js', 'utf8');
-  try { vm.runInContext(settingsSrc, T.ctx, { filename: 'settings.js' }); }
+  try { vm.runInContext(loadSettingsSource(), T.ctx, { filename: 'settings.js' }); }
   catch (e) { console.log('[settings load warn]', e.message); }
   // Offline stand-ins for the four network reads openSettings makes.
   T.getConfigCalls = () => T.ctx.__rpcCalls.filter((m) => m === 'get-config').length;

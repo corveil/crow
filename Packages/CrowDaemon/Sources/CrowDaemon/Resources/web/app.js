@@ -2,7 +2,8 @@
 // daemon's WebSockets — JSON-RPC at /rpc, terminal byte-stream at /terminal.
 //
 // CROW-1155: this file is the boot assembler. Shared `'use strict'` globals live
-// in the concern scripts loaded before it from index.html; settings.js loads last.
+// in the concern scripts loaded before it from index.html; settings tab scripts
+// and the settings.js shell load last.
 'use strict';
 
 // ---------------------------------------------------------------------------

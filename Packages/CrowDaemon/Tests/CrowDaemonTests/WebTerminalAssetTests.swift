@@ -37,7 +37,7 @@ import Testing
     /// monolith's function greps follow the split this way.
     private static func webClientJS() throws -> String {
         try StaticAssets.uiJavaScriptFiles
-            .filter { $0 != "settings.js" }
+            .filter { $0 != "settings.js" && !$0.hasPrefix("settings-") }
             .map { try webAsset($0) }
             .joined(separator: "\n")
     }

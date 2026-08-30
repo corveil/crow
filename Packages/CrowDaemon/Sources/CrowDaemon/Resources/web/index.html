@@ -88,8 +88,9 @@
   <script src="/xterm/xterm-addon-webgl.js"></script>
   <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
   <script src="/xterm/xterm-addon-crow-viewport.js"></script>
-  <!-- CROW-1155: classic scripts in dependency order. app.js is the boot
-       assembler (shared state lives in the earlier files). settings.js last. -->
+  <!-- CROW-1155 / CROW-1160: classic scripts in dependency order. app.js is
+       the boot assembler (shared state lives in the earlier files). Settings
+       tab bodies register on CrowSettingsTabs; the settings.js shell is last. -->
   <script src="/rpc.js"></script>
   <script src="/notifications.js"></script>
   <script src="/sidebar.js"></script>
@@ -101,6 +102,14 @@
   <script src="/setup.js"></script>
   <script src="/router.js"></script>
   <script src="/app.js"></script>
+  <script src="/settings-general.js"></script>
+  <script src="/settings-automation.js"></script>
+  <script src="/settings-notifications.js"></script>
+  <script src="/settings-webaccess.js"></script>
+  <script src="/settings-integrations.js"></script>
+  <script src="/settings-workspaces.js"></script>
+  <script src="/settings-jobs.js"></script>
+  <script src="/settings-about.js"></script>
   <script src="/settings.js"></script>
 </body>
 </html>
