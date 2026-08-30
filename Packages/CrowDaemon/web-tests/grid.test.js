@@ -37,6 +37,8 @@ const epilogue = `
   selectSession: (id, o) => selectSession(id, o),
   handleSessionFromGridEscape: (e) => handleSessionFromGridEscape(e),
   returnToGridFromSession: () => returnToGridFromSession(),
+  get uiConfig(){ return uiConfig; },
+  set uiConfig(v){ Object.assign(uiConfig, v); },
   parseRoute: (h) => parseRoute(h),
   routeToHash: (r) => routeToHash(r),
   GRID_PINS_KEY: () => GRID_PINS_KEY,
@@ -299,6 +301,12 @@ console.log('\nCROW-1163 — ‹ Grid header affordance:');
   T.selectedBoard = null;
   btn.onclick();
   check('click returns to the grid board', boards.length === 1 && boards[0] === 'grid');
+  T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab' };
+  T.sessionCameFromGrid = true;
+  T.renderHeader(s);
+  const btnEscTab = T.document.getElementById('detail-header').querySelector('.back-to-grid');
+  check('esc+tab binding does not teach Esc on the control',
+    btnEscTab && btnEscTab.title === 'Back to grid');
 }
 
 console.log('\nCROW-1163 — Escape → grid only from chrome, never from xterm:');
@@ -350,6 +358,20 @@ console.log('\nCROW-1163 — Escape → grid only from chrome, never from xterm:
   T.handleSessionFromGridEscape(menuEsc);
   check('Escape closes a context menu instead of leaving the session',
     boards.length === 0 && !T.document.querySelector('.ctx-menu') && menuEsc.prevented === 1);
+
+  T.selectedId = 'one';
+  T.selectedBoard = null;
+  T.sessionCameFromGrid = true;
+  T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab' };
+  const prefix = escEvent();
+  T.handleSessionFromGridEscape(prefix);
+  check('esc+tab binding: Escape is not consumed so the prefix can arm',
+    boards.length === 0 && prefix.prevented === 0 && prefix.stopped === 0);
+  T.uiConfig = { switcherEnabled: false, switcherBinding: 'esc+tab' };
+  const disabled = escEvent();
+  T.handleSessionFromGridEscape(disabled);
+  check('disabled switcher does not keep Escape from the grid',
+    boards.length === 1 && boards[0] === 'grid' && disabled.prevented === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

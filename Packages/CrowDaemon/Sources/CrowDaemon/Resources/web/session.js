@@ -94,7 +94,8 @@ function reviewForSession(id) {
 // Capture phase so we see the key *before* the lightbox's bubble listener
 // hides itself — otherwise the same Escape would close the overlay *and*
 // leave the session. Overlays (Settings, prompts, switcher, context menu)
-// get first refusal: we no-op and let their own handlers run.
+// get first refusal: we no-op and let their own handlers run. An `esc+tab`
+// switcher binding also owns Escape as a prefix (see switcherOwnsEscapePrefix).
 // ---------------------------------------------------------------------------
 function returnToGridFromSession() {
   if (!sessionCameFromGrid || !selectedId || selectedBoard) return false;
@@ -110,6 +111,17 @@ function sessionFromGridEscapeBlocked() {
   const sw = document.getElementById('session-switcher');
   if (sw && !sw.hidden) return true;
   return false;
+}
+
+// The session switcher can bind `esc+tab` (a prefix chord). Both handlers are
+// capture-phase on document; the switcher registers first and arms on Escape
+// without consuming it, so Tab can still follow. If we then navigate, that
+// sequence is cut off. Yield whenever the configured binding uses Escape as a
+// prefix — the ‹ Grid header control remains the back path. Default is
+// `cmd+/`, which does not own Escape.
+function switcherOwnsEscapePrefix() {
+  if (!uiConfig.switcherEnabled) return false;
+  return parseSwitcherBinding(uiConfig.switcherBinding).prefix === 'Escape';
 }
 
 function handleSessionFromGridEscape(e) {
@@ -132,6 +144,7 @@ function handleSessionFromGridEscape(e) {
     return;
   }
   if (sessionFromGridEscapeBlocked()) return;
+  if (switcherOwnsEscapePrefix()) return;
   e.preventDefault();
   e.stopPropagation();
   returnToGridFromSession();
@@ -148,7 +161,8 @@ function renderHeader(s) {
   if (sessionCameFromGrid) {
     const back = el('button', 'back-to-grid', '‹ Grid');
     back.type = 'button';
-    back.title = 'Back to grid (Esc)';
+    // Don't teach Esc when the switcher's esc+tab prefix owns that key.
+    back.title = switcherOwnsEscapePrefix() ? 'Back to grid' : 'Back to grid (Esc)';
     back.setAttribute('aria-label', 'Back to grid');
     back.onclick = () => returnToGridFromSession();
     top.appendChild(back);

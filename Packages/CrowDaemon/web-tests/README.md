@@ -211,7 +211,8 @@ state copy, and cell DOM (pinned class, name, column count). CROW-1163:
 grid-cell clicks pass `{ fromGrid: true }`, `selectSession` sets/clears
 `sessionCameFromGrid`, the `‹ Grid` header control renders only then, and
 Escape returns to `#/grid` from app chrome — never while the xterm textarea
-has focus, while a lightbox is open, or in place of closing a context menu.
+has focus, while a lightbox is open, in place of closing a context menu, or
+when the session switcher is bound to an Escape prefix (`esc+tab`).
 Snapshot painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
 
 ## Run
