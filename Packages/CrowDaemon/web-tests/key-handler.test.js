@@ -415,6 +415,18 @@ async function main() {
     T.disarmSwitcherPrefix();
   }
 
+  // CROW-1163: Escape must keep reaching the PTY. The back-to-grid handler
+  // is a document listener that no-ops while #terminal contains focus; this
+  // pins that handleTerminalKey does not swallow Escape on the way through.
+  console.log('Escape is forwarded to the PTY (CROW-1163 must not steal it):');
+  {
+    setup();
+    const e = key('Escape');
+    const result = T.handleTerminalKey(e);
+    check('returns true so xterm sends Escape to the agent', result === true);
+    check('does not cancel the key', e.prevented === 0 && e.stopped === 0);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }

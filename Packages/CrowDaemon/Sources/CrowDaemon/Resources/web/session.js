@@ -84,12 +84,89 @@ function reviewForSession(id) {
   return rs.find((r) => r.review_session_id === id) || null;
 }
 
+// ---------------------------------------------------------------------------
+// Back to grid (CROW-1163)
+//
+// Escape returns to `#/grid` only when this session view was opened from a
+// grid cell (`sessionCameFromGrid`) AND the xterm does not have focus.
+// Claude Code (and vim, pagers, …) use Escape to cancel; `handleTerminalKey`
+// forwards unhandled keys to the PTY, so a global binding would steal it.
+// Capture phase so we see the key *before* the lightbox's bubble listener
+// hides itself — otherwise the same Escape would close the overlay *and*
+// leave the session. Overlays (Settings, prompts, switcher, context menu)
+// get first refusal: we no-op and let their own handlers run. An `esc+tab`
+// switcher binding also owns Escape as a prefix (see switcherOwnsEscapePrefix).
+// ---------------------------------------------------------------------------
+function returnToGridFromSession() {
+  if (!sessionCameFromGrid || !selectedId || selectedBoard) return false;
+  selectBoard('grid');
+  return true;
+}
+
+function sessionFromGridEscapeBlocked() {
+  if (window.settingsIsOpen && window.settingsIsOpen()) return true;
+  const box = document.getElementById('lightbox');
+  if (box && !box.hidden) return true;
+  if (document.querySelector('.text-prompt-backdrop, .modal-dialog-backdrop')) return true;
+  const sw = document.getElementById('session-switcher');
+  if (sw && !sw.hidden) return true;
+  return false;
+}
+
+// The session switcher can bind `esc+tab` (a prefix chord). Both handlers are
+// capture-phase on document; the switcher registers first and arms on Escape
+// without consuming it, so Tab can still follow. If we then navigate, that
+// sequence is cut off. Yield whenever the configured binding uses Escape as a
+// prefix — the ‹ Grid header control remains the back path. Default is
+// `cmd+/`, which does not own Escape.
+function switcherOwnsEscapePrefix() {
+  if (!uiConfig.switcherEnabled) return false;
+  return parseSwitcherBinding(uiConfig.switcherBinding).prefix === 'Escape';
+}
+
+function handleSessionFromGridEscape(e) {
+  if (e.type !== 'keydown' || e.key !== 'Escape' || e.defaultPrevented) return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.repeat) return;
+  if (!sessionCameFromGrid || !selectedId || selectedBoard) return;
+  // Load-bearing: never compete with the agent. xterm's textarea lives inside
+  // #terminal; isTerminalFocused is the same check the switcher uses.
+  if (isTerminalFocused()) return;
+  // A chrome <input> (find, rename prompt is a modal and already blocked
+  // above) must keep Escape, not navigate.
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  const menu = document.querySelector('.ctx-menu');
+  if (menu) {
+    closeContextMenu();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (sessionFromGridEscapeBlocked()) return;
+  if (switcherOwnsEscapePrefix()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  returnToGridFromSession();
+}
+
+document.addEventListener('keydown', handleSessionFromGridEscape, true);
+
 function renderHeader(s) {
   const root = document.getElementById('detail-header');
   root.innerHTML = '';
   if (!s) return;
 
   const top = el('div', 'detail-top');
+  if (sessionCameFromGrid) {
+    const back = el('button', 'back-to-grid', '‹ Grid');
+    back.type = 'button';
+    // Don't teach Esc when the switcher's esc+tab prefix owns that key.
+    back.title = switcherOwnsEscapePrefix() ? 'Back to grid' : 'Back to grid (Esc)';
+    back.setAttribute('aria-label', 'Back to grid');
+    back.onclick = () => returnToGridFromSession();
+    top.appendChild(back);
+  }
   const nameEl = el('div', 'detail-name', s.name);
   nameEl.title = 'Double-click to rename';
   nameEl.ondblclick = () => renameSession(s.id, s.name);

@@ -29,6 +29,12 @@ const GRID_PAGE_SIZE = 16;
 const GRID_PINS_KEY = 'crow.grid.pins';
 let gridPinnedIds = [];
 let gridPage = 0;
+// True while the open session view was reached by clicking a grid cell
+// (CROW-1163). Escape / the ‹ Grid header control return to `#/grid` only
+// then — a session opened from the sidebar, a ticket, or a deep link must not
+// steal Escape from the agent. Memory-only: a reload of `#/sessions/…` is not
+// "from the grid".
+let sessionCameFromGrid = false;
 let gridPollTimer = null;
 const gridTerms = new Map(); // sessionId → { term, host, lastSnap, cols, rows }
 

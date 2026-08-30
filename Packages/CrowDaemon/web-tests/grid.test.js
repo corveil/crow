@@ -25,13 +25,29 @@ const epilogue = `
   set sessions(v){ sessions = v; },
   get selectedBoard(){ return selectedBoard; },
   set selectedBoard(v){ selectedBoard = v; },
+  get selectedId(){ return selectedId; },
+  set selectedId(v){ selectedId = v; },
+  get sessionCameFromGrid(){ return sessionCameFromGrid; },
+  set sessionCameFromGrid(v){ sessionCameFromGrid = v; },
   sidebarLeftStack(){ return sidebarLeftStack(); },
   sessionMenuItems: (s) => sessionMenuItems(s),
   renderBoard(){ return renderBoard(); },
+  renderHeader: (s) => renderHeader(s),
   selectBoard: (k) => selectBoard(k),
+  selectSession: (id, o) => selectSession(id, o),
+  handleSessionFromGridEscape: (e) => handleSessionFromGridEscape(e),
+  returnToGridFromSession: () => returnToGridFromSession(),
+  get uiConfig(){ return uiConfig; },
+  set uiConfig(v){ Object.assign(uiConfig, v); },
   parseRoute: (h) => parseRoute(h),
   routeToHash: (r) => routeToHash(r),
   GRID_PINS_KEY: () => GRID_PINS_KEY,
+  spySelectSession(sink) {
+    selectSession = async function (id, opts) { sink.push({ id, opts: opts || null }); };
+  },
+  spySelectBoard(sink) {
+    selectBoard = function (k) { sink.push(k); selectedBoard = k; selectedId = null; };
+  },
   stubPaint(){
     renderSidebar = function(){};
     refreshBoard = async function(){};
@@ -39,6 +55,11 @@ const epilogue = `
     refreshGridSnapshots = async function(){};
     startGridPolling = function(){};
     stopGridPolling = function(){};
+    refreshLive = async function(){};
+    refreshArtifacts = async function(){};
+    ensureTerminal = function(){};
+    fitTerminal = function(){};
+    renderTabs = function(){};
   },
 };
 `;
@@ -58,6 +79,8 @@ const MARKUP = `<!doctype html><html><body>
     </main>
   </div>
   <div id="statusbar"></div>
+  <div id="lightbox" hidden><img id="lightbox-img" alt=""></div>
+  <div id="session-switcher" class="session-switcher" hidden></div>
 </body></html>`;
 
 function load() {
@@ -213,6 +236,142 @@ console.log('\nrender populated grid cells:');
   check('cell is keyed by session id', cells[0].dataset.sessionId === 'one');
   const grid = board.querySelector('.session-grid');
   check('2 sessions → 2 columns', grid && grid.style.getPropertyValue('--grid-cols') === '2');
+}
+
+function escEvent(extra) {
+  const e = {
+    type: 'keydown', key: 'Escape', altKey: false, ctrlKey: false, metaKey: false,
+    repeat: false, defaultPrevented: false, prevented: 0, stopped: 0,
+    preventDefault() { e.prevented++; e.defaultPrevented = true; },
+    stopPropagation() { e.stopped++; },
+  };
+  return Object.assign(e, extra || {});
+}
+
+console.log('\nCROW-1163 — grid cell click marks fromGrid provenance:');
+{
+  const T = load();
+  const sink = [];
+  T.spySelectSession(sink);
+  T.sessions = [sess('one', { name: 'alpha' })];
+  T.selectedBoard = 'grid';
+  T.renderBoard();
+  const board = T.document.getElementById('board');
+  board.querySelector('.grid-term').onclick();
+  check('cell click passes fromGrid', sink.length === 1 && sink[0].id === 'one'
+    && sink[0].opts && sink[0].opts.fromGrid === true);
+  sink.length = 0;
+  board.querySelector('.grid-cell-name').onclick({ stopPropagation() {} });
+  check('name click passes fromGrid', sink.length === 1 && sink[0].id === 'one'
+    && sink[0].opts && sink[0].opts.fromGrid === true);
+}
+
+console.log('\nCROW-1163 — selectSession sets / clears sessionCameFromGrid:');
+{
+  const T = load();
+  T.sessions = [sess('one')];
+  // Flag is assigned synchronously, before the first await.
+  T.selectSession('one', { fromGrid: true });
+  check('fromGrid: true sets the flag', T.sessionCameFromGrid === true);
+  T.selectSession('one');
+  check('a later selectSession without fromGrid clears it', T.sessionCameFromGrid === false);
+  T.sessionCameFromGrid = true;
+  T.selectSession('one', { fromRoute: true });
+  check('fromRoute does not keep a stale flag', T.sessionCameFromGrid === false);
+}
+
+console.log('\nCROW-1163 — ‹ Grid header affordance:');
+{
+  const T = load();
+  const s = sess('one', { name: 'alpha', kind: 'work' });
+  T.sessions = [s];
+  T.sessionCameFromGrid = false;
+  T.selectedId = 'one';
+  T.renderHeader(s);
+  check('no back control when not from grid',
+    !T.document.getElementById('detail-header').querySelector('.back-to-grid'));
+  T.sessionCameFromGrid = true;
+  T.renderHeader(s);
+  const btn = T.document.getElementById('detail-header').querySelector('.back-to-grid');
+  check('‹ Grid button renders', !!(btn && btn.textContent === '‹ Grid'));
+  check('title teaches Esc', btn && /Esc/.test(btn.title));
+  const boards = [];
+  T.spySelectBoard(boards);
+  T.selectedId = 'one';
+  T.selectedBoard = null;
+  btn.onclick();
+  check('click returns to the grid board', boards.length === 1 && boards[0] === 'grid');
+  T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab' };
+  T.sessionCameFromGrid = true;
+  T.renderHeader(s);
+  const btnEscTab = T.document.getElementById('detail-header').querySelector('.back-to-grid');
+  check('esc+tab binding does not teach Esc on the control',
+    btnEscTab && btnEscTab.title === 'Back to grid');
+}
+
+console.log('\nCROW-1163 — Escape → grid only from chrome, never from xterm:');
+{
+  const T = load();
+  T.sessionCameFromGrid = true;
+  T.selectedId = 'one';
+  T.selectedBoard = null;
+  const boards = [];
+  T.spySelectBoard(boards);
+
+  const hit = escEvent();
+  T.handleSessionFromGridEscape(hit);
+  check('Escape from chrome returns to grid', boards[0] === 'grid' && hit.prevented === 1);
+
+  boards.length = 0;
+  T.selectedId = 'one';
+  T.selectedBoard = null;
+  T.sessionCameFromGrid = true;
+  const term = T.document.getElementById('terminal');
+  const ta = T.document.createElement('textarea');
+  term.appendChild(ta);
+  ta.focus();
+  const fromTerm = escEvent();
+  T.handleSessionFromGridEscape(fromTerm);
+  check('Escape while xterm focused is ignored', boards.length === 0 && fromTerm.prevented === 0);
+
+  ta.blur();
+  T.sessionCameFromGrid = false;
+  T.selectedId = 'one';
+  T.selectedBoard = null;
+  const notFromGrid = escEvent();
+  T.handleSessionFromGridEscape(notFromGrid);
+  check('Escape is ignored when the session was not opened from the grid',
+    boards.length === 0 && notFromGrid.prevented === 0);
+
+  T.sessionCameFromGrid = true;
+  T.document.getElementById('lightbox').hidden = false;
+  const overlay = escEvent();
+  T.handleSessionFromGridEscape(overlay);
+  check('Escape is ignored while the lightbox is open',
+    boards.length === 0 && overlay.prevented === 0);
+
+  T.document.getElementById('lightbox').hidden = true;
+  const menu = T.document.createElement('div');
+  menu.className = 'ctx-menu';
+  T.document.body.appendChild(menu);
+  const menuEsc = escEvent();
+  T.handleSessionFromGridEscape(menuEsc);
+  check('Escape closes a context menu instead of leaving the session',
+    boards.length === 0 && !T.document.querySelector('.ctx-menu') && menuEsc.prevented === 1);
+
+  T.selectedId = 'one';
+  T.selectedBoard = null;
+  T.sessionCameFromGrid = true;
+  T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab' };
+  const prefix = escEvent();
+  T.handleSessionFromGridEscape(prefix);
+  check('esc+tab binding: Escape is not consumed so the prefix can arm',
+    boards.length === 0 && prefix.prevented === 0 && prefix.stopped === 0);
+  T.uiConfig = { switcherEnabled: false, switcherBinding: 'esc+tab' };
+  const disabled = escEvent();
+  T.handleSessionFromGridEscape(disabled);
+  check('disabled switcher does not keep Escape from the grid',
+    boards.length === 1 && boards[0] === 'grid' && disabled.prevented === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

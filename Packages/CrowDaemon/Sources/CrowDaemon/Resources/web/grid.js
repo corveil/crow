@@ -213,7 +213,7 @@ function gridCell(s) {
   cell.appendChild(head);
   const hostWrap = el('div', 'grid-term');
   hostWrap.title = 'Open ' + (s.name || 'session');
-  hostWrap.onclick = () => selectSession(s.id);
+  hostWrap.onclick = () => selectSession(s.id, { fromGrid: true });
   const existing = gridTerms.get(s.id);
   if (existing && existing.host) {
     hostWrap.appendChild(existing.host);
@@ -234,7 +234,7 @@ function gridCellHeader(s) {
   const nameBtn = el('button', 'grid-cell-name', s.name || 'session');
   nameBtn.type = 'button';
   nameBtn.title = s.name || 'Open session';
-  nameBtn.onclick = (e) => { e.stopPropagation(); selectSession(s.id); };
+  nameBtn.onclick = (e) => { e.stopPropagation(); selectSession(s.id, { fromGrid: true }); };
   const dot = el('span', 'grid-cell-dot' + (ind.pulse ? ' pulse' : ''));
   dot.style.background = ind.color;
   const badge = el('span', 'grid-cell-badge', ind.label || s.status || '');

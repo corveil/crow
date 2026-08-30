@@ -574,6 +574,10 @@ document.addEventListener('keyup', onSwitcherKeyUp, true);
 // could never move past it (review).
 async function selectSession(id, opts) {
   const fromRoute = !!(opts && opts.fromRoute);
+  // Provenance for CROW-1163: only an explicit grid-cell click marks the
+  // session as "from the grid". Sidebar / tickets / notifications / routed
+  // deep links / the switcher all clear it, so Escape stays the agent's.
+  sessionCameFromGrid = !!(opts && opts.fromGrid);
   touchSessionMRU(id);
   // Synchronous, before the first await: applyRoute relies on the hash being
   // settled by the time anything else can observe it. A pending terminal is
