@@ -841,11 +841,14 @@ create_session() {
     die "add_worktree" "crow add-worktree failed: $wt_result"
   fi
 
-  # Step 4: Add ticket link (if URL provided)
+  # Step 4: Add ticket link (if URL provided). GitHub/GitLab chips read
+  # `Issue #N`; Jira (non-numeric) stays `Issue` (CROW-1167).
   if [[ -n "$TICKET_URL" ]]; then
     log "Adding ticket link..."
+    local ticket_label="Issue"
+    [[ "$TICKET_NUMBER" =~ ^[0-9]+$ ]] && ticket_label="Issue #$TICKET_NUMBER"
     "$CROW_BIN" add-link --session "$SESSION_ID" \
-      --label "Issue" \
+      --label "$ticket_label" \
       --url "$TICKET_URL" \
       --type ticket >/dev/null 2>&1 \
       || log "Warning: add-link (ticket) failed"
