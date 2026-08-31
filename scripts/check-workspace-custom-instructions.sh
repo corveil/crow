@@ -142,6 +142,17 @@ for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.templa
         "Do **not** \`git rm\`"
 done
 
+# CROW-1166: set-ticket failure must abort setup, not warn-and-continue.
+# Swallowing it left ticket_url null while add-link still attached a cosmetic
+# ticket row, which hid the miss from the UI (mark-in-review needs ticketURL).
+for f in skills/crow-workspace/setup.sh Resources/crow-workspace-setup.sh.template; do
+    require "$f" 'die "set_ticket"' 'crow set-ticket failed'
+    if grep -Fq 'Warning: set-ticket failed' "$f"; then
+        echo "DRIFT: $f still swallows set-ticket failure" >&2
+        fail=1
+    fi
+done
+
 if [ "$fail" -ne 0 ]; then
     echo "check-workspace-custom-instructions: FAILED (see #683)" >&2
     exit 1

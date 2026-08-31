@@ -668,6 +668,7 @@ If `setup.sh` returns a JSON error (`"status": "error"`):
 | `git_fetch` — git fetch failed | Check repo path exists and has remote configured |
 | `git_worktree_add` — worktree creation failed | Branch may exist; script auto-retries after cleanup |
 | `new_session` — crow new-session failed | Crow app may not be running. Inform user. |
+| `set_ticket` — crow set-ticket failed | Ticket metadata is required. Read `message` for the RPC error; retry with `--session-id` from `partial.session_id`. A ticket link is not a substitute — do not continue. |
 | `add_worktree` — crow add-worktree failed | Use full UUID from session, check paths |
 | `new_terminal` — crow new-terminal failed / could not create window | Session may not exist (check session_id), or tmux couldn't spawn a window under load |
 | `write_prompt` — prompt file not found | Verify prompt was written before calling setup.sh |

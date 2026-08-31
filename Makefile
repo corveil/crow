@@ -165,6 +165,8 @@ parity:
 	@./scripts/check-cli-parity.sh
 	@echo "==> Checking for banned NSLog (CROW-874)..."
 	@./scripts/check-no-nslog.sh
+	@echo "==> setup.sh set-ticket failure (CROW-1166)..."
+	@bash skills/crow-workspace/setup_session_test.sh
 	@echo "==> macos-sign-notarize helpers (CROW-1150)..."
 	@./scripts/macos-sign-notarize_test.sh
 

@@ -827,8 +827,14 @@ create_session() {
     local ticket_args=("$CROW_BIN" set-ticket --session "$SESSION_ID" --url "$TICKET_URL")
     [[ -n "$TICKET_TITLE" ]] && ticket_args+=(--title "$TICKET_TITLE")
     [[ "$TICKET_NUMBER" =~ ^[0-9]+$ ]] && ticket_args+=(--number "$TICKET_NUMBER")
-    "${ticket_args[@]}" >/dev/null 2>&1 \
-      || log "Warning: set-ticket failed (may already be set)"
+    # Ticket metadata is required for a ticketed workspace (#1166). set-ticket
+    # overwrites; a failure is not "already set". Swallowing it left sessions
+    # with a cosmetic add-link ticket row but null ticket_url, which blocks
+    # mark-in-review / can_set_project_status.
+    local ticket_result
+    if ! ticket_result=$("${ticket_args[@]}" 2>&1); then
+      die "set_ticket" "crow set-ticket failed: $ticket_result"
+    fi
   fi
 
   # Step 3: Register worktree
