@@ -6,8 +6,7 @@ Official `v*` GitHub Releases of `crow` and `crowd` are signed with a
 develop.
 
 See [ADR 0021](adr/0021-signed-notarized-macos-releases.md) for the decisions
-(standalone `crowd`, zip-not-dmg, GitHub-hosted runner until a native-host
-runner exists).
+(standalone `crowd`, zip-not-dmg, self-hosted native-macOS runner only).
 
 ## Human prerequisites (not automatable)
 
@@ -65,20 +64,18 @@ publishing an unsigned build.
 
 ## Runner
 
-Default `runs-on` is GitHub-hosted `macos-15`. To move the job onto the
-native-host runner (the Mac that hosts Colima, **outside** the Linux VM):
+macOS jobs (`Test`, `Build, Sign & Release`, CI `Desktop`) run on the
+native-host self-hosted runner labelled `signing` — the Mac that hosts
+Colima, **outside** the Linux VM. Linux jobs (`Shell Lint`, PR CI, cache-warm)
+run on the Colima runners (`[self-hosted, Linux]`).
 
-1. Provision the runner through `corveil/corveil-ci`
-   (`make install-signing-runner` — see that repo's
-   `docs/macos-signing-runner.md`).
-2. Set repository variable `CROW_SIGNING_RUNS_ON` to:
+**There is no GitHub-hosted `macos-*` fallback.** If the signing runner is
+offline, the job queues.
 
-   ```json
-   ["self-hosted", "macOS", "signing"]
-   ```
-
-No workflow change. `setup-xcode` is skipped on self-hosted; Xcode CLT is a
-runner prerequisite.
+The runner is registered as org runner `macos-signing` and converged via
+`corveil/corveil-ci` (`make install-signing-runner` — see that repo's
+`docs/macos-signing-runner.md`). Xcode / CLT is a runner prerequisite; the
+workflow does not install Xcode.
 
 ## Local dry-run
 
