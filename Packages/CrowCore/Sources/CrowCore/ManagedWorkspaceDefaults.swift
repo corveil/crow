@@ -18,10 +18,13 @@ import Foundation
 /// the behavior the ticket asks to preserve. This is the smallest possible signal:
 /// no new config field, no new CLI verb, no parity-ledger surface.
 ///
-/// Only *newly created* workspaces are defaulted, and only where the operator has
-/// not already made a choice — an existing workspace, or one whose gateway is
-/// already set, is never touched, so a later opt-out (untick the box, clear the
-/// gateway) always sticks.
+/// Only *newly created* workspaces are defaulted, and only ones not already in the
+/// stored config — an existing workspace is never re-touched, so a later opt-out
+/// (untick the box, clear the gateway) always sticks. A brand-new workspace never
+/// carries an operator-authored gateway (neither `workspace-add` nor the web can
+/// set one at creation), so the managed gateway is bound unconditionally; a
+/// pre-existing value on a new workspace can only be an untrusted `set-config`
+/// blob, which must not become an upload destination (see ``apply``).
 ///
 /// **The bound gateway is a credential** (it carries the org's `sk-citadel-…` key
 /// inline). It is copied from a value the operator already authored through the
@@ -34,12 +37,19 @@ public enum ManagedWorkspaceDefaults {
     /// Bind a freshly-created workspace to the managed org gateway and, when
     /// `enableUpload` is set, opt it into session log-sync (CROW-2841).
     ///
-    /// The gateway is only written when the workspace has none of its own, so a
-    /// caller that already bound one wins. `enableUpload` is kept separate from the
-    /// gateway so the `workspace-add` CLI path can honor an explicit
-    /// `--upload-session-logs false` while still binding the gateway — they are two
-    /// distinct audit items (#11 gateway, #23 log-sync), and opting out of upload
-    /// should not also unbind the gateway.
+    /// The managed gateway is bound **unconditionally**, overwriting any value the
+    /// workspace arrived with. A freshly-created workspace never carries an
+    /// operator-authored gateway — neither `workspace-add` (no gateway field) nor
+    /// the web (which can't author one at creation) sets one — so a pre-existing
+    /// value can only be an untrusted `set-config` blob. Enabling log-sync onto it
+    /// would redirect the transcript upload to a destination Crow never bound
+    /// (`LogSyncCollector` reuses `WorkspaceInfo.gateway` for both), so the helper
+    /// only ever pairs log-sync with the gateway it just wrote (CROW-2841 review).
+    ///
+    /// `enableUpload` is kept separate from the gateway so the `workspace-add` CLI
+    /// path can honor an explicit `--upload-session-logs false` while still binding
+    /// the gateway — they are two distinct audit items (#11 gateway, #23 log-sync),
+    /// and opting out of upload should not also unbind the gateway.
     ///
     /// - Returns: whether anything changed.
     @discardableResult
@@ -47,7 +57,7 @@ public enum ManagedWorkspaceDefaults {
         to workspace: inout WorkspaceInfo, gateway: WorkspaceGateway, enableUpload: Bool
     ) -> Bool {
         let before = workspace
-        if workspace.gateway?.isEmpty ?? true { workspace.gateway = gateway }
+        workspace.gateway = gateway
         if enableUpload { workspace.uploadSessionLogs = true }
         return workspace != before
     }

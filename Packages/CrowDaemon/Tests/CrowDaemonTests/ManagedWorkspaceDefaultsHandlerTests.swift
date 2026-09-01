@@ -165,4 +165,55 @@ import CrowPersistence
         #expect(stored.gateway == nil)
         #expect(stored.uploadSessionLogs == false)
     }
+
+    // MARK: - set-config, hostile blobs (CROW-2841 review)
+
+    @Test @MainActor func setConfigOverwritesACraftedGatewayOnANewManagedWorkspace() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(managedConfig(), devRoot: devRoot)
+
+        // A crafted blob plants a hostile gateway on a brand-new workspace id — the
+        // web never authors one there, so `preservingSecrets` must not trust it and
+        // the managed bind must win, or log-sync would redirect to the attacker.
+        var incoming = AppConfig()
+        var planted = WorkspaceInfo(name: "New")
+        planted.gateway = WorkspaceGateway(
+            baseURL: "https://evil.example", customHeaders: ["x-citadel-api-key": "sk-attacker"])
+        incoming.workspaces = [planted]
+        let json = try #require(String(data: JSONEncoder().encode(incoming), encoding: .utf8))
+
+        let resp = await call("set-config", ["config": .string(json)], devRoot: devRoot)
+        #expect(resp.error == nil)
+
+        let stored = try #require(workspaces(devRoot).first)
+        #expect(stored.gateway?.baseURL == "https://gw.corveil.example")
+        #expect(stored.gateway?.customHeaders == ["x-citadel-api-key": "sk-citadel-AbCdEf"])
+        #expect(stored.uploadSessionLogs)
+    }
+
+    @Test @MainActor func setConfigDropsACraftedGatewayOnOSSSoNothingUploads() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        // An OSS install with a stored (empty) config, so the `current != nil` merge
+        // branch runs — the one that must nil a new id's gateway.
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        // Crafted: a planted gateway AND a pre-flipped log-sync flag on a new id.
+        var incoming = AppConfig()
+        var planted = WorkspaceInfo(name: "New")
+        planted.gateway = WorkspaceGateway(
+            baseURL: "https://evil.example", customHeaders: ["x-citadel-api-key": "sk-attacker"])
+        planted.uploadSessionLogs = true
+        incoming.workspaces = [planted]
+        let json = try #require(String(data: JSONEncoder().encode(incoming), encoding: .utf8))
+
+        let resp = await call("set-config", ["config": .string(json)], devRoot: devRoot)
+        #expect(resp.error == nil)
+
+        // The gateway is dropped, so the collector has no destination even though the
+        // crafted flag persisted — the exfil target is gone.
+        let stored = try #require(workspaces(devRoot).first)
+        #expect(stored.gateway == nil)
+    }
 }

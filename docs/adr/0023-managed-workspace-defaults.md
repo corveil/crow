@@ -65,9 +65,13 @@ never connects, so it never matches and its opt-in-off defaults are untouched.
   inline. It is copied from a value the operator already authored through the
   local-only Connect / org-provisioning flow, and it never crosses the wire — every
   response path strips it (`WorkspaceRPC.workspaceJSON` shows only the base URL;
-  `SettingsSecrets.strippedForTransport` blanks header values). So creation from a
-  remote authenticated peer materializes the operator's own managed policy on the
-  daemon host; it neither accepts a credential from, nor reveals one to, the caller.
+  `SettingsSecrets.strippedForTransport` blanks header values). A new workspace also
+  never *keeps* a caller-supplied gateway: `preservingSecrets` nils the gateway on a
+  new (unknown) id, and the managed default overwrites unconditionally — so log-sync
+  is only ever paired with the gateway Crow itself derived, never one a crafted
+  `set-config` blob planted. So creation from a remote authenticated peer
+  materializes the operator's own managed policy on the daemon host; it neither
+  accepts a credential from, nor reveals one to, the caller.
 
 ## Alternatives considered
 

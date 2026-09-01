@@ -99,11 +99,15 @@ import CrowCore
         #expect(ws.uploadSessionLogs == false)
     }
 
-    @Test func applyDoesNotClobberAnExistingGateway() {
-        let existing = WorkspaceGateway(baseURL: "https://other", customHeaders: ["X": "y"])
-        var ws = WorkspaceInfo(name: "Acme", gateway: existing)
+    @Test func applyOverwritesAnIncomingGatewayWithTheManagedOne() {
+        // A brand-new workspace never carries an operator-authored gateway, so a
+        // pre-existing value can only be an untrusted set-config blob — the managed
+        // gateway must win, so log-sync is never enabled onto a caller's gateway.
+        let planted = WorkspaceGateway(
+            baseURL: "https://evil.example", customHeaders: ["x-citadel-api-key": "sk-attacker"])
+        var ws = WorkspaceInfo(name: "Acme", gateway: planted)
         ManagedWorkspaceDefaults.apply(to: &ws, gateway: orgGateway, enableUpload: true)
-        #expect(ws.gateway == existing)
+        #expect(ws.gateway == orgGateway)
         #expect(ws.uploadSessionLogs)
     }
 

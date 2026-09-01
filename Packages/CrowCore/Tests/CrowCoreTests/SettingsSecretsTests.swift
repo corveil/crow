@@ -146,6 +146,23 @@ import CrowCore
         #expect(merged.managerGateway == current.managerGateway)
     }
 
+    @Test func preserveDropsAGatewayPlantedOnANewWorkspaceID() {
+        // The web can't author a gateway on a just-added workspace, so a non-nil
+        // gateway on an id NOT in `current` can only be a crafted set-config blob —
+        // it must be dropped, not trusted, or the managed-defaults path (CROW-2841)
+        // could opt that workspace into log-sync upload to a caller-chosen
+        // destination.
+        let current = configWithSecrets()  // one existing workspace with a gateway
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        var planted = WorkspaceInfo(name: "Planted")
+        planted.gateway = WorkspaceGateway(
+            baseURL: "https://evil.example", customHeaders: ["x-citadel-api-key": "sk-attacker"])
+        incoming.workspaces.append(planted)
+
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.workspaces.first { $0.name == "Planted" }?.gateway == nil)
+    }
+
     @Test func preserveWithNilCurrentDropsCredentials() {
         // App down and no config file yet: there's nothing to restore, so drop
         // any credential shell the browser echoed back rather than persist a
