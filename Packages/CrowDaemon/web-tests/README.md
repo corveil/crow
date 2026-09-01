@@ -234,22 +234,7 @@ Exit code is non-zero if any assertion fails.
 now gates every PR — with it ignored, a `jsdom` patch release could turn an
 unrelated PR red.
 
-### `npm test` vs `npm run test:ci`
-
-`test` runs everything. `test:ci` is the same list **minus `row.test.js`**, and is
-what `.github/workflows/ci.yml` runs.
-
-`row.test.js` has 10 pre-existing failures on `main` — its own comment (above
-`pillIcons`) names the cause: CROW-802 moved PR status parts to SVG `.ico` spans,
-but the `r.glyphs` assertions still read text-only `.pr-ico`, so they assert on
-glyphs that are no longer text. Fixing them means deciding what the icons *should*
-render, which is a change to `row`, not to the harness. Until someone makes that
-call, gating CI on the whole suite would land every PR red — so CI runs the nine
-green files and this note exists so the exclusion can't quietly become permanent.
-
-Note the exclusion drops the file **wholesale**, so its 43 *passing* assertions
-stop gating too. Whoever repairs the 10 should re-add `row` to `test:ci` in the
-same change — the win is restoring 43, not just fixing 10.
+CI runs `npm run test:ci`, which is the same file list as `npm test`.
 
 > This is a Node-based harness kept separate from the Swift `swift test` suite;
 > `node_modules/` here is git-ignored and not part of the app bundle.
