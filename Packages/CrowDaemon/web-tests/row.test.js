@@ -11,6 +11,7 @@ const epilogue = `
 ;globalThis.__t = {
   sessionRow(s){ return sessionRow(s); },
   prStatusInline(pr, am, enabled, ar){ return prStatusInline(pr, am, enabled, ar); },
+  ICONS,
   set live(v){ liveById = v; },
   set hideDetails(v){ uiConfig.hideSessionDetails = v; },
 };
@@ -58,16 +59,33 @@ function render(pr, overrides, autoMergeState, autoRebaseState) {
   if (autoRebaseState && live['sess-1']) live['sess-1'].auto_rebase_state = autoRebaseState;
   T.live = live;
   const row = T.sessionRow({ ...SESSION, ...(overrides || {}) });
+  // Text-only `.pr-ico` leftovers (unknown `?` / none `○`). Named glyphs after
+  // CROW-802 / CROW-863 render as SVG `.ico` spans — identify those via
+  // `pillKinds`, not this list.
   return { row, glyphs: [...row.querySelectorAll('.pr-badge .pr-ico')].map((n) => n.textContent) };
 }
 const badge = (row) => row.querySelector('.pr-badge');
 // Every icon child of the pill, in order. Parts with an `icon` render as SVG
-// `.ico` spans and only glyph-only parts as `.pr-ico` text — the CROW-802 drift
-// the `r.glyphs` assertions below still trip over. The auto-merge part is
-// appended last, so its presence is a count delta and its tint is the last
-// child's color; both are real structural assertions rather than a restatement
-// of the aria-label.
+// `.ico` spans and only glyph-only parts (unknown `?` / none `○`) as `.pr-ico`
+// text. The auto-merge part is appended last, so its presence is a count delta
+// and its tint is the last child's color; both are real structural assertions
+// rather than a restatement of the aria-label.
 const pillIcons = (row) => [...row.querySelectorAll('.pr-badge .ico, .pr-badge .pr-ico')];
+// Identify an SVG `.ico` by the ICONS path it contains; `.pr-ico` by its text.
+// jsdom serializes self-closing SVG tags as `<path …></path>`, so expand both
+// sides before comparing.
+function expandSelfClosing(html) {
+  return html.replace(/<([a-z]+)([^>]*)\/>/gi, '<$1$2></$1>');
+}
+function iconKind(node) {
+  if (node.classList.contains('pr-ico')) return node.textContent;
+  const markup = expandSelfClosing((node.querySelector('svg') || node).innerHTML);
+  for (const [name, path] of Object.entries(T.ICONS)) {
+    if (path && markup.includes(expandSelfClosing(path))) return name;
+  }
+  return null;
+}
+const pillKinds = (row) => pillIcons(row).map(iconKind);
 const autoIco = (row) => {
   const icons = pillIcons(row);
   return icons.length ? icons[icons.length - 1] : null;
@@ -91,9 +109,9 @@ const rebaseIco = (row, withAutoMerge) => {
 console.log('Failing checks + changes requested:');
 let r = render({ has_pr: true, checks: 'failing', review: 'changesRequested', merge: 'MERGEABLE',
   is_merged: false, has_blockers: true, ready_to_merge: false, failed_checks: ['build', 'lint'] });
-check('two glyphs rendered', r.glyphs.length === 2);
-check('both are ✕', r.glyphs.join('') === '✕✕');
-check('glyphs are red', [...r.row.querySelectorAll('.pr-ico')].every((n) => n.style.color === 'var(--red)'));
+check('two glyphs rendered', pillIcons(r.row).length === 2);
+check('both are close SVGs', pillKinds(r.row).join(',') === 'close,close');
+check('glyphs are red', pillIcons(r.row).every((n) => n.style.color === 'var(--red)'));
 check('pill itself is red', badge(r.row).style.color === 'var(--red)');
 check('aria-label names the failing count and review', (() => {
   const a = badge(r.row).getAttribute('aria-label');
@@ -103,42 +121,36 @@ check('aria-label names the failing count and review', (() => {
 console.log('\nPassing checks + approved:');
 r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
   is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [] });
-check('two ✔ glyphs', r.glyphs.join('') === '✔✔');
-check('glyphs green', [...r.row.querySelectorAll('.pr-ico')].every((n) => n.style.color === 'var(--green)'));
+check('two check SVGs', pillKinds(r.row).join(',') === 'check,check');
+check('glyphs green', pillIcons(r.row).every((n) => n.style.color === 'var(--green)'));
 check('pill green', badge(r.row).style.color === 'var(--green)');
 
 console.log('\nPending checks + review required:');
 r = render({ has_pr: true, checks: 'pending', review: 'reviewRequired', merge: 'unknown',
   is_merged: false, has_blockers: false, ready_to_merge: false, failed_checks: [] });
-check('two ◷ glyphs', r.glyphs.join('') === '◷◷');
-check('glyphs orange', [...r.row.querySelectorAll('.pr-ico')].every((n) => n.style.color === 'var(--orange)'));
+check('clock then eye SVGs', pillKinds(r.row).join(',') === 'clock,eye');
+check('glyphs orange', pillIcons(r.row).every((n) => n.style.color === 'var(--orange)'));
 
 console.log('\nMerged PR collapses to a single purple check:');
 r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'merged',
   is_merged: true, has_blockers: false, ready_to_merge: false, failed_checks: [] });
-check('exactly one glyph', r.glyphs.length === 1);
-check('glyph is ✔', r.glyphs[0] === '✔');
-// `?.` guards a pre-existing CROW-802 selector drift: ✔/✕/⚠ now render as SVG
-// `.ico` spans, not `.pr-ico` text, so `.pr-ico` is null here. Without the
-// guard this line *throws* and aborts the whole file mid-run; with it the
-// suite runs to completion so later sections (incl. the crow:merge checks
-// below) execute and the exit code stops masking their pass/fail. Fixing the
-// drift itself (so this assertion passes again) is CROW-802's own ticket.
-check('glyph purple', r.row.querySelector('.pr-ico')?.style.color === 'var(--purple)');
+check('exactly one glyph', pillIcons(r.row).length === 1);
+check('glyph is check SVG', pillKinds(r.row)[0] === 'check');
+check('glyph purple', pillIcons(r.row)[0].style.color === 'var(--purple)');
 
-console.log('\nConflicting PR adds a ⚠:');
+console.log('\nConflicting PR adds a warning:');
 r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'conflicting',
   is_merged: false, has_blockers: true, ready_to_merge: false, failed_checks: [] });
-check('three glyphs (checks, review, conflict)', r.glyphs.length === 3);
-check('third glyph is ⚠', r.glyphs[2] === '⚠');
+check('three glyphs (checks, review, conflict)', pillIcons(r.row).length === 3);
+check('third glyph is warning SVG', pillKinds(r.row)[2] === 'warning');
 
 console.log('\ncrow:merge label vs auto-merge enabled (two independent signals):');
 r = render(GREEN_PR);
-check('🏷 present when has_merge_label', r.glyphs.includes('🏷'));
+check('tag present when has_merge_label', pillKinds(r.row).includes('tag'));
 check('no ⛙ when auto_merge is false and no verdict', !hasAutoChip(r.row));
 r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
   is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [] });
-check('no 🏷 when has_merge_label absent', !r.glyphs.includes('🏷'));
+check('no 🏷 when has_merge_label absent', !pillKinds(r.row).includes('tag'));
 r = render(GREEN_PR, { auto_merge: true });
 check('🏷 and ⛙ can both show',
   hasAutoChip(r.row) && /crow:merge label/.test(badge(r.row).getAttribute('aria-label')));
@@ -262,7 +274,8 @@ r = render({ has_pr: false });
 check('has_pr:false renders no glyphs', r.glyphs.length === 0);
 check('has_pr:false pill is gold', badge(r.row).style.color === 'var(--gold)');
 r = render({ has_pr: true, is_merged: false, has_blockers: false, ready_to_merge: false });
-check('missing checks/review fall back to ? and ○', r.glyphs.join('') === '?○');
+check('missing checks/review fall back to ? and ○ as .pr-ico',
+  r.glyphs.join('') === '?○' && r.row.querySelectorAll('.pr-badge .ico').length === 0);
 
 console.log('\nSession label pills:');
 const LABELS = [{ name: 'bug', color: 'd73a4a' }, { name: 'web' }, { name: 'p1' }, { name: 'infra' }];
