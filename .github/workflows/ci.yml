@@ -134,6 +134,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Colima does not ship node the way GitHub-hosted ubuntu-latest did.
+      # check-notification-events.sh runs `node -e`, so this must come first.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: CLI/RPC control-plane parity (CROW-807)
         run: bash scripts/check-cli-parity.sh
 
@@ -162,13 +168,8 @@ jobs:
       # became SVG `.ico` spans, the `r.glyphs` assertions still read text-only
       # `.pr-ico`). Running the full suite here would fail every PR. See
       # Packages/CrowDaemon/web-tests/README.md.
-      # Pinned rather than whatever the Colima host ships this month — the
-      # lockfile pins the deps, this pins the runtime they run on. Placed
-      # immediately before the step that needs it so the shell gates above keep
-      # the environment they've always had.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+      # Node is installed at the top of this job (Colima has no preinstalled
+      # node). The lockfile pins the deps; setup-node pins the runtime.
 
       # `npm ci` (not `install`) against the committed lockfile: this step gates
       # every PR now, so an unpinned jsdom patch release must not be able to
@@ -201,7 +202,22 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install shellcheck
-        run: command -v shellcheck >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y shellcheck)
+        run: |
+          # Do not apt-get: Colima runners share one VM apt lock (corveil#1972).
+          if command -v shellcheck >/dev/null; then
+            exit 0
+          fi
+          ver=v0.10.0
+          case "$(uname -m)" in
+            aarch64|arm64) arch=aarch64 ;;
+            x86_64|amd64) arch=x86_64 ;;
+            *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+          esac
+          dest="${RUNNER_TEMP}/shellcheck"
+          mkdir -p "$dest"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.${arch}.tar.xz" \
+            | tar -xJ -C "$dest" --strip-components=1
+          echo "$dest" >> "$GITHUB_PATH"
 
       - name: Check scripts
         run: shellcheck scripts/*.sh

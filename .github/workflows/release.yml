@@ -50,7 +50,22 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install shellcheck
-        run: command -v shellcheck >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y shellcheck)
+        run: |
+          # Do not apt-get: Colima runners share one VM apt lock (corveil#1972).
+          if command -v shellcheck >/dev/null; then
+            exit 0
+          fi
+          ver=v0.10.0
+          case "$(uname -m)" in
+            aarch64|arm64) arch=aarch64 ;;
+            x86_64|amd64) arch=x86_64 ;;
+            *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+          esac
+          dest="${RUNNER_TEMP}/shellcheck"
+          mkdir -p "$dest"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.${arch}.tar.xz" \
+            | tar -xJ -C "$dest" --strip-components=1
+          echo "$dest" >> "$GITHUB_PATH"
 
       - name: Check scripts
         run: shellcheck scripts/*.sh

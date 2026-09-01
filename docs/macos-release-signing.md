@@ -72,6 +72,11 @@ run on the Colima runners (`[self-hosted, Linux]`).
 **There is no GitHub-hosted `macos-*` fallback.** If the signing runner is
 offline, the job queues.
 
+`corveil/crow` is public. Org self-hosted runners stay idle until the Default
+runner group has **Allow public repositories** checked (GitHub's default is
+off). Without that, jobs queue forever with matching labels and healthy
+runners.
+
 The runner is registered as org runner `macos-signing` and converged via
 `corveil/corveil-ci` (`make install-signing-runner` — see that repo's
 `docs/macos-signing-runner.md`). Xcode / CLT is a runner prerequisite; the
