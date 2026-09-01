@@ -246,7 +246,15 @@ func makeSnapshotHandlers(
             do {
                 merged = try ConfigStore.withConfigLock {
                     let current = ConfigStore.loadConfig(devRoot: devRoot)
-                    let m = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                    var m = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                    // CROW-2841: a workspace just added from the web arrives with no
+                    // gateway (the web can't author one). On a managed / design-partner
+                    // install, default each genuinely-new workspace to the org gateway
+                    // + session log-sync so the audit plane is true by default — a
+                    // no-op for self-hosted OSS, and never for a workspace that already
+                    // existed (so a later opt-out sticks).
+                    ManagedWorkspaceDefaults.applyToNewWorkspaces(
+                        in: &m, previousWorkspaceIDs: Set((current?.workspaces ?? []).map(\.id)))
                     try ConfigStore.saveConfig(m, devRoot: devRoot)
                     return m
                 }

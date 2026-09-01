@@ -88,8 +88,13 @@ public enum SettingsSecrets {
     ///
     /// Per-workspace gateways are matched to `current` by workspace `id`. A
     /// workspace present in `incoming` but not in `current` (e.g. one just added
-    /// from the web) keeps whatever gateway it arrived with — which is `nil`,
-    /// since the web can't author a gateway.
+    /// from the web) is forced to **no gateway**: the web can't author one at
+    /// creation, and the secure per-workspace gateway route matches an existing id,
+    /// so a non-nil gateway on a new id can only be a crafted blob. Enforcing that
+    /// here — rather than trusting the incoming value — stops a remote `set-config`
+    /// from planting a plaintext key that the managed-defaults path (CROW-2841)
+    /// would then opt into log-sync, redirecting transcripts to a destination Crow
+    /// never bound.
     public static func preservingSecrets(incoming: AppConfig, current: AppConfig?) -> AppConfig {
         var result = incoming
         result.jiraCredential = current?.jiraCredential
@@ -128,9 +133,14 @@ public enum SettingsSecrets {
                 current.workspaces.map { ($0.id, $0.gateway) },
                 uniquingKeysWith: { first, _ in first })
             result.workspaces = result.workspaces.map { workspace in
-                guard let storedGateway = currentGatewaysByID[workspace.id] else { return workspace }
                 var w = workspace
-                w.gateway = storedGateway
+                // Known id → restore its stored gateway; unknown id (a just-added
+                // workspace) → force nil, never trusting the incoming value (see the
+                // doc comment above). `currentGatewaysByID[id]` is a double optional
+                // (`WorkspaceGateway??`): `?? nil` collapses both "id absent" and
+                // "id present with a nil gateway" to nil, and yields the stored
+                // gateway when present.
+                w.gateway = currentGatewaysByID[workspace.id] ?? nil
                 return w
             }
         } else {

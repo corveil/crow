@@ -52,6 +52,17 @@ func makeWorkspaceHandlers(
                     // any field added to `WorkspaceInfo` later.
                     var workspace = WorkspaceInfo(name: name)
                     try WorkspaceRPC.applyPatch(params, to: &workspace, name: name)
+                    // CROW-2841: on a managed / design-partner install (connected to
+                    // Corveil with a single provisioned org), a new workspace defaults
+                    // to that org's gateway + session log-sync so the audit plane is
+                    // true by default. Self-hosted OSS has no connection, so this is a
+                    // no-op there. An explicit `--upload-session-logs` is honored; the
+                    // gateway (a distinct audit item) is always bound.
+                    if let managedGateway = config.managedWorkspaceGateway() {
+                        let explicitUpload = (params["upload_session_logs"] ?? .null) != .null
+                        ManagedWorkspaceDefaults.apply(
+                            to: &workspace, gateway: managedGateway, enableUpload: !explicitUpload)
+                    }
                     config.workspaces.append(workspace)
                     return workspace
                 }
