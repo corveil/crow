@@ -216,7 +216,12 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // them back — mirror the daemon handler so this surface stays safe
                 // if it ever becomes web-facing (review #3).
                 let current = await loadConfigForRPC()?.1
-                let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                var merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                // CROW-2841: default a genuinely-new workspace to the managed org
+                // gateway + session log-sync on a managed / design-partner install
+                // (no-op for self-hosted OSS). Mirrors the daemon `set-config` handler.
+                ManagedWorkspaceDefaults.applyToNewWorkspaces(
+                    in: &merged, previousWorkspaceIDs: Set((current?.workspaces ?? []).map(\.id)))
                 guard let saved = await applyConfigForRPC(merged) else {
                     throw RPCError.applicationError("Config not loaded yet")
                 }
