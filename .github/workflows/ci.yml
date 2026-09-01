@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # PR Swift build/test runs on Colima Linux (no GitHub-hosted minutes).
+  # PR Swift build/test runs on Linux to avoid burning macOS Actions minutes.
   # Swift is provided by the official swift:6.1 container (no Xcode). We build and
   # test the Foundation-only packages that compile on Linux — the macOS-only
   # GUI (root Crow target) and CrowTelemetry (Apple Network.framework) are
@@ -18,7 +18,7 @@ jobs:
   # here too (CROW-645); see docs/adr/0007-linux-ci-swift.md.
   test:
     name: Build & Test
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     container: swift:6.1
     # Inside a container, Actions defaults the shell to `sh` (dash); force bash
     # so the array-based package loop below works.
@@ -126,19 +126,13 @@ jobs:
   # which would otherwise leave the RPC half of the parity gate running only on
   # release tags (CROW-807, docs/adr/0016-cli-control-plane-parity.md).
   #
-  # Bare Colima Linux rather than the swift container: check-notification-events
+  # Plain ubuntu-latest rather than the swift container: check-notification-events
   # needs node, which the container does not ship.
   parity:
     name: Catalog & Parity Gates
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # Colima does not ship node the way GitHub-hosted ubuntu-latest did.
-      # check-notification-events.sh runs `node -e`, so this must come first.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
 
       - name: CLI/RPC control-plane parity (CROW-807)
         run: bash scripts/check-cli-parity.sh
@@ -168,8 +162,13 @@ jobs:
       # became SVG `.ico` spans, the `r.glyphs` assertions still read text-only
       # `.pr-ico`). Running the full suite here would fail every PR. See
       # Packages/CrowDaemon/web-tests/README.md.
-      # Node is installed at the top of this job (Colima has no preinstalled
-      # node). The lockfile pins the deps; setup-node pins the runtime.
+      # Pinned rather than whatever ubuntu-latest ships this month — the
+      # lockfile pins the deps, this pins the runtime they run on. Placed
+      # immediately before the step that needs it so the shell gates above keep
+      # the environment they've always had.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       # `npm ci` (not `install`) against the committed lockfile: this step gates
       # every PR now, so an unpinned jsdom patch release must not be able to
@@ -182,12 +181,9 @@ jobs:
 
   desktop:
     name: Desktop (Tauri) Build
-    runs-on: [self-hosted, macOS, signing]
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-
-      - name: Ensure cargo on PATH
-        run: echo "$HOME/.cargo/bin:/opt/homebrew/bin" >> "$GITHUB_PATH"
 
       - name: Build crow-desktop (Rust/Tauri)
         run: cargo build --manifest-path crow-desktop/src-tauri/Cargo.toml
@@ -197,27 +193,9 @@ jobs:
   # them in CI at all.
   shellcheck:
     name: Shell Lint
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install shellcheck
-        run: |
-          # Do not apt-get: Colima runners share one VM apt lock (corveil#1972).
-          if command -v shellcheck >/dev/null; then
-            exit 0
-          fi
-          ver=v0.10.0
-          case "$(uname -m)" in
-            aarch64|arm64) arch=aarch64 ;;
-            x86_64|amd64) arch=x86_64 ;;
-            *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
-          esac
-          dest="${RUNNER_TEMP}/shellcheck"
-          mkdir -p "$dest"
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.${arch}.tar.xz" \
-            | tar -xJ -C "$dest" --strip-components=1
-          echo "$dest" >> "$GITHUB_PATH"
 
       - name: Check scripts
         run: shellcheck scripts/*.sh

@@ -19,9 +19,10 @@ App Store Connect API key), not its electron-builder mechanics. The old
 app-specific-password auth; that bundle no longer exists, and API-key auth is
 the non-interactive path notarytool wants in CI.
 
-`codesign` / `notarytool` / `stapler` are macOS-only. The org's self-hosted
-runners live inside a Colima Linux VM and cannot run this job. The Mac that
-hosts Colima can, if a second runner is registered on the host OS.
+`codesign` / `notarytool` / `stapler` are macOS-only. Colima Linux self-hosted
+runners cannot run this job. A native-host macOS runner was registered and
+tried; GitHub-hosted `macos-15` is the pin instead because this repo is
+public and standard hosted minutes (including macOS) are free.
 
 ## Decision
 
@@ -44,12 +45,10 @@ hosts Colima can, if a second runner is registered on the host OS.
    keychain, used, and deleted in a `trap` / `always()` cleanup. The Developer
    ID cert never lands in the host login keychain, including on a self-hosted
    runner.
-5. **Runner: native-host self-hosted only.** `runs-on: [self-hosted, macOS, signing]`
-   for Test + Sign, `[self-hosted, Linux]` for Shell Lint. There is **no**
-   GitHub-hosted `macos-*` fallback — those minutes are the cost this pipeline
-   exists to avoid. The runner lives on the Mac that hosts Colima (host OS,
-   outside the Linux VM) and is labelled `signing`. Linux jobs stay on the
-   Colima runners. GitHub-hosted images are not used.
+5. **Runner: GitHub-hosted `macos-15`.** Test, Sign, and CI Desktop use
+   `macos-15`; Shell Lint / PR CI / cache-warm use `ubuntu-latest`. Standard
+   hosted minutes are free on this public repo, so there is no
+   `CROW_SIGNING_RUNS_ON` self-hosted switch. `setup-xcode` pins Xcode 16.
 
 ## Consequences
 
@@ -61,8 +60,8 @@ hosts Colima can, if a second runner is registered on the host OS.
 - The Apple Developer Program membership must stay in good standing
   (accepted agreement). An expired agreement fails every darwin cut, which is
   how socketzero's builds were blocked (socketzero#717).
-- GitHub-hosted `macos-*` is not used. A missing or offline `macos-signing`
-  runner queues the job instead of silently spending GitHub macOS minutes.
+- GitHub-hosted macOS minutes do not bill on this public repo. Private-repo
+  10× macOS accounting does not apply.
 - `crow autostart install --binary` already takes a path — point it at the
   signed `crowd` from the extracted release directory. No new install verb.
 
@@ -71,9 +70,11 @@ hosts Colima can, if a second runner is registered on the host OS.
 - **Sign only a future Tauri `.app` and leave `crowd` unsigned** — rejected:
   launchd execs `crowd` directly, and that is the binary Gatekeeper assesses
   at login.
-- **GitHub-hosted `macos-15` as the default until a native runner exists** —
-  rejected after the first probe: those minutes are unaffordable. The job
-  queues on `[self-hosted, macOS, signing]` instead of falling back.
+- **Default `runs-on` to `[self-hosted, macOS, signing]`** — rejected:
+  `corveil/crow` is public, so GitHub-hosted `macos-15` is free. A native-host
+  runner was registered and jobs did land on it, but the org runner group
+  had to allow public repositories first, and Colima still cannot run
+  `codesign`/`notarytool`. Hosted is simpler.
 - **`.dmg` as the only artifact, so we can staple** — rejected for CLI UX
   (the install path is extract-and-symlink, not drag-to-Applications). The
   notarized zip is sufficient while online; a dmg returns if we ship a

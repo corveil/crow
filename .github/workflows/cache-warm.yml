@@ -15,7 +15,7 @@ jobs:
   # See docs/adr/0007-linux-ci-swift.md.
   warm-build:
     name: Warm Swift Build Cache
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     container: swift:6.1
     # Inside a container, Actions defaults the shell to `sh` (dash); force bash
     # so the array-based package loop below works.
