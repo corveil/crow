@@ -204,6 +204,7 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
       { view: 'session', sessionId: 'a/b' });
 
     check('unknown top-level is null', T.parseRoute('#/nope') === null);
+    check('retired allowlist route is null', T.parseRoute('#/allowlist') === null);
     check('sessions with no id is null', T.parseRoute('#/sessions') === null);
     check('malformed terminal segment is null', T.parseRoute('#/sessions/a/x/y') === null);
     check('board with extra segment is null', T.parseRoute('#/tickets/extra') === null);

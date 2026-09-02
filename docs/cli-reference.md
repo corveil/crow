@@ -364,6 +364,8 @@ crow resync-jira
 
 Takes no arguments and walks every session, so it is safe but not cheap. Nothing happens for sessions whose ticket is not Jira-backed.
 
+---
+
 ## Settings Commands
 
 The General-tab settings that were previously web-only. Every `set` is a patch — only the flags you pass change, and passing none is an error rather than a silent no-op. Each `set` echoes the resulting subtree plus a `restart_required` boolean, so a write is self-verifying without a follow-up `get`.
@@ -1272,7 +1274,7 @@ Print the daemon's entire render-state snapshot in one call.
 crow get-state | jq 'keys'
 ```
 
-Takes no flags. The result object **is** the snapshot: `sessions`, `terminals`, `worktrees`, `links`, `hookStates`, `terminalReadiness`, `prStatus`, `reviewRequests`, `assignedIssues`, `allowEntries`, `remoteControlActiveTerminals`, `remoteControlEnabled`, `activeTerminalID`, and `config`. Credentials (Jira token, gateway auth headers, web-password hash and salt) are stripped before transport.
+Takes no flags. The result object **is** the snapshot: `sessions`, `terminals`, `worktrees`, `links`, `hookStates`, `terminalReadiness`, `prStatus`, `reviewRequests`, `assignedIssues`, `remoteControlActiveTerminals`, `remoteControlEnabled`, `activeTerminalID`, and `config`. Credentials (Jira token, gateway auth headers, web-password hash and salt) are stripped before transport.
 
 This is deliberately everything at once, and it is large — the snapshot carries every assigned issue's full body text, and the socket caps a response at 1 MB. On a busy install the command fails with a message naming the narrower reads. Prefer `crow list-sessions`, `crow get-session --session <uuid>`, `crow list-links`, or `crow list-terminals` when you want one slice.
 
