@@ -36,7 +36,7 @@ PR #228 split every automation toggle out of General into its own tab. Open **Se
 
 ### Manager Terminal
 
-- **Launch in auto permission mode** — passes `--permission-mode auto` to the Manager's `claude` invocation so orchestration commands (`crow`, `gh`, `git`) run without per-call approval prompts. Default **on**. Requires:
+- **Launch in auto permission mode** — passes `--permission-mode auto` to the Manager's `claude` invocation so orchestration commands (`crow`, `gh`, `git`) run without per-call approval prompts. Default **on**. As of Claude Code ≥ 2.1.257 auto mode can still stall once on the first file Read outside `{devRoot}` (CROW-1176) — Crow does not bypass that prompt. Requires:
   - Claude Code **2.1.83+**
   - **Max / Team / Enterprise / API** plan
   - **Anthropic** API provider (not Bedrock / Vertex / Foundry)
@@ -224,7 +224,7 @@ When an issue assigned to you carries the `crow:auto` label *and* the **Auto-lau
 
 ### #189 — Manager auto permission mode
 
-The Manager terminal launches in `--permission-mode auto` by default so orchestration commands run without prompts. Toggle is at **Settings → Automation → Manager Terminal**. See above for plan / model requirements.
+The Manager terminal launches in `--permission-mode auto` by default so orchestration commands run without per-call prompts. As of Claude Code ≥ 2.1.257 a one-time extra-workdir Read prompt can still stall the pane (CROW-1176). Toggle is at **Settings → Automation → Manager Terminal**. See above for plan / model requirements.
 
 ### #182 — Positive-evidence auto-complete
 

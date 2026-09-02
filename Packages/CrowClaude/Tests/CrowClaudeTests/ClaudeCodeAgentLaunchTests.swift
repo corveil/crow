@@ -63,4 +63,31 @@ struct ClaudeCodeAgentLaunchTests {
     @Test func sessionRenameSlashCommandIsOptIn() {
         #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
     }
+
+    @Test func autoPermissionEmitsAutoModeWithoutBypassOrAddDir() throws {
+        // CROW-1176: auto is no longer stall-free (≥ 2.1.257 extra-workdir Read
+        // prompt). The launch line still carries `--permission-mode auto` and
+        // must not grow a silent bypass or blanket `--add-dir`.
+        let cmd = try #require(agent.autoLaunchCommand(
+            session: Session(name: "s", kind: .job, reviewPromptDispatched: true),
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        ))
+        #expect(cmd.contains("--permission-mode auto"))
+        #expect(!cmd.contains("--dangerously-skip-permissions"))
+        #expect(!cmd.contains("bypassPermissions"))
+        #expect(!cmd.contains("--add-dir"))
+
+        let manager = agent.managerLaunchCommand(
+            sessionName: "Manager",
+            remoteControlEnabled: true,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(manager.contains("--permission-mode auto"))
+        #expect(!manager.contains("--dangerously-skip-permissions"))
+        #expect(!manager.contains("--add-dir"))
+    }
 }

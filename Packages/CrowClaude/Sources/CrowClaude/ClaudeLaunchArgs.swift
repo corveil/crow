@@ -24,6 +24,15 @@ public enum ClaudeLaunchArgs {
     ///   - autoPermissionMode: Append `--permission-mode auto`. Used for the Manager
     ///     terminal so orchestration commands (`crow`, `gh`, `git`) can run without
     ///     per-call approval. Requires a supported Claude Code plan and provider.
+    ///
+    ///     **Not stall-free as of Claude Code ≥ 2.1.257 (CROW-1176).** Auto mode
+    ///     now prompts once before the first file Read outside the working
+    ///     directories. Do **not** paper over that prompt: `--add-dir` of `$HOME`
+    ///     / `$TMPDIR` / sibling checkouts is the too-permissive fake;
+    ///     `permissions.blockReadsOutsideWorkingDirectories` only *blocks* those
+    ///     Reads; `--dangerously-skip-permissions` / `bypassPermissions` would
+    ///     also drop the same-release Containment Escape rule (brittle-reject).
+    ///     Crow still emits `--permission-mode auto` and nothing else.
     public static func argsSuffix(
         remoteControl: Bool,
         sessionName: String?,
@@ -31,6 +40,10 @@ public enum ClaudeLaunchArgs {
     ) -> String {
         var s = ""
         if autoPermissionMode {
+            // CROW-1176: `--permission-mode auto` only. Do not append
+            // `--dangerously-skip-permissions`, `bypassPermissions`, or a
+            // blanket `--add-dir` — those would paper over the ≥ 2.1.257
+            // extra-workdir Read prompt (and bypass would drop Containment Escape).
             s += " --permission-mode auto"
         }
         if remoteControl {

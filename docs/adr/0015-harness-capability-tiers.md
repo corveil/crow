@@ -253,6 +253,49 @@ deliberate, documented gaps (full grid in the
 > next resume layer. Live state:
 > [`docs/agent-harness-matrix.md`](../agent-harness-matrix.md).
 
+> **Amendment (2026-09-02, CROW-1176):** Claude Code **≥ 2.1.257** added a
+> **one-time prompt in auto mode** before the first file Read outside the
+> working directories, plus `permissions.blockReadsOutsideWorkingDirectories`
+> to make those reads a hard deny. The same release added a **Containment
+> Escape** classifier rule (cloud metadata-credential fetches, egress evasion,
+> cross-tenant reach are no longer auto-approved unless the environment marks
+> them expected). Crow's recap pin (`awaySummaryEnabled`, ≥ 2.1.108) is
+> unchanged — this is a different auto-mode contract.
+>
+> Crow treats Claude `--permission-mode auto` as the reference unattended path
+> for `.job` / Manager / (when enabled) coder-view Auto. A new interactive
+> prompt in that mode can stall `JobScheduler` follow-ups and Manager
+> orchestration the same way Cursor's folder-trust dialog did before CROW-954.
+> The eval (changelog 2.1.257, permissions / auto-mode docs, `claude --help`
+> on the installed **2.1.232** which is *below* the pin, so a live Crow-tmux
+> PTY pass on ≥ 2.1.257 remains a human re-check):
+>
+> 1. **The prompt is specified for auto mode**, not only Manual. Crow launches
+>    the interactive TUI with `--permission-mode auto` in a tmux PTY (not
+>    `-p`). `bypassPermissions` / `--dangerously-skip-permissions` skip
+>    prompts; `dontAsk` auto-denies. Crow uses none of those.
+> 2. **Working directories** are the launch cwd plus `--add-dir` /
+>    `permissions.additionalDirectories`. A Crow work/job worktree is
+>    `{devRoot}/{workspace}/{repo}-{n}-{slug}` — sibling worktrees, the main
+>    clone, `$TMPDIR`, and `$HOME` are outside. A review clone is
+>    `{devRoot}/crow-reviews/{repo}-pr-{N}` — the original checkout, sibling
+>    clones, `$TMPDIR`, and `$HOME` (e.g. `gh` creds) are outside. The Manager
+>    cwd is `{devRoot}`, so workspace worktrees under it are inside; `$HOME`
+>    and `$TMPDIR` are still outside. Review sessions that `cd` / Read outside
+>    the clone are the likely first hit.
+> 3. **No honest pre-answer.** `blockReadsOutsideWorkingDirectories` only
+>    *blocks* extra-workdir Reads (stall by denial). `--add-dir` /
+>    `additionalDirectories` expand the working set — `--add-dir` of `$HOME`
+>    / `$TMPDIR` / sibling checkouts is the too-permissive fake, and
+>    `--add-dir` also loads skills/commands/agents from the added dir.
+>    `skipAutoPermissionPrompt` is a different one-time notice ("make auto
+>    your default"). `--dangerously-skip-permissions` / `bypassPermissions`
+>    would also drop Containment Escape — **brittle-reject**.
+> 4. **Honest answer: auto can now stall.** Crow keeps emitting
+>    `--permission-mode auto` and does **not** paper over the prompt. The
+>    matrix Auto-permission cell is ⚠️ with that residual. Containment Escape
+>    is a security classifier, not a Crow gap — do not disable it.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -403,7 +446,9 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   today it covers the Codex async-hook **minimum** (**≥ 0.148.0**), the
   `codex_hooks`→`hooks`
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
-  Claude's recap subagent (**≥ 2.1.108**), OpenCode's `session.status` done
+  Claude's recap subagent (**≥ 2.1.108**), Claude's extra-workdir auto-mode
+  Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall; no silent bypass),
+  OpenCode's `session.status` done
   signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
   `session.idle` question), and the one still-unpinned empirical timing
   (Cursor async). Codex's async *timing* is **resolved** (CROW-1065): the

@@ -18,6 +18,17 @@ The Manager terminal is launched with `--permission-mode auto` by default. This 
 
 The trust scope is explicit: only the Manager. The user can disable Manager auto-permission via the config field if their threat model requires it.
 
+> **Amendment (2026-09-02, CROW-1176):** `--permission-mode auto` is no longer
+> stall-free. Claude Code ≥ 2.1.257 prompts once before the first file Read
+> outside the working directories. Crow still launches the Manager with auto
+> and does **not** emit `--dangerously-skip-permissions` or a blanket
+> `--add-dir` to skip that prompt — that would be the too-permissive fake
+> [ADR 0015](./0015-harness-capability-tiers.md) rejects, and bypass would
+> also drop the same-release Containment Escape rule. The Manager cwd is
+> `{devRoot}`, so workspace worktrees under it are inside the working set;
+> `$HOME` / `$TMPDIR` Reads can still stall. Live state:
+> [capability matrix Auto-permission](../agent-harness-matrix.md#auto-permission).
+
 ## Consequences
 
 **Easier:**
@@ -38,7 +49,7 @@ The trust scope is explicit: only the Manager. The user can disable Manager auto
 
 ## References
 
-- PRs: [#189](https://github.com/corveil/crow/pull/189) (introduce `managerAutoPermissionMode`, default `true`)
+- PRs: [#189](https://github.com/corveil/crow/pull/189) (introduce `managerAutoPermissionMode`, default `true`); CROW-1176 (auto no longer stall-free — extra-workdir Read prompt ≥ 2.1.257)
 - Code:
   - `Packages/CrowCore/Sources/CrowCore/Models/AppConfig.swift`
   - `Packages/CrowCore/Sources/CrowCore/AppState.swift`

@@ -296,7 +296,9 @@ public protocol CodingAgent: Sendable {
     /// `sessionName` labels the agent's session in claude.ai's Remote
     /// Control panel (and analogous systems if other agents support it).
     /// `autoPermissionMode` mirrors `ClaudeCodeAgent`'s `--permission-mode auto`
-    /// — agents that don't surface this concept can ignore it. `telemetryPort`
+    /// — agents that don't surface this concept can ignore it. As of Claude
+    /// Code ≥ 2.1.257 that flag is no longer stall-free (extra-workdir Read
+    /// prompt; CROW-1176) — Crow still emits it and does not bypass. `telemetryPort`
     /// is passed through for consistency with `autoLaunchCommand`; most
     /// agents won't need it for Manager terminals (CROW-433).
     func managerLaunchCommand(
