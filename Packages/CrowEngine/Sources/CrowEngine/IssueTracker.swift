@@ -14,6 +14,10 @@ import CrowProvider
 /// piggyback on those two responses — no per-session `gh` calls. The
 /// `rateLimit` block on each response feeds `AppState.githubRateLimit`,
 /// and a soft threshold + 403 detection suspend polling when quotas are low.
+///
+/// `refresh()` snapshots `AppState`/config on MainActor, runs provider I/O
+/// off the actor (`BoardPoller.fetchOffActor`), and applies results in one
+/// hop so a 5–10s GraphQL poll cannot starve CLI RPCs (CROW-1179).
 @MainActor
 public final class IssueTracker {
     let appState: AppState
@@ -464,218 +468,25 @@ public final class IssueTracker {
         guard let devRoot = ConfigStore.loadDevRoot(),
               let config = ConfigStore.loadConfig(devRoot: devRoot) else { return }
 
-        // Iterate by **task** provider — a workspace's tickets may live somewhere
-        // other than its code host (ADR 0005). A Jira-task / GitHub-code workspace
-        // contributes Jira issues here but still uses the GitHub code path below.
-        let hasGitHub = config.workspaces.contains(where: { $0.derivedTaskProvider == "github" })
-        var gitLabHosts: [String] = []
-        for ws in config.workspaces where ws.derivedTaskProvider == "gitlab" {
-            if let host = ws.host, !gitLabHosts.contains(host) {
-                gitLabHosts.append(host)
-            }
-        }
-        // Collect distinct Jira queries (the site/JQL/project triple is what
-        // actually varies). Resolve the shared Jira REST credential once (it may
-        // shell `op read`) and thread it into every config so the board read-back
-        // can list assigned issues over REST instead of acli (#533).
-        let jiraAuthorization = config.jiraCredential.flatMap { JiraCredentialResolver.resolve($0) }
-        var jiraConfigs: [JiraConfig] = []
-        for ws in config.workspaces where ws.derivedTaskProvider == "jira" {
-            let cfg = JiraConfig(site: ws.jiraSite, projectKey: ws.jiraProjectKey, jql: ws.jiraJQL, statusMap: ws.jiraStatusMap, authorization: jiraAuthorization)
-            if !jiraConfigs.contains(cfg) { jiraConfigs.append(cfg) }
-        }
+        // Snapshot on the state actor (milliseconds). Provider I/O — including
+        // Jira `op read` — runs off MainActor so CLI RPCs can hop on while a
+        // 5–10s GraphQL poll is in flight (CROW-1179). `isRefreshing` stays
+        // true across the hop so a second poll cannot tear `appState`.
+        let snapshot = boardPoller.captureSnapshot(config: config)
+        let providerManager = self.providerManager
+        let fetch = await Task.detached(priority: .utility) {
+            await BoardPoller.fetchOffActor(snapshot: snapshot, providerManager: providerManager)
+        }.value
 
-        var allIssues: [AssignedIssue] = []
-        // Recently-done count, accumulated across every provider this refresh.
-        // Each provider contributes its 24h closed/Done window; assigned once
-        // at the end so a non-GitHub (e.g. Jira-only) workspace updates it too
-        // instead of leaving a stale value from a prior GitHub-backed refresh.
-        var doneCount = 0
+        applyFetchedBoard(fetch, config: config)
 
-        // GitHub — one consolidated GraphQL query
-        let ghResult: ConsolidatedGitHubResponse? = hasGitHub ? await boardPoller.runConsolidatedGitHubQuery() : nil
-        if let ghResult {
-            if let rl = ghResult.rateLimit { appState.githubRateLimit = rl }
-
-            var openIssues = ghResult.openIssues
-            // Match viewer's open PRs to issues by closingIssuesReferences (repo + number)
-            for pr in ghResult.viewerPRs where pr.state == "OPEN" {
-                for linked in pr.linkedIssueReferences {
-                    if let idx = openIssues.firstIndex(where: {
-                        $0.provider == .github && $0.number == linked.number && $0.repo == linked.repo
-                    }) {
-                        openIssues[idx].prNumber = pr.number
-                        openIssues[idx].prURL = pr.url
-                        // Surface PR health inline on the board (#751): PRRecord
-                        // already carries these from monitoredPRsQuery, so no
-                        // extra fetch. A draft PR reports "draft"; otherwise the
-                        // normalized state lowercased ("open"/"merged"/"closed").
-                        openIssues[idx].prState = pr.isDraft ? "draft" : pr.state.lowercased()
-                        openIssues[idx].checksState = pr.checksState.isEmpty ? nil : pr.checksState
-                        openIssues[idx].failedCheckNames = pr.failedCheckNames.isEmpty ? nil : pr.failedCheckNames
-                    }
-                }
-            }
-            allIssues.append(contentsOf: openIssues)
-
-            let openIDs = Set(openIssues.map(\.id))
-            let uniqueDone = ghResult.closedIssues.filter { !openIDs.contains($0.id) }
-            allIssues.append(contentsOf: uniqueDone)
-            doneCount += ghResult.closedTotalCount
-        }
-
-        // GitLab — one call per host; includes the recently-closed half (#697)
-        // so GitLab-backed workspaces count toward doneIssuesLast24h, mirroring
-        // GitHub's open + deduped-closed merge.
-        for host in gitLabHosts {
-            let merged = Self.mergeListing(await boardPoller.fetchGitLabIssues(host: host))
-            let enriched = await boardPoller.enrichGitLabMRStatus(merged.issues, host: host)
-            allIssues.append(contentsOf: enriched)
-            doneCount += merged.doneCount
-        }
-
-        // Jira — one search per distinct config (best-effort, like GitLab).
-        // Include the recently-Done half (#536): a Jira ticket in its mapped
-        // Done status is a workflow status, not a closed issue, so it only lands
-        // in the board's Done section once its `.done`-mapped issue reaches
-        // `assignedIssues`. Mirror GitHub's open + deduped-closed merge.
-        for cfg in jiraConfigs {
-            let listing = await boardPoller.fetchJiraIssues(config: cfg)
-            let merged = Self.mergeListing(listing)
-            allIssues.append(contentsOf: merged.issues)
-            doneCount += merged.doneCount
-        }
-
-        appState.assignedIssues = allIssues
-        appState.doneIssuesLast24h = doneCount
-
-        let ticketExcludePatterns = config.defaults.excludeTicketRepos
-        let autoCreateCandidates = ticketExcludePatterns.isEmpty
-            ? allIssues
-            : allIssues.filter { !repoMatchesPatterns($0.repo, patterns: ticketExcludePatterns) }
-        boardPoller.detectAutoCreateCandidates(issues: autoCreateCandidates)
-
-        if let ghResult {
-            // Session PR link detection runs against open PRs only — we only
-            // ever want to attach a fresh link when there's an open PR.
-            reconciler.applySessionPRLinks(viewerPRs: ghResult.viewerPRs)
-
-            // For sessions with an existing .pr link whose PR isn't in the open
-            // viewer set, fetch the state in one batched aliased query. This
-            // surfaces merged/closed state without pulling MERGED/CLOSED PRs
-            // for every viewer (which routinely returned 100 PRs / ~86 KB).
-            let openPRURLs = Set(ghResult.viewerPRs.map(\.url))
-            let staleCandidateURLs = boardPoller.collectStalePRURLs(excluding: openPRURLs)
-            // `complete == false` means at least one provider's follow-up errored
-            // (rate limit, exit != 0, parse failure). We thread that through to
-            // auto-complete so "PR missing from payload" doesn't get treated as
-            // "PR is closed" on a degraded response. Partial-success is allowed:
-            // PRs from the working provider still flow through so merged badges
-            // can flip even if the other provider failed.
-            let staleFetch = staleCandidateURLs.isEmpty
-                ? StalePRFetchResult(prs: [], complete: true)
-                : await boardPoller.fetchStalePRStates(urls: staleCandidateURLs, viewerLogin: ghResult.viewerLogin)
-            let stalePRs = staleFetch.prs
-            let prDataComplete = staleFetch.complete
-            let allKnownPRs = Self.dedupedByURL(ghResult.viewerPRs + stalePRs)
-
-            applyPRStatuses(viewerPRs: allKnownPRs)
-            attribution.updatePRAttributions(viewerPRs: allKnownPRs)
-
-            // Rework signals (#694): capture file lists for fresh merges,
-            // stamp reverts, then post-merge fixes — in that order, so a
-            // revert never double-counts as a fix (heuristic rule 4).
-            await attribution.captureChangedFilesForNewMerges()
-            await attribution.scanDefaultBranchesForReverts()
-            attribution.detectPostMergeFixes()
-
-            // Review requests (search result) + cross-reference with review sessions
-            appState.isLoadingReviews = true
-            var reviews = ghResult.reviewRequests
-            for i in reviews.indices {
-                if let session = appState.reviewSessions.first(where: {
-                    appState.links(for: $0.id).contains(where: { $0.linkType == .pr && $0.url == reviews[i].url })
-                }) {
-                    reviews[i].reviewSessionID = session.id
-                }
-            }
-            let allCurrentIDs = Set(reviews.map(\.id))
-            let reviewExcludePatterns = config.effectiveExcludeReviewRepos
-            if !reviewExcludePatterns.isEmpty {
-                reviews = reviews.filter { !repoMatchesPatterns($0.repo, patterns: reviewExcludePatterns) }
-            }
-            let ignoreLabels = config.defaults.ignoreReviewLabels
-            if !ignoreLabels.isEmpty {
-                let lowerLabels = Set(ignoreLabels.map { $0.lowercased() })
-                reviews = reviews.filter { request in
-                    !request.labels.contains(where: { lowerLabels.contains($0.name.lowercased()) })
-                }
-            }
-            let currentIDs = Set(reviews.map(\.id))
-            let newIDs = currentIDs.subtracting(previousReviewRequestIDs)
-            previousReviewRequestIDs = allCurrentIDs
-            if !isFirstFetch && !newIDs.isEmpty {
-                let newRequests = reviews.filter { newIDs.contains($0.id) }
-                onNewReviewRequests?(newRequests)
-            }
-            isFirstFetch = false
-            appState.reviewRequests = reviews
-            // How many requested reviews the filters swallowed (CROW-982). The
-            // board shows this so "No review requests" can't be mistaken for
-            // "GitHub is asking nothing of me" — the #953 failure mode, where
-            // `ignoreReviewLabels` hid live requests and the board looked empty.
-            appState.hiddenReviewCount = max(0, allCurrentIDs.count - reviews.count)
-
-            // The post-request half of the board (CROW-982, widened by
-            // CROW-990). Cross-referenced against review sessions on the same
-            // rule as the requested queue, so a PR you reviewed that still has a
-            // live session renders under In review rather than jumping straight
-            // to a finished heading. Repo/label filters are applied at
-            // serialization time via `filteredReviewedPRs` — the same place the
-            // requested queue is filtered — so the two lists can't drift apart
-            // on which repos are visible.
-            //
-            // Deliberately outside the notification path: a submitted review is
-            // work finished, not work arriving, and chiming `reviewRequested`
-            // for it would be a lie.
-            var reviewed = ghResult.reviewedPRs
-            for i in reviewed.indices {
-                if let session = appState.reviewSessions.first(where: {
-                    appState.links(for: $0.id).contains(where: { $0.linkType == .pr && $0.url == reviewed[i].url })
-                }) {
-                    reviewed[i].reviewSessionID = session.id
-                }
-            }
-            // A PR can legitimately be in both searches (you reviewed it, then
-            // the author pushed and re-requested). The requested queue owns it
-            // in that case — it is asking for something — so drop the duplicate
-            // here rather than letting it render in two groups at once.
-            //
-            // This can only ever discard an *open* row: the requested search is
-            // `review-requested:@me state:open`, so a merged or closed PR is
-            // never in `requestedURLs` and a Recently completed row cannot be
-            // swallowed by a stale request.
-            let requestedURLs = Set(reviews.map(\.url))
-            appState.reviewedPRs = reviewed.filter { !requestedURLs.contains($0.url) }
-            appState.isLoadingReviews = false
-
-            onReviewRequestsRefreshed?(reviews)
-
-            completion.syncInReviewSessions(issues: allIssues)
-            completion.autoCompleteFinishedSessions(
-                openIssues: allIssues.filter { $0.state == "open" },
-                closedIssueURLs: Set(ghResult.closedIssues.map(\.url)),
-                viewerPRs: allKnownPRs,
-                prDataComplete: prDataComplete
-            )
-            completion.autoCompleteFinishedReviews(
-                openReviewPRURLs: Set(reviews.map(\.url)),
-                prsByURL: Dictionary(allKnownPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords),
-                reviewRequestsByPRURL: Dictionary(reviews.map { ($0.url, $0) }, uniquingKeysWith: { lhs, _ in lhs }),
-                prDataComplete: prDataComplete
-            )
-
-            clearRateLimitWarning()
+        // Rework signals (#694): capture file lists for fresh merges,
+        // stamp reverts, then post-merge fixes — in that order, so a
+        // revert never double-counts as a fix (heuristic rule 4). Runs
+        // after the apply hop so attributions are already written; the
+        // fetches themselves hop off MainActor.
+        if fetch.ghResult != nil {
+            await captureReworkSignals()
         }
 
         // Reconcile any session still missing a .pr link by querying the
@@ -695,6 +506,140 @@ public final class IssueTracker {
         logRefreshSummary(elapsed: Date().timeIntervalSince(startedAt))
     }
 
+    /// One MainActor hop: warnings, `assignedIssues`, PR maps, rate-limit,
+    /// auto-create, auto-complete. No provider I/O.
+    private func applyFetchedBoard(_ fetch: BoardPoller.BoardPollFetch, config: AppConfig) {
+        for event in fetch.githubEvents {
+            applyGitHubBackendEvent(event)
+        }
+
+        let allIssues = fetch.issues
+        appState.assignedIssues = allIssues
+        appState.doneIssuesLast24h = fetch.doneCount
+
+        let ticketExcludePatterns = config.defaults.excludeTicketRepos
+        let autoCreateCandidates = ticketExcludePatterns.isEmpty
+            ? allIssues
+            : allIssues.filter { !repoMatchesPatterns($0.repo, patterns: ticketExcludePatterns) }
+        boardPoller.detectAutoCreateCandidates(issues: autoCreateCandidates)
+
+        guard let ghResult = fetch.ghResult else { return }
+
+        if let rl = ghResult.rateLimit { appState.githubRateLimit = rl }
+
+        // Session PR link detection runs against open PRs only — we only
+        // ever want to attach a fresh link when there's an open PR.
+        reconciler.applySessionPRLinks(viewerPRs: ghResult.viewerPRs)
+
+        // `complete == false` means at least one provider's follow-up errored
+        // (rate limit, exit != 0, parse failure). We thread that through to
+        // auto-complete so "PR missing from payload" doesn't get treated as
+        // "PR is closed" on a degraded response. Partial-success is allowed:
+        // PRs from the working provider still flow through so merged badges
+        // can flip even if the other provider failed.
+        let staleFetch = fetch.staleFetch
+        let allKnownPRs = Self.dedupedByURL(ghResult.viewerPRs + staleFetch.prs)
+
+        applyPRStatuses(viewerPRs: allKnownPRs)
+        attribution.updatePRAttributions(viewerPRs: allKnownPRs)
+
+        // Review requests (search result) + cross-reference with review sessions
+        appState.isLoadingReviews = true
+        var reviews = ghResult.reviewRequests
+        for i in reviews.indices {
+            if let session = appState.reviewSessions.first(where: {
+                appState.links(for: $0.id).contains(where: { $0.linkType == .pr && $0.url == reviews[i].url })
+            }) {
+                reviews[i].reviewSessionID = session.id
+            }
+        }
+        let allCurrentIDs = Set(reviews.map(\.id))
+        let reviewExcludePatterns = config.effectiveExcludeReviewRepos
+        if !reviewExcludePatterns.isEmpty {
+            reviews = reviews.filter { !repoMatchesPatterns($0.repo, patterns: reviewExcludePatterns) }
+        }
+        let ignoreLabels = config.defaults.ignoreReviewLabels
+        if !ignoreLabels.isEmpty {
+            let lowerLabels = Set(ignoreLabels.map { $0.lowercased() })
+            reviews = reviews.filter { request in
+                !request.labels.contains(where: { lowerLabels.contains($0.name.lowercased()) })
+            }
+        }
+        let currentIDs = Set(reviews.map(\.id))
+        let newIDs = currentIDs.subtracting(previousReviewRequestIDs)
+        previousReviewRequestIDs = allCurrentIDs
+        if !isFirstFetch && !newIDs.isEmpty {
+            let newRequests = reviews.filter { newIDs.contains($0.id) }
+            onNewReviewRequests?(newRequests)
+        }
+        isFirstFetch = false
+        appState.reviewRequests = reviews
+        // How many requested reviews the filters swallowed (CROW-982). The
+        // board shows this so "No review requests" can't be mistaken for
+        // "GitHub is asking nothing of me" — the #953 failure mode, where
+        // `ignoreReviewLabels` hid live requests and the board looked empty.
+        appState.hiddenReviewCount = max(0, allCurrentIDs.count - reviews.count)
+
+        // The post-request half of the board (CROW-982, widened by
+        // CROW-990). Cross-referenced against review sessions on the same
+        // rule as the requested queue, so a PR you reviewed that still has a
+        // live session renders under In review rather than jumping straight
+        // to a finished heading. Repo/label filters are applied at
+        // serialization time via `filteredReviewedPRs` — the same place the
+        // requested queue is filtered — so the two lists can't drift apart
+        // on which repos are visible.
+        //
+        // Deliberately outside the notification path: a submitted review is
+        // work finished, not work arriving, and chiming `reviewRequested`
+        // for it would be a lie.
+        var reviewed = ghResult.reviewedPRs
+        for i in reviewed.indices {
+            if let session = appState.reviewSessions.first(where: {
+                appState.links(for: $0.id).contains(where: { $0.linkType == .pr && $0.url == reviewed[i].url })
+            }) {
+                reviewed[i].reviewSessionID = session.id
+            }
+        }
+        // A PR can legitimately be in both searches (you reviewed it, then
+        // the author pushed and re-requested). The requested queue owns it
+        // in that case — it is asking for something — so drop the duplicate
+        // here rather than letting it render in two groups at once.
+        //
+        // This can only ever discard an *open* row: the requested search is
+        // `review-requested:@me state:open`, so a merged or closed PR is
+        // never in `requestedURLs` and a Recently completed row cannot be
+        // swallowed by a stale request.
+        let requestedURLs = Set(reviews.map(\.url))
+        appState.reviewedPRs = reviewed.filter { !requestedURLs.contains($0.url) }
+        appState.isLoadingReviews = false
+
+        onReviewRequestsRefreshed?(reviews)
+
+        completion.syncInReviewSessions(issues: allIssues)
+        completion.autoCompleteFinishedSessions(
+            openIssues: allIssues.filter { $0.state == "open" },
+            closedIssueURLs: Set(ghResult.closedIssues.map(\.url)),
+            viewerPRs: allKnownPRs,
+            prDataComplete: staleFetch.complete
+        )
+        completion.autoCompleteFinishedReviews(
+            openReviewPRURLs: Set(reviews.map(\.url)),
+            prsByURL: Dictionary(allKnownPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords),
+            reviewRequestsByPRURL: Dictionary(reviews.map { ($0.url, $0) }, uniquingKeysWith: { lhs, _ in lhs }),
+            prDataComplete: staleFetch.complete
+        )
+
+        clearRateLimitWarning()
+    }
+
+    /// Rework-signal fetches (#694) stay after the apply hop so a revert
+    /// never double-counts as a fix. They hop off MainActor internally.
+    private func captureReworkSignals() async {
+        await attribution.captureChangedFilesForNewMerges()
+        await attribution.scanDefaultBranchesForReverts()
+        attribution.detectPostMergeFixes()
+    }
+
 
     private func logRefreshSummary(elapsed: TimeInterval) {
         let elapsedStr = String(format: "%.2fs", elapsed)
@@ -712,19 +657,29 @@ public final class IssueTracker {
     /// Untyped errors get a console line and otherwise propagate as "this
     /// cycle is degraded" via the caller's nil-return.
     func handleGitHubBackendError(_ error: Error, operation: String) {
-        switch error {
-        case ProviderError.insufficientScope(let scope):
+        for event in BoardPoller.githubEvents(from: error, operation: operation) {
+            applyGitHubBackendEvent(event)
+        }
+    }
+
+    func applyGitHubBackendEvent(_ event: BoardPoller.GitHubBackendEvent) {
+        switch event {
+        case .insufficientScope(let scope), .reportScopeWarning(let scope):
             reportScopeWarning(scope)
-        case ProviderError.rateLimited(let stderr):
+        case .clearScopeWarning:
+            clearScopeWarning()
+        case .rateLimited(let stderr):
             _ = handleGraphQLRateLimit(stderr: stderr)
-        case ProviderError.samlRestricted:
+        case .samlRestricted, .reportSAMLWarning:
             // `findRecentPRsForBranches` doesn't recover partial data; route
             // its SAML failures to the same one-time warning instead of
             // spamming the console each cycle. (`prStates` recovers its
             // accessible aliases since #894, so it no longer lands here.)
             reportSAMLWarning()
-        default:
-            print("[IssueTracker] \(operation) failed: \(error.localizedDescription)")
+        case .clearSAMLWarning:
+            clearSAMLWarning()
+        case .failed(let operation, let message):
+            print("[IssueTracker] \(operation) failed: \(message)")
         }
     }
 

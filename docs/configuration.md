@@ -245,6 +245,14 @@ For a **Corveil** gateway, the recommended path is not a hand-entered `x-citadel
 - **Local-only, like every other credential.** The whole `corveilConnection` surface — Connect, org selection, and the migration verbs below — is authored only over the local Unix socket / a local-direct browser POST; a remote web session gets a read-only view (tokens and key values stripped). See [Gateways & Secrets](cli-reference.md#gateways--secrets).
 - Drive it from the CLI with `crow corveil connect` / `status` / `list-orgs` / `select-org` (see the [CLI reference](cli-reference.md#the-corveil-connection)).
 
+### Managed / design-partner workspace defaults
+
+On an install we operate for a customer, the audit-plane claim must be true *by default* — so a **newly created** workspace defaults both the org **gateway binding** and **session log-sync** on (CROW-2841, [ADR 0023](adr/0023-managed-workspace-defaults.md)). This is derived from the connection, not a separate flag:
+
+- **When it applies:** the install has a connected `corveilConnection` with **exactly one** provisioned org whose gateway can be derived. That org's `baseURL` + `x-citadel-api-key` is bound as the new workspace's `gateway`, and `uploadSessionLogs` is turned on — so harness traffic routes through the org's gateway and transcripts upload as session artifacts, feeding the [Builder evidence ledger](https://github.com/corveil/corveil/issues/2838), with nothing to configure.
+- **Self-hosted OSS is unchanged.** No Corveil connection ⇒ no managed org ⇒ today's opt-in (off) defaults, untouched.
+- **Conservative and reversible.** Zero provisioned orgs, or **more than one** (ambiguous — we won't guess which org a workspace belongs to), fall back to no default. Only *new* workspaces are affected — an existing one is never re-flipped, `crow workspace add --upload-session-logs false` is honored (the gateway still binds — a distinct audit item), and you can always untick the box / `crow gateway clear` afterward.
+
 ### Migrating manual gateways to the connection
 
 If you configured Corveil the old way — a `gateway` with a hand-entered `x-citadel-api-key` header — you can bring that key under the connection without disrupting the running session (CROW-1126):

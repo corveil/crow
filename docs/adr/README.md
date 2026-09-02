@@ -59,3 +59,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0020 | [Corveil is a first-class integration, not a manual gateway](./0020-first-class-corveil-integration.md) | Accepted | 2026-08-27 |
 | 0021 | [Signed + notarized macOS CLI releases](./0021-signed-notarized-macos-releases.md) | Accepted | 2026-08-28 |
 | 0022 | [Session grid cells are read-only capture-pane snapshots](./0022-session-grid-snapshots.md) | Accepted | 2026-08-28 |
+| 0023 | [Managed / design-partner workspaces default gateway binding + log-sync on](./0023-managed-workspace-defaults.md) | Accepted | 2026-09-01 |

@@ -615,7 +615,17 @@ final class AutoMergeController {
         // PR, so asking for `viewerLastReviewedAt` here would spend query
         // budget on a field that is structurally always nil. Only the
         // review-session path needs it.
-        let result = await owner.boardPoller.fetchStalePRStates(urls: [prURL], viewerLogin: "")
+        let providerManager = owner.providerManager
+        let result = await Task.detached {
+            await BoardPoller.fetchStalePRStates(
+                urls: [prURL],
+                viewerLogin: "",
+                providerManager: providerManager
+            )
+        }.value
+        for event in result.events {
+            owner.applyGitHubBackendEvent(event)
+        }
         var byURL = Dictionary(result.prs.map { ($0.url, $0) }, uniquingKeysWith: IssueTracker.mergePRRecords)
 
         // Read-your-write: `backend.addMergeLabel` threw on failure, so the

@@ -49,7 +49,8 @@ crow/
 ├── Packages/                  # SwiftPM library packages
 │   ├── CrowCore/                    # Data models, AppState (observable), store schema
 │   ├── CrowEngine/                  # Host-agnostic engine: SessionService, IssueTracker,
-│   │                                #   AutoRespondCoordinator, JobScheduler, EngineRouter,
+│   │                                #   AutoRespondCoordinator, JobScheduler, EngineRouter
+│   │                                #   (assembler + Engine*RPCHandlers.swift fallback maps),
 │   │                                #   HostBridge seam (no AppKit)
 │   ├── CrowDaemon/                  # crowd: HTTP/WS server, RPC handlers, web assets,
 │   │                                #   web-access auth, terminal WebSocket
@@ -80,7 +81,7 @@ There are two `CrowCLI` directories:
 | Component                  | Lives in                                               | Description                                                                                                       |
 | -------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | **CrowDaemon.run()**       | `Packages/CrowDaemon/.../CrowDaemon.swift`             | Boots the daemon: HTTP/WS server, Unix socket, board poll, automations, spawn engine. `crowd` is always the authority |
-| **RPC handlers**           | `Packages/CrowDaemon/.../*RPCHandlers.swift`           | The daemon's command router — `RPCHandlers.swift` assembles per-concern maps (`new-session`, `list-tickets`, `create-manager`, config, …) that run locally against `AppState` + `JSONStore` |
+| **RPC handlers**           | `Packages/CrowDaemon/.../*RPCHandlers.swift`           | The daemon's command router — `RPCHandlers.swift` assembles per-concern maps (`new-session`, `list-tickets`, `create-manager`, config, …) that run locally against `AppState` + `JSONStore`. Methods the daemon does not own (`hook-event`, `send`, `get-session`, …) fall back to `Packages/CrowEngine/.../Engine*RPCHandlers.swift` via `makeEngineRouter` |
 | **HTTP/WebSocket server**  | `Packages/CrowDaemon/`                                 | Serves the web UI, xterm assets, `/rpc` (JSON-RPC + push), `/terminal` (byte stream), and web-access auth (`WebAuth*`, CROW-593) |
 | **SessionService**         | `Packages/CrowEngine/.../SessionService.swift`         | CRUD for sessions/worktrees/terminals, spawn orchestration, terminal-readiness tracking, orphan recovery on startup |
 | **IssueTracker**           | `Packages/CrowEngine/.../IssueTracker.swift`           | Polls providers every 60s for assigned issues, PR status, project board status; auto-completes merged sessions    |

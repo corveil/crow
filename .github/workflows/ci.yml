@@ -157,11 +157,6 @@ jobs:
       # remembered to run it. This job already needs node (see above), so it is
       # the cheapest place to gate it.
       #
-      # `test:ci` deliberately omits row.test.js, which has 10 failures already
-      # on main (CROW-802 drift — its own comment explains it: PR status parts
-      # became SVG `.ico` spans, the `r.glyphs` assertions still read text-only
-      # `.pr-ico`). Running the full suite here would fail every PR. See
-      # Packages/CrowDaemon/web-tests/README.md.
       # Pinned rather than whatever ubuntu-latest ships this month — the
       # lockfile pins the deps, this pins the runtime they run on. Placed
       # immediately before the step that needs it so the shell gates above keep

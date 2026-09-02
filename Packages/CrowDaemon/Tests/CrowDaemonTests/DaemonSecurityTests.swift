@@ -1436,10 +1436,14 @@ import CrowPersistence
         // granular verbs stay un-gated too — the remote-reachable surface here is
         // strictly smaller than the whole-config blob it replaces.
         //
-        // What would justify gating — the per-workspace AI gateway — is *excluded*
-        // rather than gated: no `workspace-*` method writes it, and
-        // `workspaceJSON` reduces it to a flag plus a base URL. Authoring the
-        // credential stays with `gateway-set`, which is gated.
+        // The per-workspace AI gateway is still never *authored from the wire*:
+        // `workspaceJSON` reduces it to a flag plus a base URL, and a manual gateway
+        // credential stays with the gated `gateway-set`. `workspace-add` does now
+        // write one derived value — the managed org gateway a managed/design-partner
+        // install binds a new workspace to (CROW-2841) — but that key is copied from
+        // the operator-authored, local-only `corveilConnection`, never from the
+        // request, and is stripped from the response. A remote caller can trigger
+        // the bind but can neither supply nor read the credential.
         //
         // This test is what enforces that decision — `localOnlyDenial`'s
         // `default:` would silently swallow a later change of heart. Deliberate:

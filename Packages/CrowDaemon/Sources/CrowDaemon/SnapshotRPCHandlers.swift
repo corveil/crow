@@ -22,82 +22,19 @@ func makeSnapshotHandlers(
         // flags from the runtime terminal set, and the (possibly memory-only) PR
         // link from `links(for:)`. Matches the app's makeEngineRouter shape so the
         // web shows PR badges wherever the desktop does (CROW-581, M-E).
-        "list-sessions-live": { params in
-            return await MainActor.run {
-                var out: [String: JSONValue] = [:]
-                for session in appState.sessions {
-                    let id = session.id
-                    let available = AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl ?? false
-                    let rcActive = appState.terminals(for: id)
-                        .contains { appState.remoteControlActiveTerminals.contains($0.id) }
-                    var entry: [String: JSONValue] = [
-                        "remote_control_active": .bool(rcActive),
-                        "remote_control_available": .bool(available),
-                        // PR quick-actions need a managed Claude Code terminal to
-                        // dispatch into — mirrors native `canDispatchQuickAction`.
-                        // The web disables the quick-action buttons when false (CROW-749).
-                        "can_dispatch": .bool(appState.terminals(for: id).contains { $0.isManaged }),
-                    ]
-                    entry["pr"] = appState.prStatus[id].map { .object(prStatusJSON($0)) }
-                        ?? .object(["has_pr": .bool(false)])
-                    if let prLink = appState.links(for: id).first(where: { $0.linkType == .pr }) {
-                        entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
-                    }
-                    // What the auto-merge watcher decided about this PR — a
-                    // SIBLING of `pr`, not a member of it. `pr` mirrors what the
-                    // forge says about the pull request; this is what *Crow*
-                    // decided about it, and the two have different lifetimes: a
-                    // PR missing from the viewer fetch has no `prStatus` at all,
-                    // yet that absence is itself a verdict worth showing (#888).
-                    // Absent key means "nothing to report", which is also what
-                    // every pre-#888 daemon sends — so old clients degrade to
-                    // the persisted `auto_merge` bool on `list-sessions`.
-                    if let autoMerge = appState.autoMergeState[id] {
-                        entry["auto_merge_state"] = .object([
-                            "phase": .string(autoMerge.phase.rawValue),
-                            "reason": .string(autoMerge.reason),
-                            "message": .string(autoMerge.message),
-                            "permanent": .bool(autoMerge.permanent),
-                        ])
-                    }
-                    // What the auto-rebase watcher decided about this branch
-                    // (#944). Same sibling-of-`pr` contract as `auto_merge_state`
-                    // above, and for a sharper reason: `prStatusJSON` never ships
-                    // `mergeStateStatus`, so a PR that is BEHIND its base is
-                    // invisible in `pr` entirely — a wedged branch renders as a
-                    // fully green pill. Absent key means "nothing to report".
-                    if let autoRebase = appState.autoRebaseState[id] {
-                        entry["auto_rebase_state"] = .object([
-                            "phase": .string(autoRebase.phase.rawValue),
-                            "reason": .string(autoRebase.reason),
-                            "message": .string(autoRebase.message),
-                            "permanent": .bool(autoRebase.permanent),
-                        ])
-                    }
-                    // Per-session analytics strip (CROW-722). Prefer the live
-                    // in-memory hook aggregate (open sessions); fall back to the
-                    // durable end-of-session snapshot (terminal sessions). Mirrors
-                    // `writeAnalyticsSnapshot`'s own source preference. Never for the
-                    // Manager, and never an all-zeros aggregate — the web renders
-                    // the strip only when this key is present (chips-only empty
-                    // state), so absence IS the empty state.
-                    if !appState.isManagerSession(id) {
-                        let dto: SessionAnalyticsDTO?
-                        if let live = appState.existingHookState(for: id)?.analytics, !live.isEmpty {
-                            dto = SessionAnalyticsDTO(live: live, wallClockDuration: session.wallClockDuration)
-                        } else if let snapshot = appState.analyticsSnapshots[id.uuidString] {
-                            dto = SessionAnalyticsDTO(snapshot: snapshot)
-                        } else {
-                            dto = nil
-                        }
-                        if let dto, let encoded = try? JSONValue(encoding: dto) {
-                            entry["analytics"] = encoded
-                        }
-                    }
-                    out[id.uuidString] = .object(entry)
-                }
-                return ["sessions": .object(out)]
+        //
+        // Copy on MainActor, encode off it (CROW-1180). The web polls this every
+        // 4s; JSONValue / analytics DTO encoding used to sit inside the same
+        // `MainActor.run` and pin the actor that every Unix-socket CLI RPC
+        // shares. Same snapshot pattern as `get-state` and
+        // `LaunchScaffold.repairStaleHooks` (#892): concurrent applies still
+        // serialize on the actor; encoding an immutable copy cannot tear AppState.
+        // Memory only — do not await GitHub or other I/O here.
+        "list-sessions-live": { _ in
+            let snapshots = await MainActor.run {
+                snapshotLiveSessions(from: appState)
             }
+            return encodeLiveSessions(snapshots)
         },
 
         // Full render-state snapshot so a rich client (the macOS app) can rebuild
@@ -246,7 +183,15 @@ func makeSnapshotHandlers(
             do {
                 merged = try ConfigStore.withConfigLock {
                     let current = ConfigStore.loadConfig(devRoot: devRoot)
-                    let m = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                    var m = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                    // CROW-2841: a workspace just added from the web arrives with no
+                    // gateway (the web can't author one). On a managed / design-partner
+                    // install, default each genuinely-new workspace to the org gateway
+                    // + session log-sync so the audit plane is true by default — a
+                    // no-op for self-hosted OSS, and never for a workspace that already
+                    // existed (so a later opt-out sticks).
+                    ManagedWorkspaceDefaults.applyToNewWorkspaces(
+                        in: &m, previousWorkspaceIDs: Set((current?.workspaces ?? []).map(\.id)))
                     try ConfigStore.saveConfig(m, devRoot: devRoot)
                     return m
                 }
@@ -315,4 +260,130 @@ private func expandSetupDevRoot(_ raw: String) -> String {
     }
     if (raw as NSString).isAbsolutePath { return raw }
     return (home as NSString).appendingPathComponent(raw)
+}
+
+// MARK: - list-sessions-live snapshot (CROW-1180)
+
+/// Immutable per-session copy of the fields `list-sessions-live` ships.
+/// Copied on MainActor so JSON encode can run off it without tearing AppState.
+struct LiveSessionSnapshot: Sendable {
+    struct PRLink: Sendable {
+        let label: String
+        let url: String
+    }
+
+    let id: UUID
+    let remoteControlActive: Bool
+    let remoteControlAvailable: Bool
+    let canDispatch: Bool
+    let prStatus: PRStatus?
+    let prLink: PRLink?
+    let autoMerge: AutoMergeState?
+    let autoRebase: AutoRebaseState?
+    /// Nil for Managers and for sessions with no live/snapshot aggregate —
+    /// absence of the wire key is the empty state (CROW-722).
+    let analytics: SessionAnalyticsDTO?
+}
+
+/// Walk `appState.sessions` and copy every field the live payload needs.
+/// Must stay on MainActor: `SessionHookState` is actor-isolated, and readers
+/// need a consistent copy of RC / PR / watcher / analytics inputs.
+@MainActor
+func snapshotLiveSessions(from appState: AppState) -> [LiveSessionSnapshot] {
+    appState.sessions.map { session in
+        let id = session.id
+        let terminals = appState.terminals(for: id)
+        let prLink = appState.links(for: id).first(where: { $0.linkType == .pr })
+            .map { LiveSessionSnapshot.PRLink(label: $0.label, url: $0.url) }
+
+        // Per-session analytics strip (CROW-722). Prefer the live in-memory
+        // hook aggregate (open sessions); fall back to the durable end-of-session
+        // snapshot (terminal sessions). Mirrors `writeAnalyticsSnapshot`'s own
+        // source preference. Never for the Manager, and never an all-zeros
+        // aggregate — the web renders the strip only when this key is present.
+        let analytics: SessionAnalyticsDTO?
+        if !appState.isManagerSession(id) {
+            if let live = appState.existingHookState(for: id)?.analytics, !live.isEmpty {
+                analytics = SessionAnalyticsDTO(live: live, wallClockDuration: session.wallClockDuration)
+            } else if let snapshot = appState.analyticsSnapshots[id.uuidString] {
+                analytics = SessionAnalyticsDTO(snapshot: snapshot)
+            } else {
+                analytics = nil
+            }
+        } else {
+            analytics = nil
+        }
+
+        return LiveSessionSnapshot(
+            id: id,
+            remoteControlActive: terminals.contains { appState.remoteControlActiveTerminals.contains($0.id) },
+            remoteControlAvailable: AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl ?? false,
+            // PR quick-actions need a managed terminal to dispatch into —
+            // mirrors native `canDispatchQuickAction`. The web disables the
+            // quick-action buttons when false (CROW-749).
+            canDispatch: terminals.contains { $0.isManaged },
+            prStatus: appState.prStatus[id],
+            prLink: prLink,
+            autoMerge: appState.autoMergeState[id],
+            autoRebase: appState.autoRebaseState[id],
+            analytics: analytics
+        )
+    }
+}
+
+/// Build the `sessions` JSON object from an already-copied snapshot.
+///
+/// `nonisolated` is load-bearing: this is the work `sample` used to catch on
+/// `com.apple.main-thread` (analytics DTO `JSONValue` encode). Must not hop
+/// back to MainActor. JSONValue of an immutable copy cannot tear AppState.
+nonisolated func encodeLiveSessions(_ snapshots: [LiveSessionSnapshot]) -> [String: JSONValue] {
+    var out: [String: JSONValue] = [:]
+    out.reserveCapacity(snapshots.count)
+    for snap in snapshots {
+        var entry: [String: JSONValue] = [
+            "remote_control_active": .bool(snap.remoteControlActive),
+            "remote_control_available": .bool(snap.remoteControlAvailable),
+            "can_dispatch": .bool(snap.canDispatch),
+        ]
+        entry["pr"] = snap.prStatus.map { .object(prStatusJSON($0)) }
+            ?? .object(["has_pr": .bool(false)])
+        if let prLink = snap.prLink {
+            entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
+        }
+        // Auto-merge / auto-rebase are siblings of `pr`, not members of it
+        // (#888 / #944). Absent key means "nothing to report".
+        if let autoMerge = snap.autoMerge {
+            entry["auto_merge_state"] = watcherStateJSON(autoMerge)
+        }
+        if let autoRebase = snap.autoRebase {
+            entry["auto_rebase_state"] = watcherStateJSON(autoRebase)
+        }
+        if let dto = snap.analytics, let encoded = try? JSONValue(encoding: dto) {
+            entry["analytics"] = encoded
+        }
+        out[snap.id.uuidString] = .object(entry)
+    }
+    return ["sessions": .object(out)]
+}
+
+/// Shared `{phase, reason, message, permanent}` wire shape for both watchers.
+private func watcherStateJSON(phase: String, reason: String, message: String, permanent: Bool) -> JSONValue {
+    .object([
+        "phase": .string(phase),
+        "reason": .string(reason),
+        "message": .string(message),
+        "permanent": .bool(permanent),
+    ])
+}
+
+private func watcherStateJSON(_ state: AutoMergeState) -> JSONValue {
+    watcherStateJSON(
+        phase: state.phase.rawValue, reason: state.reason,
+        message: state.message, permanent: state.permanent)
+}
+
+private func watcherStateJSON(_ state: AutoRebaseState) -> JSONValue {
+    watcherStateJSON(
+        phase: state.phase.rawValue, reason: state.reason,
+        message: state.message, permanent: state.permanent)
 }

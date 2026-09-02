@@ -264,7 +264,7 @@ describes what the UI claims, not what Crow can do.
   Remote Control panel.
 - **Cursor, OpenCode, Grok, Antigravity & Muse:** `true`, but there is **no RC
   flag** — remote driving is `crow send` pasting into the interactive TUI (the
-  agent-agnostic path: the `send` RPC handler in `EngineRouter.swift` →
+  agent-agnostic path: the `send` RPC handler in `EngineTerminalRPCHandlers.swift` →
   `TerminalRouter.send`). The badge reflects that Crow *can* drive them, not
   that the agent has a native RC protocol.
 - **Codex was `false` on a premise that turned out to be wrong.** The reason
@@ -910,7 +910,7 @@ mis-shaped reply denies every tool call (cmux #5358), so — like Antigravity's 
 bundled vibe-island plugin — Crow stays off it. **Consequence — named tool
 activity is a Tier-2 gap:** `PostToolUse` stdin carries no tool name (only
 `stepIdx`/`error`), and `toolCall.name` lives on `PreToolUse` alone, so Crow can
-signal "a tool ran, still working" but not *which* tool. `EngineRouter`'s
+signal "a tool ran, still working" but not *which* tool. `EngineHookRPCHandlers`'s
 `hookToolName` reads `tool_name` or the nested `toolCall.name` (future-proofing a
 `PreToolUse` re-enable; a no-op for the currently-registered events). Gaps: no
 `--output-format json`/`stream-json` (upstream FRs

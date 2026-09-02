@@ -11,7 +11,11 @@ import CrowProvider
 /// log-rate-limit bookkeeping; reaches the shared warnings + rate-limit sink,
 /// the auto-create callback/toggle, `appState`, `providerManager`, and the
 /// shared `JSONStore` through an unowned back-reference to the tracker.
-/// `refresh()` still drives every method here, in the current order.
+///
+/// Provider I/O is `nonisolated` (`fetchOffActor`) so `refresh()` can snapshot
+/// on the state actor, await GitHub/GitLab/Jira off MainActor, and apply in
+/// one hop (CROW-1179). `refresh()` still drives every method here, in the
+/// current order.
 @MainActor
 final class BoardPoller {
     private unowned let owner: IssueTracker
@@ -185,6 +189,44 @@ final class BoardPoller {
         let rateLimit: GitHubRateLimit?
     }
 
+    /// Side effects the GitHub fetch must not apply itself — they mutate
+    /// `@MainActor` warning / rate-limit state. Collected off-actor and
+    /// applied in the single hop back (CROW-1179).
+    enum GitHubBackendEvent: Sendable, Equatable {
+        case insufficientScope(String)
+        case rateLimited(stderr: String)
+        case samlRestricted
+        case failed(operation: String, message: String)
+        case reportScopeWarning(String)
+        case clearScopeWarning
+        case reportSAMLWarning
+        case clearSAMLWarning
+    }
+
+    /// Everything the off-actor poll needs from `AppState` / config.
+    /// Snapshotted on MainActor in milliseconds; contains no live actor refs.
+    struct BoardPollSnapshot: Sendable {
+        let hasGitHub: Bool
+        let gitLabHosts: [String]
+        /// Workspace Jira configs **without** a resolved `Authorization`
+        /// header. `op read` for `op://` tokens is blocking (semaphore, up to
+        /// 15s) and must not run on MainActor — `fetchOffActor` resolves it.
+        let jiraConfigsWithoutAuth: [JiraConfig]
+        let jiraCredential: JiraCredential?
+        /// PR URLs linked to active/paused/inReview sessions. Stale follow-up
+        /// subtracts the open-viewer set after the GitHub query returns.
+        let sessionPRURLs: [String]
+    }
+
+    /// Assembled board payload. `refresh()` assigns this in one MainActor hop.
+    struct BoardPollFetch: Sendable {
+        var issues: [AssignedIssue]
+        var doneCount: Int
+        var ghResult: ConsolidatedGitHubResponse?
+        var githubEvents: [GitHubBackendEvent]
+        var staleFetch: StalePRFetchResult
+    }
+
     // MARK: - PR Dedup
 
     /// State-rank precedence used when the same PR URL appears in multiple
@@ -315,10 +357,14 @@ final class BoardPoller {
     /// via the GitHub backends. Issues + PRs go in parallel — the GitHub
     /// backend issues two GraphQL calls in flight at once (one for assigned
     /// issues, one for PRs + reviews).
-    func runConsolidatedGitHubQuery() async -> ConsolidatedGitHubResponse? {
-        let taskBackend = providerManager.taskBackend(for: .github)
-        let codeBackend = providerManager.codeBackend(for: .github)!
-
+    ///
+    /// `nonisolated` so the GraphQL round-trip and JSON parse run off
+    /// MainActor (CROW-1179). Warning / rate-limit side effects are returned
+    /// as events for the apply hop.
+    nonisolated static func runConsolidatedGitHubQuery(
+        taskBackend: TaskBackend,
+        codeBackend: CodeBackend
+    ) async -> (ConsolidatedGitHubResponse?, [GitHubBackendEvent]) {
         async let assignedAsync = taskBackend.listAssigned()
         async let monitoredAsync = codeBackend.listMonitoredPRs()
 
@@ -327,27 +373,26 @@ final class BoardPoller {
         do {
             assigned = try await assignedAsync
         } catch {
-            owner.handleGitHubBackendError(error, operation: "listAssigned")
             // Drain the second task so we don't leak an unawaited future.
             _ = try? await monitoredAsync
-            return nil
+            return (nil, githubEvents(from: error, operation: "listAssigned"))
         }
         do {
             monitored = try await monitoredAsync
         } catch {
-            owner.handleGitHubBackendError(error, operation: "listMonitoredPRs")
-            return nil
+            return (nil, githubEvents(from: error, operation: "listMonitoredPRs"))
         }
 
+        var events: [GitHubBackendEvent] = []
         if let scope = assigned.missingScope {
             // listAssigned silently degrades on INSUFFICIENT_SCOPES (drops
             // projectItems) and reports the scope here so the warning UI
             // stays lit instead of getting cleared on the next poll. This
             // preserves the prior `owner.reportScopeWarning("read:project")`
             // behavior the consolidated query had inline.
-            owner.reportScopeWarning(scope)
+            events.append(.reportScopeWarning(scope))
         } else {
-            owner.clearScopeWarning()
+            events.append(.clearScopeWarning)
         }
 
         // The backends recover accessible-org data on SAML enforcement and
@@ -355,11 +400,11 @@ final class BoardPoller {
         // assembled above. Light the one-time warning while any org stays
         // blocked; clear it once a clean poll returns.
         if assigned.samlRestricted || monitored.samlRestricted {
-            owner.reportSAMLWarning()
+            events.append(.reportSAMLWarning)
         } else {
-            owner.clearSAMLWarning()
+            events.append(.clearSAMLWarning)
         }
-        return ConsolidatedGitHubResponse(
+        let response = ConsolidatedGitHubResponse(
             openIssues: assigned.open,
             closedIssues: assigned.closed,
             closedTotalCount: assigned.closedTotalCount,
@@ -369,16 +414,28 @@ final class BoardPoller {
             viewerLogin: monitored.viewerLogin,
             rateLimit: assigned.rateLimit ?? monitored.rateLimit
         )
+        return (response, events)
+    }
+
+    nonisolated static func githubEvents(from error: Error, operation: String) -> [GitHubBackendEvent] {
+        switch error {
+        case ProviderError.insufficientScope(let scope):
+            return [.insufficientScope(scope)]
+        case ProviderError.rateLimited(let stderr):
+            return [.rateLimited(stderr: stderr)]
+        case ProviderError.samlRestricted(_):
+            return [.samlRestricted]
+        default:
+            return [.failed(operation: operation, message: error.localizedDescription)]
+        }
     }
 
     // MARK: - Stale PR Follow-up
 
-    /// PR URLs linked to active/paused/inReview sessions that are NOT in
-    /// `openPRURLs`. These are the PRs we need to fetch state for to surface
-    /// merged/closed status on the badge and drive auto-complete.
-    /// Completed sessions are skipped — their badge state is set in-memory
-    /// during the cycle they auto-complete and is preserved thereafter.
-    func collectStalePRURLs(excluding openPRURLs: Set<String>) -> [String] {
+    /// PR URLs linked to active/paused/inReview sessions. Snapshotted on
+    /// MainActor before the off-actor fetch; stale follow-up subtracts the
+    /// open-viewer set once GitHub returns.
+    func collectSessionPRURLs() -> [String] {
         var urls: Set<String> = []
         for session in appState.sessions where !session.isManager {
             switch session.status {
@@ -388,20 +445,28 @@ final class BoardPoller {
                 continue
             }
             for link in appState.links(for: session.id) where link.linkType == .pr {
-                if !openPRURLs.contains(link.url) {
-                    urls.insert(link.url)
-                }
+                urls.insert(link.url)
             }
         }
         return Array(urls)
     }
 
+    /// PR URLs linked to active/paused/inReview sessions that are NOT in
+    /// `openPRURLs`. These are the PRs we need to fetch state for to surface
+    /// merged/closed status on the badge and drive auto-complete.
+    /// Completed sessions are skipped — their badge state is set in-memory
+    /// during the cycle they auto-complete and is preserved thereafter.
+    func collectStalePRURLs(excluding openPRURLs: Set<String>) -> [String] {
+        collectSessionPRURLs().filter { !openPRURLs.contains($0) }
+    }
+
     /// Result of a stale-PR follow-up: any PRs successfully fetched, plus
     /// whether every provider call returned cleanly. `complete == false`
     /// signals downstream auto-completion to treat the cycle as degraded.
-    struct StalePRFetchResult {
+    struct StalePRFetchResult: Sendable {
         var prs: [ViewerPR]
         var complete: Bool
+        var events: [GitHubBackendEvent] = []
     }
 
     /// Fetch state for a small set of PRs/MRs that are linked to a session
@@ -420,7 +485,11 @@ final class BoardPoller {
     /// `viewer.pullRequests(first: 50)`, or one in a SAML-restricted org (a
     /// permanent hole in that connection), reaches the UI only through here, so
     /// without `statusCheckRollup` it could never show CI state at all.
-    func fetchStalePRStates(urls: [String], viewerLogin: String) async -> StalePRFetchResult {
+    nonisolated static func fetchStalePRStates(
+        urls: [String],
+        viewerLogin: String,
+        providerManager: ProviderManager
+    ) async -> StalePRFetchResult {
         // Bucket URLs by (provider, host). GitLab self-hosted needs the host so the
         // backend pins the right GITLAB_HOST env var.
         var githubRefs: [PRRef] = []
@@ -451,6 +520,7 @@ final class BoardPoller {
 
         var prs: [ViewerPR] = []
         var complete = true
+        var events: [GitHubBackendEvent] = []
 
         if !githubRefs.isEmpty {
             let backend = providerManager.codeBackend(for: .github)!
@@ -468,7 +538,7 @@ final class BoardPoller {
                     prs.append(rec)
                 }
             } catch {
-                owner.handleGitHubBackendError(error, operation: "prStates(github)")
+                events.append(contentsOf: githubEvents(from: error, operation: "prStates(github)"))
                 complete = false
             }
         }
@@ -490,7 +560,7 @@ final class BoardPoller {
             }
         }
 
-        return StalePRFetchResult(prs: prs, complete: complete)
+        return StalePRFetchResult(prs: prs, complete: complete, events: events)
     }
 
     /// Copy `pr` with a different `url`. Used by the stale-PR follow-up to
@@ -628,8 +698,7 @@ final class BoardPoller {
     /// half (#697) so GitLab-backed workspaces feed the done-count badge.
     /// Best-effort: degrades to an empty listing on failure, mirroring the
     /// Jira / Corveil paths.
-    func fetchGitLabIssues(host: String) async -> AssignedListing {
-        let backend = providerManager.taskBackend(for: .gitlab, host: host)
+    nonisolated static func fetchGitLabIssues(host: String, backend: TaskBackend) async -> AssignedListing {
         do {
             return try await backend.listAssigned(includeClosed: true)
         } catch {
@@ -641,7 +710,7 @@ final class BoardPoller {
     /// Hard cap on how many GitLab issues get the (up to 2 REST calls each)
     /// related-MR lookup per host per poll, so one large assigned-issue queue
     /// can't stall the ~60s cycle or burn API quota (#751 review).
-    private static let maxGitLabMREnrich = 25
+    nonisolated private static let maxGitLabMREnrich = 25
 
     /// Attach linked-MR state + CI checks to open GitLab issues for the board's
     /// inline PR badges (#751). GitLab has no consolidated issue↔MR query like
@@ -650,10 +719,12 @@ final class BoardPoller {
     /// GitLab reports have zero MRs (`merge_requests_count == 0`) skip the round
     /// trip entirely, and the rest are capped at `maxGitLabMREnrich`. Any
     /// failure leaves the fields nil and the card degrades gracefully.
-    func enrichGitLabMRStatus(_ issues: [AssignedIssue], host: String) async -> [AssignedIssue] {
-        guard let backend = providerManager.codeBackend(for: .gitlab, host: host) as? GitLabCodeBackend else {
-            return issues
-        }
+    nonisolated static func enrichGitLabMRStatus(
+        _ issues: [AssignedIssue],
+        host: String,
+        backend: GitLabCodeBackend?
+    ) async -> [AssignedIssue] {
+        guard let backend else { return issues }
         var result = issues
         var budget = Self.maxGitLabMREnrich
         var skippedForBudget = 0
@@ -680,8 +751,7 @@ final class BoardPoller {
     /// recently-Done half (#536) so tickets in their mapped Done status surface
     /// in the board's Done section. Best-effort: degrades to an empty listing on
     /// failure, mirroring the GitLab / Corveil paths.
-    func fetchJiraIssues(config: JiraConfig) async -> AssignedListing {
-        let backend = providerManager.taskBackend(for: .jira, jira: config)
+    nonisolated static func fetchJiraIssues(config: JiraConfig, backend: TaskBackend) async -> AssignedListing {
         do {
             return try await backend.listAssigned(includeClosed: true)
         } catch {
@@ -702,6 +772,153 @@ final class BoardPoller {
         let openIDs = Set(listing.open.map(\.id))
         let uniqueDone = listing.closed.filter { !openIDs.contains($0.id) }
         return (listing.open + uniqueDone, listing.closedTotalCount)
+    }
+
+    // MARK: - Off-actor poll (CROW-1179)
+
+    /// Snapshot the poll inputs from live `AppState` / config. Milliseconds;
+    /// no provider I/O. Jira `op://` tokens stay unresolved.
+    func captureSnapshot(config: AppConfig) -> BoardPollSnapshot {
+        let hasGitHub = config.workspaces.contains(where: { $0.derivedTaskProvider == "github" })
+        var gitLabHosts: [String] = []
+        for ws in config.workspaces where ws.derivedTaskProvider == "gitlab" {
+            if let host = ws.host, !gitLabHosts.contains(host) {
+                gitLabHosts.append(host)
+            }
+        }
+        var jiraConfigs: [JiraConfig] = []
+        for ws in config.workspaces where ws.derivedTaskProvider == "jira" {
+            let cfg = JiraConfig(
+                site: ws.jiraSite,
+                projectKey: ws.jiraProjectKey,
+                jql: ws.jiraJQL,
+                statusMap: ws.jiraStatusMap
+            )
+            if !jiraConfigs.contains(cfg) { jiraConfigs.append(cfg) }
+        }
+        return BoardPollSnapshot(
+            hasGitHub: hasGitHub,
+            gitLabHosts: gitLabHosts,
+            jiraConfigsWithoutAuth: jiraConfigs,
+            jiraCredential: config.jiraCredential,
+            sessionPRURLs: collectSessionPRURLs()
+        )
+    }
+
+    /// Match viewer's open PRs onto assigned issues by
+    /// `closingIssuesReferences` (repo + number). Pure over the GitHub
+    /// payload so it can run off MainActor with the rest of the fetch.
+    nonisolated static func enrichOpenIssuesWithViewerPRs(
+        _ openIssues: [AssignedIssue],
+        viewerPRs: [ViewerPR]
+    ) -> [AssignedIssue] {
+        var openIssues = openIssues
+        for pr in viewerPRs where pr.state == "OPEN" {
+            for linked in pr.linkedIssueReferences {
+                if let idx = openIssues.firstIndex(where: {
+                    $0.provider == .github && $0.number == linked.number && $0.repo == linked.repo
+                }) {
+                    openIssues[idx].prNumber = pr.number
+                    openIssues[idx].prURL = pr.url
+                    // Surface PR health inline on the board (#751): PRRecord
+                    // already carries these from monitoredPRsQuery, so no
+                    // extra fetch. A draft PR reports "draft"; otherwise the
+                    // normalized state lowercased ("open"/"merged"/"closed").
+                    openIssues[idx].prState = pr.isDraft ? "draft" : pr.state.lowercased()
+                    openIssues[idx].checksState = pr.checksState.isEmpty ? nil : pr.checksState
+                    openIssues[idx].failedCheckNames = pr.failedCheckNames.isEmpty ? nil : pr.failedCheckNames
+                }
+            }
+        }
+        return openIssues
+    }
+
+    /// Run GitHub GraphQL, GitLab, Jira, and the stale-PR follow-up off
+    /// MainActor. `refresh()` awaits this from a detached task, then applies
+    /// `BoardPollFetch` in one hop.
+    nonisolated static func fetchOffActor(
+        snapshot: BoardPollSnapshot,
+        providerManager: ProviderManager
+    ) async -> BoardPollFetch {
+        var allIssues: [AssignedIssue] = []
+        var doneCount = 0
+        var githubEvents: [GitHubBackendEvent] = []
+
+        let ghResult: ConsolidatedGitHubResponse?
+        if snapshot.hasGitHub {
+            let (response, events) = await runConsolidatedGitHubQuery(
+                taskBackend: providerManager.taskBackend(for: .github),
+                codeBackend: providerManager.codeBackend(for: .github)!
+            )
+            githubEvents.append(contentsOf: events)
+            ghResult = response
+        } else {
+            ghResult = nil
+        }
+
+        if let ghResult {
+            let openIssues = enrichOpenIssuesWithViewerPRs(
+                ghResult.openIssues, viewerPRs: ghResult.viewerPRs)
+            allIssues.append(contentsOf: openIssues)
+            let openIDs = Set(openIssues.map(\.id))
+            let uniqueDone = ghResult.closedIssues.filter { !openIDs.contains($0.id) }
+            allIssues.append(contentsOf: uniqueDone)
+            doneCount += ghResult.closedTotalCount
+        }
+
+        for host in snapshot.gitLabHosts {
+            let listing = await fetchGitLabIssues(
+                host: host,
+                backend: providerManager.taskBackend(for: .gitlab, host: host)
+            )
+            let merged = mergeListing(listing)
+            let gitlabCode = providerManager.codeBackend(for: .gitlab, host: host) as? GitLabCodeBackend
+            let enriched = await enrichGitLabMRStatus(merged.issues, host: host, backend: gitlabCode)
+            allIssues.append(contentsOf: enriched)
+            doneCount += merged.doneCount
+        }
+
+        // Resolve the shared Jira REST credential once (it may shell `op read`)
+        // off MainActor, then thread it into every config.
+        let jiraAuthorization = snapshot.jiraCredential.flatMap { JiraCredentialResolver.resolve($0) }
+        for cfg in snapshot.jiraConfigsWithoutAuth {
+            let authed = JiraConfig(
+                site: cfg.site,
+                projectKey: cfg.projectKey,
+                jql: cfg.jql,
+                statusMap: cfg.statusMap,
+                authorization: jiraAuthorization
+            )
+            let listing = await fetchJiraIssues(
+                config: authed,
+                backend: providerManager.taskBackend(for: .jira, jira: authed)
+            )
+            let merged = mergeListing(listing)
+            allIssues.append(contentsOf: merged.issues)
+            doneCount += merged.doneCount
+        }
+
+        var staleFetch = StalePRFetchResult(prs: [], complete: true)
+        if let ghResult {
+            let openPRURLs = Set(ghResult.viewerPRs.map(\.url))
+            let staleCandidateURLs = snapshot.sessionPRURLs.filter { !openPRURLs.contains($0) }
+            if !staleCandidateURLs.isEmpty {
+                staleFetch = await fetchStalePRStates(
+                    urls: staleCandidateURLs,
+                    viewerLogin: ghResult.viewerLogin,
+                    providerManager: providerManager
+                )
+                githubEvents.append(contentsOf: staleFetch.events)
+            }
+        }
+
+        return BoardPollFetch(
+            issues: allIssues,
+            doneCount: doneCount,
+            ghResult: ghResult,
+            githubEvents: githubEvents,
+            staleFetch: staleFetch
+        )
     }
 }
 
