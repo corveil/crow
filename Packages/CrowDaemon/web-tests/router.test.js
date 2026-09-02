@@ -190,8 +190,7 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
       { view: 'session', sessionId: 'abc', terminalId: 'xyz' });
     eq('tickets', T.parseRoute('#/tickets'), { view: 'board', board: 'tickets' });
     eq('reviews', T.parseRoute('#/reviews'), { view: 'board', board: 'reviews' });
-    // The ticket named only tickets/reviews; the client has five boards.
-    eq('allowlist', T.parseRoute('#/allowlist'), { view: 'board', board: 'allowlist' });
+    // The ticket named only tickets/reviews; the client has four boards.
     eq('scorecard', T.parseRoute('#/scorecard'), { view: 'board', board: 'scorecard' });
     eq('grid', T.parseRoute('#/grid'), { view: 'board', board: 'grid' });
     eq('settings tab', T.parseRoute('#/settings/jobs'), { view: 'settings', tab: 'jobs' });

@@ -10,7 +10,7 @@ import CrowIPC
 import CrowPersistence
 @testable import CrowDaemon
 
-/// Board RPCs (Ticket Board / Reviews / Allowlist) answer locally off the
+/// Board RPCs (Ticket Board / Reviews) answer locally off the
 /// daemon's own `AppState`. This suite pins the no-provider contract — no
 /// tmux/providers needed — so the web UI degrades gracefully: reads return an
 /// empty board, actions surface an application error.
@@ -38,10 +38,6 @@ import CrowPersistence
         #expect(reviews.error == nil)
         #expect(reviews.result?["reviews"]?.arrayValue?.isEmpty == true)
 
-        let allow = await router.handle(request: JSONRPCRequest(id: 3, method: "list-allowlist"))
-        #expect(allow.error == nil)
-        #expect(allow.result?["entries"]?.arrayValue?.isEmpty == true)
-
         let live = await router.handle(request: JSONRPCRequest(id: 4, method: "list-sessions-live"))
         #expect(live.error == nil)
         #expect(live.result?["sessions"]?.objectValue?.isEmpty == true)
@@ -55,7 +51,7 @@ import CrowPersistence
         // locally, so they're covered by LocalStatusTests instead.)
         let actions = [
             "work-on-issue", "batch-work-on-issues", "start-review", "batch-start-review",
-            "promote-allowlist", "refresh-tickets", "refresh-allowlist",
+            "refresh-tickets",
             "create-manager", "mark-issue-done", "add-merge-label",
         ]
         for method in actions {
@@ -477,11 +473,10 @@ private struct StubShellRunner: ShellRunner {
 }
 
 /// M-C inversion: when the daemon owns the board services, `list-tickets` /
-/// `list-reviews` / `list-allowlist` answer **locally** off `appState`
-/// (populated by the daemon's own IssueTracker/AllowListService) instead of
-/// forwarding — so the boards work with the app down (CROW-581). The service
-/// instances here are never polled; passing them just flips the router to the
-/// owned-data path.
+/// `list-reviews` answer **locally** off `appState` (populated by the daemon's
+/// own IssueTracker) instead of forwarding — so the boards work with the app
+/// down (CROW-581). The service instances here are never polled; passing them
+/// just flips the router to the owned-data path.
 @Suite struct LocalBoardTests {
     @Test @MainActor func listTicketsServesLocalAppStateWhenOwned() async {
         let appState = AppState()
@@ -501,22 +496,6 @@ private struct StubShellRunner: ShellRunner {
         let issues = resp.result?["issues"]?.arrayValue ?? []
         #expect(issues.count == 1)
         #expect(issues.first?.objectValue?["number"]?.intValue == 7)
-    }
-
-    @Test @MainActor func listAllowlistServesLocalAppStateWhenOwned() async {
-        let appState = AppState()
-        appState.allowEntries = [AllowEntry(pattern: "Bash(npm test:*)", sources: [.global])]
-        let allowList = AllowListService(appState: appState, devRoot: NSTemporaryDirectory())
-        let router = makeCommandRouter(
-            appState: appState, store: JSONStore.temporary(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, allowList: allowList)
-
-        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-allowlist"))
-        #expect(resp.error == nil)
-        let entries = resp.result?["entries"]?.arrayValue ?? []
-        #expect(entries.count == 1)
-        #expect(entries.first?.objectValue?["pattern"]?.stringValue == "Bash(npm test:*)")
-        #expect(entries.first?.objectValue?["is_global"]?.boolValue == true)
     }
 }
 

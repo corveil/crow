@@ -68,9 +68,6 @@ actor RPCDispatcher {
         /// re-create #931 one level down.
         case reviewKickoff
 
-        /// The global `~/.claude/settings.json` allowlist: promote, then scan.
-        case allowlist
-
         /// Whole-board provider sweeps (`resync-jira`), which walk every session
         /// and transition its ticket. Two at once would double every provider
         /// call.

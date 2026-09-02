@@ -50,7 +50,7 @@ public struct GetState: ParsableCommand {
         abstract: "Print the daemon's full render-state snapshot as JSON",
         discussion: """
         Sessions, terminals, worktrees, links, PR status, review requests, \
-        assigned issues, allowlist entries, and config (credentials stripped). \
+        assigned issues, and config (credentials stripped). \
         This is the whole snapshot in one call and it is large — prefer \
         list-sessions / get-session / list-links when you want one slice.
         """

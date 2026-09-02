@@ -1,8 +1,8 @@
 'use strict';
-// Crow web UI — Boards: tickets, reviews, allowlist, scorecard. Extracted from app.js (CROW-1155).
+// Crow web UI — Boards: tickets, reviews, scorecard. Extracted from app.js (CROW-1155).
 
 // ---------------------------------------------------------------------------
-// Boards (Ticket Board / Reviews / Allowlist)
+// Boards (Ticket Board / Reviews)
 // ---------------------------------------------------------------------------
 function selectBoard(key) {
   navigate({ view: 'board', board: key });
@@ -21,11 +21,7 @@ function selectBoard(key) {
   renderSidebar();
   renderBoard();       // instant paint (may be stale/empty)…
   if (key === 'grid') return;
-  // Allowlist is manual-refresh-only (never polled), so a plain list read
-  // returns nothing until the app has scanned. Kick a scan on open so the
-  // section populates without the user having to click Refresh (CROW-593).
-  if (key === 'allowlist') refreshAllowlist();
-  else refreshBoard(key); // …then refresh from the app
+  refreshBoard(key); // …then refresh from the app
 }
 
 // Fetch one board; only re-render when the data actually changed so polling
@@ -33,24 +29,12 @@ function selectBoard(key) {
 async function refreshBoard(key) {
   const method = key === 'tickets' ? 'list-tickets'
     : key === 'reviews' ? 'list-reviews'
-    : key === 'scorecard' ? 'get-scorecard'
-    : 'list-allowlist';
+    : 'get-scorecard';
   let data;
   try { data = await rpc(method); } catch (_) {
     // A failed read leaves us with no fresh word on the daemon's in-flight
     // flag, and a stale `true` never self-clears (CROW-771).
     if (key === 'tickets') clearDaemonRefreshFlag();
-    // The allowlist never polls or caches (it's manual-refresh-only), so a failed
-    // FIRST read would strand its cold-open "Scanning…" state forever —
-    // renderAllowlist keys that on `boardData.allowlist == null`. Seed an empty,
-    // settled snapshot so it lands on "No allowlist entries" like the pre-CROW-907
-    // board did (the disconnected banner is the real daemon-down signal); a later
-    // manual Refresh still replaces it. A failed LATER read keeps the last-good
-    // snapshot (d already non-null), so only the null case needs this.
-    if (key === 'allowlist' && !boardData.allowlist) {
-      boardData.allowlist = { entries: [], loading: false };
-      if (selectedBoard === 'allowlist') renderBoard();
-    }
     return;
   }
   const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
@@ -78,7 +62,6 @@ function renderBoard() {
   root.innerHTML = '';
   if (selectedBoard === 'tickets') renderTicketBoard(root);
   else if (selectedBoard === 'reviews') renderReviewBoard(root);
-  else if (selectedBoard === 'allowlist') renderAllowlist(root);
   else if (selectedBoard === 'scorecard') renderScorecard(root);
 }
 
@@ -567,13 +550,12 @@ function labelPills(labels, maxVisible) {
 }
 
 // An empty board is just an empty list, not an error — `crowd` serves the boards
-// off its own IssueTracker/AllowListService (CROW-581 M-C), so a "requires the
+// off its own IssueTracker (CROW-581 M-C), so a "requires the
 // Crow desktop app" hint would be stale post native→web migration (ADR 0010) and
 // read as a false error/warning (CROW-907). Just render the caller's context
 // message ("No review requests", …). NOTE: this is reachable before the first
 // read lands (the pre-refresh paint at selectBoard) — a caller that must not
-// conflate "not loaded yet" with "empty" gates the message itself, as
-// renderAllowlist does with its scanning state.
+// conflate "not loaded yet" with "empty" gates the message itself.
 function boardEmpty(msg) {
   return el('div', 'board-empty', msg);
 }
@@ -654,9 +636,9 @@ function startActionsSplit(primaryLabel, onPrimary, items) {
 }
 
 // -- Ticket Board --
-// #714: shared board filter input (generalized from #701's allowlist filter).
-// The board fully re-renders on each keystroke, so restore focus + caret after
-// renderBoard() by re-querying the recreated input via its `cls`.
+// #714: shared board filter input. The board fully re-renders on each keystroke,
+// so restore focus + caret after renderBoard() by re-querying the recreated
+// input via its `cls`.
 function boardFilterInput(cls, value, placeholder, onValue) {
   const input = document.createElement('input');
   input.type = 'text';
@@ -1373,129 +1355,4 @@ function reviewCard(r) {
   // which has no button at all — would otherwise end in 8px of dead space.
   if (foot.childNodes.length) card.appendChild(foot);
   return card;
-}
-
-// -- Allowlist --
-function renderAllowlist(root) {
-  const d = boardData.allowlist;
-  // The allowlist is never cached (persistSidebarCache stores only tickets/
-  // reviews) and never polled — it's manual-refresh-only, auto-scanned once on
-  // open (CROW-593). So `d == null` means no read has come back yet: the board
-  // isn't known-empty, and rendering "No entries" would flash a false empty
-  // during the cold-open scan. refreshBoard seeds a settled snapshot even on a
-  // failed read (see its catch), so `d == null` can't mean "read failed" and
-  // strand this forever. `d.loading` is defensive only — AllowListService.scan()
-  // is synchronous, so `list-allowlist` never lands mid-scan today; it's the
-  // right shape if that ever goes async, and costs nothing.
-  const scanning = !d || d.loading;
-  let entries = ((d && d.entries) || []).slice();
-  if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
-  // #701: case-insensitive substring filter on pattern (mirrors desktop's
-  // localizedCaseInsensitiveContains). Applied before deriving `promotable` so
-  // Select All and the pruned selection only ever reference visible rows.
-  const filter = allowlistFilter.trim().toLowerCase();
-  if (filter) entries = entries.filter((e) => e.pattern.toLowerCase().includes(filter));
-  entries.sort((a, b) => a.pattern.localeCompare(b.pattern));
-  // Only worktree-only patterns are promotable to global.
-  const promotable = entries.filter((e) => !e.is_global).map((e) => e.pattern);
-  // #701: prune selections for rows hidden by the filter (or no longer promotable)
-  // so Promote can never act on a pattern that isn't visible.
-  const visiblePromotable = new Set(promotable);
-  for (const p of [...allowlistSelection]) if (!visiblePromotable.has(p)) allowlistSelection.delete(p);
-
-  const head = el('div', 'board-head');
-  const title = el('div', 'board-title', 'Allowlist');
-  if (scanning) title.appendChild(el('span', 'action-spinner'));
-  head.appendChild(title);
-  const hide = el('button', 'action-btn' + (allowlistHideGlobal ? ' active' : ''), allowlistHideGlobal ? 'Show Global' : 'Hide Global');
-  hide.onclick = () => { allowlistHideGlobal = !allowlistHideGlobal; renderBoard(); };
-  head.appendChild(hide);
-  const refresh = el('button', 'action-btn', 'Refresh');
-  refresh.onclick = () => refreshAllowlist();
-  head.appendChild(refresh);
-  const selectAll = el('button', 'action-btn', 'Select All');
-  selectAll.disabled = !promotable.length;
-  selectAll.onclick = () => { promotable.forEach((p) => allowlistSelection.add(p)); renderBoard(); };
-  head.appendChild(selectAll);
-  const clearSel = el('button', 'action-btn', 'Clear');
-  clearSel.id = 'allow-clear';
-  clearSel.disabled = allowlistSelection.size === 0;
-  clearSel.onclick = () => { allowlistSelection.clear(); renderBoard(); };
-  head.appendChild(clearSel);
-  const promote = el('button', 'action-btn action-primary', 'Promote to Global (' + allowlistSelection.size + ')');
-  promote.id = 'allow-promote';
-  promote.disabled = allowlistSelection.size === 0;
-  promote.onclick = () => promoteAllowlist([...allowlistSelection]);
-  head.appendChild(promote);
-  root.appendChild(head);
-
-  // #701/#714: filter bar above the list (shared helper restores focus + caret
-  // across the per-keystroke re-render).
-  root.appendChild(boardFilterInput('allow-filter', allowlistFilter, 'Filter patterns…', (v) => { allowlistFilter = v; }));
-
-  if (!entries.length) {
-    // Not loaded yet ⇒ say we're scanning rather than assert empty / no-match —
-    // honest whether or not a filter is active (allowlistFilter survives board
-    // switches, so a cold open can carry one).
-    if (scanning) { root.appendChild(boardEmpty('Scanning allowlist…')); return; }
-    root.appendChild(boardEmpty(filter ? 'No matching entries' : 'No allowlist entries'));
-    return;
-  }
-  const list = el('div', 'allow-list');
-  for (const e of entries) list.appendChild(allowRow(e));
-  root.appendChild(list);
-}
-
-function allowRow(e) {
-  // #701: fade rows already in the global allowlist (parity with desktop AllowListView)
-  // so promotable (non-global) rows stand out as the actionable ones.
-  const row = el('div', 'allow-row' + (e.is_global ? ' is-global' : ''));
-  if (!e.is_global) {
-    // Only worktree-only patterns are promotable to global.
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.className = 'allow-check';
-    box.checked = allowlistSelection.has(e.pattern);
-    box.onchange = () => {
-      if (box.checked) allowlistSelection.add(e.pattern); else allowlistSelection.delete(e.pattern);
-      const empty = allowlistSelection.size === 0;
-      const promote = document.getElementById('allow-promote');
-      if (promote) {
-        promote.textContent = 'Promote to Global (' + allowlistSelection.size + ')';
-        promote.disabled = empty;
-      }
-      // Clear was fixed at render time; refresh it here too so ticking the first
-      // row from an empty selection enables Clear (review Yellow).
-      const clear = document.getElementById('allow-clear');
-      if (clear) clear.disabled = empty;
-    };
-    row.appendChild(box);
-  } else {
-    row.appendChild(el('span', 'allow-check-spacer'));
-  }
-  const main = el('div', 'allow-main');
-  main.appendChild(el('code', 'allow-pattern', e.pattern));
-  const badges = el('div', 'allow-badges');
-  if (e.is_global) badges.appendChild(el('span', 'allow-badge-global', 'Global'));
-  for (const name of (e.worktree_session_names || [])) badges.appendChild(el('span', 'allow-chip', name));
-  main.appendChild(badges);
-  row.appendChild(main);
-  return row;
-}
-
-async function promoteAllowlist(patterns) {
-  if (!patterns.length) return;
-  try {
-    await rpc('promote-allowlist', { patterns });
-    allowlistSelection.clear();
-    await rpc('refresh-allowlist').catch(() => {});
-    setTimeout(() => refreshBoard('allowlist'), 800);
-  } catch (e) {
-    alertModal('Promote failed: ' + (e.message || e));
-  }
-}
-
-async function refreshAllowlist() {
-  try { await rpc('refresh-allowlist'); } catch (_) { /* app down — ignore */ }
-  setTimeout(() => refreshBoard('allowlist'), 800);
 }

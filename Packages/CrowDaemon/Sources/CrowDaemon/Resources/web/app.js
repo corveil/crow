@@ -90,7 +90,7 @@ setInterval(refreshLive, 4000);
 // before first open.
 refreshBoard('tickets');
 refreshBoard('reviews');
-// Keep the open ticket/review board fresh (allowlist is manual-refresh only).
+// Keep the open ticket/review board fresh.
 // Slow fallback — board changes are push-driven via the daemon's poll nudge.
 setInterval(() => {
   if (selectedBoard === 'tickets' || selectedBoard === 'reviews') refreshBoard(selectedBoard);

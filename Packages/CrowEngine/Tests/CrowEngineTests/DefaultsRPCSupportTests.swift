@@ -120,10 +120,9 @@ struct DefaultsRPCSupportTests {
         }
     }
 
-    /// Strict element typing, per `AllowlistRPC.decodePatterns`: a bare
-    /// `compactMap` would apply a *subset* of the request and still report
-    /// success. An all-blank array is likewise a caller bug — "empty the list"
-    /// has its own key.
+    /// Strict element typing: a bare `compactMap` would apply a *subset* of the
+    /// request and still report success. An all-blank array is likewise a caller
+    /// bug — "empty the list" has its own key.
     @Test func patchStringListRejectsMalformedArrays() {
         let bad: [JSONValue] = [
             .string("acme/docs"),                        // not an array

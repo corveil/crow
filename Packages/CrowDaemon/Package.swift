@@ -15,7 +15,7 @@ let package = Package(
         // Login-item installer shared with the crow CLI (CROW-769).
         .package(path: "../CrowAutostart"),
         .package(path: "../CrowTerminal"),
-        // The headless engine (IssueTracker / AllowListService) + its provider
+        // The headless engine (IssueTracker) + its provider
         // layer, so the daemon owns the board reads with the app down (CROW-581).
         .package(path: "../CrowEngine"),
         .package(path: "../CrowProvider"),

@@ -125,9 +125,6 @@ public final class AppState {
     /// Fixed UUID for the ticket board tab.
     nonisolated public static let ticketBoardSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
-    /// Fixed UUID for the allow list tab.
-    nonisolated public static let allowListSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-
     /// Fixed UUID for the review board tab.
     nonisolated public static let reviewBoardSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
 
@@ -218,12 +215,6 @@ public final class AppState {
     /// True while a rebuild is running; drives the scorecard button's
     /// spinner/disabled state.
     public var isRebuildingScorecard: Bool = false
-
-    // MARK: - Allowlist
-
-    /// Aggregated allow-list entries from all worktrees.
-    public var allowEntries: [AllowEntry] = []
-    public var isLoadingAllowList: Bool = false
 
     /// Lists the repos available to a workspace, as `owner/repo` slugs, by
     /// expanding its `alwaysInclude` specs against the provider — along with any
@@ -499,7 +490,6 @@ public final class AppState {
 
     public var selectedSession: Session? {
         guard selectedSessionID != Self.ticketBoardSessionID,
-              selectedSessionID != Self.allowListSessionID,
               selectedSessionID != Self.reviewBoardSessionID,
               selectedSessionID != Self.scorecardSessionID else { return nil }
         return sessions.first { $0.id == selectedSessionID }

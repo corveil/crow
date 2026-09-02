@@ -78,7 +78,6 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow job list`](#crow-job-list) | List all jobs |
 | [`crow job run`](#crow-job-run) | Run a job now, regardless of its schedule or enabled flag |
 | [`crow launch-agent`](#crow-launch-agent) | Launch the session's coding agent in a ready terminal |
-| [`crow list-allowlist`](#crow-list-allowlist) | List allowlist patterns and where each one is defined |
 | [`crow list-artifacts`](#crow-list-artifacts) | List images an agent dropped in a session's artifacts directory |
 | [`crow list-links`](#crow-list-links) | List links for a session |
 | [`crow list-reviews`](#crow-list-reviews) | List requested PR reviews (with unseen count and loading state) |
@@ -106,11 +105,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow notifications set`](#crow-notifications-set) | Change notification settings |
 | [`crow open-in-vscode`](#crow-open-in-vscode) | Open the session's worktree in VS Code on the host |
 | [`crow open-terminal`](#crow-open-terminal) | Open a macOS Terminal.app window at the session's worktree (host GUI) |
-| [`crow promote-allowlist`](#crow-promote-allowlist) | Copy worktree-local allowlist patterns into ~/.claude/settings.json |
 | [`crow quick-action`](#crow-quick-action) | Dispatch a PR quick action into a session's agent terminal |
 | [`crow rebuild-scorecard`](#crow-rebuild-scorecard) | Backfill analytics snapshots and recompute the scorecard |
 | [`crow recreate-terminal`](#crow-recreate-terminal) | Recreate a terminal to restore full scrollback (CROW-804) |
-| [`crow refresh-allowlist`](#crow-refresh-allowlist) | Re-scan global and worktree settings files for allowlist patterns |
 | [`crow refresh-tickets`](#crow-refresh-tickets) | Re-poll the ticket provider now |
 | [`crow reload-tmux-config`](#crow-reload-tmux-config) | Reload the bundled tmux config into the running server |
 | [`crow remove-link`](#crow-remove-link) | Remove a link from a session |
@@ -1012,7 +1009,7 @@ Print the daemon's full render-state snapshot as JSON.
 crow get-state
 ```
 
-Sessions, terminals, worktrees, links, PR status, review requests, assigned issues, allowlist entries, and config (credentials stripped). This is the whole snapshot in one call and it is large — prefer list-sessions / get-session / list-links when you want one slice.
+Sessions, terminals, worktrees, links, PR status, review requests, assigned issues, and config (credentials stripped). This is the whole snapshot in one call and it is large — prefer list-sessions / get-session / list-links when you want one slice.
 
 ---
 
@@ -1219,18 +1216,6 @@ The daemon applies this only to a terminal that is shell-ready and still pending
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--terminal` | `<terminal>` | yes | Terminal UUID |
-
----
-
-## `crow list-allowlist`
-
-List allowlist patterns and where each one is defined.
-
-```
-crow list-allowlist
-```
-
-Reads the daemon's last scan rather than re-reading disk — run refresh-allowlist first if a settings file changed underneath it.
 
 ---
 
@@ -1663,27 +1648,6 @@ macOS only. Host-app launches are restricted to local callers; the CLI qualifies
 
 ---
 
-## `crow promote-allowlist`
-
-Copy worktree-local allowlist patterns into ~/.claude/settings.json.
-
-```
-crow promote-allowlist [--pattern <pattern> ...]
-```
-
-Patterns already in the global file are reported under already_global and left alone. Quote patterns — parentheses and '*' are shell metacharacters: --pattern 'Bash(npm test:*)'.
-
-Promote everything not yet global:
-```
-crow list-allowlist | jq -r '.entries[] | select(.is_global | not) | "--pattern", .pattern' | xargs crow promote-allowlist
-```
-
-| Flag | Value | Required | Description |
-| --- | --- | --- | --- |
-| `--pattern` | `<pattern>` _(repeatable)_ | no | Allowlist pattern to promote, e.g. 'Bash(npm test:*)' (repeatable) |
-
----
-
 ## `crow quick-action`
 
 Dispatch a PR quick action into a session's agent terminal.
@@ -1725,16 +1689,6 @@ crow recreate-terminal --session <session> --terminal <terminal>
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
 | `--terminal` | `<terminal>` | yes | Terminal UUID |
-
----
-
-## `crow refresh-allowlist`
-
-Re-scan global and worktree settings files for allowlist patterns.
-
-```
-crow refresh-allowlist
-```
 
 ---
 

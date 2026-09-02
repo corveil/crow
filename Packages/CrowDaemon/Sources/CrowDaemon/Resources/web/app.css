@@ -128,10 +128,9 @@ body {
 }
 .divider-selall:hover { color: var(--gold); border-color: var(--gold); }
 .session-row.selecting { display: flex; align-items: flex-start; gap: 8px; }
-/* Circular multi-select checkboxes (sidebar + allowlist) — native input kept for
+/* Circular multi-select checkboxes (sidebar) — native input kept for
    keyboard/a11y; appearance stripped so the control reads as a circle (CROW-614). */
-.row-check,
-.allow-check {
+.row-check {
   appearance: none;
   -webkit-appearance: none;
   width: 16px;
@@ -145,10 +144,8 @@ body {
   vertical-align: top;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
-.row-check:hover,
-.allow-check:hover { border-color: var(--gold); }
-.row-check:checked,
-.allow-check:checked {
+.row-check:hover { border-color: var(--gold); }
+.row-check:checked {
   background-color: var(--gold);
   border-color: var(--gold);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23121416' stroke='%23121416' stroke-width='0.5' d='M4.7 8.6L2.2 6.1l.9-.9 1.6 1.6 3.7-3.7.9.9z'/%3E%3C/svg%3E");
@@ -156,8 +153,7 @@ body {
   background-position: center;
   background-repeat: no-repeat;
 }
-.row-check:focus-visible,
-.allow-check:focus-visible {
+.row-check:focus-visible {
   outline: 2px solid var(--gold);
   outline-offset: 2px;
 }
@@ -634,7 +630,7 @@ body.update-banner-visible #back-to-sidebar {
   #app.mobile-show-sidebar ~ #statusbar { display: flex; }
 }
 
-/* ---- Boards (Ticket Board / Reviews / Allowlist) ---- */
+/* ---- Boards (Ticket Board / Reviews) ---- */
 #board { display: none; flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
 #app.board-active #board { display: block; }
 #app.board-active #detail-header,
@@ -785,7 +781,6 @@ body.update-banner-visible #back-to-sidebar {
   border: 1px solid; background: var(--bg-card); white-space: nowrap;
 }
 
-.allow-list { display: flex; flex-direction: column; gap: 4px; }
 .board-filter {
   width: 100%; box-sizing: border-box; margin-bottom: 8px;
   padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: 6px;
@@ -793,29 +788,6 @@ body.update-banner-visible #back-to-sidebar {
 }
 .board-filter::placeholder { color: var(--text-muted); }
 .board-filter:focus { outline: none; border-color: var(--border-strong); }
-.allow-row {
-  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
-  border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
-}
-/* #701: entries already in the global allowlist render faded/muted (parity with
-   desktop AllowListView: .opacity(0.6) + foregroundStyle(textMuted)). */
-.allow-row.is-global { opacity: 0.6; }
-.allow-row.is-global .allow-pattern { color: var(--text-muted); }
-.allow-check-spacer { width: 16px; flex: 0 0 auto; }
-.allow-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
-.allow-pattern {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
-  color: var(--text-primary); word-break: break-all;
-}
-.allow-badges { display: flex; flex-wrap: wrap; gap: 5px; }
-.allow-badge-global {
-  font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: 9px;
-  color: var(--green); border: 1px solid rgba(52, 199, 89, 0.4);
-}
-.allow-chip {
-  font-size: 10px; padding: 1px 8px; border-radius: 9px;
-  color: var(--blue); border: 1px solid rgba(10, 132, 255, 0.35);
-}
 
 .board-empty { color: var(--text-muted); text-align: center; padding: 48px 12px; }
 
@@ -1005,7 +977,7 @@ body.update-banner-visible #back-to-sidebar {
 .tk-dot { width: 7px; height: 7px; border-radius: 50%; }
 .tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* Left-column nav rows (CROW-917): row 1 Grid/Reviews/Allowlist/Scorecard, row 2 the
+/* Left-column nav rows (CROW-917): row 1 Grid/Reviews/Scorecard, row 2 the
    full-width Manager pill. Each .nav-pills-row is its own non-wrapping flex line so
    groups never reflow; the "+" and Select buttons live in the right icon column. */
 .nav-pills-row { display: flex; gap: 6px; }

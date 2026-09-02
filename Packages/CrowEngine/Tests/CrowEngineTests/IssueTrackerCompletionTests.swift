@@ -664,7 +664,6 @@ struct IssueTrackerCompletionTests {
     func virtualTabSessionsAreProtected() {
         let protectedIDs = [
             AppState.ticketBoardSessionID,
-            AppState.allowListSessionID,
             AppState.reviewBoardSessionID,
         ]
         let sessions = protectedIDs.map {

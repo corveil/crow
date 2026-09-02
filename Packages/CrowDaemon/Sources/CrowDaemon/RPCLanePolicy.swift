@@ -104,8 +104,6 @@ enum RPCLanePolicy {
         "start-review": .fixed(.reviewKickoff),
         "batch-start-review": .fixed(.reviewKickoff),
         "quick-action": .on("session_id"),
-        "promote-allowlist": .fixed(.allowlist),
-        "refresh-allowlist": .fixed(.allowlist),
         // `ScorecardRebuilder` is already single-flight: a second caller awaits
         // the in-flight run instead of starting one.
         "rebuild-scorecard": .concurrent,

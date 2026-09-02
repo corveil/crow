@@ -453,8 +453,8 @@ func makeSessionHandlers(
             #endif
         },
 
-        // Board data (Ticket Board / Reviews / Allowlist) is in-memory on the app
-        // (IssueTracker / AllowListService), so these reads are forward-only.
+        // Board data (Ticket Board / Reviews) is in-memory on the app
+        // (IssueTracker), so these reads are forward-only.
         // Coding agents are registered in the daemon's own AgentRegistry at
         // startup, so `list-agents` answers locally — no app required (CROW-581).
         // Returns **all known** agents, each with an `available` flag + `binary`

@@ -168,9 +168,9 @@ public enum DefaultsRPC {
     /// Array-of-strings param: trimmed, blanks dropped, deduped first-seen
     /// (case-insensitively, keeping the first casing), at least one survivor.
     ///
-    /// Strict about element type for the reason `AllowlistRPC.decodePatterns`
-    /// spells out: a bare `compactMap` drops a non-string element, so a malformed
-    /// payload applies a *subset* of the request and still reports success.
+    /// Strict about element type: a bare `compactMap` drops a non-string
+    /// element, so a malformed payload applies a *subset* of the request and
+    /// still reports success.
     ///
     /// - Returns: `nil` when the key is absent or null.
     private static func decodeStringArray(
@@ -190,8 +190,7 @@ public enum DefaultsRPC {
             .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
         // An empty or all-blank array is a caller bug: it either means "clear"
         // (which has its own key) or the caller's own list-building produced
-        // nothing. Accepting it makes an inert write look successful — the same
-        // call `AllowlistRPC.decodePatterns` makes.
+        // nothing. Accepting it makes an inert write look successful.
         guard !cleaned.isEmpty else {
             throw RPCError.invalidParams("\(key) must contain at least one non-blank value")
         }

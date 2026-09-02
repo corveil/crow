@@ -35,7 +35,6 @@ func makeCommandRouter(
     devRoot: String,
     cockpit: TerminalCockpit?,
     tracker: IssueTracker? = nil,
-    allowList: AllowListService? = nil,
     sessionService: SessionService? = nil,
     autoRespond: AutoRespondCoordinator? = nil,
     jobScheduler: JobScheduler? = nil,
@@ -65,7 +64,7 @@ func makeCommandRouter(
     ) { existing, _ in existing }
     handlers.merge(
         makeBoardHandlers(
-            appState: appState, tracker: tracker, allowList: allowList,
+            appState: appState, tracker: tracker,
             sessionService: sessionService, reviewSerializer: reviewSerializer)
     ) { existing, _ in existing }
     handlers.merge(

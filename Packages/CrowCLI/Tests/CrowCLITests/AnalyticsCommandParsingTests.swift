@@ -39,7 +39,6 @@ private let validUUID = "550e8400-e29b-41d4-a716-446655440000"
 @Test func crowRootRegistersTheNewVerbs() {
     let registered = Set(CrowCommand.configuration.subcommands.map { $0.configuration.commandName })
     for verb in [
-        "list-allowlist", "promote-allowlist", "refresh-allowlist",
         "get-scorecard", "rebuild-scorecard", "get-state", "list-artifacts",
     ] {
         #expect(registered.contains(verb), "\(verb) is not registered on the crow root command")
