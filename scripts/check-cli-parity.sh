@@ -112,7 +112,7 @@ engine_methods() {
 overlap="$(comm -12 <(daemon_methods) <(engine_methods) || true)"
 if [ -n "$overlap" ]; then
   echo "check-cli-parity: engine files re-register methods the daemon already owns:" >&2
-  echo "$overlap" | sed 's/^/  /' >&2
+  printf '%s\n' "$overlap" >&2
   echo "Delete the engine copy — crowd answers the daemon body via fallback." >&2
   exit 1
 fi
