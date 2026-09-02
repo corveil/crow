@@ -378,10 +378,12 @@ final class PRAttributionRecorder {
             changedFilesFetchAttempted.insert(attribution.prURL)
             let files: [String]
             do {
-                files = try await backend.fetchPRChangedFiles(
-                    repoSlug: attribution.repoNameWithOwner,
-                    prNumber: attribution.prNumber
-                )
+                files = try await Task.detached {
+                    try await backend.fetchPRChangedFiles(
+                        repoSlug: attribution.repoNameWithOwner,
+                        prNumber: attribution.prNumber
+                    )
+                }.value
             } catch {
                 CrowLog.info("[Crow] fetchPRChangedFiles failed for \(attribution.prURL): \(error.localizedDescription)")
                 continue
@@ -423,7 +425,9 @@ final class PRAttributionRecorder {
         for repo in repos.sorted() {
             let commits: [CommitInfo]
             do {
-                commits = try await backend.fetchRecentDefaultBranchCommits(repoSlug: repo, since: since)
+                commits = try await Task.detached {
+                    try await backend.fetchRecentDefaultBranchCommits(repoSlug: repo, since: since)
+                }.value
             } catch {
                 CrowLog.info("[Crow] fetchRecentDefaultBranchCommits failed for \(repo): \(error.localizedDescription)")
                 continue

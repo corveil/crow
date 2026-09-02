@@ -367,7 +367,9 @@ public final class PRLinkReconciler {
         let github = candidates.filter { $0.provider == .github }
         guard !github.isEmpty, let backend = providerManager.codeBackend(for: .github) else { return [] }
         do {
-            let matches = try await backend.findPRsMatchingKeys(Self.dedupedKeyCandidates(github))
+            let matches = try await Task.detached {
+                try await backend.findPRsMatchingKeys(Self.dedupedKeyCandidates(github))
+            }.value
             return Self.fanOutKeyMatches(matches, across: github)
         } catch {
             owner.handleGitHubBackendError(error, operation: "findPRsMatchingKeys(github)")
@@ -422,9 +424,11 @@ public final class PRLinkReconciler {
         guard !candidates.isEmpty else { return [] }
         let backend = providerManager.codeBackend(for: .github)!
         do {
-            let matches = try await backend.findRecentPRsForBranches(
-                Self.dedupedBranchCandidates(candidates)
-            )
+            let matches = try await Task.detached {
+                try await backend.findRecentPRsForBranches(
+                    Self.dedupedBranchCandidates(candidates)
+                )
+            }.value
             return Self.fanOutMatches(matches, across: candidates)
         } catch {
             owner.handleGitHubBackendError(error, operation: "findRecentPRsForBranches(github)")
@@ -440,9 +444,11 @@ public final class PRLinkReconciler {
         guard !candidates.isEmpty else { return [] }
         let backend = providerManager.codeBackend(for: .gitlab, host: host)!
         do {
-            let matches = try await backend.findRecentPRsForBranches(
-                Self.dedupedBranchCandidates(candidates)
-            )
+            let matches = try await Task.detached {
+                try await backend.findRecentPRsForBranches(
+                    Self.dedupedBranchCandidates(candidates)
+                )
+            }.value
             return Self.fanOutMatches(matches, across: candidates)
         } catch {
             print("[IssueTracker] Reconcile via backend failed for host \(host): \(error.localizedDescription.prefix(200))")
