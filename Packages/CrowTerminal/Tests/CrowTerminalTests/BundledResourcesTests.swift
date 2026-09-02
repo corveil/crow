@@ -113,6 +113,22 @@ struct BundledResourcesTests {
         #expect(body.contains("CrowViewportAddon"))
     }
 
+    @Test func unicode11AddonIsBundled() throws {
+        // CROW-1157: xterm.js defaults to Unicode 6 cell widths; Claude Code's
+        // status-line emoji need Unicode 11 to match tmux/Node wcwidth. The
+        // daemon serves this file at /xterm/… because `Resources/xterm` is
+        // `.copy`d wholesale — a missing file is a silent 404 and the caret
+        // offset returns, not a build error. Pin presence + the UMD global
+        // the pages construct (`Unicode11Addon.Unicode11Addon`).
+        let dir = try #require(BundledResources.xtermDirectoryURL)
+        let url = dir.appendingPathComponent("xterm-addon-unicode11.js")
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        let body = try String(contentsOf: url, encoding: .utf8)
+        #expect(body.contains("Unicode11Addon"))
+        #expect(body.contains("this.version=\"11\"") || body.contains("version=\"11\""),
+                "addon must register a Unicode 11 width provider")
+    }
+
     @Test func tmuxConfHasNoBarePrefixUnbind() throws {
         // #473: a bare `unbind-key -a` (no `-T`) defaults to the prefix
         // table, which is empty/non-existent after the first clear on
