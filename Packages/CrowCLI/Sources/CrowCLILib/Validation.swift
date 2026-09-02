@@ -121,34 +121,14 @@ func validateTicketPriority(_ value: String) throws {
     }
 }
 
-/// Normalize repeatable `--pattern` values for `promote-allowlist` (#819): trim
-/// each, drop blanks, dedupe preserving first-seen order, and require at least
-/// one survivor. A blank pattern would be written verbatim into
-/// `~/.claude/settings.json` and silently grant nothing. Returns a value rather
-/// than `Void` like its neighbors because `validate()` and `run()` share it.
-///
-/// - Throws: `ValidationError` when no non-blank pattern remains.
-func normalizedAllowlistPatterns(_ raw: [String]) throws -> [String] {
-    var seen = Set<String>()
-    let cleaned = raw
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty && seen.insert($0).inserted }
-    guard !cleaned.isEmpty else {
-        throw ValidationError("At least one non-blank --pattern is required.")
-    }
-    return cleaned
-}
-
 /// Normalize repeatable `crow defaults set --add-…` / `--remove-…` values
 /// (#810): trim each, drop blanks, dedupe preserving first-seen order, and
 /// require at least one survivor. Returns a value rather than `Void` because
 /// `validate()` and `run()` share it.
 ///
-/// Deduping is case-INSENSITIVE, unlike `normalizedAllowlistPatterns` above.
-/// These values are matched case-insensitively by their consumers
-/// (`repoMatchesPatterns` lowercases both sides; ignored labels go through a
-/// lowercased Set), so `Owner/Repo` and `owner/repo` are one entry. Allowlist
-/// patterns are matched literally, so there the two really are different rules.
+/// Deduping is case-INSENSITIVE. These values are matched case-insensitively by
+/// their consumers (`repoMatchesPatterns` lowercases both sides; ignored labels
+/// go through a lowercased Set), so `Owner/Repo` and `owner/repo` are one entry.
 ///
 /// - Throws: `ValidationError` when no non-blank value remains — a flag passed
 ///   with only whitespace is a typo, and sending it would be an inert write

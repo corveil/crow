@@ -366,80 +366,6 @@ Takes no arguments and walks every session, so it is safe but not cheap. Nothing
 
 ---
 
-## Allowlist Commands
-
-The Claude Code permission allowlist, aggregated across the global `~/.claude/settings.json` and every registered worktree's `.claude/settings.local.json`. `crowd` owns the scan (it is pure disk I/O), so these work with the desktop app closed.
-
-### `crow list-allowlist`
-
-List every known pattern and where it is defined.
-
-```bash
-crow list-allowlist
-```
-
-Takes no flags. Returns:
-
-```json
-{
-  "entries": [
-    { "pattern": "Bash(npm test:*)", "is_global": false, "worktree_session_names": ["acme-api-197"] }
-  ],
-  "loading": false
-}
-```
-
-`is_global` means the pattern is in `~/.claude/settings.json`; `worktree_session_names` lists the sessions whose worktree settings declare it. This reads the daemon's **last scan** rather than re-reading disk — run `crow refresh-allowlist` first if a settings file changed underneath it.
-
-### `crow promote-allowlist`
-
-Copy worktree-local patterns into the global `~/.claude/settings.json`, then re-scan.
-
-```bash
-crow promote-allowlist --pattern 'Bash(npm test:*)' --pattern 'Read'
-```
-
-| Flag        | Required | Description                                        |
-| ----------- | -------- | -------------------------------------------------- |
-| `--pattern` | yes      | Pattern to promote; repeat for more than one       |
-
-**Quote your patterns.** `(`, `)`, and `*` are shell metacharacters — `--pattern 'Bash(npm test:*)'`, not `--pattern Bash(npm test:*)`.
-
-Returns which patterns actually changed:
-
-```json
-{
-  "ok": true,
-  "added": ["Bash(npm test:*)"],
-  "already_global": ["Read"],
-  "global_settings_path": "/Users/you/.claude/settings.json"
-}
-```
-
-Promoting an already-global pattern is a no-op, not an error — it comes back under `already_global` with an empty `added`.
-
-A write that cannot land is an **error** (non-zero exit), never `{"ok": true}`. Two cases are refused outright rather than half-applied:
-
-- the global settings file exists but is not valid JSON — it is left byte-for-byte untouched rather than being replaced by one containing only `permissions.allow`;
-- any element of the request is not a string — the whole call is rejected instead of silently promoting the valid subset.
-
-Promote everything not yet global:
-
-```bash
-crow list-allowlist \
-  | jq -r '.entries[] | select(.is_global | not) | "--pattern", .pattern' \
-  | xargs crow promote-allowlist
-```
-
-### `crow refresh-allowlist`
-
-Re-scan the global and per-worktree settings files from disk.
-
-```bash
-crow refresh-allowlist
-```
-
-Takes no flags. Returns `{"ok": true}`.
 ## Settings Commands
 
 The General-tab settings that were previously web-only. Every `set` is a patch — only the flags you pass change, and passing none is an error rather than a silent no-op. Each `set` echoes the resulting subtree plus a `restart_required` boolean, so a write is self-verifying without a follow-up `get`.
@@ -1348,7 +1274,7 @@ Print the daemon's entire render-state snapshot in one call.
 crow get-state | jq 'keys'
 ```
 
-Takes no flags. The result object **is** the snapshot: `sessions`, `terminals`, `worktrees`, `links`, `hookStates`, `terminalReadiness`, `prStatus`, `reviewRequests`, `assignedIssues`, `allowEntries`, `remoteControlActiveTerminals`, `remoteControlEnabled`, `activeTerminalID`, and `config`. Credentials (Jira token, gateway auth headers, web-password hash and salt) are stripped before transport.
+Takes no flags. The result object **is** the snapshot: `sessions`, `terminals`, `worktrees`, `links`, `hookStates`, `terminalReadiness`, `prStatus`, `reviewRequests`, `assignedIssues`, `remoteControlActiveTerminals`, `remoteControlEnabled`, `activeTerminalID`, and `config`. Credentials (Jira token, gateway auth headers, web-password hash and salt) are stripped before transport.
 
 This is deliberately everything at once, and it is large — the snapshot carries every assigned issue's full body text, and the socket caps a response at 1 MB. On a busy install the command fails with a message naming the narrower reads. Prefer `crow list-sessions`, `crow get-session --session <uuid>`, `crow list-links`, or `crow list-terminals` when you want one slice.
 

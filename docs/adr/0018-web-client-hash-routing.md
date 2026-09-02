@@ -50,7 +50,7 @@ The web client routes on the URL **fragment**. Routes are:
 #/                                   home / empty state
 #/sessions/:sessionId
 #/sessions/:sessionId/t/:terminalId
-#/tickets  #/reviews  #/allowlist  #/scorecard  #/grid
+#/tickets  #/reviews  #/scorecard  #/grid
 #/settings/:tab
 ```
 

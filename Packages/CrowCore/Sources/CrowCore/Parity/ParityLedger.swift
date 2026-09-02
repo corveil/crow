@@ -261,11 +261,6 @@ public enum ParityLedger {
                 which reports per-URL failures instead of one batch result.
                 """),
 
-        // Allowlist
-        .read("list-allowlist", cli: "list-allowlist"),
-        .write("promote-allowlist", cli: "promote-allowlist"),
-        .write("refresh-allowlist", cli: "refresh-allowlist"),
-
         // Analytics
         .read("get-scorecard", cli: "get-scorecard"),
         .write("rebuild-scorecard", cli: "rebuild-scorecard"),

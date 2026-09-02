@@ -4,13 +4,12 @@ import CrowIPC
 import CrowPersistence
 import Foundation
 
-/// Ticket / review / allowlist board reads and actions.
+/// Ticket / review board reads and actions.
 ///
 /// Extracted from `makeCommandRouter`'s dictionary literal (CROW-1134).
 func makeBoardHandlers(
     appState: AppState,
     tracker: IssueTracker?,
-    allowList: AllowListService?,
     sessionService: SessionService?,
     reviewSerializer: ReviewKickoffSerializer
 ) -> [String: CommandRouter.Handler] {
@@ -18,10 +17,10 @@ func makeBoardHandlers(
     // dictionary of closures without a contextual type blows Swift's
     // type-checker solver budget (CROW-1134).
     let handlers: [String: CommandRouter.Handler] = [
-        // Board reads. When the daemon owns the tracker/allowList (CROW-581 M-C)
-        // they answer locally off `appState` — populated by the daemon's own
-        // IssueTracker/AllowListService — so the boards work with the app down.
-        // Without those services (tests, stripped builds) they fall back to
+        // Board reads. When the daemon owns the tracker (CROW-581 M-C) they
+        // answer locally off `appState` — populated by the daemon's own
+        // IssueTracker — so the boards work with the app down.
+        // Without that service (tests, stripped builds) they fall back to
         // forwarding to the app / an empty board, like get-pr-status. NOTE: while
         // both the app and daemon run, each polls its providers → transient
         // double-polling until the app becomes a pure client (Milestone F).
@@ -82,26 +81,9 @@ func makeBoardHandlers(
             let empty: [String: JSONValue] = ["reviews": .array([]), "loading": .bool(false), "unseen": .int(0)]
             return empty
         },
-        "list-allowlist": { _ in
-            if allowList != nil {
-                return await MainActor.run {
-                    let entries: [JSONValue] = appState.allowEntries.map { e in
-                        .object([
-                            "pattern": .string(e.pattern),
-                            "is_global": .bool(e.isInGlobal),
-                            "worktree_session_names": .array(e.worktreeSessionNames.map { .string($0) }),
-                        ])
-                    }
-                    return ["entries": .array(entries), "loading": .bool(appState.isLoadingAllowList)]
-                }
-            }
-            let empty: [String: JSONValue] = ["entries": .array([]), "loading": .bool(false)]
-            return empty
-        },
 
         // Board actions — forward-only (need the app's coordinators to spawn
-        // workspaces / mutate the global allowlist). Error when the app isn't
-        // running, like quick-action.
+        // workspaces). Error when the app isn't running, like quick-action.
         // Work-on-issue types `/crow-workspace <url>` (or `--explore` for an
         // exploration session, CROW-1149) into the primary Manager terminal and
         // lets that agent do the worktree/session setup. Forwarded to the app
@@ -241,42 +223,12 @@ func makeBoardHandlers(
                 "rejected": .array(rejected.map { .string($0) }),
             ]
         },
-        // Allowlist writes/refreshes run locally when the daemon owns the
-        // AllowListService (pure disk — no app needed); otherwise forward.
-        "promote-allowlist": { params in
-            guard let allowList else {
-                // Pure disk I/O — no provider involved. (The old copy said
-                // "provider-configured daemon", pasted from refresh-tickets.)
-                throw DaemonRPCError.applicationError(
-                    "Promoting allowlist patterns requires a daemon with the allowlist service")
-            }
-            let patterns = try await mapRPCError { try AllowlistRPC.decodePatterns(params["patterns"]) }
-            do {
-                let promotion = try await MainActor.run {
-                    try allowList.promoteToGlobal(patterns: patterns)
-                }
-                return AllowlistRPC.promotionJSON(promotion)
-            } catch {
-                // Never report success for a write that didn't land (#819) — the
-                // failure used to be an NSLog behind an unconditional ok:true.
-                throw DaemonRPCError.applicationError(
-                    "Failed to promote \(patterns.count) allowlist pattern(s): \(error.localizedDescription)")
-            }
-        },
         "refresh-tickets": { params in
             if let tracker {
                 await tracker.refresh()
                 return ["ok": .bool(true)]
             }
             throw DaemonRPCError.applicationError("Refreshing tickets requires a provider-configured daemon")
-        },
-        "refresh-allowlist": { _ in
-            if let allowList {
-                await MainActor.run { allowList.scan() }
-                return ["ok": .bool(true)]
-            }
-            throw DaemonRPCError.applicationError(
-                "Refreshing the allowlist requires a daemon with the allowlist service")
         },
     ]
     return handlers

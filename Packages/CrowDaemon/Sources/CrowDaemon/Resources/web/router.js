@@ -15,13 +15,13 @@
 //   #/                                   home / empty state
 //   #/sessions/:sessionId
 //   #/sessions/:sessionId/t/:terminalId
-//   #/tickets  #/reviews  #/allowlist  #/scorecard  #/grid
+//   #/tickets  #/reviews  #/scorecard  #/grid
 //   #/settings/:tab
 //
 // Only the addressable view lives in the URL — scroll position, open menus,
 // selection mode and board filters stay out of it on purpose.
 // ---------------------------------------------------------------------------
-const ROUTE_BOARDS = ['tickets', 'reviews', 'allowlist', 'scorecard', 'grid'];
+const ROUTE_BOARDS = ['tickets', 'reviews', 'scorecard', 'grid'];
 // Mirrors TABS in settings.js. An unknown tab degrades to 'general' rather than
 // 404ing, so a link from an older/newer build still opens Settings.
 const ROUTE_SETTINGS_TABS = [

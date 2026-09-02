@@ -55,7 +55,6 @@ const epilogue = `
   stubPaint(){
     renderSidebar = function(){};
     refreshBoard = async function(){};
-    refreshAllowlist = async function(){};
     refreshGridSnapshots = async function(){};
     startGridPolling = function(){};
     stopGridPolling = function(){};

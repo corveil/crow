@@ -41,8 +41,6 @@ const RPC_TIMEOUTS_MS = {
   'list-tickets': 60000,
   'list-reviews': 60000,
   'get-state': 60000,
-  'promote-allowlist': 60000,
-  'refresh-allowlist': 60000,
   'mark-issue-done': 60000,
   'add-merge-label': 60000,
   // 16 capture-pane snapshots for the session grid (CROW-1153).

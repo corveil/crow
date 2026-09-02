@@ -14,7 +14,7 @@ flowchart TB
     subgraph daemon["crowd — the sole authority"]
         HTTP["HTTP + WebSocket server<br/>/rpc · /terminal · web + login"]
         ENGINE["CrowEngine<br/>SessionService · spawn / lifecycle"]
-        BOARDS["IssueTracker · AllowListService<br/>JobScheduler · auto-respond / -review"]
+        BOARDS["IssueTracker<br/>JobScheduler · auto-respond / -review"]
         HUB["EventHub — server push"]
         STORE[("store.json")]
     end

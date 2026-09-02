@@ -187,7 +187,7 @@ func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) throws -> T
     }
 }
 
-/// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`, `SettingsRPC`,
+/// The engine's pure RPC support (`JobRPC`, `SettingsRPC`,
 /// `SessionLifecycleRPC`, `NotificationRPC`) throws `RPCError`; map to
 /// `DaemonRPCError` for the daemon router. Async so the lifecycle handlers can
 /// `await` a main-actor hop inside the mapped body; a synchronous body satisfies

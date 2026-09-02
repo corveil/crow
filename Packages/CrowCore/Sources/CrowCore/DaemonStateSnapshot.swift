@@ -19,7 +19,6 @@ public struct DaemonStateSnapshot: Codable, Sendable {
     public var prStatus: [String: PRStatus]
     public var reviewRequests: [ReviewRequest]
     public var assignedIssues: [AssignedIssue]
-    public var allowEntries: [AllowEntry]
     public var remoteControlActiveTerminals: [String]
     public var remoteControlEnabled: Bool
     public var activeTerminalID: [String: String]
@@ -35,7 +34,6 @@ public struct DaemonStateSnapshot: Codable, Sendable {
         prStatus: [String: PRStatus] = [:],
         reviewRequests: [ReviewRequest] = [],
         assignedIssues: [AssignedIssue] = [],
-        allowEntries: [AllowEntry] = [],
         remoteControlActiveTerminals: [String] = [],
         remoteControlEnabled: Bool = false,
         activeTerminalID: [String: String] = [:],
@@ -50,7 +48,6 @@ public struct DaemonStateSnapshot: Codable, Sendable {
         self.prStatus = prStatus
         self.reviewRequests = reviewRequests
         self.assignedIssues = assignedIssues
-        self.allowEntries = allowEntries
         self.remoteControlActiveTerminals = remoteControlActiveTerminals
         self.remoteControlEnabled = remoteControlEnabled
         self.activeTerminalID = activeTerminalID
@@ -72,7 +69,6 @@ public struct DaemonStateSnapshot: Codable, Sendable {
             uniqueKeysWithValues: appState.prStatus.map { ($0.key.uuidString, $0.value) })
         self.reviewRequests = appState.reviewRequests
         self.assignedIssues = appState.assignedIssues
-        self.allowEntries = appState.allowEntries
         self.remoteControlActiveTerminals = appState.remoteControlActiveTerminals.map(\.uuidString)
         self.remoteControlEnabled = appState.remoteControlEnabled
         self.activeTerminalID = Dictionary(
@@ -106,7 +102,6 @@ public extension AppState {
             })
         reviewRequests = snapshot.reviewRequests
         assignedIssues = snapshot.assignedIssues
-        allowEntries = snapshot.allowEntries
         remoteControlActiveTerminals = Set(snapshot.remoteControlActiveTerminals.compactMap { UUID(uuidString: $0) })
         remoteControlEnabled = snapshot.remoteControlEnabled
         activeTerminalID = Dictionary(uniqueKeysWithValues:

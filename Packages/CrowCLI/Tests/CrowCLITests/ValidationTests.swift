@@ -163,30 +163,6 @@ import CrowCore
     }
 }
 
-// MARK: - promote-allowlist patterns (#819)
-
-@Test func allowlistPatternsAreTrimmedDedupedAndOrdered() throws {
-    // First-seen order is preserved so the echoed request reads like the input.
-    #expect(try normalizedAllowlistPatterns(["  Read ", "Write", "Read"]) == ["Read", "Write"])
-}
-
-@Test func allowlistPatternsKeepInternalSpacingAndGlobs() throws {
-    #expect(try normalizedAllowlistPatterns(["Bash(npm run build:*)"]) == ["Bash(npm run build:*)"])
-}
-
-@Test func allowlistPatternsDropBlanksAlongsideRealOnes() throws {
-    #expect(try normalizedAllowlistPatterns(["Read", "  ", ""]) == ["Read"])
-}
-
-@Test func allowlistPatternsRejectEmptyAndAllBlank() {
-    // A blank pattern would be written verbatim and silently grant nothing.
-    for bad in [[], ["", " "], ["\n"]] {
-        #expect(throws: (any Error).self, "expected \(bad) to be rejected") {
-            try normalizedAllowlistPatterns(bad)
-        }
-    }
-}
-
 // MARK: - Board & Workflow Validation (CROW-817)
 
 @Test func validQuickActionsAccepted() throws {
@@ -321,9 +297,9 @@ import CrowCore
 }
 
 @Test func normalizedListValuesTrimsDropsBlanksAndDedupes() throws {
-    // Case-insensitive, unlike `normalizedAllowlistPatterns`: these values are
-    // matched case-insensitively by their consumers, so `Owner/Repo` and
-    // `owner/repo` are one entry. First-seen casing wins.
+    // Case-insensitive: these values are matched case-insensitively by their
+    // consumers, so `Owner/Repo` and `owner/repo` are one entry. First-seen
+    // casing wins.
     #expect(try normalizedListValues(
         ["  acme/docs  ", "acme/docs", "ACME/DOCS", "   ", "acme/api"], flag: "--add-x")
         == ["acme/docs", "acme/api"])

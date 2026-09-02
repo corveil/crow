@@ -328,7 +328,6 @@ public final class SessionCompletionController {
     nonisolated static let protectedSessionIDs: Set<UUID> = [
         AppState.managerSessionID,
         AppState.ticketBoardSessionID,
-        AppState.allowListSessionID,
         AppState.reviewBoardSessionID,
         AppState.scorecardSessionID,
     ]

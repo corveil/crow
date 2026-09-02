@@ -24,7 +24,7 @@ single client holding privileged state.
 The CROW-581 migration (Milestones A–E1, PR #594) has already moved the engine
 into a host-agnostic `CrowEngine` package (no AppKit; host affordances behind a
 `HostBridge` seam) and inverted the read/query/status layer into the daemon
-(agents, boards, tickets/reviews/allowlist, session-status writes all answer
+(agents, boards, tickets/reviews, session-status writes all answer
 locally; clients get live WebSocket push). What remains is the authority itself:
 spawning, lifecycle, and store ownership.
 

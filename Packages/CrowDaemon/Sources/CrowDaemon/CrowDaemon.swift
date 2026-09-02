@@ -174,17 +174,13 @@ public enum CrowDaemon {
         // (M-E2). Zero-config at construction — it reads gh/glab/config lazily.
         let providerManager = ProviderManager()
 
-        // Boards: the daemon owns the ticket/review + allowlist read layer so
-        // those panels work with the app down (CROW-581, M-C). AllowListService
-        // is a synchronous disk scan (ready immediately); IssueTracker polls the
+        // Boards: the daemon owns the ticket/review read layer so those panels
+        // work with the app down (CROW-581, M-C). IssueTracker polls the
         // providers — its Timer needs a RunLoop.main the headless daemon doesn't
         // run, so we drive it with an explicit async tick (`startBoardPoll`)
         // instead of `tracker.start()`.
-        let (tracker, allowList): (IssueTracker, AllowListService) = await MainActor.run {
-            let tracker = IssueTracker(appState: appState, providerManager: providerManager, store: store)
-            let allowList = AllowListService(appState: appState, devRoot: options.devRoot)
-            allowList.scan()
-            return (tracker, allowList)
+        let tracker: IssueTracker = await MainActor.run {
+            IssueTracker(appState: appState, providerManager: providerManager, store: store)
         }
         // Fan-out hub for server-initiated `changed` nudges over `/rpc`, so
         // connected clients re-fetch on state change instead of polling
@@ -499,7 +495,7 @@ public enum CrowDaemon {
         let soundLibrary = CustomSoundLibrary.live
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
-            cockpit: cockpit, tracker: tracker, allowList: allowList,
+            cockpit: cockpit, tracker: tracker,
             sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler,
             rebuildScorecard: rebuildScorecard, versionUpdateService: versionUpdateService,
             soundLibrary: soundLibrary,

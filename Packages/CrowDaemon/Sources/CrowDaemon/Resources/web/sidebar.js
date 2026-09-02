@@ -16,11 +16,11 @@ let activeTerminal = null; // { id, name, window }
 // by session id. Runtime-only — empty when the desktop app isn't running.
 let liveById = {};
 
-// Boards (Ticket Board / Reviews / Allowlist), mirroring the desktop's
-// full-pane boards. Served by `crowd` off its own IssueTracker/AllowListService
-// (CROW-581 M-C), so they populate whether or not the desktop app is running.
-let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | 'scorecard' | 'grid' | null
-const boardData = { tickets: null, reviews: null, allowlist: null, scorecard: null };
+// Boards (Ticket Board / Reviews), mirroring the desktop's full-pane boards.
+// Served by `crowd` off its own IssueTracker (CROW-581 M-C), so they populate
+// whether or not the desktop app is running.
+let selectedBoard = null; // 'tickets' | 'reviews' | 'scorecard' | 'grid' | null
+const boardData = { tickets: null, reviews: null, scorecard: null };
 
 // Session grid (CROW-1153): an ordered per-browser pin list. Pinned ids lead
 // the wall; remaining slots auto-fill with active/in-review sessions. Caps at
@@ -98,11 +98,8 @@ function persistSidebarCache() {
   } catch (_) { /* quota / private mode */ }
 }
 let ticketFilter = 'Backlog'; // pipeline segment ('All' or a status rawValue); default to Backlog so the Tickets view opens on the intake queue (CROW-795). 'All' stays a selectable tab.
-let allowlistHideGlobal = false;
-let allowlistFilter = ''; // #701: case-insensitive substring filter on entry pattern
 let ticketSearch = ''; // #714: case-insensitive substring on ticket text, composed with ticketFilter
 let reviewSearch = ''; // #714: case-insensitive substring across review text
-const allowlistSelection = new Set();
 // Session multi-select (#5): toggled by the sidebar checkmark button; holds the
 // ids of sessions ticked for a bulk action (delete).
 let selectionMode = false;
@@ -336,8 +333,8 @@ function renderSidebar() {
   brand.alt = 'Crow';
   root.appendChild(brand);
 
-  // Two-column sidebar top (CROW-917): a left stack [tickets → Reviews/Allowlist/
-  // Scorecard → Manager] over a far-right column of four stacked icon buttons
+  // Two-column sidebar top (CROW-917): a left stack [tickets → Reviews/Scorecard
+  // → Manager] over a far-right column of four stacked icon buttons
   // [bell, gear, +, select], grouped and centered in the column (CROW-922).
   const top = el('div', 'sidebar-top');
   top.appendChild(sidebarLeftStack());
@@ -637,19 +634,18 @@ function sidebarIconColumn() {
 }
 
 // Left sidebar-top stack (CROW-917): the Tickets card over two nav-pill rows —
-// row 1 Grid · Reviews · Allowlist · Scorecard, row 2 the full-width Manager pill.
+// row 1 Grid · Reviews · Scorecard, row 2 the full-width Manager pill.
 function sidebarLeftStack() {
   const wrap = el('div', 'sidebar-left');
   wrap.appendChild(ticketsCard());
 
-  // Row 1: Grid · Reviews · Allowlist · Scorecard (each its own non-wrapping flex line).
+  // Row 1: Grid · Reviews · Scorecard (each its own non-wrapping flex line).
   const row1 = el('div', 'nav-pills-row');
   row1.appendChild(navPill('Grid', selectedBoard === 'grid', () => selectBoard('grid')));
   const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
   const unseen = (boardData.reviews && boardData.reviews.unseen) || 0;
   if (unseen) rev.appendChild(el('span', 'pill-badge', String(unseen)));
   row1.appendChild(rev);
-  row1.appendChild(navPill('Allowlist', selectedBoard === 'allowlist', () => selectBoard('allowlist')));
   row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
   wrap.appendChild(row1);
 

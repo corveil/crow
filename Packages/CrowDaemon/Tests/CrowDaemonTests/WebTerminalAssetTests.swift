@@ -551,10 +551,8 @@ import Testing
     /// CROW-907: an empty board is an empty list, not an error. `boardEmpty` once
     /// appended "Boards require the Crow desktop app to be running." to every
     /// empty board — false since `crowd` serves the boards off its own
-    /// IssueTracker/AllowListService (CROW-581 M-C, ADR 0010). Pin the hint out of
-    /// the executed source so it can't creep back, and pin the allowlist's own
-    /// scanning state — the load-bearing half of the fix, since the allowlist is
-    /// never cached and would otherwise flash "empty" during the CROW-593 scan.
+    /// IssueTracker (CROW-581 M-C, ADR 0010). Pin the hint out of the executed
+    /// source so it can't creep back.
     @Test func emptyBoardsDropTheStaleDesktopAppHint() throws {
         let source = try Self.webClientJS()
         #expect(
@@ -563,17 +561,6 @@ import Testing
         #expect(
             try Self.functionBody("boardEmpty", in: source).contains("'board-empty', msg"),
             "boardEmpty must render only the caller's context message")
-        #expect(
-            try Self.functionBody("renderAllowlist", in: source).contains("Scanning allowlist"),
-            "renderAllowlist must show a scanning state, not 'No allowlist entries', mid-scan")
-        // The allowlist never polls or caches, so `scanning` keys on `d == null`;
-        // refreshBoard must seed a settled snapshot on a failed read or that
-        // scanning state strands forever (a spinner that lies — the very thing
-        // CROW-907 removes).
-        #expect(
-            try Self.functionBody("refreshBoard", in: source)
-                .contains("boardData.allowlist = { entries: [], loading: false }"),
-            "refreshBoard must seed the allowlist on a failed read so it can't wedge on 'Scanning…'")
         #expect(
             !(try Self.webAsset("app.css")).contains(".board-empty-hint"),
             "the board-empty-hint CSS rule is dead once the hint is gone")
