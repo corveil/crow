@@ -208,6 +208,51 @@ deliberate, documented gaps (full grid in the
 > their version caveats are in the
 > [matrix](../agent-harness-matrix.md#remote-control) and gap audit §3b.
 
+> **Amendment (2026-09-02, CROW-1175):** Cursor CLI **2026.08.26** shipped
+> `agent persist` — keep the agent running after you disconnect (`/detach`,
+> `agent persist attach`, `list`/`stop`, `--resume`). This is an honest
+> upstream flag, not a missing `--continue` (that closed in #829) and not
+> native RC. The load-bearing question was whether persist outlives a Crow
+> pane kill (`crow recreate-terminal` / tmux rebuild) *and* stays
+> paste-drivable per session. Probed against installed `cursor-agent
+> 2026.08.31-4057e58` (changelog date 2026.08.26; `--help` + the bundled
+> `./src/persistence/persistent-session.ts`):
+>
+> 1. **Persist is Cursor's own tmux wrapper**, not a process that outlives
+>    tmux. It stands up a second server (`tmux -L cursor-agent -f /dev/null`),
+>    `new-session -d` with `destroy-unattached off`, and `/detach` is
+>    `tmux detach-client`. State lives under `/tmp/cursor-agent-persist-<uid>/`.
+>    A `pane-died` hook with `killSession: true` tears the session down when
+>    the persist pane itself dies.
+> 2. **It no-ops inside Crow's launch environment.** If `$TMUX` is already
+>    set, persist forwards argv to a normal `agent` launch rather than
+>    creating a persistent session. Crow always launches inside a tmux pane
+>    ([ADR 0001](./0001-tmux-only-terminal-backend.md)), so `agent persist`
+>    as a Crow launch command would never persist. Forcing it would mean
+>    unsetting `$TMUX` to fight that guard, then nested tmux (Crow's server
+>    attaching to Cursor's).
+> 3. **`crow send` still needs a live attached TUI.** After `/detach` the
+>    Crow pane has no composer; persist also refuses a non-interactive
+>    stdin/stdout. Paste-drivable only while attached — the same property
+>    Crow's tmux pane already provides.
+> 4. **Control plane is machine-global.** `persist list`/`stop` enumerate
+>    every `@cursor_managed` session on the `cursor-agent` tmux server.
+>    Names are `cursor-<workspace-slug>-<hash>-<n>-<rand>`, not Crow session
+>    UUIDs. Crow runs N Cursor sessions; a user's own `agent persist`
+>    outside Crow shares that server. Same defect *class* as Codex's
+>    app-server daemon (CROW-1001 blocker 2), even though this is a pool of
+>    tmux sessions rather than a singleton socket.
+>
+> Per the ticket's rule: persist is TTY-detach only and still needs a live
+> pane for `crow send`, so **do not wire**. Crow's tmux pane already *is*
+> that. `crow recreate-terminal` keeps relaunching with `--continue`.
+> Re-check only if persist starts a session *from inside* `$TMUX` without
+> nesting, addresses sessions by an id Crow can scope, and stays
+> paste-drivable while detached. Decision item 2's resume closure is
+> unchanged (`--continue`); this amendment records that persist is not the
+> next resume layer. Live state:
+> [`docs/agent-harness-matrix.md`](../agent-harness-matrix.md).
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -235,8 +280,10 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    prompt. OpenCode's `--continue` re-enters the TUI but carries no history.
    *(Observed at authoring; since closed — Cursor resumes with `--continue`
    (#829) and Codex with `codex resume --last` (#830), and OpenCode's
-   run-then-`--continue` shipped in #547. Live state:
-   `docs/agent-harness-matrix.md`.)*
+   run-then-`--continue` shipped in #547. Cursor CLI 2026.08.26's
+   `agent persist` is **not** a further resume close: it is TTY-detach via
+   a second tmux server and no-ops when `$TMUX` is set, so it stays unwired
+   (CROW-1175). Live state: `docs/agent-harness-matrix.md`.)*
 
 3. **Remote control is Claude-native; every other harness is faked.** Claude has
    real `--rc --name` flags. Cursor, Codex, OpenCode, Grok, Antigravity and Muse set
@@ -252,7 +299,10 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    `codex-cli 0.141.0`). Since `TerminalRouter.send` never consulted the flag,
    Codex sessions were already drivable and only the badge disagreed. Native
    `codex remote-control` remains unwired for reasons unrelated to the flag —
-   see the [harness matrix](../agent-harness-matrix.md#remote-control).*
+   see the [harness matrix](../agent-harness-matrix.md#remote-control). Cursor
+   `agent persist` is the same class of documented reject (CROW-1175): it is
+   Cursor's own tmux wrapper, not Crow's drive path, and wiring it would
+   change non-Crow `agent` usage if it ever became the default launch.*
 
 4. **Codex hooks were sync-only.** `CodexHookConfigWriter.asyncEvents` was
    empty: *"Codex's hook runtime is sync-only as of v0.139.0 — declaring
@@ -344,7 +394,9 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   3's Codex clause was **retired as incorrect** rather than closed by an upstream
   bump ([CROW-1001](https://github.com/corveil/crow/issues/1001) — see the
   2026-08-13 amendment, and note that an upstream-only re-probe could not have
-  caught it). The canonical
+  caught it). Cursor `agent persist` (2026.08.26) was the same kind of
+  re-check and **declined** rather than wired ([CROW-1175](https://github.com/corveil/crow/issues/1175) —
+  TTY-detach via a second tmux server; no-ops when `$TMUX` is set). The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);
@@ -385,7 +437,7 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
 
 ## References
 
-- Issue: [#827](https://github.com/corveil/crow/issues/827)
+- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175)
 - Related ADRs: [0014](./0014-pluggable-coding-agent-adapter.md) (the adapter),
   [0004](./0004-manager-auto-permission-mode.md) (`--permission-mode auto`),
   [0011](./0011-agent-handoff-preserves-session-not-chat.md) (handoff)

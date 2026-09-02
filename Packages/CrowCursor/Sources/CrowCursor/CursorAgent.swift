@@ -8,8 +8,10 @@ import CrowCore
 /// `CursorHookConfigWriter`, #829). Remote control is enabled: Cursor runs an
 /// interactive TUI, so `crow send` (the agent-agnostic tmux paste-buffer path
 /// in `SessionService`, not stdin — CROW-1001) drives it; no per-launch RC flag
-/// needed. Cursor's hook
-/// engine is a superset of Claude Code's — same exit-code 0/2 protocol,
+/// needed. Cursor CLI 2026.08.26's `agent persist` is **not** that flag and is
+/// not wired (CROW-1175): it is Cursor's own tmux wrapper, no-ops when `$TMUX`
+/// is set (every Crow pane), and still needs an attached TUI for paste. Cursor's
+/// hook engine is a superset of Claude Code's — same exit-code 0/2 protocol,
 /// accepts `CLAUDE_PROJECT_DIR` as an alias — which is why the
 /// `HookConfigWriter` / `StateSignalSource` pair works rather than being a
 /// no-op like Codex's per-session writer.
@@ -19,6 +21,15 @@ public struct CursorAgent: CodingAgent {
     /// Visually distinct from Claude's `"sparkles"` and Codex's
     /// `"terminal.fill"`. Easy to swap once branding firms up.
     public let iconSystemName: String = "cursorarrow.rays"
+    /// `true` because Crow can drive the interactive TUI via `crow send` (tmux
+    /// paste-buffer, not stdin — CROW-1001). There is **no** per-launch RC flag.
+    ///
+    /// Native `agent persist` (Cursor CLI ≥ 2026.08.26) is **not** why this is
+    /// true, and is not wired (CROW-1175). Persist is Cursor's own tmux wrapper
+    /// (`tmux -L cursor-agent`); it no-ops when `$TMUX` is already set, which
+    /// every Crow pane has, so launching it from Crow would never persist.
+    /// After `/detach` there is no composer for `crow send` to paste into.
+    /// `crow recreate-terminal` keeps `--continue`. See the harness matrix.
     public let supportsRemoteControl: Bool = true
     /// Cursor's interactive TUI paints inline in the main buffer and never
     /// issues `smcup`. `alternate-screen on` is therefore inert. Live capture
@@ -145,9 +156,12 @@ public struct CursorAgent: CodingAgent {
             // `.job`/`.review` restart, #829; a fresh work TUI without resume is
             // a deliberate product choice), no remote-control flag (remote
             // control is `crow send` typing into the TUI — agent-agnostic,
-            // handled by the `send` RPC → `TerminalRouter.send`). The `--trust`
-            // seed always applies, and the auto-permission flags when the opt-in
-            // coder-view toggle is on (#586) — both come from `launchArgs`.
+            // handled by the `send` RPC → `TerminalRouter.send`). Deliberately
+            // **not** `agent persist` (CROW-1175): persist is Cursor's own tmux
+            // wrapper and no-ops when `$TMUX` is set, which this pane has.
+            // The `--trust` seed always applies, and the auto-permission flags
+            // when the opt-in coder-view toggle is on (#586) — both come from
+            // `launchArgs`.
             return "\(agentPath)\(launchArgs)\n"
         case .job, .review:
             // Jobs and reviews share the same dispatch shape: a pre-written
@@ -162,7 +176,10 @@ public struct CursorAgent: CodingAgent {
             //
             // On subsequent app restarts we resume the conversation with
             // `--continue` (landed CLI 2026-01-16) instead of re-running the
-            // whole prompt or dropping into a cold TUI (#829).
+            // whole prompt or dropping into a cold TUI (#829). This is also
+            // the recreate-terminal / tmux-rebuild path. `agent persist` does
+            // **not** replace it (CROW-1175): persist no-ops inside `$TMUX`
+            // and would leave `crow send` with no TUI after `/detach`.
             //
             // Review prompts are agent-aware: SessionService.buildReviewPrompt
             // inlines the crow-review-pr SKILL body for Cursor so the `agent`
@@ -241,7 +258,9 @@ public struct CursorAgent: CodingAgent {
     ) -> String {
         // Cursor's Manager is an orchestration TUI in the devRoot — no
         // auto-prompt, no `--continue`. Cursor has no `--rc`/`--name`
-        // equivalent, so remote control doesn't apply (CROW-433). It carries the
+        // equivalent, so remote control doesn't apply (CROW-433). Not
+        // `agent persist` either (CROW-1175 — same `$TMUX` no-op as the
+        // worker launch). It carries the
         // `--trust` workspace-trust seed (the devRoot may be fresh to Cursor's
         // trust ledger — parity with Claude seeding the Manager cwd, CROW-890),
         // plus the auto-permission flags so `crow`/`gh`/`git` orchestration runs
