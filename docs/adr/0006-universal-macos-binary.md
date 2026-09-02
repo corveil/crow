@@ -20,7 +20,11 @@ Replace Ghostty with an xterm.js terminal surface hosted in WKWebView, backed by
 1. `XTermSurfaceView` loads vendored xterm.js assets from SPM resources and bridges PTY I/O via `WKScriptMessageHandler`.
 2. `PTYProcess` spawns the attach command with `openpty` + `fork`/`exec`.
 3. Remove GhosttyKit, Zig, and Metal toolchain from the build path. Crow builds with SwiftPM only.
-4. Release artifacts ship as universal macOS binaries (`arm64` + `x86_64`) via `swift build --arch arm64 --arch x86_64`.
+4. Release artifacts ship as universal macOS binaries (`arm64` + `x86_64`).
+   `swift build --arch arm64 --arch x86_64` in one invocation fails on
+   Xcode 16.4 (missing target configuration / duplicate
+   DependencyMetadataFileList). `scripts/package-release.sh` builds each
+   arch separately and `lipo`s the products.
 
 # Consequences
 

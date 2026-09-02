@@ -74,9 +74,12 @@ unset APPLE_DEVELOPER_SIGNING_KEY_CERT RM_APPLE_DEVELOPER_SIGNING_KEY_CERT \
   DEVELOPER_CERTIFICATE_BASE64 CSC_KEY_PASSWORD DEVELOPER_CERTIFICATE_PASSWORD \
   APPLE_API_KEY APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER \
   APPLE_API_ISSUER_ID
-check_rc "missing all secrets" 1 require_secrets
+check_rc "missing all secrets is unsigned fallback" 0 require_secrets
+check "SIGN_MODE unsigned when empty" "unsigned" "$SIGN_MODE"
 
 APPLE_DEVELOPER_SIGNING_KEY_CERT="Y2VydA=="
+check_rc "cert without password is partial" 1 require_secrets
+
 CSC_KEY_PASSWORD="pw"
 check_rc "p12 without notary secrets" 1 require_secrets
 
@@ -84,12 +87,24 @@ APPLE_API_KEY="-----BEGIN PRIVATE KEY-----"
 APPLE_API_KEY_ID="KEYID"
 APPLE_API_ISSUER="ISSUER"
 check_rc "all secrets present" 0 require_secrets
+check "SIGN_MODE signed when complete" "signed" "$SIGN_MODE"
 check "alias stored cert" "Y2VydA==" "$SIGN_CERT_B64"
 check "alias stored password" "pw" "$SIGN_CERT_PASSWORD"
 
 SKIP_NOTARIZE=1
 unset APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
 check_rc "skip-notarize allows missing api key" 0 require_secrets
+
+SKIP_NOTARIZE=0
+unset APPLE_DEVELOPER_SIGNING_KEY_CERT CSC_KEY_PASSWORD
+APPLE_API_KEY="-----BEGIN PRIVATE KEY-----"
+APPLE_API_KEY_ID="KEYID"
+APPLE_API_ISSUER="ISSUER"
+check_rc "notary without p12 is partial" 1 require_secrets
+unset APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
+SKIP_NOTARIZE=1
+check_rc "skip-notarize still needs p12" 1 require_secrets
+SKIP_NOTARIZE=0
 
 echo "legacy + socketzero aliases"
 unset APPLE_DEVELOPER_SIGNING_KEY_CERT CSC_KEY_PASSWORD
@@ -112,6 +127,32 @@ check_rc "--help" 0 macos_sign_notarize_main --help
 
 CROW_VERSION="0.0.0-test"
 check_rc "missing archive" 1 macos_sign_notarize_main --archive "$TMP/nope.tar.gz"
+
+echo "unsigned fallback packs zip without codesign"
+unset APPLE_DEVELOPER_SIGNING_KEY_CERT RM_APPLE_DEVELOPER_SIGNING_KEY_CERT \
+  DEVELOPER_CERTIFICATE_BASE64 CSC_KEY_PASSWORD DEVELOPER_CERTIFICATE_PASSWORD \
+  APPLE_API_KEY APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER \
+  APPLE_API_ISSUER_ID
+SKIP_NOTARIZE=0
+mkdir -p "$TMP/bin" "$TMP/unsigned-src/crow-0.0.0-test"
+printf 'x' > "$TMP/unsigned-src/crow-0.0.0-test/crow"
+COPYFILE_DISABLE=1 tar -czf "$TMP/crow-0.0.0-test-macos-universal.tar.gz" -C "$TMP/unsigned-src" "crow-0.0.0-test"
+cat > "$TMP/bin/ditto" <<'SH'
+#!/usr/bin/env bash
+# last arg is dest zip
+dest=""
+for dest in "$@"; do :; done
+: > "$dest"
+SH
+chmod +x "$TMP/bin/ditto"
+DITTO_BIN="$TMP/bin/ditto"
+export GITHUB_OUTPUT="$TMP/gh.out"
+: > "$GITHUB_OUTPUT"
+CROW_VERSION="0.0.0-test"
+check_rc "unsigned main succeeds" 0 macos_sign_notarize_main --archive "$TMP/crow-0.0.0-test-macos-universal.tar.gz"
+check "wrote signed=false" "signed=false" "$(grep '^signed=' "$GITHUB_OUTPUT")"
+check "wrote unsigned zip" "1" "$( [ -f "$TMP/crow-0.0.0-test-macos-universal.zip" ] && echo 1 || echo 0 )"
+check "release-body mentions unsigned" "1" "$(grep -c 'not signed or notarized' "$TMP/release-body.md")"
 
 echo "cleanup_keychain"
 KEYCHAIN_PATH="$TMP/fake.keychain-db"

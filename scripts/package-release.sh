@@ -35,20 +35,39 @@ trap cleanup_staging EXIT
 
 bash scripts/generate-build-info.sh
 
-# crow and crowd are the only two products; --product is single-valued in SwiftPM.
-swift build -c release --arch arm64 --arch x86_64
+# Dual-arch `swift build --arch arm64 --arch x86_64` fails on Xcode 16.4 /
+# GitHub-hosted macos-15 (missing target configuration for UnixSignals /
+# ServiceLifecycle / _RopeModule; duplicate DependencyMetadataFileList).
+# Build each slice and lipo — still a universal binary (ADR 0006).
+for arch in arm64 x86_64; do
+  echo "==> swift build -c release --arch $arch"
+  swift build -c release --arch "$arch"
+done
 
-if [ -f .build/apple/Products/Release/crow ]; then
-  BUILD_DIR=".build/apple/Products/Release"
-else
-  BUILD_DIR=".build/release"
-fi
+release_dir_for_arch() {
+  local arch=$1 d
+  for d in \
+    ".build/${arch}-apple-macosx/release" \
+    ".build/${arch}-apple-macosx/Release"; do
+    if [ -f "$d/crow" ] && [ -f "$d/crowd" ]; then
+      printf '%s' "$d"
+      return 0
+    fi
+  done
+  echo "ERROR: no release dir for $arch (looked under .build/${arch}-apple-macosx/)" >&2
+  find .build -name crow -type f 2>/dev/null | head -20 >&2 || true
+  return 1
+}
+
+ARM_DIR="$(release_dir_for_arch arm64)"
+X86_DIR="$(release_dir_for_arch x86_64)"
+BUILD_DIR="$ARM_DIR"
 
 rm -rf "$STAGING_ROOT"
 mkdir -p "$STAGING_DIR"
 
 for binary in crow crowd; do
-  cp "$BUILD_DIR/$binary" "$STAGING_DIR/$binary"
+  lipo -create "$ARM_DIR/$binary" "$X86_DIR/$binary" -output "$STAGING_DIR/$binary"
   archs="$(lipo -archs "$STAGING_DIR/$binary")"
   for arch in arm64 x86_64; do
     case " $archs " in

@@ -43,24 +43,27 @@ notarization. Restrict it to the Crow app if App Store Connect lets you.
 
 On a `v*` tag (and on `workflow_dispatch`):
 
-1. `scripts/package-release.sh` builds universal `crow` + `crowd`, smoke-tests
-   them, and writes `crow-<version>-macos-universal.tar.gz`.
-2. `scripts/macos-sign-notarize.sh` unpacks that tarball, imports the `.p12`
-   into an **ephemeral keychain**, signs every Mach-O with hardened runtime +
-   timestamp + `Crow.entitlements`, re-packs the tarball, writes a zip, and
-   submits the zip to `xcrun notarytool submit --wait`.
+1. `scripts/package-release.sh` builds universal `crow` + `crowd` (each arch
+   separately, then `lipo`), smoke-tests them, and writes
+   `crow-<version>-macos-universal.tar.gz`.
+2. `scripts/macos-sign-notarize.sh`:
+   - **Secrets set:** unpacks the tarball, imports the `.p12` into an
+     **ephemeral keychain**, signs every Mach-O, re-packs, writes a zip, and
+     submits the zip to `xcrun notarytool submit --wait`.
+   - **Secrets all unset:** packs an unsigned zip next to the tarball and
+     writes a Release body that says so. This is the DUNS-pending path —
+     putting the five secrets in GitHub flips back to signed with no workflow
+     change. **Partial** secrets (only a cert, only a notary key, …) still
+     fail closed.
 3. The keychain (and the decoded `.p12` / `.p8`) are deleted in an `EXIT`
    trap — including on failure. The Developer ID cert never enters the login
    keychain.
-4. Both archives (signed tarball + notarized zip) and their `.sha256` files
-   are attached to the GitHub Release.
+4. Both archives (tarball + zip) and their `.sha256` files are attached to
+   the GitHub Release.
 
 A zip cannot be stapled. Gatekeeper looks up the notarization ticket online by
 CDHash when a quarantined binary is launched; that is the documented path for
 CLI zip distributions.
-
-If any signing/notarization secret is missing, the job **fails** rather than
-publishing an unsigned build.
 
 ## Runner
 

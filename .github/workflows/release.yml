@@ -96,6 +96,7 @@ jobs:
         run: bash scripts/package-release.sh
 
       - name: Sign and notarize
+        id: sign
         env:
           CROW_VERSION: ${{ env.CROW_VERSION }}
           APPLE_DEVELOPER_SIGNING_KEY_CERT: ${{ secrets.APPLE_DEVELOPER_SIGNING_KEY_CERT }}
@@ -138,25 +139,4 @@ jobs:
             crow-${{ env.CROW_VERSION }}-macos-universal.zip.sha256
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          body: |
-            ## Install
-
-            Download `crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz` (or the `.zip`) and its checksum file, verify the archive, extract it, and symlink the binaries into your `PATH`. Keep the extracted directory intact — `crowd` needs the `.bundle` resources next to the binaries.
-
-            ```bash
-            shasum -a 256 -c crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz.sha256
-            mkdir -p ~/.local/lib ~/.local/bin
-            tar -xzf crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz -C ~/.local/lib
-            ln -sf ~/.local/lib/crow-${{ env.CROW_VERSION }}/crow ~/.local/bin/crow
-            ln -sf ~/.local/lib/crow-${{ env.CROW_VERSION }}/crowd ~/.local/bin/crowd
-            ```
-
-            These binaries are **signed and notarized** (Developer ID Application + notarytool). A browser download still applies Gatekeeper quarantine; first launch contacts Apple to look up the notarization ticket — you should **not** need `xattr -d com.apple.quarantine`.
-
-            Point `crow autostart install --binary` at the extracted `crowd` so launchd runs the signed daemon:
-
-            ```bash
-            crow autostart install --binary ~/.local/lib/crow-${{ env.CROW_VERSION }}/crowd
-            ```
-
-            To build from source instead: `make daemon CONFIG=release && make install CONFIG=release` (unsigned; fine for local use). Signing details: [docs/macos-release-signing.md](https://github.com/${{ github.repository }}/blob/main/docs/macos-release-signing.md).
+          body_path: release-body.md

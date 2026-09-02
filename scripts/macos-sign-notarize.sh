@@ -24,8 +24,14 @@
 #
 # Flags:
 #   --archive PATH        tarball to sign (default: crow-$CROW_VERSION-macos-universal.tar.gz)
-#   --skip-notarize       sign + pack only (local testing)
+#   --skip-notarize       sign + pack only (local testing; still needs the .p12)
 #   --help
+#
+# If every signing and notarization secret is unset, the script does not fail:
+# it packs an unsigned zip next to the tarball (SIGN_MODE=unsigned) so a v*
+# tag can still attach binaries while the Apple Developer Program (DUNS) is
+# pending. Partial secrets still fail closed. Once the five GitHub secrets
+# are present, this is the signed + notarized path again — no workflow flip.
 #
 # The Developer ID cert is imported into an ephemeral keychain that this script
 # deletes on EXIT — including on failure. It never touches the login keychain.
@@ -46,6 +52,8 @@ OPENSSL_BIN="${OPENSSL_BIN:-openssl}"
 
 SKIP_NOTARIZE=0
 ARCHIVE=""
+# signed | unsigned — set by require_secrets.
+SIGN_MODE=""
 
 # Set by prepare_keychain; consumed by cleanup_keychain.
 KEYCHAIN_PATH=""
@@ -56,7 +64,7 @@ ORIGINAL_KEYCHAINS=""
 WORK_DIR=""
 
 usage() {
-  sed -n '2,36p' "$SIGN_SCRIPT" | sed -e 's/^# //' -e 's/^#//'
+  sed -n '2,39p' "$SIGN_SCRIPT" | sed -e 's/^# //' -e 's/^#//'
 }
 
 # Print the first non-empty argument. Used so the workflow can accept both
@@ -259,8 +267,69 @@ notarize_zip() {
   P8_PATH=""
 }
 
+write_github_signed_output() {
+  local signed=$1
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "signed=$signed" >> "$GITHUB_OUTPUT"
+  fi
+}
+
+write_release_body() {
+  local signed=$1 version=$2 dest=$3
+  if [ "$signed" = "true" ]; then
+    cat > "$dest" <<EOF
+## Install
+
+Download \`crow-${version}-macos-universal.tar.gz\` (or the \`.zip\`) and its checksum file, verify the archive, extract it, and symlink the binaries into your \`PATH\`. Keep the extracted directory intact — \`crowd\` needs the \`.bundle\` resources next to the binaries.
+
+\`\`\`bash
+shasum -a 256 -c crow-${version}-macos-universal.tar.gz.sha256
+mkdir -p ~/.local/lib ~/.local/bin
+tar -xzf crow-${version}-macos-universal.tar.gz -C ~/.local/lib
+ln -sf ~/.local/lib/crow-${version}/crow ~/.local/bin/crow
+ln -sf ~/.local/lib/crow-${version}/crowd ~/.local/bin/crowd
+\`\`\`
+
+These binaries are **signed and notarized** (Developer ID Application + notarytool). A browser download still applies Gatekeeper quarantine; first launch contacts Apple to look up the notarization ticket — you should **not** need \`xattr -d com.apple.quarantine\`.
+
+Point \`crow autostart install --binary\` at the extracted \`crowd\` so launchd runs the signed daemon:
+
+\`\`\`bash
+crow autostart install --binary ~/.local/lib/crow-${version}/crowd
+\`\`\`
+
+To build from source instead: \`make daemon CONFIG=release && make install CONFIG=release\` (unsigned; fine for local use). Signing details: [docs/macos-release-signing.md](https://github.com/corveil/crow/blob/main/docs/macos-release-signing.md).
+EOF
+  else
+    cat > "$dest" <<EOF
+## Install (unsigned)
+
+These binaries are **not signed or notarized**. The Apple Developer Program enrollment (DUNS) is still pending; once the GitHub signing secrets are set, the same workflow signs and notarizes automatically.
+
+A browser download applies Gatekeeper quarantine. Clear it after extracting:
+
+\`\`\`bash
+shasum -a 256 -c crow-${version}-macos-universal.tar.gz.sha256
+mkdir -p ~/.local/lib ~/.local/bin
+tar -xzf crow-${version}-macos-universal.tar.gz -C ~/.local/lib
+ln -sf ~/.local/lib/crow-${version}/crow ~/.local/bin/crow
+ln -sf ~/.local/lib/crow-${version}/crowd ~/.local/bin/crowd
+xattr -d com.apple.quarantine ~/.local/lib/crow-${version}/crow ~/.local/lib/crow-${version}/crowd
+\`\`\`
+
+Keep the extracted directory intact — \`crowd\` needs the \`.bundle\` resources next to the binaries.
+
+\`\`\`bash
+crow autostart install --binary ~/.local/lib/crow-${version}/crowd
+\`\`\`
+
+To build from source instead: \`make daemon CONFIG=release && make install CONFIG=release\`.
+EOF
+  fi
+}
+
 require_secrets() {
-  local cert password
+  local cert password notary_key notary_id notary_issuer
   cert="$(first_set \
     "${APPLE_DEVELOPER_SIGNING_KEY_CERT:-}" \
     "${RM_APPLE_DEVELOPER_SIGNING_KEY_CERT:-}" \
@@ -268,7 +337,41 @@ require_secrets() {
   password="$(first_set \
     "${CSC_KEY_PASSWORD:-}" \
     "${DEVELOPER_CERTIFICATE_PASSWORD:-}" || true)"
-  if [ -z "$cert" ] || [ -z "$password" ]; then
+  notary_key="$(first_set \
+    "${APPLE_API_KEY:-}" \
+    "${APPLE_API_KEY_P8_BASE64:-}" || true)"
+  notary_id="$(first_set "${APPLE_API_KEY_ID:-}" || true)"
+  notary_issuer="$(first_set \
+    "${APPLE_API_ISSUER:-}" \
+    "${APPLE_API_ISSUER_ID:-}" || true)"
+
+  local have_cert=0 have_notary=0
+  if [ -n "$cert" ] && [ -n "$password" ]; then
+    have_cert=1
+  fi
+  if [ -n "$notary_key" ] && [ -n "$notary_id" ] && [ -n "$notary_issuer" ]; then
+    have_notary=1
+  fi
+
+  # Completely unset → unsigned fallback (DUNS pending). --skip-notarize is
+  # the local "sign but don't submit" path and still needs the .p12.
+  if [ "$have_cert" -eq 0 ] && [ "$have_notary" -eq 0 ]; then
+    if [ -n "$cert" ] || [ -n "$password" ] || [ -n "$notary_key" ] || [ -n "$notary_id" ] || [ -n "$notary_issuer" ]; then
+      echo "ERROR: signing/notarization secrets are only partially set." >&2
+      echo "  Set all five (see docs/macos-release-signing.md) or leave them all unset" >&2
+      echo "  to publish an unsigned tarball until Apple enrollment completes." >&2
+      return 1
+    fi
+    if [ "$SKIP_NOTARIZE" -eq 1 ]; then
+      echo "ERROR: signing secrets missing." >&2
+      echo "  --skip-notarize still needs APPLE_DEVELOPER_SIGNING_KEY_CERT and CSC_KEY_PASSWORD." >&2
+      return 1
+    fi
+    SIGN_MODE=unsigned
+    return 0
+  fi
+
+  if [ "$have_cert" -eq 0 ]; then
     echo "ERROR: signing secrets missing." >&2
     echo "  Need APPLE_DEVELOPER_SIGNING_KEY_CERT (base64 .p12) and CSC_KEY_PASSWORD." >&2
     echo "  See docs/macos-release-signing.md." >&2
@@ -276,24 +379,21 @@ require_secrets() {
   fi
   SIGN_CERT_B64=$cert
   SIGN_CERT_PASSWORD=$password
+  SIGN_MODE=signed
 
   if [ "$SKIP_NOTARIZE" -eq 1 ]; then
     return 0
   fi
-  NOTARY_KEY="$(first_set \
-    "${APPLE_API_KEY:-}" \
-    "${APPLE_API_KEY_P8_BASE64:-}" || true)"
-  NOTARY_KEY_ID="$(first_set "${APPLE_API_KEY_ID:-}" || true)"
-  NOTARY_ISSUER="$(first_set \
-    "${APPLE_API_ISSUER:-}" \
-    "${APPLE_API_ISSUER_ID:-}" || true)"
-  if [ -z "$NOTARY_KEY" ] || [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ]; then
+  if [ "$have_notary" -eq 0 ]; then
     echo "ERROR: notarization secrets missing." >&2
     echo "  Need APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER." >&2
     echo "  Pass --skip-notarize to sign without submitting." >&2
     echo "  See docs/macos-release-signing.md." >&2
     return 1
   fi
+  NOTARY_KEY=$notary_key
+  NOTARY_KEY_ID=$notary_id
+  NOTARY_ISSUER=$notary_issuer
 }
 
 macos_sign_notarize_main() {
@@ -335,6 +435,33 @@ macos_sign_notarize_main() {
 
   require_secrets
 
+  DEST_DIR="$(cd "$(dirname "$ARCHIVE")" && pwd)"
+
+  if [ "$SIGN_MODE" = "unsigned" ]; then
+    echo "==> Apple secrets unset — packing unsigned zip (DUNS pending; not a signed release)"
+    WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/crow-sign.XXXXXX")"
+    tar -xzf "$ARCHIVE" -C "$WORK_DIR"
+    PACKAGE_DIR="crow-${CROW_VERSION}"
+    if [ ! -d "$WORK_DIR/$PACKAGE_DIR" ]; then
+      echo "ERROR: expected $PACKAGE_DIR/ inside the archive" >&2
+      rm -rf "$WORK_DIR"
+      WORK_DIR=""
+      return 1
+    fi
+    ZIP_PATH="$DEST_DIR/crow-${CROW_VERSION}-macos-universal.zip"
+    rm -f "$ZIP_PATH"
+    "$DITTO_BIN" -c -k --keepParent "$WORK_DIR/$PACKAGE_DIR" "$ZIP_PATH"
+    shasum -a 256 "$ZIP_PATH" > "$ZIP_PATH.sha256"
+    echo "    $ARCHIVE (unsigned, from package-release.sh)"
+    echo "    $ZIP_PATH (unsigned)"
+    rm -rf "$WORK_DIR"
+    WORK_DIR=""
+    write_github_signed_output false
+    write_release_body false "$CROW_VERSION" "$DEST_DIR/release-body.md"
+    echo "==> Done (unsigned)"
+    return 0
+  fi
+
   trap cleanup_keychain EXIT
 
   WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/crow-sign.XXXXXX")"
@@ -361,15 +488,17 @@ macos_sign_notarize_main() {
   sign_tree "$WORK_DIR/$PACKAGE_DIR" "$IDENTITY"
 
   echo "==> Packing signed archives"
-  pack_signed "$WORK_DIR" "$PACKAGE_DIR" "$(cd "$(dirname "$ARCHIVE")" && pwd)" "$CROW_VERSION"
+  pack_signed "$WORK_DIR" "$PACKAGE_DIR" "$DEST_DIR" "$CROW_VERSION"
 
   if [ "$SKIP_NOTARIZE" -eq 1 ]; then
     echo "==> Skipping notarization (--skip-notarize)"
   else
-    ZIP_PATH="$(cd "$(dirname "$ARCHIVE")" && pwd)/crow-${CROW_VERSION}-macos-universal.zip"
+    ZIP_PATH="$DEST_DIR/crow-${CROW_VERSION}-macos-universal.zip"
     notarize_zip "$ZIP_PATH" "$NOTARY_KEY" "$NOTARY_KEY_ID" "$NOTARY_ISSUER"
   fi
 
+  write_github_signed_output true
+  write_release_body true "$CROW_VERSION" "$DEST_DIR/release-body.md"
   echo "==> Done"
 }
 

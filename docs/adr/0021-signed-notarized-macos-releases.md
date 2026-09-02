@@ -49,11 +49,18 @@ public and standard hosted minutes (including macOS) are free.
    `macos-15`; Shell Lint / PR CI / cache-warm use `ubuntu-latest`. Standard
    hosted minutes are free on this public repo, so there is no
    `CROW_SIGNING_RUNS_ON` self-hosted switch. `setup-xcode` pins Xcode 16.
+6. **Unsigned fallback while Apple enrollment is pending.** If every signing
+   and notarization secret is unset, the job packs the unsigned tarball + zip
+   and the GitHub Release body says they are unsigned. Partial secrets still
+   fail closed. Setting the five secrets restores the signed path with no
+   workflow change.
 
 ## Consequences
 
-- A `v*` tag cut fails closed if signing/notarization secrets are missing —
-  we do not publish an unsigned build as a "release".
+- A `v*` tag cut **signs and notarizes** when the Apple secrets are present
+  (fail closed on a partial set or a notarytool failure). When they are all
+  unset, it still attaches the universal tarball and labels the Release
+  unsigned — the DUNS-pending path, not a silent unsigned "signed" build.
 - Local `make daemon` / `scripts/package-release.sh` stay unsigned; only the
   GitHub release artifacts are signed. Developers still do not need an Apple
   certificate.
