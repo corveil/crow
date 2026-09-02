@@ -42,10 +42,11 @@ import Darwin
 /// and per-worktree trust (`CodexTrustSeeder`), so it is *edited*, never owned.
 public struct CodexHookConfigWriter: HookConfigWriter {
 
-    /// All hook event names Codex can dispatch (from
-    /// codex-rs/hooks/schema/generated/*.input.schema.json). `CodexSignalSource`
-    /// maps each onto Crow's state machine.
-    static let allEvents = [
+    /// Events that must be present with Crow's marker for a file to count as
+    /// Crow-owned. Kept as the original CROW-1060 set so adding a new event we
+    /// write (`Interrupt`, CROW-1177) does not orphan files from an older Crow
+    /// — those still match, and `writeHookConfig` then upgrades them.
+    static let ownershipEvents = [
         "SessionStart",
         "PreToolUse",
         "PostToolUse",
@@ -53,6 +54,11 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         "Stop",
         "PermissionRequest",
     ]
+
+    /// All hook event names Crow registers. Codex's vocabulary is the generated
+    /// schemas under `codex-rs/hooks/schema/` plus `Interrupt` (shipped in
+    /// 0.150.0, #40511). `CodexSignalSource` maps each onto Crow's state machine.
+    static let allEvents = ownershipEvents + ["Interrupt"]
 
     /// Events Crow runs async (fire-and-forget) **when the installed Codex is
     /// new enough** — see `CodexVersionProbe`, which gates `asyncHooksSupported`
@@ -65,7 +71,10 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     /// deliberately so it is *accepted* by the daemon ahead of the
     /// `PermissionRequest` that follows it (#903 apply-order caveat — the
     /// non-self-healing permission-badge inversion; see
-    /// docs/agent-harness-matrix.md).
+    /// docs/agent-harness-matrix.md). **`Interrupt` stays sync too** (CROW-1177):
+    /// it mutates `activityState` (`.waiting`), so an async delivery that landed
+    /// after `Stop` would un-complete a turn and reopen CROW-1065's proof.
+    /// `PostToolUse` remains the only async Codex event.
     private static let asyncEvents: Set<String> = ["PostToolUse"]
 
     /// Whether this writer may emit `async: true` — `CodexVersionProbe`'s
@@ -98,10 +107,15 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             // is user-chosen (`/Users/x/My Projects/…` would otherwise split the
             // command and silently stop every hook from firing).
             let command = "\(ShellLaunchArgs.shellQuote(crowPath)) hook-event --session \(sid) --agent codex --event \(event)"
+            // Interrupt is clamped to 3s upstream (`discovery.rs`); writing 5
+            // would only produce a clamp warning. `hook-event` is a local
+            // socket RPC (milliseconds), so 3s is ample and the command is
+            // not skipped on a healthy daemon.
+            let timeout = event == "Interrupt" ? 3 : 5
             var entry: [String: Any] = [
                 "type": "command",
                 "command": command,
-                "timeout": 5,
+                "timeout": timeout,
             ]
             if asyncHooksSupported && asyncEvents.contains(event) {
                 entry["async"] = true
@@ -177,18 +191,32 @@ public struct CodexHookConfigWriter: HookConfigWriter {
 
     // MARK: - Crow-owned probe
 
-    /// A per-worktree file is Crow-owned when every registered event's command
-    /// contains `hook-event --session`. A user's own hooks.json will not.
+    /// A per-worktree file is Crow-owned when every *legacy* event's command
+    /// contains `hook-event --session`. Newly added events in `allEvents`
+    /// (`Interrupt`) are optional so a 6-event file from CROW-1060 still
+    /// matches and can be upgraded; if one of those extras is present, it
+    /// must also carry the marker so a user Interrupt grafted onto an
+    /// otherwise Crow file is left untouched.
     static func isCrowOwned(_ document: [String: Any]) -> Bool {
         guard let hooks = document["hooks"] as? [String: Any] else { return false }
         guard !hooks.isEmpty else { return false }
-        for event in allEvents {
-            guard let groups = hooks[event] as? [[String: Any]],
-                  let inner = groups.first?["hooks"] as? [[String: Any]],
-                  let command = inner.first?["command"] as? String,
-                  command.contains("hook-event --session") else {
+        for event in ownershipEvents {
+            guard commandIsCrowOwned(hooks[event]) else { return false }
+        }
+        for event in allEvents where !ownershipEvents.contains(event) {
+            guard hooks[event] == nil || commandIsCrowOwned(hooks[event]) else {
                 return false
             }
+        }
+        return true
+    }
+
+    private static func commandIsCrowOwned(_ value: Any?) -> Bool {
+        guard let groups = value as? [[String: Any]],
+              let inner = groups.first?["hooks"] as? [[String: Any]],
+              let command = inner.first?["command"] as? String,
+              command.contains("hook-event --session") else {
+            return false
         }
         return true
     }

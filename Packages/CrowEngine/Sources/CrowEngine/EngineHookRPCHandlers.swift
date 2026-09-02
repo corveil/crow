@@ -189,6 +189,8 @@ func makeEngineHookHandlers(
                     return "Notification: \(msg.prefix(80))"
                 case "Stop":
                     return "Agent finished responding"
+                case "Interrupt":
+                    return "Turn interrupted"
                 case "StopFailure":
                     return "Agent stopped with error"
                 case "SessionStart":

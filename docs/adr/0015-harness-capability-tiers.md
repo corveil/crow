@@ -252,6 +252,24 @@ deliberate, documented gaps (full grid in the
 > unchanged (`--continue`); this amendment records that persist is not the
 > next resume layer. Live state:
 > [`docs/agent-harness-matrix.md`](../agent-harness-matrix.md).
+>
+> **Amendment (2026-09-02, CROW-1177):** Codex grew an `Interrupt` hook
+> (0.150.0 `#40511`; executor coverage in 0.152.0 `#41432`). It is an honest
+> observational event — the abort-path sibling of `Stop`, not a permission
+> bypass. Crow registers it **sync** in per-worktree `.codex/hooks.json` and
+> maps it to `.waiting`, not `.done`: `JobScheduler.finishDecision` completes
+> only on `.done`, so treating a cancel (Esc, Ctrl+C, or a `crow send`
+> follow-up that aborts the in-flight turn) as `Stop` would complete a `.job`
+> mid-turn. Upstream `Stop` and `Interrupt` are exclusive paths
+> (`run_turn_stop_hooks` vs `run_turn_interrupt_hooks`). Official hooks docs
+> still omit `Interrupt` and still claim async command hooks are unsupported —
+> that page is stale; the pin is `discovery.rs` plus the changelogs. Crow does
+> **not** emit `async: true` on `Interrupt` even though upstream honors it for
+> this event (unlike `SessionEnd`): CROW-1065's "safe by construction"
+> argument assumed `PostToolUse` was the only async Codex event, and
+> `Interrupt` mutates `activityState`. Timeout is written as 3s (upstream
+> clamp). Pre-0.150 Codex ignores the unknown key (`HookEventsToml` has no
+> `deny_unknown_fields`), so emitting it does not drop the other six hooks.
 
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
@@ -317,7 +335,9 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    `0.148.0` — async landed at `alpha.9`, so an earlier alpha of that release
    would still skip the hooks. `PreToolUse` stays sync deliberately, matching
    Claude, so it is accepted ahead of the `PermissionRequest` that follows it
-   (#903).
+   (#903). CROW-1177 registers Codex's `Interrupt` hook **sync** and maps it
+   to `.waiting` rather than `.done`, so CROW-1065's "PostToolUse is the only
+   async event" proof still holds.
 
 5. **Auto-permission is Claude + OpenCode only.** Claude emits
    `--permission-mode auto`; OpenCode runtime-probes `opencode --help` for the

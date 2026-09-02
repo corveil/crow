@@ -22,13 +22,14 @@ struct CodexHookConfigWriterTests {
 
     // MARK: - Per-worktree hook document (CROW-1060)
 
-    @Test func generateDocumentBakesInSessionUUIDAndAgentForAllSixEvents() throws {
+    @Test func generateDocumentBakesInSessionUUIDAndAgentForAllEvents() throws {
         let sid = UUID()
         let doc = CodexHookConfigWriter.generateDocument(
             sessionID: sid, crowPath: "/opt/homebrew/bin/crow", asyncHooksSupported: false)
         let hooks = try #require(doc["hooks"] as? [String: Any])
 
-        #expect(hooks.count == 6)
+        #expect(hooks.count == CodexHookConfigWriter.allEvents.count)
+        #expect(hooks["Interrupt"] != nil, "CROW-1177: Interrupt must be registered")
         for event in CodexHookConfigWriter.allEvents {
             let groups = try #require(hooks[event] as? [[String: Any]], "missing hook entry for \(event)")
             let entry = try #require((groups.first?["hooks"] as? [[String: Any]])?.first)
@@ -36,7 +37,9 @@ struct CodexHookConfigWriterTests {
             let command = try #require(entry["command"] as? String)
             // Shell-quoted crow path, session UUID routing, explicit agent kind.
             #expect(command == "'/opt/homebrew/bin/crow' hook-event --session \(sid.uuidString) --agent codex --event \(event)")
-            #expect(entry["timeout"] as? Int == 5)
+            let expectedTimeout = event == "Interrupt" ? 3 : 5
+            #expect(entry["timeout"] as? Int == expectedTimeout, "event \(event) timeout")
+            #expect(entry["async"] == nil, "Interrupt (and every other non-PostToolUse event) stays sync")
         }
     }
 
@@ -132,8 +135,9 @@ struct CodexHookConfigWriterTests {
                 #expect(entry["async"] as? Bool == true, "PostToolUse should be async")
                 sawAsync = true
             } else {
-                // PreToolUse in particular stays sync so it is accepted ahead of
-                // the PermissionRequest that follows it (#903).
+                // PreToolUse stays sync so it is accepted ahead of
+                // the PermissionRequest that follows it (#903). Interrupt
+                // stays sync because it mutates activityState (CROW-1177).
                 #expect(entry["async"] == nil, "event \(event) must stay synchronous")
             }
         }
@@ -175,6 +179,70 @@ struct CodexHookConfigWriterTests {
         #expect(!CodexHookConfigWriter.isCrowOwned([:]))
         #expect(!CodexHookConfigWriter.isCrowOwned(["hooks": [String: Any]()]))
         #expect(!CodexHookConfigWriter.isCrowOwned(["hooks": ["Stop": "nope"]]))
+    }
+
+    @Test func isCrowOwnedRecognizesLegacySixEventFile() throws {
+        // A CROW-1060 file has the original six events and no Interrupt. It
+        // must still count as Crow-owned so `writeHookConfig` can upgrade it.
+        let sid = UUID()
+        var hooks: [String: Any] = [:]
+        for event in CodexHookConfigWriter.ownershipEvents {
+            hooks[event] = [[
+                "hooks": [[
+                    "type": "command",
+                    "command": "/bin/crow hook-event --session \(sid.uuidString) --agent codex --event \(event)",
+                ]]
+            ]]
+        }
+        #expect(CodexHookConfigWriter.isCrowOwned(["hooks": hooks]))
+        #expect(hooks["Interrupt"] == nil)
+    }
+
+    @Test func writeHookConfigUpgradesLegacySixEventFileWithInterrupt() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        let sid = UUID()
+        var hooks: [String: Any] = [:]
+        for event in CodexHookConfigWriter.ownershipEvents {
+            hooks[event] = [[
+                "hooks": [[
+                    "type": "command",
+                    "command": "/bin/crow hook-event --session \(sid.uuidString) --agent codex --event \(event)",
+                ]]
+            ]]
+        }
+        let codexDir = worktree.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        let path = codexDir.appendingPathComponent("hooks.json")
+        try JSONSerialization.data(withJSONObject: ["hooks": hooks]).write(to: path)
+
+        try CodexHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+
+        let after = try #require(FileManager.default.contents(atPath: path.path))
+        let root = try #require(try JSONSerialization.jsonObject(with: after) as? [String: Any])
+        let afterHooks = try #require(root["hooks"] as? [String: Any])
+        #expect(afterHooks["Interrupt"] != nil, "upgrade must register Interrupt")
+        #expect(CodexHookConfigWriter.isCrowOwned(root))
+    }
+
+    @Test func isCrowOwnedRejectsUserInterruptGraftedOntoCrowFile() throws {
+        let sid = UUID()
+        var hooks: [String: Any] = [:]
+        for event in CodexHookConfigWriter.ownershipEvents {
+            hooks[event] = [[
+                "hooks": [[
+                    "type": "command",
+                    "command": "/bin/crow hook-event --session \(sid.uuidString) --agent codex --event \(event)",
+                ]]
+            ]]
+        }
+        hooks["Interrupt"] = [[
+            "hooks": [["type": "command", "command": "/usr/local/bin/user-interrupt"]]
+        ]]
+        #expect(!CodexHookConfigWriter.isCrowOwned(["hooks": hooks]),
+                "a user Interrupt on an otherwise Crow file must not be clobbered")
     }
 
     // MARK: - Global-config migration (one-time cleanup)

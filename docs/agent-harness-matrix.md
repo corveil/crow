@@ -37,7 +37,7 @@ capabilities, update this table in the same PR.
 | Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
-| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
+| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065); **`Interrupt` stays sync** (CROW-1177; mutates completion) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ positional `[PROMPT]` (`.work` seed, CROW-1144); run-then-`-c` (`.job`/`.review`) | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
@@ -477,7 +477,10 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   (`removeManagedGlobalConfig`, mirroring Cursor/Antigravity), because Codex
   layers project hooks atop the global file and running both would double-count.
   The `notify`→`CodexNotifyCommand` bridge is gone: the per-worktree `Stop` hook
-  drives `.done` on its own (`CodexSignalSource`). Write/remove follow the
+  drives `.done` on its own (`CodexSignalSource`). `Interrupt` (Codex ≥ 0.150.0,
+  #40511) is registered **sync** and maps to `.waiting` — a cancelled turn must
+  not satisfy job completion (`JobScheduler.finishDecision` keys only on
+  `.done`). Write/remove follow the
   Cursor/Muse protections — a git-tracked or non-Crow-owned `.codex/hooks.json`
   is left untouched (a user may ship one; it isn't conventionally gitignored),
   an untracked Crow write is git-excluded. Auto-launched **`.work`/`.job`
@@ -608,7 +611,31 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   by `lateAsyncPostToolUseAfterStopStaysDone` / `postToolUseLeavesCompletionFieldsUntouched`
   in `CodexSignalSourceTests`. A literal 0.148.0+ TUI observation remains a nice-to-have
   human re-check, but it can only confirm the ordering the structural argument
-  already proves harmless for all orderings.*
+  already proves harmless for all orderings. CROW-1177 keeps `PostToolUse` as the
+  sole async event: `Interrupt` is registered sync.*
+  **`Interrupt` (CROW-1177)** is a new Codex event (0.150.0 `#40511`; executor
+  coverage in 0.152.0 `#41432`). It fires on the **abort** path only
+  (`run_turn_interrupt_hooks` before the interrupted-abort event) — `Stop`
+  still fires only on natural completion (`run_turn_stop_hooks`), so the two
+  are exclusive. Crow maps `Interrupt` → `.waiting` (not `.done`): a
+  cancelled turn, or a `crow send` follow-up that aborts-then-submits
+  (`Interrupt` then `UserPromptSubmit`), must not complete a `.job`. Official
+  hooks docs still omit `Interrupt` and still claim async command hooks are
+  unsupported — that page is stale vs source; the pin is
+  `codex-rs/hooks/src/engine/discovery.rs` (`interrupt_normalizes_timeout_and_supports_async_execution`)
+  plus the 0.150.0 / 0.152.0 changelogs. Crow does **not** emit `async: true`
+  on `Interrupt` even though upstream honors it: the event mutates
+  `activityState`, so an async delivery that landed after `Stop` would
+  un-complete a turn and reopen the CROW-1065 proof. Timeout is written as 3s
+  (upstream default 1s, clamp 3s); `hook-event` is a local socket RPC, so the
+  clamp does not skip the command. Unknown `Interrupt` keys are ignored by
+  pre-0.150 `HookEventsToml` (no `deny_unknown_fields` on that struct), so
+  emitting the event is fail-closed for older Codex — the other six hooks
+  still load. A live TUI trace of Esc / `crow send` while working remains a
+  nice-to-have human re-check; the mapping is pinned by
+  `interruptFromWorkingMarksWaitingWithoutCompleting` /
+  `interruptThenUserPromptSubmitResumesWorking` /
+  `interruptDoesNotUncompleteADoneTurn`.
 - **Cursor:** declares `PostToolUse` / `Notification` async, but the timing is
   "one of the three things to confirm empirically" (`CursorSignalSource`).
 - **OpenCode:** event *names* are verified, and the "done" signal is now the
@@ -1053,7 +1080,8 @@ against current upstream CLIs.
 
 | Reason | Pin | Source | Last verified |
 |---|---|---|---|
-| Codex honors `async: true` (below the pin it *skips* the entry, breaking state detection) | Codex **≥ 0.148.0** (gate lives in `CodexVersionProbe.minimumAsyncHookVersion`) | `CodexVersionProbe` / `CodexHookConfigWriter.asyncEvents` | 2026-08-20 (CROW-1065) — **closed**. Upstream `discovery.rs` on `rust-v0.148.0` computes `runs_async = async && event != SessionEnd` (the "not supported yet" skip is gone). `0.148.0` shipped **stable** on 2026-08-18 (npm `latest` = `0.149.0` on 2026-08-20), so the gate now passes on real installs — earlier the reason held (2026-08-13, CROW-999) but `0.148.0` was still pre-release. Async **timing** is now resolved **by construction**: `PostToolUse` is the only async event and its sole mutation (`lastToolActivity`) is persistence-excluded + reader-less, while completion is owned by the sync `Stop` — so no straggler-after-`Stop` ordering is observable on the card (proof over all orderings; pinned by `lateAsyncPostToolUseAfterStopStaysDone`). A live 0.148.0+ TUI trace stays a nice-to-have human re-check |
+| Codex honors `async: true` (below the pin it *skips* the entry, breaking state detection) | Codex **≥ 0.148.0** (gate lives in `CodexVersionProbe.minimumAsyncHookVersion`) | `CodexVersionProbe` / `CodexHookConfigWriter.asyncEvents` | 2026-08-20 (CROW-1065) — **closed**. Upstream `discovery.rs` on `rust-v0.148.0` computes `runs_async = async && event != SessionEnd` (the "not supported yet" skip is gone). `0.148.0` shipped **stable** on 2026-08-18 (npm `latest` = `0.149.0` on 2026-08-20), so the gate now passes on real installs — earlier the reason held (2026-08-13, CROW-999) but `0.148.0` was still pre-release. Async **timing** is now resolved **by construction**: `PostToolUse` is the only async event and its sole mutation (`lastToolActivity`) is persistence-excluded + reader-less, while completion is owned by the sync `Stop` — so no straggler-after-`Stop` ordering is observable on the card (proof over all orderings; pinned by `lateAsyncPostToolUseAfterStopStaysDone`). A live 0.148.0+ TUI trace stays a nice-to-have human re-check. **CROW-1177 keeps this proof:** `Interrupt` is registered but **sync** (it mutates `activityState` → `.waiting`) |
+| Codex `Interrupt` hook (abort path; must not look like `Stop`) | Codex **≥ 0.150.0** (`#40511`); executor coverage **0.152.0** (`#41432`). Official hooks docs still omit it | `CodexHookConfigWriter.allEvents` / `CodexSignalSource` | 2026-09-02 (CROW-1177) — **wired**. `Stop` = natural completion → `.done`; `Interrupt` = `TurnAborted` → `.waiting` (jobs/reviews stay open). `crow send` while working is abort-then-submit (`Interrupt` then `UserPromptSubmit`). Timeout written 3s (upstream clamp). No `async: true` (would reopen CROW-1065). Pre-0.150 ignores the unknown key (`HookEventsToml` has no `deny_unknown_fields`). Live Esc/`crow send` TUI trace is a nice-to-have |
 | Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
