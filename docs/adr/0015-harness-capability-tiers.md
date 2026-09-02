@@ -242,7 +242,7 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    real `--rc --name` flags. Cursor, Codex, OpenCode, Grok, Antigravity and Muse set
    `supportsRemoteControl = true` with **no RC flag** — remote driving is
    `crow send` into the interactive TUI (the `send` RPC handler in
-   `EngineRouter.swift` → `TerminalRouter.send`), agent-agnostic, not a
+   `EngineTerminalRPCHandlers.swift` → `TerminalRouter.send`), agent-agnostic, not a
    per-launch flag.
 
    *Codex was `false` here until CROW-1001, on the recorded reason "Codex doesn't

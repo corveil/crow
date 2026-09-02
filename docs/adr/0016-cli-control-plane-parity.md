@@ -147,29 +147,40 @@ last touched the ledger.
 
 **A covered row does not mean one implementation** (#806).
 [ADR 0009](./0009-crowd-sole-authority-clients-only.md) retired `forwardToApp`,
-but the shape it left behind survives: the daemon's `makeCommandRouter` and the
-`makeEngineRouter` it falls back to both register **29 of the same method
+but the shape it left behind survived: the daemon's `makeCommandRouter` and the
+`makeEngineRouter` it falls back to both registered **29 of the same method
 names** — `new-session`, `set-status`, `delete-session`, `get-config` and 25
-more. The daemon's copy always answers; the engine's is shadowed, reachable only
-if the daemon's is removed. `CommandRouter.methodNames` *unions* the two, so the
-ledger sees a single row where two bodies of code exist, and no check can tell
-them apart.
+more. The daemon's copy always answered; the engine's was shadowed, reachable
+only if the daemon's was removed. `CommandRouter.methodNames` *unions* the two,
+so the ledger saw a single row where two bodies of code existed, and no check
+could tell them apart.
 
-Those bodies have already drifted. `get-config` reports `app_running: false`
-from the daemon (`SnapshotRPCHandlers.swift`) and `true` from
-`EngineRouter.swift`, and the daemon's copy returns three keys the engine's
-omits (`configured`, `default_dev_root`, `vs_code_available`) — one method
-name, two response contracts. `delete-session`
-refuses without tmux in the daemon copy and has no such guard in the engine's.
+Those bodies had already drifted. `get-config` reported `app_running: false`
+from the daemon (`SnapshotRPCHandlers.swift`) and `true` from the engine copy,
+and the daemon's copy returned three keys the engine's omitted (`configured`,
+`default_dev_root`, `vs_code_available`) — one method name, two response
+contracts. `delete-session` refused without tmux in the daemon copy and had no
+such guard in the engine's.
 
-Parity work must respect this: **a verb wired against the shadowed copy is a
-no-op**, so a ticket moving a row from exempt to covered has to confirm its verb
-reaches the implementation that actually answers. De-duplication is the durable
-fix, and the newer verb families already demonstrate it — `job-*`, `defaults-*`,
-`agents-*`, `notifications-*` and `telemetry-*` share one body under
+CROW-1174 is the de-duplication this ADR named. It split `makeEngineRouter`
+into per-concern `Engine*RPCHandlers.swift` files (assembler in
+`EngineRouter.swift`) and **deleted** every engine registration whose method
+name the daemon already owned. A name now exists in at most one of the daemon
+`*RPCHandlers.swift` files or the engine handler files — the ledger still sees
+one row, but there is only one body. The remaining engine-only verbs
+(`hook-event`, `send`, `get-session`, `list-worktrees`, …) still live behind
+`fallback: makeEngineRouter(ctx)` until a later ticket unifies them into the
+daemon maps. `scripts/check-cli-parity.sh` globs both
+`Packages/CrowDaemon/Sources/CrowDaemon/*RPCHandlers.swift` and
+`Packages/CrowEngine/Sources/CrowEngine/*RPCHandlers.swift` (plus the
+assemblers).
+
+Parity work must still respect the older lesson: **a verb wired against a
+shadowed copy is a no-op**. The newer verb families already demonstrated
+single-body registration — `job-*`, `defaults-*`, `agents-*`,
+`notifications-*` and `telemetry-*` share one body under
 `Packages/CrowEngine/Sources/CrowEngine/*RPCSupport.swift` and never grew a
-second. All 29 duplicates are pre-CROW-581 vintage; they are a standing re-check
-target, not a settled design.
+second.
 
 ## Alternatives considered
 

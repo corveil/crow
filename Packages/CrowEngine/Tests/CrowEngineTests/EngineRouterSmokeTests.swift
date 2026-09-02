@@ -1,26 +1,30 @@
 import Foundation
 import Testing
 import CrowCore
-import CrowClaude
-import CrowCursor
 import CrowPersistence
 import CrowIPC
 @testable import CrowEngine
 
 /// Proves the engine's RPC router can be constructed and driven headlessly with
 /// a `NoopHostBridge` — no AppKit, no desktop app. This is the invariant that
-/// lets the `crowd` daemon host `makeEngineRouter` in a later milestone
-/// (CROW-581 headless-engine migration, A7).
+/// lets the `crowd` daemon host `makeEngineRouter` as its fallback
+/// (CROW-581 headless-engine migration, A7; CROW-1174 split).
 @Suite("makeEngineRouter smoke")
 @MainActor
 struct EngineRouterSmokeTests {
-    @Test("router builds with NoopHostBridge and dispatches list-sessions")
-    func listSessionsDispatch() async throws {
+    /// `list-sessions` is daemon-owned (shadowed, deleted from the engine in
+    /// CROW-1174). Dispatch a live fallback method so a split that drops the
+    /// engine map cannot stay green on a method the daemon already answers.
+    @Test("router builds with NoopHostBridge and dispatches list-worktrees")
+    func listWorktreesDispatch() async throws {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
         let appState = AppState()
         let store = JSONStore(directory: tmp)
         let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
+
+        let session = Session(name: "wt-smoke")
+        appState.sessions.append(session)
 
         let ctx = EngineContext(
             appState: appState,
@@ -35,9 +39,11 @@ struct EngineRouterSmokeTests {
         )
         let router = makeEngineRouter(ctx)
 
-        let response = await router.handle(request: JSONRPCRequest(id: 1, method: "list-sessions"))
+        let response = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "list-worktrees",
+            params: ["session_id": .string(session.id.uuidString)]))
         #expect(response.error == nil)
-        #expect(response.result != nil)
+        #expect(response.result?["worktrees"] != nil)
     }
 
     /// #639: the web UI's "+" add-terminal button sends only `session_id` (it
@@ -95,7 +101,7 @@ struct EngineRouterSmokeTests {
     /// #723 (ADR 0008 follow-up 8): the `set-goal` data model, `SessionService`
     /// mutator, and `crow set-goal` CLI all shipped with #696, but no RPC ever
     /// routed the method — so the whole path silently no-op'd with nothing to
-    /// catch it. This locks in the newly-wired route (`EngineRouter.swift`) and
+    /// catch it. This locks in the newly-wired route (`EngineSessionRPCHandlers.swift`) and
     /// its contract, which mirrors the CLI's `validateSetGoal`: reject both /
     /// neither / a blank goal (so a missing or typo'd param can't silently wipe
     /// an existing tag), and exclude the manager session.
@@ -192,55 +198,6 @@ struct EngineRouterSmokeTests {
         let mgr = await handle(["session_id": .string(manager.id.uuidString), "goal": .string("x")])
         #expect(mgr.error != nil)
         #expect(appState.sessions.first(where: { $0.id == manager.id })?.orgGoal == nil)
-    }
-
-    /// #834: the app's `new-session` surface must run a requested `agent_kind`
-    /// through the shared registry gate — an unregistered kind falls back to the
-    /// configured default (not persisted verbatim, which would leave the session
-    /// unlaunchable), while a registered non-default kind passes through.
-    @Test("new-session gates agent_kind against the registry")
-    func newSessionGatesAgentKindAgainstRegistry() async throws {
-        // Two agents registered; the app default is Claude Code (AppState default).
-        AgentRegistry.shared.register(ClaudeCodeAgent())
-        AgentRegistry.shared.register(CursorAgent())
-        #expect(AgentRegistry.shared.registeredKind(.cursor) == .cursor)
-
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
-        let appState = AppState()
-        appState.defaultAgentKind = .claudeCode
-        let store = JSONStore(directory: tmp)
-        let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
-
-        let ctx = EngineContext(
-            appState: appState,
-            store: store,
-            sessionService: service,
-            issueTracker: nil,
-            telemetryPort: nil,
-            devRoot: tmp.path,
-            hostBridge: NoopHostBridge(),
-            loadConfig: { nil },
-            applyConfig: { _ in nil }
-        )
-        let router = makeEngineRouter(ctx)
-
-        func createSession(agentKind: String) async -> JSONRPCResponse {
-            await router.handle(request: JSONRPCRequest(id: 1, method: "new-session", params: [
-                "name": .string("s"), "agent_kind": .string(agentKind),
-            ]))
-        }
-
-        // Unregistered kind → falls back to the configured default, not persisted.
-        let unknown = await createSession(agentKind: "crow-834-unregistered-work")
-        #expect(unknown.error == nil)
-        #expect(unknown.result?["agent_kind"]?.stringValue == AgentKind.claudeCode.rawValue)
-
-        // Registered non-default kind → honored (proves the gate isn't just
-        // always returning the default).
-        let cursor = await createSession(agentKind: AgentKind.cursor.rawValue)
-        #expect(cursor.error == nil)
-        #expect(cursor.result?["agent_kind"]?.stringValue == AgentKind.cursor.rawValue)
     }
 
     /// CROW-969: `get-session` reports which workspace a session's gateway
