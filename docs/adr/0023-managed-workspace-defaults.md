@@ -95,4 +95,4 @@ never connects, so it never matches and its opt-in-off defaults are untouched.
 - Code: `Packages/CrowCore/Sources/CrowCore/ManagedWorkspaceDefaults.swift`,
   `Packages/CrowDaemon/Sources/CrowDaemon/WorkspaceRPCHandlers.swift`
   (`workspace-add`), `Packages/CrowDaemon/Sources/CrowDaemon/SnapshotRPCHandlers.swift`
-  + `Packages/CrowEngine/Sources/CrowEngine/EngineRouter.swift` (`set-config`)
+  (`set-config`)
