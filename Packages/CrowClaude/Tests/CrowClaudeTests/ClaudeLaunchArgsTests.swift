@@ -53,6 +53,19 @@ import CrowCore
     #expect(ClaudeLaunchArgs.argsSuffix(remoteControl: false, sessionName: nil) == "")
 }
 
+@Test func claudeLaunchArgsAutoPermissionDoesNotBypassOrAddDir() {
+    // CROW-1176: Claude ≥ 2.1.257 can stall on the first extra-workdir Read in
+    // auto mode. Crow keeps `--permission-mode auto` and does not paper over
+    // that prompt with bypass or a blanket `--add-dir`.
+    let s = ClaudeLaunchArgs.argsSuffix(
+        remoteControl: true, sessionName: "Manager", autoPermissionMode: true)
+    #expect(s.contains("--permission-mode auto"))
+    #expect(!s.contains("--dangerously-skip-permissions"))
+    #expect(!s.contains("bypassPermissions"))
+    #expect(!s.contains("--add-dir"))
+    #expect(s == " --permission-mode auto --rc --name 'Manager'")
+}
+
 // MARK: - Launch-line gateway prefix (ClaudeLaunchArgs.gatewayEnvPrefix, CROW-402)
 
 @Test func gatewayEnvPrefixUnsetsWhenNil() throws {

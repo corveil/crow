@@ -928,7 +928,7 @@ crow automation set --respond-to-failed-checks true --auto-rebase-and-resolve-co
 crow automation set --manager-auto-permission-mode false && crow restart-manager
 ```
 
-**Permission modes** — each passes `--permission-mode auto` to the agent at launch. `--jobs-auto-permission-mode` is here rather than under `crow job` so all five read and write as one group, even though the web UI renders it on the Jobs tab.
+**Permission modes** — each passes `--permission-mode auto` to the agent at launch. `--jobs-auto-permission-mode` is here rather than under `crow job` so all five read and write as one group, even though the web UI renders it on the Jobs tab. As of Claude Code ≥ 2.1.257 auto mode can still stall once on the first extra-workdir Read (CROW-1176); Crow does not bypass that prompt.
 
 | Flag                                 | Default | Description                                                          |
 | ------------------------------------ | ------- | -------------------------------------------------------------------- |

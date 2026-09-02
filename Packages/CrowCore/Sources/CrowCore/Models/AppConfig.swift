@@ -17,11 +17,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// When true, sessions launched by the Jobs scheduler start with
     /// `--permission-mode auto` so their prompts can run `crow`, `gh`, and
     /// `git` without per-call approval. Defaults to true — jobs are
-    /// unattended by definition.
+    /// unattended by definition. Claude Code ≥ 2.1.257 can still stall once
+    /// on the first extra-workdir Read (CROW-1176); Crow does not bypass that.
     public var jobsAutoPermissionMode: Bool
     /// When true, code-review sessions start with `--permission-mode auto` so
     /// the review prompt can run `crow`, `gh`, and `git` without per-call
     /// approval. Defaults to true — reviews kick off unattended, like jobs.
+    /// Same extra-workdir Read residual as jobs (CROW-1176); review clones
+    /// under `{devRoot}/crow-reviews/` are the likely first hit.
     public var reviewAutoPermissionMode: Bool
     /// When true, newly launched work coder views start with
     /// `--permission-mode auto` (auto-accept) instead of the default plan

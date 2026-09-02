@@ -42,6 +42,8 @@ public final class AppState {
     /// can run `crow`, `gh`, and `git` commands without per-call approval.
     /// Mirrors `AppConfig.managerAutoPermissionMode`. Applies only to the Manager
     /// launch; worker sessions and CLI-spawned terminals are unaffected.
+    /// Claude Code ≥ 2.1.257 can still stall once on an extra-workdir Read
+    /// (CROW-1176); Crow does not bypass that prompt.
     public var managerAutoPermissionMode: Bool = true
 
     /// Whether sessions launched by the Jobs scheduler start with

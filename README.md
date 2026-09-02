@@ -205,7 +205,7 @@ Handy for Rust/window work, but each relaunch re-runs the launch logic and tears
 The left rail groups your work:
 
 - **Tickets** — Assigned issues grouped by project board status (Backlog, Ready, In Progress, In Review, Done in last 24h). Click a status to filter.
-- **Manager** — A persistent Claude Code terminal for orchestrating work. Use `/crow-workspace` here to create new sessions. Launches in `--permission-mode auto` by default so orchestration commands (`crow`, `gh`, `git`) run without per-call approval; opt out via Settings → Automation → Manager Terminal.
+- **Manager** — A persistent Claude Code terminal for orchestrating work. Use `/crow-workspace` here to create new sessions. Launches in `--permission-mode auto` by default so orchestration commands (`crow`, `gh`, `git`) skip per-call approval (Claude Code ≥ 2.1.257 can still prompt once on a Read outside `{devRoot}`; CROW-1176); opt out via Settings → Automation → Manager Terminal.
 - **Active Sessions** — One per work context. Shows repo, branch, issue/PR badges with pipeline and review status.
 - **Completed Sessions** — Sessions whose PRs have been merged or issues closed.
 
