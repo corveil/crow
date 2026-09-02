@@ -32,8 +32,8 @@ capabilities, update this table in the same PR.
 |---|---|---|---|---|---|---|---|
 | Binary token (`launchCommandToken`) | `claude` | `cursor-agent` ✅ (alias `agent` ⚠️ collides with grok-build) — identity-probed | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision | `muse` ⚠️ collision (Muse Sequencer) — identity-probed |
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
-| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
-| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
+| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829); `agent persist` evaluated and **declined** (CROW-1175 — TTY-detach, no-ops in `$TMUX`) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
+| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste (`agent persist` is not native RC — CROW-1175) | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
 | Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
@@ -230,7 +230,15 @@ managed-terminal command needs hook/env prep.
   restart (`ClaudeCodeAgent.autoLaunchCommand`, CROW-224 / CROW-317).
 - **Cursor:** review/job sessions read their prompt file on first launch, then
   resume with `--continue` on restart (`CursorAgent.autoLaunchCommand`, #829);
-  `.work` launches bare (deliberate — the user types into the TUI).
+  `.work` launches bare (deliberate — the user types into the TUI). Cursor CLI
+  **2026.08.26** added `agent persist` (keep running after disconnect;
+  `/detach`, `agent persist attach`, `list`/`stop`, `--resume`). That is **not**
+  a missing `--continue` and is **not wired** (CROW-1175). Persist is Cursor's
+  own tmux wrapper (`tmux -L cursor-agent`); it no-ops when `$TMUX` is already
+  set — which every Crow pane has — so launching `agent persist` from Crow
+  would never persist. After `/detach` there is no TUI for `crow send` to
+  paste into. `crow recreate-terminal` keeps relaunching with `--continue`.
+  See the persist re-check row below.
 - **Codex:** review/job sessions read their prompt file on first launch, then
   resume with `codex resume --last` on restart; `.work` also relaunches with
   `codex resume --last` rather than dropping into a bare TUI
@@ -267,6 +275,39 @@ describes what the UI claims, not what Crow can do.
   agent-agnostic path: the `send` RPC handler in `EngineTerminalRPCHandlers.swift` →
   `TerminalRouter.send`). The badge reflects that Crow *can* drive them, not
   that the agent has a native RC protocol.
+
+  Cursor `agent persist` (CLI **2026.08.26**) is **not** native RC and stays
+  unwired (CROW-1175), on the same footing as native `codex remote-control`.
+  It is TTY-detach via a second tmux server, not Crow's drive path; wiring it
+  as the default launch would also change the user's non-Crow `agent` usage.
+  Four blockers, any one disqualifying — probed on installed `cursor-agent
+  2026.08.31-4057e58` (`--help` + bundled `persistent-session.ts`):
+
+  1. **Already-in-tmux no-op.** If `$TMUX` is set, persist forwards argv to a
+     normal `agent` launch. Crow always launches inside tmux (ADR 0001), so
+     persist as a Crow launch command would never persist. Fighting that
+     means unsetting `$TMUX` and nested tmux (Crow attaching to
+     `-L cursor-agent`).
+  2. **TTY-detach, not pane-kill survival in Crow.** `/detach` is
+     `tmux detach-client`; a `pane-died` hook with `killSession: true` tears
+     the persist session down when *its* pane dies. Crow's
+     `recreate-terminal` kills Crow's window. Persist would only outlive
+     that if Crow were an attach client of a session on Cursor's server —
+     which the `$TMUX` guard prevents.
+  3. **`crow send` needs an attached TUI.** After detach the Crow pane has
+     no composer; persist also requires interactive stdin/stdout. Paste
+     works only while attached — Crow's tmux pane already is that.
+  4. **Machine-global control plane.** `persist list`/`stop` enumerate every
+     `@cursor_managed` session on the `cursor-agent` tmux server. Names are
+     `cursor-<workspace-slug>-<hash>-<n>-<rand>`, not Crow session UUIDs.
+     Crow's N Cursor sessions plus the user's own persist share that
+     server — the same defect class as Codex's app-server daemon
+     (CROW-1001 blocker 2).
+
+  Re-check only if persist starts *from inside* `$TMUX` without nesting,
+  addresses sessions by an id Crow can scope, and stays paste-drivable
+  while detached. Until then `--continue` remains the recreate/restart
+  path.
 - **Codex was `false` on a premise that turned out to be wrong.** The reason
   recorded here and in ADR 0015 was that "Codex's TUI isn't stdin-drivable the
   way `crow send` fakes RC for the others." Two things were off. First,
@@ -1030,6 +1071,7 @@ against current upstream CLIs.
 | Grok session-log layout + directory-name encoding — `<$GROK_HOME or ~/.grok>/sessions/<url-encoded-cwd>/<uuid>/chat_history.jsonl`, dir name = abs cwd percent-encoded over the RFC 3986 **unreserved** set (`/`→`%2F`, dashes preserved — *not* `NON_ALPHANUMERIC`, which would escape them) | `xai-org/grok-build` (same closed upstream mirror → churn likely); layout captured on a real tree in **#1090 (2026-08-21)** | `GrokAgent.logSources` / `GrokSessionDir` / `GrokHome` · `BackfillScanner.reconstructGrok` | 2026-08-24 (CROW-1098) — a mismatched encoding silently collects nothing (never misattributes); re-confirm the dash-preserving scheme on a Grok version bump |
 | Grok `grok` binary collides with community `superagent-ai/grok-cli` | **Identity probe** at registration (`grok --help`/`--version` vs grok-build flag markers) greys out the foreign `grok`; explicit `defaults.binaries.grok` pin bypasses it. Decision is pure `AgentDiscovery.evaluate`; probe markers (`--prompt-file`, `--prompt-json`, `--permission-mode`, `--always-approve`) are the same upstream flag set as the row above — re-verify together | `GrokAgent.identityMarkers` / `verifyBinaryIdentity` · `AgentDiscovery.evaluate` | 2026-07-26 (CROW-911) |
 | Cursor's legacy `agent` alias collides with grok-build's `~/.grok/bin/agent` (fired in the field) | Prefer the unambiguous **`cursor-agent`** via a token-major PATH walk (order-independent), plus the same **identity probe** on a bare `agent` match. Markers (`--approve-mcps`, `--trust`, `CURSOR_API_KEY`, `CURSOR_API_ENDPOINT`) are the flags this adapter passes — re-verify with `CursorLaunchArgs` on each Cursor CLI baseline bump. CROW-1058 then closed the two gaps that let it fire again: discovery **probes every** candidate instead of stopping at the first (so a genuine `cursor-agent` behind grok-build's `agent` still registers), and launch reads the **verified path** (`launchBinary()` / `VerifiedBinaries`) instead of re-walking PATH — with the unverified fallback narrowed to the unambiguous `cursor-agent`, never the alias | `CursorAgent.identityMarkers` / `verifyBinaryIdentity` · `BinaryTokenResolver` · `BinaryIdentityProbe` · `VerifiedBinaries` / `launchBinary()` | 2026-08-19 (CROW-1058) — Cursor CLI baseline `2026.08.04-aaa8809` |
+| Cursor `agent persist` (keep running after disconnect) is TTY-detach via a **second tmux server**, not a missing `--continue` and not native RC — **declined** | **min: Cursor CLI ≥ 2026.08.26** (changelog: Persistent sessions); probed `cursor-agent 2026.08.31-4057e58` (`agent persist --help` + bundled `./src/persistence/persistent-session.ts`). Persist is `tmux -L cursor-agent -f /dev/null`, `new-session -d` with `destroy-unattached off`; `/detach` is `tmux detach-client` and requires `CURSOR_AGENT_PERSIST_SESSION` + `$TMUX`. **If `$TMUX` is already set, persist forwards argv to a normal `agent` launch** — Crow always launches inside tmux (ADR 0001), so persist as a Crow launch command would never persist. `persist list`/`stop` are machine-global on that named server (names `cursor-<slug>-<hash>-<n>-<rand>`, not Crow UUIDs). `crow send` still needs an attached TUI. `crow recreate-terminal` keeps `--continue` | `CursorAgent.autoLaunchCommand` / `managerLaunchCommand` (deliberately omit `persist`) | 2026-09-02 (CROW-1175) — **declined**. Re-check only if persist starts *from inside* `$TMUX` without nesting, addresses sessions by an id Crow can scope, and stays paste-drivable while detached |
 | Grok **`--permission-mode auto` now exists** — the #859 probe reported it absent; current docs show it *and* `--always-approve`. Crow Auto maps to `--always-approve` + `--deny` on `.work`/`.job` (CROW-1037): Grok's classifier `auto` still gates `gh pr create`, which is not Claude-equivalent. Reviews stay human-gated. Re-probe `--always-approve`/`--yolo` with the rest of the flag set | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-08-15 (CROW-1037; was 2026-07-26) |
 | Grok positional `[PROMPT]` is the **interactive** seed; `--prompt-file`/`-p` are single-turn *headless* and a "turn" is a full agentic loop — so `.work` must not chain `; grok -c` behind `--prompt-file` | grok **1.0.5** (the 2026-07-25 probe claimed positional = headless; **false** on 1.0.5 `--help`) | `GrokLaunchArgs.interactiveSeedCommand` / `workSeedCommand` / `skills/crow-workspace/setup.sh` `launch_grok` | 2026-08-27 (CROW-1144) — re-probe positional vs `--prompt-file` on each grok bump; argv overflow still falls back to the headless chain at 128 KiB |
 | Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |

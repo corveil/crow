@@ -334,6 +334,51 @@ struct CursorAgentTests {
         #expect(auto.hasSuffix("\n") == false)
     }
 
+    /// CROW-1175: `agent persist` is Cursor's own tmux wrapper (TTY-detach,
+    /// no-ops when `$TMUX` is set, machine-global list/stop). Crow already
+    /// launches inside tmux, so persist would never persist and would leave
+    /// `crow send` with no TUI after `/detach`. Pin that no launch path emits
+    /// it — a future "wire persist for recreate-terminal" change has to fail
+    /// this first.
+    @Test func launchNeverEmitsAgentPersist() async throws {
+        var resumed = Session(name: "review", kind: .review, agentKind: .cursor)
+        resumed.reviewPromptDispatched = true
+        var resumedJob = Session(name: "job", kind: .job, agentKind: .cursor)
+        resumedJob.reviewPromptDispatched = true
+
+        let sessions: [Session] = [
+            Session(name: "work", kind: .work, agentKind: .cursor),
+            Session(name: "job", kind: .job, agentKind: .cursor),
+            Session(name: "review", kind: .review, agentKind: .cursor),
+            resumed,
+            resumedJob,
+        ]
+        for session in sessions {
+            let cmd = agent.autoLaunchCommand(
+                session: session,
+                worktreePath: "/tmp/wt",
+                remoteControlEnabled: true,
+                autoPermissionMode: true,
+                telemetryPort: nil)
+            #expect(containsPersistToken(cmd) == false, "\(session.kind) auto-launch emitted persist")
+        }
+        #expect(agent.autoLaunchCommand(
+            session: Session(name: "manager", kind: .manager, agentKind: .cursor),
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: true,
+            autoPermissionMode: true,
+            telemetryPort: nil) == nil)
+
+        let manager = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: true,
+            autoPermissionMode: true, telemetryPort: nil)
+        #expect(containsPersistToken(manager) == false)
+
+        let handoff = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "hello")
+        #expect(containsPersistToken(handoff) == false)
+    }
+
     @Test func findBinaryReturnsNilWhenAbsent() {
         // We can't easily mock FileManager.isExecutableFile, but we CAN
         // verify the search returns nil when the candidate paths don't
@@ -513,6 +558,16 @@ struct CursorAgentTests {
         for marker in CursorAgent.identityMarkers {
             #expect(help.contains(marker), "marker \(marker) no longer appears in Cursor's --help")
         }
+    }
+}
+
+/// True when `persist` appears as its own argv token — the `agent persist`
+/// subcommand — not as a substring of a path (this worktree is named
+/// `crow-1175-agent-persist`).
+private func containsPersistToken(_ command: String?) -> Bool {
+    guard let command else { return false }
+    return command.split { $0.isWhitespace }.contains { token in
+        token.trimmingCharacters(in: CharacterSet(charactersIn: "'\"")) == "persist"
     }
 }
 
