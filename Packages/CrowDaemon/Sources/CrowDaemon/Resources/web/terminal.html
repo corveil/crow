@@ -62,6 +62,7 @@
   <div id="terminal"></div>
   <div id="ctxmenu"></div>
   <script src="/xterm/xterm.js"></script>
+  <script src="/xterm/xterm-addon-unicode11.js"></script>
   <script src="/xterm/xterm-addon-fit.js"></script>
   <script src="/xterm/xterm-addon-image.js"></script>
   <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
@@ -90,9 +91,21 @@
         theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
         scrollback: 50000,
         allowTransparency: true,
+        // Required to switch `term.unicode.activeVersion` off Unicode 6 (CROW-1157).
+        allowProposedApi: true,
       });
       term.loadAddon(fitAddon);
       term.loadAddon(imageAddon);
+      // CROW-1157: match tmux/Node wcwidth for emoji so Claude's hardware
+      // cursor lands on the cell it painted. Guarded so a missing /xterm
+      // fetch cannot take this debug page down.
+      if (typeof Unicode11Addon === 'object' && Unicode11Addon
+          && typeof Unicode11Addon.Unicode11Addon === 'function') {
+        try {
+          term.loadAddon(new Unicode11Addon.Unicode11Addon());
+          term.unicode.activeVersion = '11';
+        } catch (_) { /* addon or proposed unicode API unavailable */ }
+      }
 
       // The shared tmux server sets `mouse on` (crow-tmux.conf) so the macOS
       // surface gets wheel-scrollback + drag-copy through tmux copy-mode. In the

@@ -106,6 +106,7 @@ import CrowPersistence
     @Test func acceptsPlainBasenames() {
         #expect(StaticAssets.isSafeAssetName("xterm.js"))
         #expect(StaticAssets.isSafeAssetName("xterm-addon-fit.js"))
+        #expect(StaticAssets.isSafeAssetName("xterm-addon-unicode11.js"))
     }
 
     @Test func rejectsTraversalAndSeparators() {

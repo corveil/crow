@@ -355,6 +355,8 @@ function ensureTerminal() {
     theme: { background: '#1e1e1e', foreground: '#d4d4d4', ...scrollbarTheme() },
     scrollback: UNIFIED_SCROLLBACK,
     allowTransparency: true,
+    // Required to switch `term.unicode.activeVersion` off Unicode 6 (CROW-1157).
+    allowProposedApi: true,
     // Escape hatch for agent surfaces, where we stop swallowing mouse modes so
     // the agent owns the wheel (ADR-0013) — which also means xterm reports
     // drags to the app instead of selecting text. xterm.js's Mac force-select
@@ -364,6 +366,21 @@ function ensureTerminal() {
     macOptionClickForcesSelection: true,
   });
   term.loadAddon(fitAddon);
+  // CROW-1157: xterm.js defaults to Unicode 6 cell widths, so emoji and many
+  // symbols in Claude Code's status line (`ctx: 0%`, mode glyphs) occupy 1
+  // cell here while tmux and Node's string-width count them as 2. Claude then
+  // CUP-places the hardware cursor several columns past the glyphs it painted,
+  // which reads as a caret floating after the footer while typed text inserts
+  // at the prompt. Unicode 11 matches that wcwidth; load before open()/first
+  // write so no PTY frame is measured on the old tables. Guarded like the
+  // viewport addon — a failed /xterm fetch must not take ensureTerminal down.
+  if (typeof Unicode11Addon === 'object' && Unicode11Addon
+      && typeof Unicode11Addon.Unicode11Addon === 'function') {
+    try {
+      term.loadAddon(new Unicode11Addon.Unicode11Addon());
+      term.unicode.activeVersion = '11';
+    } catch (_) { /* addon or proposed unicode API unavailable */ }
+  }
   term.loadAddon(imageAddon);
   term.loadAddon(searchAddon);
   term.loadAddon(webLinksAddon);

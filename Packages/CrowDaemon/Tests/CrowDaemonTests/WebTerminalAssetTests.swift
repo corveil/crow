@@ -424,6 +424,36 @@ import Testing
             "\(page) must load the visual-viewport addon (CROW-988)")
     }
 
+    /// CROW-1157: xterm.js's default Unicode 6 tables give emoji 1 cell, while
+    /// tmux and Claude Code (Node string-width) give them 2. The hardware
+    /// cursor then sits several columns past the status line (`ctx: 0%`) while
+    /// typed text inserts at the prompt. Unicode 11 is the matching width
+    /// table; `allowProposedApi` is required to switch `term.unicode`. The two
+    /// live pages wire xterm independently (same drift this suite exists to
+    /// catch — #776 shipped the mouse swallow on one surface only), so pin
+    /// the script tag AND the load on both.
+    @Test(arguments: ["app.js", "terminal.html"])
+    func terminalSurfacesActivateUnicode11Widths(asset: String) throws {
+        let code = Self.stripComments(try Self.surfaceSource(asset))
+        #expect(
+            code.contains("allowProposedApi: true"),
+            "\(asset) must opt into the proposed unicode API (CROW-1157)")
+        #expect(
+            code.contains("Unicode11Addon.Unicode11Addon("),
+            "\(asset) must construct the Unicode 11 addon (CROW-1157)")
+        #expect(
+            code.contains("unicode.activeVersion = '11'"),
+            "\(asset) must switch off Unicode 6 — loading the addon alone does not")
+    }
+
+    @Test(arguments: ["index.html", "terminal.html"])
+    func terminalPagesShipTheUnicode11Addon(page: String) throws {
+        let source = try Self.webAsset(page)
+        #expect(
+            source.contains("xterm-addon-unicode11.js"),
+            "\(page) must load the Unicode 11 addon (CROW-1157)")
+    }
+
     /// `interactive-widget=resizes-content` makes Chrome/Android shrink the
     /// LAYOUT viewport for the keyboard, which puts that platform back on the
     /// ordinary `100dvh` + window-`resize` path the pages already handle; without
