@@ -192,6 +192,8 @@ parity:
 	@./scripts/macos-sign-notarize_test.sh
 	@echo "==> desktop sidecar helpers (CROW-1189)..."
 	@./scripts/prepare-desktop-sidecar_test.sh
+	@echo "==> package-release helpers (CROW-1192)..."
+	@./scripts/package-release_test.sh
 
 # Regenerate the CLI reference from the commands themselves (CROW-808). Run
 # after adding or changing a subcommand — a stale docs/cli.md fails CrowCLI's

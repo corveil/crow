@@ -10,12 +10,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # PR Swift build/test runs on Linux to avoid burning macOS Actions minutes.
-  # Swift is provided by the official swift:6.1 container (no Xcode). We build and
-  # test the Foundation-only packages that compile on Linux — the macOS-only
-  # GUI (root Crow target) and CrowTelemetry (Apple Network.framework) are
-  # compiled only by release.yml. CrowTerminal + CrowDaemon + `crowd` now build
-  # here too (CROW-645); see docs/adr/0007-linux-ci-swift.md.
+  # PR Swift build/test runs on Linux to avoid burning macOS Actions minutes
+  # for the Foundation-only tree (ADR 0007). Swift is provided by the official
+  # swift:6.1 container (no Xcode). The macOS-only CrowTelemetry suite still
+  # compiles only in release.yml. The `universal-build` job below is the
+  # exception (CROW-1192): a tag-shaped `package-release.sh` dry-run so dual-arch
+  # packaging is not first exercised on a v* tag. CrowTerminal + CrowDaemon +
+  # `crowd` now build here too (CROW-645).
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -187,6 +188,34 @@ jobs:
           cargo test --manifest-path crow-desktop/src-tauri/Cargo.toml
           cargo build --manifest-path crow-desktop/src-tauri/Cargo.toml
 
+  # Dual-arch native SwiftPM + lipo. Two `--arch` flags on one `swift build`
+  # switch onto XCBuild, which is broken on Xcode 16.4 for
+  # swift-service-lifecycle / swift-collections (CROW-1192). Linux CI cannot
+  # exercise this path (ADR 0007); this is the PR-time catch so a tag cut is
+  # not the first time we lipo. Same Xcode pin as release.yml.
+  universal-build:
+    name: Universal macOS Build
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16"
+
+      - name: Restore SwiftPM cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swift-build-macOS-${{ hashFiles('Package.swift', 'Packages/*/Package.swift') }}
+          restore-keys: swift-build-macOS-
+
+      - name: Package release binaries (per-arch + lipo)
+        env:
+          CROW_VERSION: ci-smoke
+        run: bash scripts/package-release.sh
+
   # Cheap cross-cutting invariants that no compiler enforces. These live in
   # `make test` too, but that only runs locally — before this job, nothing ran
   # them in CI at all.
@@ -204,3 +233,6 @@ jobs:
 
       - name: desktop sidecar staging unit tests
         run: bash scripts/prepare-desktop-sidecar_test.sh
+
+      - name: package-release unit tests
+        run: bash scripts/package-release_test.sh

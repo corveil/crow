@@ -45,8 +45,7 @@ notarization. Restrict it to the Crow app if App Store Connect lets you.
 
 On a `v*` tag (and on `workflow_dispatch`):
 
-1. `scripts/package-release.sh` builds universal `crow` + `crowd`, smoke-tests
-   them, and writes `crow-<version>-macos-universal.tar.gz`.
+1. `scripts/package-release.sh` builds each arch with native SwiftPM (`swift build -c release --arch arm64`, then `--arch x86_64`), `lipo`s `crow` + `crowd`, smoke-tests them, and writes `crow-<version>-macos-universal.tar.gz`. Two `--arch` flags on one `swift build` would switch onto XCBuild, which is broken on Xcode 16.4 (CROW-1192).
 2. `scripts/package-app.sh --universal` stages those binaries as Tauri
    sidecars, runs `tauri build`, copies SwiftPM `.bundle` resources into
    `Crow.app/Contents/Resources`, and writes `release-app/Crow.app`.
