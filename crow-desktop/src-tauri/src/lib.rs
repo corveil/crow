@@ -391,6 +391,7 @@ mod tests {
     use super::{crow_commit_url, resolve_crowd_bin};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn links_a_real_sha() {
@@ -423,13 +424,13 @@ mod tests {
     }
 
     fn scratch_dir() -> PathBuf {
+        // Process-wide counter: pid + nanos is not unique when libtest runs
+        // these two resolver tests on the same tick (review #1191).
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "crow-desktop-crowd-bin-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            SEQ.fetch_add(1, Ordering::Relaxed),
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
