@@ -5,9 +5,10 @@ Official `v*` GitHub Releases of `crow` and `crowd` are signed with a
 `make daemon` builds stay unsigned — you do not need an Apple certificate to
 develop.
 
-See [ADR 0021](adr/0021-signed-notarized-macos-releases.md) for the decisions
-(standalone `crowd`, zip-not-dmg, GitHub-hosted runner until a native-host
-runner exists).
+See [ADR 0021](adr/0021-signed-notarized-macos-releases.md) for the CLI
+decisions (standalone `crowd`, zip-not-dmg, GitHub-hosted runner until a
+native-host runner exists) and [ADR 0024](adr/0024-tauri-sidecar-app.md) for
+the Tauri `Crow.app` sidecar + staple.
 
 ## Human prerequisites (not automatable)
 
@@ -46,22 +47,29 @@ On a `v*` tag (and on `workflow_dispatch`):
 
 1. `scripts/package-release.sh` builds universal `crow` + `crowd`, smoke-tests
    them, and writes `crow-<version>-macos-universal.tar.gz`.
-2. `scripts/macos-sign-notarize.sh` unpacks that tarball, imports the `.p12`
+2. `scripts/package-app.sh --universal` stages those binaries as Tauri
+   sidecars, runs `tauri build`, copies SwiftPM `.bundle` resources into
+   `Crow.app/Contents/Resources`, and writes `release-app/Crow.app`.
+3. `scripts/macos-sign-notarize.sh` unpacks the CLI tarball, imports the `.p12`
    into an **ephemeral keychain**, signs every Mach-O with hardened runtime +
    timestamp + `Crow.entitlements`, re-packs the tarball, writes a zip, and
-   submits the zip to `xcrun notarytool submit --wait`.
-3. The keychain (and the decoded `.p12` / `.p8`) are deleted in an `EXIT`
+   submits the zip to `xcrun notarytool submit --wait`. It then signs the
+   `.app` inside-out (sidecars, then the bundle — identifier `com.corveil.crow`;
+   CLI `crow` is `com.corveil.crow.cli`), notarizes a zip of it, **staples**
+   `Crow.app`, and re-zips to `Crow-<version>-macos.app.zip`.
+4. The keychain (and the decoded `.p12` / `.p8`) are deleted in an `EXIT`
    trap — including on failure. The Developer ID cert never enters the login
    keychain.
-4. Both archives (signed tarball + notarized zip) and their `.sha256` files
-   are attached to the GitHub Release.
+5. Both CLI archives, the stapled `.app` zip, and their `.sha256` files are
+   attached to the GitHub Release.
 
-A zip cannot be stapled. Gatekeeper looks up the notarization ticket online by
-CDHash when a quarantined binary is launched; that is the documented path for
-CLI zip distributions.
+A CLI zip cannot be stapled. Gatekeeper looks up the notarization ticket online
+by CDHash when a quarantined binary is launched; that is the documented path for
+CLI zip distributions. The `.app` **is** stapled, so it verifies offline.
 
 If any signing/notarization secret is missing, the job **fails** rather than
-publishing an unsigned build.
+publishing an unsigned build. Local `make daemon` / `make app CONFIG=release`
+stay unsigned.
 
 ## Runner
 
@@ -87,6 +95,7 @@ With a `.p12` in env, you can sign without submitting to Apple:
 ```bash
 export CROW_VERSION=0.2.0
 bash scripts/package-release.sh
+bash scripts/package-app.sh --universal
 APPLE_DEVELOPER_SIGNING_KEY_CERT="$(base64 -i developer-id.p12)" \
   CSC_KEY_PASSWORD='...' \
   bash scripts/macos-sign-notarize.sh --skip-notarize
@@ -107,7 +116,7 @@ is the offline check.
 
 ## What this does not cover
 
-- The Tauri `Crow.app` (`crow-desktop/`) — it does not yet bundle `crowd` as
-  a sidecar, so it is not a release artifact.
-- A Homebrew cask.
+- A Homebrew cask (including putting `crow` on `PATH` via drag-to-Applications).
 - Linux binaries (no Gatekeeper; unsigned is fine).
+
+The Tauri `Crow.app` **is** a release artifact as of CROW-1189 / [ADR 0024](adr/0024-tauri-sidecar-app.md): `crowd` is bundled as a sidecar, SwiftPM `.bundle` resources sit in `Contents/Resources`, and the `.app` is notarized and stapled. The CLI tarball remains the install path for `crow` on `PATH` and for `crow autostart`.

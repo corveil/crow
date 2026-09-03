@@ -53,13 +53,29 @@ daemon: setup
 	bash scripts/generate-build-info.sh
 	swift build $(if $(filter release,$(CONFIG)),-c release,)
 
-# Tauri only: the Crow desktop window → $(DESKTOP_BIN). Independent of the Swift
-# build (crowd is resolved/launched at runtime, not linked in).
+# Tauri only: the Crow desktop window. Debug (`make app`): a naked `Crow`
+# binary that spawns `.build/debug/crowd` at runtime. Release
+# (`make app CONFIG=release`): `tauri build` → Crow.app with crowd bundled as a
+# sidecar (needs a prior `make daemon CONFIG=release`, which `make build` does).
+ifeq ($(UNAME_S),Darwin)
+ifeq ($(CONFIG),release)
+DESKTOP_APP := $(CURDIR)/release-app/Crow.app
+app: daemon
+	@$(CARGO_ENV) cargo --version >/dev/null 2>&1 || { \
+		echo "ERROR: cargo (Rust, arm64) not found. Install from https://rustup.rs — the Crow desktop app needs it."; \
+		echo "       To build only the daemon, run: make daemon"; exit 1; }
+	bash scripts/package-app.sh
+else
 app:
 	@$(CARGO_ENV) cargo --version >/dev/null 2>&1 || { \
 		echo "ERROR: cargo (Rust, arm64) not found. Install from https://rustup.rs — the Crow desktop app needs it."; \
 		echo "       To build only the daemon, run: make daemon"; exit 1; }
-	$(CARGO_ENV) cargo build --manifest-path $(DESKTOP_DIR)/Cargo.toml $(if $(filter release,$(CONFIG)),--release,)
+	$(CARGO_ENV) cargo build --manifest-path $(DESKTOP_DIR)/Cargo.toml
+endif
+else
+app:
+	@echo "Desktop Crow.app is macOS-only. Use 'make daemon' and browse http://127.0.0.1:8787"
+endif
 
 # macOS: build everything, then open the Crow desktop window without installing
 # a bundle. The window reuses a crowd already listening on :8787 (e.g. one from
@@ -69,8 +85,13 @@ app:
 # Linux: no native window — build the daemon, then serve the web UI live from
 # source (http://127.0.0.1:8787; Ctrl-C to stop). Same as `make daemon-run`.
 ifeq ($(UNAME_S),Darwin)
+ifeq ($(CONFIG),release)
+run: build
+	open "$(DESKTOP_APP)"
+else
 run: build
 	$(DESKTOP_BIN)
+endif
 else
 run: daemon
 	CROW_HTTP_PORT=$(CROW_HTTP_PORT) CROW_SOCKET=$(CROW_SOCKET) bash scripts/daemon-run.sh
@@ -82,7 +103,7 @@ help:
 	@echo "Targets:"
 	@echo "  build      Default. macOS: crow CLI + crowd daemon + Crow desktop app. Linux: Swift binaries only"
 	@echo "  daemon     Build just the Swift binaries (crow CLI + crowd daemon)"
-	@echo "  app        Build just the Crow desktop app (Tauri, macOS only) → $(DESKTOP_BIN)"
+	@echo "  app        Build the Crow desktop app. Debug: Tauri binary → $(DESKTOP_BIN). Release (macOS): Crow.app with bundled crowd"
 	@echo "  run        macOS: open the desktop window over crowd. Linux: serve the web UI on :8787"
 	@echo "  daemon-run Run crowd serving the frozen bundle-baked web UI (add --watch to rebuild on Swift/web change)"
 	@echo "  setup      Check build prerequisites"
@@ -169,6 +190,8 @@ parity:
 	@bash skills/crow-workspace/setup_session_test.sh
 	@echo "==> macos-sign-notarize helpers (CROW-1150)..."
 	@./scripts/macos-sign-notarize_test.sh
+	@echo "==> desktop sidecar helpers (CROW-1189)..."
+	@./scripts/prepare-desktop-sidecar_test.sh
 
 # Regenerate the CLI reference from the commands themselves (CROW-808). Run
 # after adding or changing a subcommand — a stale docs/cli.md fails CrowCLI's
@@ -181,6 +204,9 @@ docs:
 clean:
 	rm -rf .build
 	rm -rf $(DESKTOP_DIR)/target
+	rm -rf release-app
+	rm -rf $(DESKTOP_DIR)/sidecar-resources
+	find $(DESKTOP_DIR)/binaries -type f ! -name '.gitkeep' -delete
 
 check: setup
 	@command -v gh >/dev/null 2>&1 || echo "WARNING: gh (GitHub CLI) not found. Install with: brew install gh"

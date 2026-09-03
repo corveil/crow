@@ -180,8 +180,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build crow-desktop (Rust/Tauri)
-        run: cargo build --manifest-path crow-desktop/src-tauri/Cargo.toml
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build + test crow-desktop (Rust/Tauri)
+        run: |
+          cargo test --manifest-path crow-desktop/src-tauri/Cargo.toml
+          cargo build --manifest-path crow-desktop/src-tauri/Cargo.toml
 
   # Cheap cross-cutting invariants that no compiler enforces. These live in
   # `make test` too, but that only runs locally — before this job, nothing ran
@@ -197,3 +201,6 @@ jobs:
 
       - name: macos-sign-notarize unit tests
         run: bash scripts/macos-sign-notarize_test.sh
+
+      - name: desktop sidecar staging unit tests
+        run: bash scripts/prepare-desktop-sidecar_test.sh

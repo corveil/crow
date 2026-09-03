@@ -6,6 +6,7 @@
 // spawning a second — a second crowd on the same devRoot would contend on the
 // shared store.json + tmux cockpit.
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::thread;
@@ -24,14 +25,50 @@ fn port() -> u16 {
 /// Holds the spawned crowd child so we can kill it when the app exits.
 struct Crowd(Mutex<Option<Child>>);
 
-/// Path to the crowd binary. Dev: `<repo>/.build/debug/crowd`, resolved relative
-/// to this crate. Override with `CROWD_BIN`. A release build will bundle crowd as
-/// a proper Tauri sidecar instead (TODO).
-fn crowd_bin() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("CROWD_BIN") {
-        return p.into();
+/// Path to the crowd binary.
+///
+/// `CROWD_BIN` always wins. Debug builds keep the SwiftPM output at
+/// `<repo>/.build/debug/crowd` (same as `make run`). Release builds look next to
+/// this executable for a Tauri sidecar: `crowd-<target-triple>` (what
+/// `bundle.externalBin` installs into `Contents/MacOS`), then unsuffixed
+/// `crowd` (what `tauri-build` copies next to an unbundled `target/release/Crow`).
+fn crowd_bin() -> PathBuf {
+    resolve_crowd_bin(
+        std::env::var_os("CROWD_BIN").map(PathBuf::from),
+        cfg!(debug_assertions),
+        std::env::current_exe().ok(),
+        env!("TAURI_ENV_TARGET_TRIPLE"),
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+    )
+}
+
+/// Pure resolver so release/debug/sidecar layout can be unit-tested without
+/// spawning the window. `debug` is passed in rather than read from
+/// `cfg!(debug_assertions)` so the release branch is reachable from debug tests.
+fn resolve_crowd_bin(
+    override_bin: Option<PathBuf>,
+    debug: bool,
+    current_exe: Option<PathBuf>,
+    target_triple: &str,
+    manifest_dir: &Path,
+) -> PathBuf {
+    if let Some(p) = override_bin {
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
     }
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.build/debug/crowd")
+    if debug {
+        return manifest_dir.join("../../.build/debug/crowd");
+    }
+    let dir = current_exe
+        .as_deref()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    let suffixed = dir.join(format!("crowd-{target_triple}"));
+    if suffixed.exists() {
+        return suffixed;
+    }
+    dir.join("crowd")
 }
 
 /// Whether something is accepting TCP connections on 127.0.0.1:PORT.
@@ -351,7 +388,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::crow_commit_url;
+    use super::{crow_commit_url, resolve_crowd_bin};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn links_a_real_sha() {
@@ -381,5 +421,94 @@ mod tests {
         ] {
             assert!(crow_commit_url(sha).is_none(), "expected None for {sha:?}");
         }
+    }
+
+    fn scratch_dir() -> PathBuf {
+        // Process-wide counter: pid + nanos is not unique when libtest runs
+        // these two resolver tests on the same tick (review #1191).
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "crow-desktop-crowd-bin-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn crowd_bin_override_wins_in_debug_and_release() {
+        let override_bin = PathBuf::from("/tmp/custom-crowd");
+        let manifest = Path::new("/repo/crow-desktop/src-tauri");
+        for debug in [true, false] {
+            let got = resolve_crowd_bin(
+                Some(override_bin.clone()),
+                debug,
+                Some(PathBuf::from("/Applications/Crow.app/Contents/MacOS/Crow")),
+                "aarch64-apple-darwin",
+                manifest,
+            );
+            assert_eq!(got, override_bin, "debug={debug}");
+        }
+    }
+
+    #[test]
+    fn crowd_bin_debug_uses_swiftpm_debug_output() {
+        let manifest = Path::new("/repo/crow-desktop/src-tauri");
+        let got = resolve_crowd_bin(None, true, None, "aarch64-apple-darwin", manifest);
+        assert_eq!(got, PathBuf::from("/repo/crow-desktop/src-tauri/../../.build/debug/crowd"));
+    }
+
+    #[test]
+    fn crowd_bin_empty_override_falls_through() {
+        let manifest = Path::new("/repo/crow-desktop/src-tauri");
+        let got = resolve_crowd_bin(
+            Some(PathBuf::from("")),
+            true,
+            None,
+            "aarch64-apple-darwin",
+            manifest,
+        );
+        assert_eq!(got, PathBuf::from("/repo/crow-desktop/src-tauri/../../.build/debug/crowd"));
+    }
+
+    #[test]
+    fn crowd_bin_release_prefers_tauri_sidecar_triple_suffix() {
+        let dir = scratch_dir();
+        let exe = dir.join("Crow");
+        fs::write(&exe, []).unwrap();
+        let sidecar = dir.join("crowd-aarch64-apple-darwin");
+        fs::write(&sidecar, []).unwrap();
+        let unsuffixed = dir.join("crowd");
+        fs::write(&unsuffixed, []).unwrap();
+
+        let got = resolve_crowd_bin(
+            None,
+            false,
+            Some(exe),
+            "aarch64-apple-darwin",
+            Path::new("/unused"),
+        );
+        assert_eq!(got, sidecar);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crowd_bin_release_falls_back_to_unsuffixed_next_to_exe() {
+        let dir = scratch_dir();
+        let exe = dir.join("Crow");
+        fs::write(&exe, []).unwrap();
+        let unsuffixed = dir.join("crowd");
+        fs::write(&unsuffixed, []).unwrap();
+
+        let got = resolve_crowd_bin(
+            None,
+            false,
+            Some(exe),
+            "aarch64-apple-darwin",
+            Path::new("/unused"),
+        );
+        assert_eq!(got, unsuffixed);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

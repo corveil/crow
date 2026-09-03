@@ -3,8 +3,8 @@
 A thin native macOS shell around the Crow web UI, built with **Tauri v2**. On
 launch it starts the `crowd` daemon as a **sidecar**, waits for it, and points
 the window at its web UI; `crowd` stays the sole authority
-(see [ADR 0007](../docs/adr/0007-crowd-sole-authority-clients-only.md) /
-[ADR 0008](../docs/adr/0008-retire-the-macos-app.md)). There is **no bundled
+(see [ADR 0009](../docs/adr/0009-crowd-sole-authority-clients-only.md) /
+[ADR 0010](../docs/adr/0010-retire-the-macos-app.md)). There is **no bundled
 frontend** — the UI is served by `crowd`, not this project.
 
 ## Run
@@ -20,8 +20,11 @@ Or run the prebuilt binary directly (equivalent to the old
 `./.build/debug/CrowApp`):
 
 ```bash
-make app                                    # build just this app
+make app                                    # debug: cargo build → crow-desktop/src-tauri/target/debug/Crow
 crow-desktop/src-tauri/target/debug/Crow    # then launch it
+
+make app CONFIG=release                     # tauri build → release-app/Crow.app
+open release-app/Crow.app
 ```
 
 First launch compiles the Rust (~30s), then a **"Crow"** window opens. You do
@@ -57,13 +60,15 @@ this churns the daemon — for iterating on `crowd` or the web UI, prefer
   navigates the window to it, and kills the spawned child on `RunEvent::Exit`.
 - `ui/index.html` — the "Starting crowd…" splash shown until `crowd` is up
   (`tauri.conf.json` `frontendDist` points here).
-- **Dev only:** the crowd binary is resolved relative to the crate
-  (`../../.build/debug/crowd`). A release build will bundle `crowd` as a proper
-  Tauri sidecar instead.
+- Dev: the crowd binary is resolved relative to the crate
+  (`../../.build/debug/crowd`). Override with `CROWD_BIN`.
+- **Release:** `make app CONFIG=release` runs `tauri build` with
+  `bundle.externalBin` (`crowd` + `crow` sidecars) and copies SwiftPM
+  `.bundle` resources into `Contents/Resources`. The window is
+  `release-app/Crow.app`.
 
 ## Roadmap
 
 1. Native **menu + notifications** (`tauri-plugin-notification`).
 2. **`open_in_editor` / `open_terminal`** Rust commands exposed to the web UI via
    a `window.__TAURI__` shim — closes the deferred host-affordance gap.
-3. Release build → bundle `crowd` as a Tauri sidecar → `.app` / `.dmg`.

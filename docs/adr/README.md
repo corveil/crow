@@ -60,3 +60,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0021 | [Signed + notarized macOS CLI releases](./0021-signed-notarized-macos-releases.md) | Accepted | 2026-08-28 |
 | 0022 | [Session grid cells are read-only capture-pane snapshots](./0022-session-grid-snapshots.md) | Accepted | 2026-08-28 |
 | 0023 | [Managed / design-partner workspaces default gateway binding + log-sync on](./0023-managed-workspace-defaults.md) | Accepted | 2026-09-01 |
+| 0024 | [Crow.app ships crowd as a Tauri sidecar](./0024-tauri-sidecar-app.md) | Accepted | 2026-09-02 |
