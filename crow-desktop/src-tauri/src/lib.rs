@@ -394,6 +394,34 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
+    fn crate_name_does_not_collide_with_sidecar_names() {
+        // Tauri's build.rs errors with "Cannot define a sidecar with the same
+        // name as the Cargo package name" — that is what blocked the v0.2.0
+        // Crow.app release job (CROW-1195). cargo test never runs `tauri build`,
+        // so assert the invariant here.
+        let pkg = env!("CARGO_PKG_NAME");
+        let conf = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.sidecar.conf.json"),
+        )
+        .expect("tauri.sidecar.conf.json");
+        let json: serde_json::Value = serde_json::from_str(&conf).expect("sidecar json");
+        let bins = json["bundle"]["externalBin"]
+            .as_array()
+            .expect("bundle.externalBin");
+        for b in bins {
+            let path = b.as_str().expect("externalBin entry is a string");
+            let name = Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path);
+            assert_ne!(
+                pkg, name,
+                "Tauri forbids a sidecar named {name:?} when the crate is also {pkg:?} (CROW-1195)"
+            );
+        }
+    }
+
+    #[test]
     fn links_a_real_sha() {
         assert_eq!(
             crow_commit_url("2a24aeb3").as_deref(),

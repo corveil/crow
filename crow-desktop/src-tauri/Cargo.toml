@@ -1,5 +1,8 @@
 [package]
-name = "crow"
+# Not `crow`: Tauri forbids an externalBin sidecar whose base name equals the
+# Cargo package name, and we ship a `crow` CLI sidecar (CROW-1195).
+# productName/identifier stay Crow / com.corveil.crow — this is crate-only.
+name = "crow-desktop"
 version = "0.1.0"
 description = "Crow desktop shell — a native window over the crowd daemon and its web UI."
 authors = ["dhilgaertner", "dgershman"]
