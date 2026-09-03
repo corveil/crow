@@ -115,6 +115,22 @@ build_universal_products() {
   copy_release_bundles "$UNIVERSAL_PRODUCTS_DIR"
 }
 
+# EXIT runs after package_release_main returns, so this cannot be `local`
+# (set -u: "STAGING_ROOT: unbound variable" on an otherwise successful cut).
+STAGING_ROOT=""
+
+cleanup_staging() {
+  local rc=$?
+  if [ -z "${STAGING_ROOT:-}" ]; then
+    return 0
+  fi
+  if [ "$rc" -eq 0 ]; then
+    rm -rf "$STAGING_ROOT"
+  else
+    echo "Keeping $STAGING_ROOT for inspection after failure (exit $rc)" >&2
+  fi
+}
+
 package_release_main() {
   if [ -z "${CROW_VERSION:-}" ]; then
     echo "ERROR: CROW_VERSION is required" >&2
@@ -124,16 +140,8 @@ package_release_main() {
   cd "$ROOT_DIR"
 
   local PACKAGE_DIR="crow-${CROW_VERSION}"
-  local STAGING_ROOT="$ROOT_DIR/release-staging"
+  STAGING_ROOT="$ROOT_DIR/release-staging"
   local STAGING_DIR="$STAGING_ROOT/$PACKAGE_DIR"
-  cleanup_staging() {
-    local rc=$?
-    if [ "$rc" -eq 0 ]; then
-      rm -rf "$STAGING_ROOT"
-    else
-      echo "Keeping $STAGING_ROOT for inspection after failure (exit $rc)" >&2
-    fi
-  }
   trap cleanup_staging EXIT
 
   bash scripts/generate-build-info.sh

@@ -131,6 +131,25 @@ missing_x86_crowd() {
 }
 check_rc "missing x86_64 crowd" 1 missing_x86_crowd
 
+echo "EXIT trap STAGING_ROOT is not local"
+# The Universal macOS Build job compiled, lipo'd, smoked, and packed, then
+# died here: package_release_main returned, EXIT fired, STAGING_ROOT was gone.
+if grep -qE 'local[[:space:]]+STAGING_ROOT' "$SRC"; then
+  check "STAGING_ROOT is not local" "absent" "present"
+else
+  check "STAGING_ROOT is not local" "absent" "absent"
+fi
+
+STAGING_ROOT="$TMP/clean-me"
+mkdir -p "$STAGING_ROOT/x"
+( trap cleanup_staging EXIT; exit 0 )
+check "success EXIT removes staging" "0" "$( [ -d "$STAGING_ROOT" ] && echo 1 || echo 0 )"
+
+STAGING_ROOT="$TMP/keep-me"
+mkdir -p "$STAGING_ROOT/x"
+( trap cleanup_staging EXIT; exit 1 ) || true
+check "failure EXIT keeps staging" "1" "$( [ -d "$STAGING_ROOT" ] && echo 1 || echo 0 )"
+
 echo
 if [ "$fail" -ne 0 ]; then
   echo "FAILED: $fail  passed: $pass"
