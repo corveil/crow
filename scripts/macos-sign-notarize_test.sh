@@ -161,8 +161,18 @@ export CROW_FAKE_LOG="$TMP/codesign.log"
 sign_tree "$TMP/sign-tree" "Developer ID Application: Test (ABCD)"
 if grep -q -- "--options runtime" "$CROW_FAKE_LOG"; then check "hardened runtime" "0" "0"; else check "hardened runtime" "0" "1"; fi
 if grep -q -- "--timestamp" "$CROW_FAKE_LOG"; then check "secure timestamp" "0" "0"; else check "secure timestamp" "0" "1"; fi
-if grep -q -- "--identifier com.corveil.crow" "$CROW_FAKE_LOG"; then check "bundle identifier for crow" "0" "0"; else check "bundle identifier for crow" "0" "1"; fi
+if grep -q -- "--identifier com.corveil.crow.cli" "$CROW_FAKE_LOG"; then check "bundle identifier for crow CLI" "0" "0"; else check "bundle identifier for crow CLI" "0" "1"; fi
 if grep -q -- "--keychain /tmp/crow-signing.keychain-db" "$CROW_FAKE_LOG"; then check "signs with ephemeral keychain" "0" "0"; else check "signs with ephemeral keychain" "0" "1"; fi
+
+echo "codesign_identifier"
+check "Crow.app" "com.corveil.crow" "$(codesign_identifier /tmp/Crow.app)"
+check "Crow binary" "com.corveil.crow" "$(codesign_identifier /tmp/Contents/MacOS/Crow)"
+check "crow CLI" "com.corveil.crow.cli" "$(codesign_identifier /tmp/crow)"
+check "crowd" "com.corveil.crowd" "$(codesign_identifier /tmp/crowd)"
+check "crowd sidecar triple" "com.corveil.crowd" "$(codesign_identifier /tmp/Contents/MacOS/crowd-aarch64-apple-darwin)"
+check "crow sidecar triple" "com.corveil.crow.cli" "$(codesign_identifier /tmp/crow-x86_64-apple-darwin)"
+check "universal sidecar" "com.corveil.crowd" "$(codesign_identifier /tmp/crowd-universal-apple-darwin)"
+check "unknown macho" "com.corveil.crow.helper" "$(codesign_identifier /tmp/helper)"
 
 echo
 if [ "$fail" -ne 0 ]; then

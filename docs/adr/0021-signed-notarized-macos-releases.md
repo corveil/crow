@@ -36,10 +36,12 @@ hosts Colima can, if a second runner is registered on the host OS.
    published so existing install instructions keep working. A zip cannot be
    stapled — Gatekeeper looks up the ticket online by CDHash, which is the
    documented path for CLI zip distributions.
-3. **No `.app` / `.dmg` in this cut.** The SwiftUI app is gone (ADR 0010). The
-   Tauri desktop window does not yet bundle `crowd` as a sidecar (roadmap on
-   `crow-desktop/README.md`). Shipping an empty shell would not close
-   Gatekeeper for the daemon. A Homebrew cask is a follow-up.
+3. **No `.app` / `.dmg` in the CLI cut** — superseded in part by
+   [ADR 0024](./0024-tauri-sidecar-app.md), which ships a Tauri `Crow.app` with
+   `crowd` as a sidecar. The CLI zip remains the CLI distribution; `crow
+   autostart` still execs a **standalone** signed `crowd`. This cut's reason
+   for skipping an empty Tauri shell still holds: do not ship a window with
+   no daemon inside.
 4. **Ephemeral keychain per job.** The `.p12` is imported into a throwaway
    keychain, used, and deleted in a `trap` / `always()` cleanup. The Developer
    ID cert never lands in the host login keychain, including on a self-hosted
@@ -55,9 +57,9 @@ hosts Colima can, if a second runner is registered on the host OS.
 
 - A `v*` tag cut fails closed if signing/notarization secrets are missing —
   we do not publish an unsigned build as a "release".
-- Local `make daemon` / `scripts/package-release.sh` stay unsigned; only the
-  GitHub release artifacts are signed. Developers still do not need an Apple
-  certificate.
+- Local `make daemon` / `make app CONFIG=release` / `scripts/package-release.sh`
+  stay unsigned; only the GitHub release artifacts are signed. Developers still
+  do not need an Apple certificate.
 - The Apple Developer Program membership must stay in good standing
   (accepted agreement). An expired agreement fails every darwin cut, which is
   how socketzero's builds were blocked (socketzero#717).

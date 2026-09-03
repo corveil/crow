@@ -26,14 +26,15 @@ This runs `setup` (checks Xcode Command Line Tools), generates the CLI version f
 
 | Target       | Purpose                                                                       |
 | ------------ | ----------------------------------------------------------------------------- |
-| `build`      | Full build: prerequisites + `swift build` — builds `crow` + `crowd` (default) |
+| `build`      | Full build: `crow` + `crowd` (and on macOS the debug desktop window)         |
+| `app`        | Desktop shell. Debug: naked `Crow` binary. `CONFIG=release`: `Crow.app`      |
+| `clean`      | Remove `.build/`, the desktop `target/`, and staged sidecars                 |
 | `setup`      | Verify build prerequisites (Xcode CLT)                                         |
 | `check`      | Verify all build and runtime prerequisites (includes `gh`, `claude`, `tmux`)  |
 | `daemon-run` | Dev loop for `crowd` (web served from the compiled bundle; `--watch` rebuilds + restarts on Swift or web-asset changes) |
 | `install`    | Symlink `crow` + `crowd` into `~/.local/bin` (override `BINDIR=`, `CONFIG=`)   |
 | `uninstall`  | Remove the `crow` + `crowd` symlinks created by `install`                      |
 | `test`       | Run all package tests                                                          |
-| `clean`      | Remove `.build/`                                                               |
 | `help`       | Print the target list                                                          |
 
 ### Advanced / Manual Build

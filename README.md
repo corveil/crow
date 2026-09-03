@@ -147,7 +147,8 @@ make run       # build, then open the Crow window
 `make run` is the modern equivalent of the old `make && ./.build/debug/CrowApp`. On launch the window looks for a `crowd` already listening on `127.0.0.1:8787`:
 
 - **Found** (and it identifies as crowd) → it **reuses** that daemon and leaves it running when you quit the window.
-- **None** → it spawns its own `crowd` from `.build/debug/crowd` and stops that one on quit.
+- **None** → it spawns its own `crowd` from `.build/debug/crowd` (debug) or from
+  the bundled sidecar inside `Crow.app` (release) and stops that one on quit.
 
 Once built, the binary is self-contained — run it directly without `make`:
 

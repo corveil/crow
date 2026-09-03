@@ -8,7 +8,8 @@
 #   crow-${CROW_VERSION}-macos-universal.tar.gz
 #   crow-${CROW_VERSION}-macos-universal.tar.gz.sha256
 #   crow-${CROW_VERSION}-macos-universal.zip          (the notarized container)
-#   crow-${CROW_VERSION}-macos-universal.zip.sha256
+#   Crow-${CROW_VERSION}-macos.app.zip             (stapled .app; optional)
+#   Crow-${CROW_VERSION}-macos.app.zip.sha256
 #
 # Required env (aliases accepted; see first_set):
 #   APPLE_DEVELOPER_SIGNING_KEY_CERT  base64-encoded Developer ID .p12
@@ -24,6 +25,8 @@
 #
 # Flags:
 #   --archive PATH        tarball to sign (default: crow-$CROW_VERSION-macos-universal.tar.gz)
+#   --app PATH            Crow.app to sign, notarize, and staple (default:
+#                         $ROOT_DIR/release-app/Crow.app when that directory exists)
 #   --skip-notarize       sign + pack only (local testing)
 #   --help
 #
@@ -43,9 +46,11 @@ SECURITY_BIN="${SECURITY_BIN:-security}"
 XCRUN_BIN="${XCRUN_BIN:-xcrun}"
 DITTO_BIN="${DITTO_BIN:-ditto}"
 OPENSSL_BIN="${OPENSSL_BIN:-openssl}"
+STAPLER_BIN="${STAPLER_BIN:-stapler}"
 
 SKIP_NOTARIZE=0
 ARCHIVE=""
+APP_BUNDLE=""
 
 # Set by prepare_keychain; consumed by cleanup_keychain.
 KEYCHAIN_PATH=""
@@ -56,7 +61,7 @@ ORIGINAL_KEYCHAINS=""
 WORK_DIR=""
 
 usage() {
-  sed -n '2,36p' "$SIGN_SCRIPT" | sed -e 's/^# //' -e 's/^#//'
+  sed -n '2,40p' "$SIGN_SCRIPT" | sed -e 's/^# //' -e 's/^#//'
 }
 
 # Print the first non-empty argument. Used so the workflow can accept both
@@ -83,8 +88,32 @@ decode_maybe_base64() {
   printf '%s' "$blob" | base64 --decode > "$dest"
 }
 
-# Mach-O (thin or universal), by magic bytes so this works on Linux CI
-# without cctools. MH_MAGIC / MH_CIGAM for 32/64-bit either endian; FAT_MAGIC.
+# Strip a Tauri sidecar target-triple suffix so Contents/MacOS/crowd-aarch64-apple-darwin
+# codesigns as com.corveil.crowd — the same id as the standalone CLI copy (ADR 0021).
+# The .app itself stays com.corveil.crow; the CLI crow binary uses com.corveil.crow.cli
+# so the two products in one release do not share a codesign identifier (CROW-1189).
+sidecar_basename() {
+  local base
+  base="$(basename "$1")"
+  # ${var%suffix} is prefix-greedy on the right; strip the known triples only.
+  case "$base" in
+    *-aarch64-apple-darwin)   printf '%s' "${base%-aarch64-apple-darwin}" ;;
+    *-x86_64-apple-darwin)     printf '%s' "${base%-x86_64-apple-darwin}" ;;
+    *-universal-apple-darwin) printf '%s' "${base%-universal-apple-darwin}" ;;
+    *)                        printf '%s' "$base" ;;
+  esac
+}
+
+codesign_identifier() {
+  local path=$1 base
+  base="$(sidecar_basename "$path")"
+  case "$base" in
+    Crow.app|Crow) printf '%s' "com.corveil.crow" ;;
+    crow)          printf '%s' "com.corveil.crow.cli" ;;
+    crowd)         printf '%s' "com.corveil.crowd" ;;
+    *)             printf '%s' "com.corveil.crow.$base" ;;
+  esac
+}
 is_macho() {
   local path=$1
   [ -f "$path" ] || return 1
@@ -182,22 +211,14 @@ cleanup_keychain() {
 
 sign_tree() {
   local tree=$1 identity=$2
-  local f base id count=0
+  local f id count=0
   if [ ! -f "$ENTITLEMENTS" ]; then
     echo "ERROR: entitlements file not found at $ENTITLEMENTS" >&2
     return 1
   fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    # Identifier is basename-only. Today's tree is crow + crowd plus resource
-    # bundles with no Mach-O; if a future bundle ships embedded binaries this
-    # will collide on duplicate names and should switch to a path-relative id.
-    base="$(basename "$f")"
-    case "$base" in
-      crow)  id="com.corveil.crow" ;;
-      crowd) id="com.corveil.crowd" ;;
-      *)     id="com.corveil.crow.$base" ;;
-    esac
+    id="$(codesign_identifier "$f")"
     echo "    signing $f ($id)"
     "$CODESIGN_BIN" --force --options runtime --timestamp \
       --sign "$identity" \
@@ -259,6 +280,55 @@ notarize_zip() {
   P8_PATH=""
 }
 
+# Inside-out: nested Mach-Os (sidecars) first, then the .app bundle itself.
+# Never --deep (ADR 0021). The bundle identifier is com.corveil.crow — the same
+# as tauri.conf.json `identifier`. Sidecar crowd keeps com.corveil.crowd so
+# launchd can still exec the standalone CLI copy.
+sign_app() {
+  local app=$1 identity=$2
+  if [ ! -d "$app" ]; then
+    echo "ERROR: Crow.app not found at $app" >&2
+    return 1
+  fi
+  echo "==> Signing $app"
+  sign_tree "$app" "$identity"
+  echo "    signing bundle $(codesign_identifier "$app")"
+  "$CODESIGN_BIN" --force --options runtime --timestamp \
+    --sign "$identity" \
+    --keychain "$KEYCHAIN_PATH" \
+    --entitlements "$ENTITLEMENTS" \
+    --identifier "$(codesign_identifier "$app")" \
+    "$app"
+  "$CODESIGN_BIN" --verify --strict --verbose=2 "$app"
+}
+
+pack_app_zip() {
+  local app=$1 dest_zip=$2
+  rm -f "$dest_zip"
+  "$DITTO_BIN" -c -k --keepParent "$app" "$dest_zip"
+  shasum -a 256 "$dest_zip" > "$dest_zip.sha256"
+  echo "    $dest_zip"
+}
+
+# Notarize a zip of the .app, staple the .app (unlike the CLI zip), re-zip.
+notarize_and_staple_app() {
+  local app=$1 dest_zip=$2 key_blob=$3 key_id=$4 issuer=$5
+  pack_app_zip "$app" "$dest_zip"
+  write_api_key "$key_blob"
+  echo "==> Submitting $dest_zip to notarytool..."
+  "$XCRUN_BIN" notarytool submit "$dest_zip" \
+    --key "$P8_PATH" \
+    --key-id "$key_id" \
+    --issuer "$issuer" \
+    --wait \
+    --timeout 1800
+  rm -f "$P8_PATH"
+  P8_PATH=""
+  echo "==> Stapling $app"
+  "$XCRUN_BIN" "$STAPLER_BIN" staple "$app"
+  pack_app_zip "$app" "$dest_zip"
+}
+
 require_secrets() {
   local cert password
   cert="$(first_set \
@@ -301,6 +371,10 @@ macos_sign_notarize_main() {
     case "$1" in
       --archive)
         ARCHIVE=$2
+        shift 2
+        ;;
+      --app)
+        APP_BUNDLE=$2
         shift 2
         ;;
       --skip-notarize)
@@ -368,6 +442,20 @@ macos_sign_notarize_main() {
   else
     ZIP_PATH="$(cd "$(dirname "$ARCHIVE")" && pwd)/crow-${CROW_VERSION}-macos-universal.zip"
     notarize_zip "$ZIP_PATH" "$NOTARY_KEY" "$NOTARY_KEY_ID" "$NOTARY_ISSUER"
+  fi
+
+  if [ -z "$APP_BUNDLE" ] && [ -d "$ROOT_DIR/release-app/Crow.app" ]; then
+    APP_BUNDLE="$ROOT_DIR/release-app/Crow.app"
+  fi
+  if [ -n "$APP_BUNDLE" ]; then
+    sign_app "$APP_BUNDLE" "$IDENTITY"
+    APP_ZIP="$(cd "$(dirname "$ARCHIVE")" && pwd)/Crow-${CROW_VERSION}-macos.app.zip"
+    if [ "$SKIP_NOTARIZE" -eq 1 ]; then
+      echo "==> Packing unsigned-skip app zip (signed locally, not notarized)"
+      pack_app_zip "$APP_BUNDLE" "$APP_ZIP"
+    else
+      notarize_and_staple_app "$APP_BUNDLE" "$APP_ZIP" "$NOTARY_KEY" "$NOTARY_KEY_ID" "$NOTARY_ISSUER"
+    fi
   fi
 
   echo "==> Done"

@@ -57,6 +57,9 @@ jobs:
       - name: macos-sign-notarize unit tests
         run: bash scripts/macos-sign-notarize_test.sh
 
+      - name: desktop sidecar staging unit tests
+        run: bash scripts/prepare-desktop-sidecar_test.sh
+
   release:
     name: Build, Sign & Release
     needs: [test, shellcheck]
@@ -64,7 +67,7 @@ jobs:
     # CROW_SIGNING_RUNS_ON to '["self-hosted","macOS","signing"]' to use the
     # native-host runner provisioned by corveil-ci (ADR 0021).
     runs-on: ${{ fromJSON(vars.CROW_SIGNING_RUNS_ON || '["macos-15"]') }}
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -100,6 +103,22 @@ jobs:
           CROW_VERSION: ${{ env.CROW_VERSION }}
         run: bash scripts/package-release.sh
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: crow-desktop/package-lock.json
+
+      - name: Build Crow.app (crowd sidecar)
+        env:
+          CROW_VERSION: ${{ env.CROW_VERSION }}
+        run: bash scripts/package-app.sh --universal
+
       - name: Sign and notarize
         env:
           CROW_VERSION: ${{ env.CROW_VERSION }}
@@ -129,6 +148,8 @@ jobs:
             crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz.sha256
             crow-${{ env.CROW_VERSION }}-macos-universal.zip
             crow-${{ env.CROW_VERSION }}-macos-universal.zip.sha256
+            Crow-${{ env.CROW_VERSION }}-macos.app.zip
+            Crow-${{ env.CROW_VERSION }}-macos.app.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -141,6 +162,8 @@ jobs:
             crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz.sha256
             crow-${{ env.CROW_VERSION }}-macos-universal.zip
             crow-${{ env.CROW_VERSION }}-macos-universal.zip.sha256
+            Crow-${{ env.CROW_VERSION }}-macos.app.zip
+            Crow-${{ env.CROW_VERSION }}-macos.app.zip.sha256
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
@@ -156,12 +179,16 @@ jobs:
             ln -sf ~/.local/lib/crow-${{ env.CROW_VERSION }}/crowd ~/.local/bin/crowd
             ```
 
+            Unzip `Crow-${{ env.CROW_VERSION }}-macos.app.zip` and drag **Crow.app** to `/Applications`. Double-clicking it starts a bundled `crowd` (or reuses one already listening on `:8787`) and opens the web UI. Quitting the window only SIGTERMs a crowd **this app spawned** — an autostart / `make daemon-run` daemon is left up.
+
+            The `.app` is **signed, notarized, and stapled**. The CLI zip cannot be stapled (Gatekeeper looks up that ticket online); the `.app` carries the ticket on disk.
+
             These binaries are **signed and notarized** (Developer ID Application + notarytool). A browser download still applies Gatekeeper quarantine; first launch contacts Apple to look up the notarization ticket — you should **not** need `xattr -d com.apple.quarantine`.
 
-            Point `crow autostart install --binary` at the extracted `crowd` so launchd runs the signed daemon:
+            Point `crow autostart install --binary` at the extracted **CLI** `crowd` (not the sidecar inside Crow.app) so launchd runs the signed standalone daemon:
 
             ```bash
             crow autostart install --binary ~/.local/lib/crow-${{ env.CROW_VERSION }}/crowd
             ```
 
-            To build from source instead: `make daemon CONFIG=release && make install CONFIG=release` (unsigned; fine for local use). Signing details: [docs/macos-release-signing.md](https://github.com/${{ github.repository }}/blob/main/docs/macos-release-signing.md).
+            To build from source instead: `make daemon CONFIG=release && make install CONFIG=release` (unsigned CLI) or `make app CONFIG=release` (unsigned Crow.app). Signing details: [docs/macos-release-signing.md](https://github.com/${{ github.repository }}/blob/main/docs/macos-release-signing.md).
