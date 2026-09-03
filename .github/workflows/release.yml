@@ -60,6 +60,9 @@ jobs:
       - name: desktop sidecar staging unit tests
         run: bash scripts/prepare-desktop-sidecar_test.sh
 
+      - name: package-release unit tests
+        run: bash scripts/package-release_test.sh
+
   release:
     name: Build, Sign & Release
     needs: [test, shellcheck]

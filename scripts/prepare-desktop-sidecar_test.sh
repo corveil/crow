@@ -45,6 +45,26 @@ FROM_DIR="$TMP/empty"
 mkdir -p "$FROM_DIR"
 check_rc "missing crowd at --from" 1 prepare_desktop_sidecar_main --from "$FROM_DIR"
 
+echo "resolve_build_dir"
+SAVED_ROOT="$ROOT_DIR"
+ROOT_DIR="$TMP/root"
+FROM_DIR=""
+mkdir -p "$ROOT_DIR/.build/universal/release" \
+  "$ROOT_DIR/.build/apple/Products/Release" \
+  "$ROOT_DIR/.build/release"
+printf 'uni' > "$ROOT_DIR/.build/universal/release/crowd"
+printf 'apple' > "$ROOT_DIR/.build/apple/Products/Release/crowd"
+printf 'native' > "$ROOT_DIR/.build/release/crowd"
+check "prefers lipo products" "$ROOT_DIR/.build/universal/release" "$(resolve_build_dir)"
+rm "$ROOT_DIR/.build/universal/release/crowd"
+check "falls back to XCBuild products" "$ROOT_DIR/.build/apple/Products/Release" "$(resolve_build_dir)"
+rm "$ROOT_DIR/.build/apple/Products/Release/crowd"
+check "falls back to native release" "$ROOT_DIR/.build/release" "$(resolve_build_dir)"
+rm "$ROOT_DIR/.build/release/crowd"
+check_rc "no crowd anywhere" 1 resolve_build_dir
+ROOT_DIR="$SAVED_ROOT"
+FROM_DIR=""
+
 # Staging copies both binaries + every .bundle, named with the host triple.
 if ! command -v rustc >/dev/null 2>&1; then
   echo "skipping sidecar staging (no rustc)"

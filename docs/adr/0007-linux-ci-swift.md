@@ -16,11 +16,12 @@ PR CI and cache-warm run on `ubuntu-latest` inside the official `swift:6.1` cont
 
 ## Consequences
 
-- PRs and `main` pushes no longer burn macOS minutes; the only residual macOS cost is `release.yml`, which fires on `v*` tags (infrequent).
+- PRs and `main` pushes no longer burn macOS minutes for the **Linux-compilable Swift tree**; the residual macOS cost is `release.yml` (tags), the PR `desktop` Tauri job, and the PR `universal-build` lipo smoke (CROW-1192).
 - **The GUI half of the tree (`Crow`/`CrowApp`, `CrowUI`) and `CrowTelemetry` are no longer compiled on PRs** — a change that breaks them passes PR CI and only fails when a release tag is pushed. This is the accepted trade-off for the minute savings.
 - **Amended 2026-08-07 (CROW-645, PR #948):** `CrowTerminal` and `CrowDaemon` now compile on every PR, and the Linux lane builds + links the root `crowd`/`crow` products (`swift build --product crowd` / `--product crow` with no `--package-path`). `CrowTerminal`'s pure `SmartDetect` tests run on Linux; tmux integration tests still run only on macOS in `release.yml`. The root `crowd`/`crow` binaries are linked but not executed in CI — runtime smoke (socket RPC, web UI assets) remains a manual or follow-up step.
 - **The root `CrowTests` suite moves from every-PR to release-tag time.** Those tests `@testable import Crow`, and the root `Crow` target imports `CrowTerminal` (AppKit), so they cannot run in the Linux PR lane. They exercise root-target business logic (IssueTracker, Job decisions, Scaffolder, SessionService, …), not just GUI, so to avoid dropping that coverage entirely they now run in `release.yml`'s macOS `test` job at tag time — not on every PR. A logic regression there is caught at release, not on the PR that introduces it.
 - **Amended 2026-08-28 (CROW-1150, ADR 0021):** `release.yml` now actually signs and notarizes the `crow`/`crowd` CLI artifacts (that claim was aspirational after #939 shipped unsigned tarballs). The macOS-only GUI named in the original decision (`Crow`/`CrowApp`, `CrowUI`) was removed in ADR 0010; the remaining macOS-only compile in this workflow is `CrowTelemetry` plus the full package test sweep. Default `runs-on` stays GitHub-hosted `macos-15`; `CROW_SIGNING_RUNS_ON` retargets the sign job to `[self-hosted, macOS, signing]` once the native-host runner exists.
+- **Amended 2026-09-02 (CROW-1192):** PR CI now also runs `scripts/package-release.sh` on `macos-15` (per-arch native SwiftPM + `lipo`, not dual `--arch` XCBuild). The v0.2.0 cut failed on that path while `swift test` stayed green, because the Test job never leaves the native build system. This is an explicit exception to "no macOS Swift on PRs": Linux cannot lipo, and a tag is too late to discover a toolchain/XCBuild break. The Linux allow-list lane is unchanged.
 
 - The Linux allow-list in `ci.yml`/`cache-warm.yml` must be updated by hand when a new Linux-compilable package is added. This is deliberate: a glob would silently try to build a new macOS-only package on Linux and turn CI red.
 - Only the SwiftPM dependency cache (`~/.cache/org.swift.swiftpm`) is retained, not compiled `.build` products, so each Linux run recompiles the packages from scratch. Acceptable given each package builds under its own `Packages/$pkg/.build`.
@@ -38,4 +39,4 @@ PR CI and cache-warm run on `ubuntu-latest` inside the official `swift:6.1` cont
 - PR: https://github.com/corveil/crow/pull/651 (issue #647)
 - PR: https://github.com/corveil/crow/pull/948 (issue #645 — Linux `crowd`/`crow` build lane; amends this ADR)
 - Related ADRs: [0006](./0006-universal-macos-binary.md), [0021](./0021-signed-notarized-macos-releases.md)
-- Code: `.github/workflows/ci.yml`, `.github/workflows/cache-warm.yml`, `.github/workflows/release.yml`, `scripts/generate-build-info.sh`
+- Code: `.github/workflows/ci.yml`, `.github/workflows/cache-warm.yml`, `.github/workflows/release.yml`, `scripts/generate-build-info.sh`, `scripts/package-release.sh`

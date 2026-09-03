@@ -20,7 +20,9 @@ Replace Ghostty with an xterm.js terminal surface hosted in WKWebView, backed by
 1. `XTermSurfaceView` loads vendored xterm.js assets from SPM resources and bridges PTY I/O via `WKScriptMessageHandler`.
 2. `PTYProcess` spawns the attach command with `openpty` + `fork`/`exec`.
 3. Remove GhosttyKit, Zig, and Metal toolchain from the build path. Crow builds with SwiftPM only.
-4. Release artifacts ship as universal macOS binaries (`arm64` + `x86_64`) via `swift build --arch arm64 --arch x86_64`.
+4. Release artifacts ship as universal macOS binaries (`arm64` + `x86_64`).
+
+**Amended 2026-09-02 (CROW-1192):** Two `--arch` flags on one `swift build` switch SwiftPM onto XCBuild, which on Xcode 16.4 fails for `swift-service-lifecycle` / `swift-collections` (`supported: []` language versions + duplicate `.DependencyMetadataFileList`). `scripts/package-release.sh` now builds each arch with the native SwiftPM build system and `lipo`s `crow` / `crowd` together. Do not revert to `swift build --arch arm64 --arch x86_64`.
 
 # Consequences
 
@@ -39,4 +41,5 @@ Replace Ghostty with an xterm.js terminal surface hosted in WKWebView, backed by
 
 - Issue #548
 - ADR 0001 (tmux as sole terminal backend)
-- Code: `XTermSurfaceView.swift`, `PTYProcess.swift`, `Packages/CrowTerminal/Resources/xterm/`
+- Issue #1192 (per-arch native SwiftPM + lipo; XCBuild path is broken on Xcode 16.4)
+- Code: `XTermSurfaceView.swift`, `PTYProcess.swift`, `Packages/CrowTerminal/Resources/xterm/`, `scripts/package-release.sh`

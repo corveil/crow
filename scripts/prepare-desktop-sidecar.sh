@@ -8,8 +8,9 @@
 # so package-app.sh can drop them in Crow.app/Contents/Resources.
 #
 # Flags:
-#   --from DIR     Swift products dir (default: .build/apple/Products/Release
-#                  if present, else .build/release)
+#   --from DIR     Swift products dir (default: .build/universal/release after
+#                  package-release.sh, else .build/apple/Products/Release, else
+#                  .build/release)
 #   --universal    also write *-universal-apple-darwin (and both thin names)
 #                  so `tauri build --target universal-apple-darwin` succeeds
 #   --help
@@ -44,6 +45,11 @@ resolve_build_dir() {
     printf '%s' "$FROM_DIR"
     return 0
   fi
+  if [ -f "$ROOT_DIR/.build/universal/release/crowd" ]; then
+    printf '%s' "$ROOT_DIR/.build/universal/release"
+    return 0
+  fi
+  # Legacy XCBuild layout from `swift build --arch arm64 --arch x86_64`.
   if [ -f "$ROOT_DIR/.build/apple/Products/Release/crowd" ]; then
     printf '%s' "$ROOT_DIR/.build/apple/Products/Release"
     return 0
