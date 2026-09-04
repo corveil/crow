@@ -132,6 +132,8 @@ private func readPlist(_ service: LaunchdAutostart) throws -> [String: Any] {
     #expect(plist["ProgramArguments"] as? [String] == [binary, "--host", "127.0.0.1", "--http-port", "8787"])
     #expect(plist["RunAtLoad"] as? Bool == true)
     #expect(plist["ProcessType"] as? String == "Background")
+    // Capture stays on crowd.log; CrowLog reopens the fds after a size-capped
+    // rename so launchd's inherited fds actually follow (CROW-1197).
     #expect(plist["StandardOutPath"] as? String == service.logURL.path)
     #expect(plist["StandardErrorPath"] as? String == service.logURL.path)
     // The PATH launchd hands an agent is too bare for git/gh/tmux.
