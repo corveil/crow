@@ -76,8 +76,12 @@ Two sites also passed a 64-bit `Int` to `%d`, which worked only by ABI accident.
   `TmuxBackend.captureDiagnostics`) arrive whole on stderr but truncated in the unified
   log.
 - **A dedicated thread, permanently.** It is parked on a condition variable when idle.
-- **`~/Library/Logs/crow/crowd.log` still has no rotation** — launchd writes it by stream
-  redirection, and each line is now slightly longer. Pre-existing, but worth a ticket.
+- **`crowd.log` rotation reopens launchd's capture fds.** launchd holds stdout/stderr
+  open for the process lifetime, so a rename alone would leave writes on the old inode.
+  The drain thread size-caps the file at 5 MB (one `…log.1` generation, 0o600) and
+  `dup2`s a new open over fd 1/2 so later writes follow. A tty is left alone so
+  `scripts/daemon-run.sh` still prints to the terminal. `crowd-automation.log` stays a
+  decision log — general traffic is not mixed into it.
 
 ## Alternatives considered
 
@@ -98,15 +102,22 @@ Two sites also passed a 64-bit `Int` to `%d`, which worked only by ABI accident.
 - **Redirecting stderr to a file by default outside launchd.** Narrows the window but does
   not close it (a full disk or a stalled network mount still blocks), and it takes the
   daemon's output away from the terminal a developer is watching.
+- **A `newsyslog.d` plist, or giving `CrowLog` its own `crowd.log` and dropping
+  launchd `StandardOutPath`.** newsyslog still needs the process to reopen the fd (or
+  SIGUSR1/HUP) and splits the 5 MB policy out of Crow. Dropping launchd capture would
+  miss leftover `print()` and runtime writes; feeding that volume into
+  `crowd-automation.log` would evict the auto-merge trail. Rotation next to
+  `rotateIfNeeded` plus `dup2` keeps one policy and the existing capture.
 
 ## References
 
-- Issue: [#874](https://github.com/corveil/crow/issues/874)
+- Issue: [#874](https://github.com/corveil/crow/issues/874), [#1197](https://github.com/corveil/crow/issues/1197)
 - Related ADRs: [0007](./0007-linux-ci-swift.md) (CrowCore builds on Linux, so `import os`
   is `#if canImport(Darwin)`-fenced), [0009](./0009-crowd-sole-authority-clients-only.md)
   (why the main actor is shared by every client), [0012](./0012-tests-never-touch-live-data.md)
   (the log directory resolves to a temp dir under a test runner)
 - Code: `Packages/CrowCore/Sources/CrowCore/CrowLog.swift`,
+  `Packages/CrowAutostart/Sources/CrowAutostart/LaunchdAutostart.swift`,
   `scripts/check-no-nslog.sh`,
   `Packages/CrowTerminal/Sources/CrowTerminal/TmuxController.swift` (the bounded-drain
   half of the same defect class),

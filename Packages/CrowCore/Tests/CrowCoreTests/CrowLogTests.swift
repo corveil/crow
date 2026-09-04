@@ -1,6 +1,11 @@
 import Foundation
 import Testing
 @testable import CrowCore
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// `CrowLog` is the durable automation log added for CROW-782, and since
 /// CROW-874 the process-wide non-blocking sink. Every test here points the sink
@@ -196,6 +201,150 @@ struct CrowLogTests {
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             #expect(iso.date(from: parts[0]) != nil)
             #expect(parts[1] == "[automation] auto-merge: pr=42 skipped reason=checks-pending")
+        }
+    }
+
+    // MARK: - CROW-1197 (launchd crowd.log rotation)
+
+    /// Open `url` twice (launchd gives stdout and stderr separate opens of the
+    /// same path) and return the fds. Caller closes them.
+    private func openCapturePair(_ url: URL) throws -> (err: Int32, out: Int32) {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let flags = O_WRONLY | O_CREAT | O_APPEND
+        let errFD = url.path.withCString { open($0, flags, 0o600) }
+        let outFD = url.path.withCString { open($0, flags, 0o600) }
+        try #require(errFD >= 0 && outFD >= 0)
+        return (errFD, outFD)
+    }
+
+    private func seedFile(_ url: URL, contents: String) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func posixPermissions(_ path: String) throws -> Int16 {
+        let perms = try #require(
+            (try FileManager.default.attributesOfItem(atPath: path))[.posixPermissions] as? NSNumber)
+        return perms.int16Value
+    }
+
+    @Test func oversizedCrowdLogRotatesAndReopensStdio() throws {
+        // Dedicated fds, not the process stderr: the drain writes there, and
+        // stealing it would swallow the test runner. Same rename + dup2 the
+        // drain calls on STDERR_FILENO / STDOUT_FILENO under launchd.
+        try withTempLogDirectory { dir in
+            let url = dir.appendingPathComponent("crowd.log")
+            try seedFile(url, contents: String(repeating: "y", count: CrowLog.maxBytes + 1))
+
+            let pair = try openCapturePair(url)
+            defer { close(pair.err); close(pair.out) }
+
+            CrowLog.rotateCaptureIfNeeded(stderrFD: pair.err, stdoutFD: pair.out)
+
+            let rotated = url.appendingPathExtension("1")
+            #expect(FileManager.default.fileExists(atPath: rotated.path))
+            let active = try String(contentsOf: url, encoding: .utf8)
+            #expect(active.isEmpty)
+            #expect(try String(contentsOf: rotated, encoding: .utf8).hasPrefix("yyy"))
+            #expect(try posixPermissions(url.path) == 0o600)
+            #expect(try posixPermissions(rotated.path) == 0o600)
+
+            // Subsequent writes follow the new inode, not the rotated generation.
+            let probe = Array("post-rotate\n".utf8)
+            #expect(probe.withUnsafeBufferPointer { write(pair.err, $0.baseAddress, $0.count) } > 0)
+            #expect(probe.withUnsafeBufferPointer { write(pair.out, $0.baseAddress, $0.count) } > 0)
+            let after = try String(contentsOf: url, encoding: .utf8)
+            #expect(after.contains("post-rotate"))
+            #expect(!((try String(contentsOf: rotated, encoding: .utf8)).contains("post-rotate")))
+        }
+    }
+
+    @Test func undersizedCrowdLogIsNotRotatedButIsOwnerOnly() throws {
+        try withTempLogDirectory { dir in
+            let url = dir.appendingPathComponent("crowd.log")
+            try seedFile(url, contents: "small\n")
+            // Seed 0644 so the drain's chmod is what makes it owner-only.
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o644], ofItemAtPath: url.path)
+
+            let pair = try openCapturePair(url)
+            defer { close(pair.err); close(pair.out) }
+
+            CrowLog.rotateCaptureIfNeeded(stderrFD: pair.err, stdoutFD: pair.out)
+
+            #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("1").path))
+            #expect(try String(contentsOf: url, encoding: .utf8) == "small\n")
+            #expect(try posixPermissions(url.path) == 0o600)
+        }
+    }
+
+    @Test func oversizedNonCrowdLogIsNotRotated() throws {
+        // Safety: a redirected test-runner log or a tty-backed file that happens
+        // to be large must not be renamed just because we fstat a regular file.
+        try withTempLogDirectory { dir in
+            let url = dir.appendingPathComponent("other.log")
+            try seedFile(url, contents: String(repeating: "z", count: CrowLog.maxBytes + 1))
+
+            let pair = try openCapturePair(url)
+            defer { close(pair.err); close(pair.out) }
+
+            CrowLog.rotateCaptureIfNeeded(stderrFD: pair.err, stdoutFD: pair.out)
+
+            #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("1").path))
+            #expect(try String(contentsOf: url, encoding: .utf8).hasPrefix("zzz"))
+        }
+    }
+
+    @Test func crowdLogRotationDoesNotTouchTheAutomationFile() throws {
+        try withTempLogDirectory { dir in
+            let url = dir.appendingPathComponent("crowd.log")
+            try seedFile(url, contents: String(repeating: "y", count: CrowLog.maxBytes + 1))
+
+            let pair = try openCapturePair(url)
+            defer { close(pair.err); close(pair.out) }
+
+            CrowLog.rotateCaptureIfNeeded(stderrFD: pair.err, stdoutFD: pair.out)
+
+            #expect(!FileManager.default.fileExists(atPath: CrowLog.fileURL.path))
+        }
+    }
+
+    @Test func drainRotatesAnOversizedCrowdLogBehindStderr() throws {
+        // End-to-end: the drain's default fds are 1 and 2, so this briefly
+        // retargets them at a temp crowd.log. The suite is serialized and
+        // flush is a barrier, so the runner's stderr is restored before the
+        // next test.
+        try withTempLogDirectory { dir in
+            let url = dir.appendingPathComponent("crowd.log")
+            try seedFile(url, contents: String(repeating: "y", count: CrowLog.maxBytes + 1))
+
+            let savedErr = dup(STDERR_FILENO)
+            let savedOut = dup(STDOUT_FILENO)
+            try #require(savedErr >= 0 && savedOut >= 0)
+            defer {
+                _ = dup2(savedErr, STDERR_FILENO)
+                _ = dup2(savedOut, STDOUT_FILENO)
+                close(savedErr)
+                close(savedOut)
+            }
+
+            let pair = try openCapturePair(url)
+            _ = dup2(pair.err, STDERR_FILENO)
+            _ = dup2(pair.out, STDOUT_FILENO)
+            close(pair.err)
+            close(pair.out)
+
+            CrowLog.info("after rotation via drain")
+            #expect(CrowLog.flush(timeout: 5))
+
+            let rotated = url.appendingPathExtension("1")
+            #expect(FileManager.default.fileExists(atPath: rotated.path))
+            let active = try String(contentsOf: url, encoding: .utf8)
+            #expect(active.contains("after rotation via drain"))
+            #expect(active.count < CrowLog.maxBytes)
+            #expect(try String(contentsOf: rotated, encoding: .utf8).hasPrefix("yyy"))
         }
     }
 }

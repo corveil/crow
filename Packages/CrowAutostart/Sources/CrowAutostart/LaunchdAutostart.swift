@@ -246,6 +246,12 @@ public struct LaunchdAutostart: AutostartService {
             "ThrottleInterval": 10,
             "ProcessType": "Background",
             "EnvironmentVariables": ["PATH": loginPath()],
+            // launchd keeps these fds open for the process lifetime. CrowLog's
+            // drain thread size-caps the file at CrowLog.maxBytes and dup2s a
+            // new open over stdout/stderr so writes follow the rename
+            // (CROW-1197). Do not drop these keys: leftover print() and runtime
+            // writes would otherwise vanish, and crowd-automation.log must not
+            // absorb that volume.
             "StandardOutPath": logURL.path,
             "StandardErrorPath": logURL.path,
         ]

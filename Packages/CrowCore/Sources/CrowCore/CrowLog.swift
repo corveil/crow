@@ -43,11 +43,21 @@ import Glibc
 /// `error(_:)` deliberately do **not** touch that file — it is a decision log,
 /// and general traffic would evict the auto-merge trail it exists to preserve.
 ///
+/// Under launchd, stdout and stderr are the same path
+/// (`~/Library/Logs/crow/crowd.log`). launchd keeps that fd open for the process
+/// lifetime, so a rename alone would leave subsequent writes on the old inode
+/// (the file on disk looks rotated, then grows forever under a new name). The
+/// drain thread therefore size-caps `crowd.log` with the same `maxBytes` /
+/// one-generation / 0o600 policy and `dup2`s a freshly opened fd over stdout
+/// and stderr so later writes follow. A tty (dev-mode
+/// `scripts/daemon-run.sh`) is left alone — `fstat` sees a non-regular file.
+///
 /// Per ADR 0012 a test process never writes to the live log directory: the
 /// destination is resolved on the *caller's* thread at enqueue (see `emit`), so
 /// `configure(directory:)` is a strict happens-before for every later line.
 public enum CrowLog {
-    /// Rotate the automation file once it exceeds this size (bytes).
+    /// Rotate `crowd.log` and `crowd-automation.log` once either exceeds this
+    /// size (bytes). One policy, two files — never mix their traffic.
     static let maxBytes: Int = 5 * 1024 * 1024
 
     /// Maximum lines held while the sink is blocked. Past this, lines are
@@ -245,7 +255,9 @@ public enum CrowLog {
                     appendToAutomationFile(directory: dir, line: "\(stamp) \(record.message)\n")
                 }
             }
-            // The only blocking call in this loop, and no lock is held across it.
+            // Rotate launchd's capture file *before* the blocking write so this
+            // batch lands on the new inode. No lock is held across either call.
+            rotateCaptureIfNeeded()
             writeAll(out, to: STDERR_FILENO)
 
             cond.lock()
@@ -315,17 +327,109 @@ public enum CrowLog {
         try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
     }
 
-    private static func rotateIfNeeded(url: URL) {
+    /// Rename `url` to `url.1` once it exceeds `maxBytes`. Returns whether the
+    /// rename happened, so the capture-fd path can `dup2` a new open only then.
+    @discardableResult
+    private static func rotateIfNeeded(url: URL) -> Bool {
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: url.path),
-              let size = attrs[.size] as? Int, size > maxBytes else { return }
+              let size = attrs[.size] as? Int, size > maxBytes else { return false }
         let rotated = url.appendingPathExtension("1")
         try? fm.removeItem(at: rotated)
-        try? fm.moveItem(at: url, to: rotated)
+        do {
+            try fm.moveItem(at: url, to: rotated)
+        } catch {
+            return false
+        }
         // The rotated generation holds the same data as the active file, so it
         // keeps the same owner-only permissions (a move preserves them, but the
         // active file may predate this hardening).
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: rotated.path)
+        return true
+    }
+
+    // MARK: - launchd capture file (drain thread; CROW-1197)
+
+    /// Size-cap the file behind stderr when it is launchd's `crowd.log`, and
+    /// retarget stdout/stderr onto a new open so writes follow the rename.
+    ///
+    /// Default fds are the process stdio; tests pass dedicated fds opened on a
+    /// temp `crowd.log` so this never has to steal the test runner's stderr.
+    static func rotateCaptureIfNeeded(
+        stderrFD: Int32 = STDERR_FILENO,
+        stdoutFD: Int32 = STDOUT_FILENO
+    ) {
+        var st = stat()
+        guard fstat(stderrFD, &st) == 0 else { return }
+        // A tty / pipe / socket is the inner-loop case: leave it alone.
+        guard (st.st_mode & S_IFMT) == S_IFREG else { return }
+        guard let path = filePath(of: stderrFD) else { return }
+        guard URL(fileURLWithPath: path).lastPathComponent == "crowd.log" else { return }
+
+        // launchd creates this 0644 via umask. Re-applied every drain so a
+        // rotated-and-reopened inode cannot drift, matching the automation file.
+        _ = fchmod(stderrFD, 0o600)
+
+        guard st.st_size > off_t(maxBytes) else { return }
+
+        var outStat = stat()
+        let retargetStdout = fstat(stdoutFD, &outStat) == 0
+            && (outStat.st_mode & S_IFMT) == S_IFREG
+            && outStat.st_dev == st.st_dev
+            && outStat.st_ino == st.st_ino
+
+        let url = URL(fileURLWithPath: path)
+        guard rotateIfNeeded(url: url) else { return }
+        reopenStdio(onto: path, stderrFD: stderrFD, stdoutFD: stdoutFD, retargetStdout: retargetStdout)
+    }
+
+    /// `dup2` a newly created `crowd.log` over the capture fds. `O_APPEND` is
+    /// mandatory: launchd may have given stdout and stderr separate opens of the
+    /// same path, and independent offsets would clobber each other.
+    private static func reopenStdio(
+        onto path: String,
+        stderrFD: Int32,
+        stdoutFD: Int32,
+        retargetStdout: Bool
+    ) {
+        let dir = URL(fileURLWithPath: path).deletingLastPathComponent()
+        try? FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+
+        let fd = path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600) }
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        _ = fchmod(fd, 0o600)
+        _ = dup2(fd, stderrFD)
+        if retargetStdout {
+            _ = dup2(fd, stdoutFD)
+        }
+    }
+
+    /// Path of an open fd. Darwin's `F_GETPATH`; Linux `/proc/self/fd/N`.
+    private static func filePath(of fd: Int32) -> String? {
+        #if canImport(Darwin)
+        var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let rc = buf.withUnsafeMutableBufferPointer { ptr -> Int32 in
+            guard let base = ptr.baseAddress else { return -1 }
+            return fcntl(fd, F_GETPATH, base)
+        }
+        guard rc == 0 else { return nil }
+        return String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        #elseif canImport(Glibc)
+        var buf = [CChar](repeating: 0, count: 4096)
+        let n = "/proc/self/fd/\(fd)".withCString { cPath in
+            buf.withUnsafeMutableBufferPointer { ptr -> Int in
+                guard let base = ptr.baseAddress else { return -1 }
+                return readlink(cPath, base, ptr.count - 1)
+            }
+        }
+        guard n > 0 else { return nil }
+        return String(decoding: buf.prefix(n).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - Directory resolution (callers hold `dirLock`)
