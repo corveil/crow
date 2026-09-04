@@ -106,12 +106,90 @@ CSC_KEY_PASSWORD="socketpw"
 check_rc "socketzero cert alias" 0 require_secrets
 check "socketzero cert" "c29ja2V0emVybw==" "$SIGN_CERT_B64"
 
+echo "allow_unsigned_from_env"
+unset CROW_ALLOW_UNSIGNED
+check_rc "unset env is not unsigned" 1 allow_unsigned_from_env
+CROW_ALLOW_UNSIGNED=1
+check_rc "CROW_ALLOW_UNSIGNED=1" 0 allow_unsigned_from_env
+CROW_ALLOW_UNSIGNED=true
+check_rc "CROW_ALLOW_UNSIGNED=true" 0 allow_unsigned_from_env
+CROW_ALLOW_UNSIGNED=0
+check_rc "CROW_ALLOW_UNSIGNED=0 is not unsigned" 1 allow_unsigned_from_env
+unset CROW_ALLOW_UNSIGNED
+
 echo "macos_sign_notarize_main"
 check_rc "unknown flag" 2 macos_sign_notarize_main --bogus
 check_rc "--help" 0 macos_sign_notarize_main --help
 
 CROW_VERSION="0.0.0-test"
 check_rc "missing archive" 1 macos_sign_notarize_main --archive "$TMP/nope.tar.gz"
+
+# Valid unsigned tree so we can hit require_secrets vs --skip-signing.
+mkdir -p "$TMP/bin" "$TMP/unsigned-src/crow-0.0.0-test" "$TMP/unsigned-out" \
+  "$TMP/Crow.app/Contents/MacOS"
+printf 'payload\n' > "$TMP/unsigned-src/crow-0.0.0-test/README"
+cp "$TMP/thin64" "$TMP/unsigned-src/crow-0.0.0-test/crow"
+cp "$TMP/thin64" "$TMP/Crow.app/Contents/MacOS/Crow"
+COPYFILE_DISABLE=1 tar -czf \
+  "$TMP/unsigned-out/crow-0.0.0-test-macos-universal.tar.gz" \
+  -C "$TMP/unsigned-src" "crow-0.0.0-test"
+UNSIGNED_ARCHIVE="$TMP/unsigned-out/crow-0.0.0-test-macos-universal.tar.gz"
+
+unset APPLE_DEVELOPER_SIGNING_KEY_CERT RM_APPLE_DEVELOPER_SIGNING_KEY_CERT \
+  DEVELOPER_CERTIFICATE_BASE64 CSC_KEY_PASSWORD DEVELOPER_CERTIFICATE_PASSWORD \
+  CROW_ALLOW_UNSIGNED
+check_rc "valid archive still fails without secrets or skip-signing" 1 \
+  macos_sign_notarize_main --archive "$UNSIGNED_ARCHIVE"
+
+cat > "$TMP/bin/ditto" <<'SH'
+#!/usr/bin/env bash
+dest="${!#}"
+printf 'fake-zip\n' > "$dest"
+SH
+chmod +x "$TMP/bin/ditto"
+DITTO_BIN="$TMP/bin/ditto"
+
+cat > "$TMP/bin/codesign-fail" <<'SH'
+#!/usr/bin/env bash
+echo "codesign $*" >> "${CROW_FAKE_LOG:?}"
+exit 99
+SH
+chmod +x "$TMP/bin/codesign-fail"
+CODESIGN_BIN="$TMP/bin/codesign-fail"
+export CROW_FAKE_LOG="$TMP/skip-signing-codesign.log"
+: > "$CROW_FAKE_LOG"
+
+check_rc "--skip-signing with no secrets" 0 \
+  macos_sign_notarize_main --skip-signing \
+  --archive "$UNSIGNED_ARCHIVE" --app "$TMP/Crow.app"
+check "unsigned tar.gz present" "1" \
+  "$( [ -f "$TMP/unsigned-out/crow-0.0.0-test-macos-universal.tar.gz" ] && echo 1 || echo 0 )"
+check "unsigned tar.gz sha256 present" "1" \
+  "$( [ -f "$TMP/unsigned-out/crow-0.0.0-test-macos-universal.tar.gz.sha256" ] && echo 1 || echo 0 )"
+check "unsigned zip present" "1" \
+  "$( [ -f "$TMP/unsigned-out/crow-0.0.0-test-macos-universal.zip" ] && echo 1 || echo 0 )"
+check "unsigned app zip present" "1" \
+  "$( [ -f "$TMP/unsigned-out/Crow-0.0.0-test-macos.app.zip" ] && echo 1 || echo 0 )"
+check "unsigned app zip sha256 present" "1" \
+  "$( [ -f "$TMP/unsigned-out/Crow-0.0.0-test-macos.app.zip.sha256" ] && echo 1 || echo 0 )"
+check "skip-signing did not invoke codesign" "0" \
+  "$( [ -s "$CROW_FAKE_LOG" ] && echo 1 || echo 0 )"
+
+# Restore the test EXIT trap — main() installs cleanup_keychain on EXIT.
+true
+cleanup_keychain
+trap 'rm -rf "$TMP"' EXIT
+
+rm -f "$TMP/unsigned-out/"*.zip "$TMP/unsigned-out/"*.sha256
+CROW_ALLOW_UNSIGNED=1
+check_rc "CROW_ALLOW_UNSIGNED=1 without --skip-signing" 0 \
+  macos_sign_notarize_main --archive "$UNSIGNED_ARCHIVE" --app "$TMP/Crow.app"
+check "env unsigned zip present" "1" \
+  "$( [ -f "$TMP/unsigned-out/crow-0.0.0-test-macos-universal.zip" ] && echo 1 || echo 0 )"
+unset CROW_ALLOW_UNSIGNED
+true
+cleanup_keychain
+trap 'rm -rf "$TMP"' EXIT
 
 echo "cleanup_keychain"
 KEYCHAIN_PATH="$TMP/fake.keychain-db"

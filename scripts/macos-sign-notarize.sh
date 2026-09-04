@@ -22,12 +22,15 @@
 #   DEVELOPER_ID_APPLICATION          codesign identity; discovered from the
 #                                     imported cert when unset
 #   CROW_VERSION                      required (from the git tag / workflow)
+#   CROW_ALLOW_UNSIGNED               if 1 or true, same as --skip-signing
 #
 # Flags:
 #   --archive PATH        tarball to sign (default: crow-$CROW_VERSION-macos-universal.tar.gz)
 #   --app PATH            Crow.app to sign, notarize, and staple (default:
 #                         $ROOT_DIR/release-app/Crow.app when that directory exists)
-#   --skip-notarize       sign + pack only (local testing)
+#   --skip-notarize       sign + pack only (local testing); still requires the .p12
+#   --skip-signing        do not codesign, notarize, or staple; re-pack the
+#                         unsigned tree to the usual output paths (CROW-1199)
 #   --help
 #
 # The Developer ID cert is imported into an ephemeral keychain that this script
@@ -49,6 +52,7 @@ OPENSSL_BIN="${OPENSSL_BIN:-openssl}"
 STAPLER_BIN="${STAPLER_BIN:-stapler}"
 
 SKIP_NOTARIZE=0
+SKIP_SIGNING=0
 ARCHIVE=""
 APP_BUNDLE=""
 
@@ -61,7 +65,14 @@ ORIGINAL_KEYCHAINS=""
 WORK_DIR=""
 
 usage() {
-  sed -n '2,40p' "$SIGN_SCRIPT" | sed -e 's/^# //' -e 's/^#//'
+  awk 'NR==1 {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$SIGN_SCRIPT"
+}
+
+allow_unsigned_from_env() {
+  case "${CROW_ALLOW_UNSIGNED:-}" in
+    1|true|TRUE) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Print the first non-empty argument. Used so the workflow can accept both
@@ -341,6 +352,8 @@ require_secrets() {
   if [ -z "$cert" ] || [ -z "$password" ]; then
     echo "ERROR: signing secrets missing." >&2
     echo "  Need APPLE_DEVELOPER_SIGNING_KEY_CERT (base64 .p12) and CSC_KEY_PASSWORD." >&2
+    echo "  Pass --skip-signing (or CROW_ALLOW_UNSIGNED=1) to re-pack unsigned artifacts." >&2
+    echo "  The GitHub Release unsigned path also needs vars.CROW_ALLOW_UNSIGNED_RELEASE=true." >&2
     echo "  See docs/macos-release-signing.md." >&2
     return 1
   fi
@@ -367,6 +380,11 @@ require_secrets() {
 }
 
 macos_sign_notarize_main() {
+  SKIP_NOTARIZE=0
+  SKIP_SIGNING=0
+  ARCHIVE=""
+  APP_BUNDLE=""
+
   while [ $# -gt 0 ]; do
     case "$1" in
       --archive)
@@ -381,6 +399,10 @@ macos_sign_notarize_main() {
         SKIP_NOTARIZE=1
         shift
         ;;
+      --skip-signing)
+        SKIP_SIGNING=1
+        shift
+        ;;
       --help|-h)
         usage
         return 0
@@ -392,6 +414,10 @@ macos_sign_notarize_main() {
         ;;
     esac
   done
+
+  if allow_unsigned_from_env; then
+    SKIP_SIGNING=1
+  fi
 
   if [ -z "${CROW_VERSION:-}" ]; then
     echo "ERROR: CROW_VERSION is required" >&2
@@ -407,7 +433,14 @@ macos_sign_notarize_main() {
     return 1
   fi
 
-  require_secrets
+  if [ "$SKIP_SIGNING" -eq 1 ]; then
+    echo "==> UNSIGNED: skipping codesign, notarize, and staple (--skip-signing / CROW_ALLOW_UNSIGNED)"
+    echo "    Artifacts will be Gatekeeper-quarantined. Recipients must run:"
+    echo "      xattr -dr com.apple.quarantine <path>"
+    echo "    or right-click → Open. See ADR 0021 / CROW-1199."
+  else
+    require_secrets
+  fi
 
   trap cleanup_keychain EXIT
 
@@ -420,27 +453,35 @@ macos_sign_notarize_main() {
     return 1
   fi
 
-  echo "==> Importing Developer ID cert into ephemeral keychain"
-  prepare_keychain "$SIGN_CERT_B64" "$SIGN_CERT_PASSWORD"
+  DEST_DIR="$(cd "$(dirname "$ARCHIVE")" && pwd)"
 
-  IDENTITY="$(codesign_identity)"
-  if [ -z "$IDENTITY" ]; then
-    echo "ERROR: no Developer ID Application identity in the imported keychain" >&2
-    "$SECURITY_BIN" find-identity -v -p codesigning "$KEYCHAIN_PATH" >&2 || true
-    return 1
+  if [ "$SKIP_SIGNING" -eq 0 ]; then
+    echo "==> Importing Developer ID cert into ephemeral keychain"
+    prepare_keychain "$SIGN_CERT_B64" "$SIGN_CERT_PASSWORD"
+
+    IDENTITY="$(codesign_identity)"
+    if [ -z "$IDENTITY" ]; then
+      echo "ERROR: no Developer ID Application identity in the imported keychain" >&2
+      "$SECURITY_BIN" find-identity -v -p codesigning "$KEYCHAIN_PATH" >&2 || true
+      return 1
+    fi
+    echo "    identity: $IDENTITY"
+
+    echo "==> Signing Mach-O files"
+    sign_tree "$WORK_DIR/$PACKAGE_DIR" "$IDENTITY"
+
+    echo "==> Packing signed archives"
+  else
+    echo "==> Packing UNSIGNED archives"
   fi
-  echo "    identity: $IDENTITY"
+  pack_signed "$WORK_DIR" "$PACKAGE_DIR" "$DEST_DIR" "$CROW_VERSION"
 
-  echo "==> Signing Mach-O files"
-  sign_tree "$WORK_DIR/$PACKAGE_DIR" "$IDENTITY"
-
-  echo "==> Packing signed archives"
-  pack_signed "$WORK_DIR" "$PACKAGE_DIR" "$(cd "$(dirname "$ARCHIVE")" && pwd)" "$CROW_VERSION"
-
-  if [ "$SKIP_NOTARIZE" -eq 1 ]; then
+  if [ "$SKIP_SIGNING" -eq 1 ]; then
+    echo "==> Skipping notarization (unsigned)"
+  elif [ "$SKIP_NOTARIZE" -eq 1 ]; then
     echo "==> Skipping notarization (--skip-notarize)"
   else
-    ZIP_PATH="$(cd "$(dirname "$ARCHIVE")" && pwd)/crow-${CROW_VERSION}-macos-universal.zip"
+    ZIP_PATH="$DEST_DIR/crow-${CROW_VERSION}-macos-universal.zip"
     notarize_zip "$ZIP_PATH" "$NOTARY_KEY" "$NOTARY_KEY_ID" "$NOTARY_ISSUER"
   fi
 
@@ -448,13 +489,22 @@ macos_sign_notarize_main() {
     APP_BUNDLE="$ROOT_DIR/release-app/Crow.app"
   fi
   if [ -n "$APP_BUNDLE" ]; then
-    sign_app "$APP_BUNDLE" "$IDENTITY"
-    APP_ZIP="$(cd "$(dirname "$ARCHIVE")" && pwd)/Crow-${CROW_VERSION}-macos.app.zip"
-    if [ "$SKIP_NOTARIZE" -eq 1 ]; then
-      echo "==> Packing unsigned-skip app zip (signed locally, not notarized)"
+    if [ ! -d "$APP_BUNDLE" ]; then
+      echo "ERROR: Crow.app not found at $APP_BUNDLE" >&2
+      return 1
+    fi
+    APP_ZIP="$DEST_DIR/Crow-${CROW_VERSION}-macos.app.zip"
+    if [ "$SKIP_SIGNING" -eq 1 ]; then
+      echo "==> Packing UNSIGNED Crow.app zip"
       pack_app_zip "$APP_BUNDLE" "$APP_ZIP"
     else
-      notarize_and_staple_app "$APP_BUNDLE" "$APP_ZIP" "$NOTARY_KEY" "$NOTARY_KEY_ID" "$NOTARY_ISSUER"
+      sign_app "$APP_BUNDLE" "$IDENTITY"
+      if [ "$SKIP_NOTARIZE" -eq 1 ]; then
+        echo "==> Packing unsigned-skip app zip (signed locally, not notarized)"
+        pack_app_zip "$APP_BUNDLE" "$APP_ZIP"
+      else
+        notarize_and_staple_app "$APP_BUNDLE" "$APP_ZIP" "$NOTARY_KEY" "$NOTARY_KEY_ID" "$NOTARY_ISSUER"
+      fi
     fi
   fi
 

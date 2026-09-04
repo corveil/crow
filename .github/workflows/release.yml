@@ -122,9 +122,15 @@ jobs:
           CROW_VERSION: ${{ env.CROW_VERSION }}
         run: bash scripts/package-app.sh --universal
 
+      # Default: fail closed when Apple secrets are absent (ADR 0021).
+      # Set repository/org variable CROW_ALLOW_UNSIGNED_RELEASE to 'true' to
+      # publish an unsigned prerelease instead (CROW-1199). An arbitrary tag
+      # push cannot take this path — only the admin-gated variable. When
+      # secrets are present, signing runs as usual even if the variable is on.
       - name: Sign and notarize
         env:
           CROW_VERSION: ${{ env.CROW_VERSION }}
+          CROW_ALLOW_UNSIGNED_RELEASE: ${{ vars.CROW_ALLOW_UNSIGNED_RELEASE }}
           APPLE_DEVELOPER_SIGNING_KEY_CERT: ${{ secrets.APPLE_DEVELOPER_SIGNING_KEY_CERT }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -139,7 +145,18 @@ jobs:
           # API-key fallbacks (socketzero-shaped / base64 p8):
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: bash scripts/macos-sign-notarize.sh
+        run: |
+          set -euo pipefail
+          cert="${APPLE_DEVELOPER_SIGNING_KEY_CERT:-}${RM_APPLE_DEVELOPER_SIGNING_KEY_CERT:-}${DEVELOPER_CERTIFICATE_BASE64:-}"
+          password="${CSC_KEY_PASSWORD:-}${DEVELOPER_CERTIFICATE_PASSWORD:-}"
+          if [ "${CROW_ALLOW_UNSIGNED_RELEASE:-}" = "true" ] && { [ -z "$cert" ] || [ -z "$password" ]; }; then
+            echo "::warning::CROW_ALLOW_UNSIGNED_RELEASE=true and Apple signing secrets are absent; publishing an UNSIGNED prerelease"
+            echo "UNSIGNED_RELEASE=true" >> "$GITHUB_ENV"
+            bash scripts/macos-sign-notarize.sh --skip-signing
+          else
+            echo "UNSIGNED_RELEASE=false" >> "$GITHUB_ENV"
+            bash scripts/macos-sign-notarize.sh
+          fi
 
       - name: Upload artifacts
         if: github.event_name == 'workflow_dispatch'
@@ -156,6 +173,82 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Write release notes
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          CROW_VERSION: ${{ env.CROW_VERSION }}
+          UNSIGNED_RELEASE: ${{ env.UNSIGNED_RELEASE }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/release-notes.md"
+          {
+            if [ "${UNSIGNED_RELEASE:-}" = "true" ]; then
+              cat <<EOF
+          ## Unsigned prerelease
+
+          **This build is NOT signed and NOT notarized.** Apple Developer enrollment is pending (CROW-1199). A browser download is Gatekeeper-quarantined.
+
+          Clear quarantine before first launch:
+
+          \`\`\`bash
+          xattr -dr com.apple.quarantine crow-${CROW_VERSION}-macos-universal.tar.gz
+          xattr -dr com.apple.quarantine Crow-${CROW_VERSION}-macos.app.zip
+          # after extract / unzip:
+          xattr -dr com.apple.quarantine ~/.local/lib/crow-${CROW_VERSION}
+          xattr -dr com.apple.quarantine /Applications/Crow.app
+          \`\`\`
+
+          Or right-click **Crow.app** → Open (and confirm). Do not treat this cut as a production release.
+
+          EOF
+            fi
+            cat <<EOF
+          ## Install
+
+          Download \`crow-${CROW_VERSION}-macos-universal.tar.gz\` (or the \`.zip\`) and its checksum file, verify the archive, extract it, and symlink the binaries into your \`PATH\`. Keep the extracted directory intact — \`crowd\` needs the \`.bundle\` resources next to the binaries.
+
+          \`\`\`bash
+          shasum -a 256 -c crow-${CROW_VERSION}-macos-universal.tar.gz.sha256
+          mkdir -p ~/.local/lib ~/.local/bin
+          tar -xzf crow-${CROW_VERSION}-macos-universal.tar.gz -C ~/.local/lib
+          ln -sf ~/.local/lib/crow-${CROW_VERSION}/crow ~/.local/bin/crow
+          ln -sf ~/.local/lib/crow-${CROW_VERSION}/crowd ~/.local/bin/crowd
+          \`\`\`
+
+          Unzip \`Crow-${CROW_VERSION}-macos.app.zip\` and drag **Crow.app** to \`/Applications\`. Double-clicking it starts a bundled \`crowd\` (or reuses one already listening on \`:8787\`) and opens the web UI. Quitting the window only SIGTERMs a crowd **this app spawned** — an autostart / \`make daemon-run\` daemon is left up.
+          EOF
+            if [ "${UNSIGNED_RELEASE:-}" = "true" ]; then
+              cat <<EOF
+
+          These binaries are **unsigned**. See the warning above.
+
+          Point \`crow autostart install --binary\` at the extracted **CLI** \`crowd\` (not the sidecar inside Crow.app):
+
+          \`\`\`bash
+          crow autostart install --binary ~/.local/lib/crow-${CROW_VERSION}/crowd
+          \`\`\`
+          EOF
+            else
+              cat <<EOF
+
+          The \`.app\` is **signed, notarized, and stapled**. The CLI zip cannot be stapled (Gatekeeper looks up that ticket online); the \`.app\` carries the ticket on disk.
+
+          These binaries are **signed and notarized** (Developer ID Application + notarytool). A browser download still applies Gatekeeper quarantine; first launch contacts Apple to look up the notarization ticket — you should **not** need \`xattr -d com.apple.quarantine\`.
+
+          Point \`crow autostart install --binary\` at the extracted **CLI** \`crowd\` (not the sidecar inside Crow.app) so launchd runs the signed standalone daemon:
+
+          \`\`\`bash
+          crow autostart install --binary ~/.local/lib/crow-${CROW_VERSION}/crowd
+          \`\`\`
+          EOF
+            fi
+            cat <<EOF
+
+          To build from source instead: \`make daemon CONFIG=release && make install CONFIG=release\` (unsigned CLI) or \`make app CONFIG=release\` (unsigned Crow.app). Signing details: [docs/macos-release-signing.md](https://github.com/${REPOSITORY}/blob/main/docs/macos-release-signing.md).
+          EOF
+          } > "$notes"
+
       - name: Create GitHub Release
         if: github.event_name != 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
@@ -168,30 +261,5 @@ jobs:
             Crow-${{ env.CROW_VERSION }}-macos.app.zip
             Crow-${{ env.CROW_VERSION }}-macos.app.zip.sha256
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          body: |
-            ## Install
-
-            Download `crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz` (or the `.zip`) and its checksum file, verify the archive, extract it, and symlink the binaries into your `PATH`. Keep the extracted directory intact — `crowd` needs the `.bundle` resources next to the binaries.
-
-            ```bash
-            shasum -a 256 -c crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz.sha256
-            mkdir -p ~/.local/lib ~/.local/bin
-            tar -xzf crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz -C ~/.local/lib
-            ln -sf ~/.local/lib/crow-${{ env.CROW_VERSION }}/crow ~/.local/bin/crow
-            ln -sf ~/.local/lib/crow-${{ env.CROW_VERSION }}/crowd ~/.local/bin/crowd
-            ```
-
-            Unzip `Crow-${{ env.CROW_VERSION }}-macos.app.zip` and drag **Crow.app** to `/Applications`. Double-clicking it starts a bundled `crowd` (or reuses one already listening on `:8787`) and opens the web UI. Quitting the window only SIGTERMs a crowd **this app spawned** — an autostart / `make daemon-run` daemon is left up.
-
-            The `.app` is **signed, notarized, and stapled**. The CLI zip cannot be stapled (Gatekeeper looks up that ticket online); the `.app` carries the ticket on disk.
-
-            These binaries are **signed and notarized** (Developer ID Application + notarytool). A browser download still applies Gatekeeper quarantine; first launch contacts Apple to look up the notarization ticket — you should **not** need `xattr -d com.apple.quarantine`.
-
-            Point `crow autostart install --binary` at the extracted **CLI** `crowd` (not the sidecar inside Crow.app) so launchd runs the signed standalone daemon:
-
-            ```bash
-            crow autostart install --binary ~/.local/lib/crow-${{ env.CROW_VERSION }}/crowd
-            ```
-
-            To build from source instead: `make daemon CONFIG=release && make install CONFIG=release` (unsigned CLI) or `make app CONFIG=release` (unsigned Crow.app). Signing details: [docs/macos-release-signing.md](https://github.com/${{ github.repository }}/blob/main/docs/macos-release-signing.md).
+          prerelease: ${{ env.UNSIGNED_RELEASE == 'true' || contains(github.ref_name, '-') }}
+          body_path: ${{ runner.temp }}/release-notes.md
