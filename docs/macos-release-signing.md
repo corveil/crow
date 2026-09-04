@@ -67,7 +67,13 @@ by CDHash when a quarantined binary is launched; that is the documented path for
 CLI zip distributions. The `.app` **is** stapled, so it verifies offline.
 
 If any signing/notarization secret is missing, the job **fails** rather than
-publishing an unsigned build. Local `make daemon` / `make app CONFIG=release`
+publishing an unsigned build. The one exception is repository/org variable
+`CROW_ALLOW_UNSIGNED_RELEASE=true` (CROW-1199 / ADR 0021): when that is set
+and the Developer ID secrets are absent, the workflow passes
+`--skip-signing`, attaches the unsigned CLI tarball/zip and `Crow.app` zip
+to a **prerelease**, and the notes say the build is Gatekeeper-quarantined.
+`--skip-notarize` still signs and still needs the `.p12`. Flip the variable
+off once Apple secrets exist. Local `make daemon` / `make app CONFIG=release`
 stay unsigned.
 
 ## Runner
@@ -98,6 +104,15 @@ bash scripts/package-app.sh --universal
 APPLE_DEVELOPER_SIGNING_KEY_CERT="$(base64 -i developer-id.p12)" \
   CSC_KEY_PASSWORD='...' \
   bash scripts/macos-sign-notarize.sh --skip-notarize
+```
+
+To re-pack the usual artifact paths without a cert (still not a GitHub
+Release — that path is the admin-gated repo variable):
+
+```bash
+export CROW_VERSION=0.2.0
+bash scripts/macos-sign-notarize.sh --skip-signing
+# or: CROW_ALLOW_UNSIGNED=1 bash scripts/macos-sign-notarize.sh
 ```
 
 ## Verify a downloaded release

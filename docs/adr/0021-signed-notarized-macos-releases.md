@@ -52,11 +52,29 @@ hosts Colima can, if a second runner is registered on the host OS.
    runner is provisioned through `corveil/corveil-ci` (host OS, outside
    Colima), not by hand on the live Mac. `setup-xcode` runs only on
    GitHub-hosted images.
+6. **Opt-in unsigned publish is admin-gated, never the default.** Repository
+   (or org) variable `CROW_ALLOW_UNSIGNED_RELEASE=true` is the only switch.
+   When it is set **and** Developer ID secrets are absent, `release.yml`
+   passes `--skip-signing` to `scripts/macos-sign-notarize.sh`, which re-packs
+   the unsigned CLI tarball/zip and `Crow.app` zip to the usual output paths
+   and skips codesign, notarytool, and staple. The GitHub Release is always a
+   **prerelease** whose notes say the build is unsigned and
+   Gatekeeper-quarantined (`xattr -dr com.apple.quarantine <path>` or
+   right-click → Open). An arbitrary tag push cannot take this path. When
+   secrets are present, signing runs as usual even if the variable is on.
+   `--skip-notarize` still signs and still requires the `.p12`. Flip the
+   variable off once Apple secrets exist; signed cuts resume with no further
+   code change. (CROW-1199; interim while Developer Program enrollment waits
+   on a D-U-N-S number.)
 
 ## Consequences
 
 - A `v*` tag cut fails closed if signing/notarization secrets are missing —
-  we do not publish an unsigned build as a "release".
+  we do not publish an unsigned build as a "release". **Amended 2026-09-04
+  (CROW-1199):** the fail-closed default stands. The one exception is the
+  admin-gated `CROW_ALLOW_UNSIGNED_RELEASE=true` path above, which publishes
+  a labeled unsigned **prerelease** rather than failing the job. It is
+  interim until Developer ID secrets are configured.
 - Local `make daemon` / `make app CONFIG=release` / `scripts/package-release.sh`
   stay unsigned; only the GitHub release artifacts are signed. Developers still
   do not need an Apple certificate.
@@ -85,10 +103,14 @@ hosts Colima can, if a second runner is registered on the host OS.
   another product (the Tauri bundle).
 - **Apple ID + app-specific password** (the retired script) — rejected:
   API keys are the CI-friendly, revocable path socketzero uses.
+- **A `workflow_dispatch` / per-tag input to skip signing** — rejected
+  (CROW-1199): an arbitrary tag push could downgrade a real release to
+  unsigned. The repository/org variable is admin-gated.
 
 ## References
 
 - Issue: https://github.com/corveil/crow/issues/1150
+- Unsigned opt-in: https://github.com/corveil/crow/issues/1199
 - Related ADRs: [0007](./0007-linux-ci-swift.md), [0010](./0010-retire-the-macos-app.md)
 - Code: `scripts/macos-sign-notarize.sh`, `.github/workflows/release.yml`,
   `docs/macos-release-signing.md`
