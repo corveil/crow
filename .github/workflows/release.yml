@@ -63,6 +63,9 @@ jobs:
       - name: package-release unit tests
         run: bash scripts/package-release_test.sh
 
+      - name: write-release-notes unit tests
+        run: bash scripts/write-release-notes_test.sh
+
   release:
     name: Build, Sign & Release
     needs: [test, shellcheck]
@@ -147,8 +150,27 @@ jobs:
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           set -euo pipefail
-          cert="${APPLE_DEVELOPER_SIGNING_KEY_CERT:-}${RM_APPLE_DEVELOPER_SIGNING_KEY_CERT:-}${DEVELOPER_CERTIFICATE_BASE64:-}"
-          password="${CSC_KEY_PASSWORD:-}${DEVELOPER_CERTIFICATE_PASSWORD:-}"
+          # Same presence semantics as require_secrets / first_set in
+          # scripts/macos-sign-notarize.sh (first non-empty alias wins).
+          # Concatenating aliases would treat two populated secrets as one
+          # blob that first_set would never use.
+          first_set() {
+            local val
+            for val in "$@"; do
+              if [ -n "$val" ]; then
+                printf '%s' "$val"
+                return 0
+              fi
+            done
+            return 1
+          }
+          cert="$(first_set \
+            "${APPLE_DEVELOPER_SIGNING_KEY_CERT:-}" \
+            "${RM_APPLE_DEVELOPER_SIGNING_KEY_CERT:-}" \
+            "${DEVELOPER_CERTIFICATE_BASE64:-}" || true)"
+          password="$(first_set \
+            "${CSC_KEY_PASSWORD:-}" \
+            "${DEVELOPER_CERTIFICATE_PASSWORD:-}" || true)"
           if [ "${CROW_ALLOW_UNSIGNED_RELEASE:-}" = "true" ] && { [ -z "$cert" ] || [ -z "$password" ]; }; then
             echo "::warning::CROW_ALLOW_UNSIGNED_RELEASE=true and Apple signing secrets are absent; publishing an UNSIGNED prerelease"
             echo "UNSIGNED_RELEASE=true" >> "$GITHUB_ENV"
@@ -178,76 +200,15 @@ jobs:
         env:
           CROW_VERSION: ${{ env.CROW_VERSION }}
           UNSIGNED_RELEASE: ${{ env.UNSIGNED_RELEASE }}
-          REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           notes="${RUNNER_TEMP}/release-notes.md"
-          {
-            if [ "${UNSIGNED_RELEASE:-}" = "true" ]; then
-              cat <<EOF
-          ## Unsigned prerelease
-
-          **This build is NOT signed and NOT notarized.** Apple Developer enrollment is pending (CROW-1199). A browser download is Gatekeeper-quarantined.
-
-          Clear quarantine before first launch:
-
-          \`\`\`bash
-          xattr -dr com.apple.quarantine crow-${CROW_VERSION}-macos-universal.tar.gz
-          xattr -dr com.apple.quarantine Crow-${CROW_VERSION}-macos.app.zip
-          # after extract / unzip:
-          xattr -dr com.apple.quarantine ~/.local/lib/crow-${CROW_VERSION}
-          xattr -dr com.apple.quarantine /Applications/Crow.app
-          \`\`\`
-
-          Or right-click **Crow.app** → Open (and confirm). Do not treat this cut as a production release.
-
-          EOF
-            fi
-            cat <<EOF
-          ## Install
-
-          Download \`crow-${CROW_VERSION}-macos-universal.tar.gz\` (or the \`.zip\`) and its checksum file, verify the archive, extract it, and symlink the binaries into your \`PATH\`. Keep the extracted directory intact — \`crowd\` needs the \`.bundle\` resources next to the binaries.
-
-          \`\`\`bash
-          shasum -a 256 -c crow-${CROW_VERSION}-macos-universal.tar.gz.sha256
-          mkdir -p ~/.local/lib ~/.local/bin
-          tar -xzf crow-${CROW_VERSION}-macos-universal.tar.gz -C ~/.local/lib
-          ln -sf ~/.local/lib/crow-${CROW_VERSION}/crow ~/.local/bin/crow
-          ln -sf ~/.local/lib/crow-${CROW_VERSION}/crowd ~/.local/bin/crowd
-          \`\`\`
-
-          Unzip \`Crow-${CROW_VERSION}-macos.app.zip\` and drag **Crow.app** to \`/Applications\`. Double-clicking it starts a bundled \`crowd\` (or reuses one already listening on \`:8787\`) and opens the web UI. Quitting the window only SIGTERMs a crowd **this app spawned** — an autostart / \`make daemon-run\` daemon is left up.
-          EOF
-            if [ "${UNSIGNED_RELEASE:-}" = "true" ]; then
-              cat <<EOF
-
-          These binaries are **unsigned**. See the warning above.
-
-          Point \`crow autostart install --binary\` at the extracted **CLI** \`crowd\` (not the sidecar inside Crow.app):
-
-          \`\`\`bash
-          crow autostart install --binary ~/.local/lib/crow-${CROW_VERSION}/crowd
-          \`\`\`
-          EOF
-            else
-              cat <<EOF
-
-          The \`.app\` is **signed, notarized, and stapled**. The CLI zip cannot be stapled (Gatekeeper looks up that ticket online); the \`.app\` carries the ticket on disk.
-
-          These binaries are **signed and notarized** (Developer ID Application + notarytool). A browser download still applies Gatekeeper quarantine; first launch contacts Apple to look up the notarization ticket — you should **not** need \`xattr -d com.apple.quarantine\`.
-
-          Point \`crow autostart install --binary\` at the extracted **CLI** \`crowd\` (not the sidecar inside Crow.app) so launchd runs the signed standalone daemon:
-
-          \`\`\`bash
-          crow autostart install --binary ~/.local/lib/crow-${CROW_VERSION}/crowd
-          \`\`\`
-          EOF
-            fi
-            cat <<EOF
-
-          To build from source instead: \`make daemon CONFIG=release && make install CONFIG=release\` (unsigned CLI) or \`make app CONFIG=release\` (unsigned Crow.app). Signing details: [docs/macos-release-signing.md](https://github.com/${REPOSITORY}/blob/main/docs/macos-release-signing.md).
-          EOF
-          } > "$notes"
+          if [ "${UNSIGNED_RELEASE:-}" = "true" ]; then
+            bash scripts/write-release-notes.sh --output "$notes" --unsigned
+          else
+            bash scripts/write-release-notes.sh --output "$notes"
+          fi
 
       - name: Create GitHub Release
         if: github.event_name != 'workflow_dispatch'

@@ -236,3 +236,6 @@ jobs:
 
       - name: package-release unit tests
         run: bash scripts/package-release_test.sh
+
+      - name: write-release-notes unit tests
+        run: bash scripts/write-release-notes_test.sh

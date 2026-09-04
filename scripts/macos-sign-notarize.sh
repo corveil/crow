@@ -76,7 +76,9 @@ allow_unsigned_from_env() {
 }
 
 # Print the first non-empty argument. Used so the workflow can accept both
-# socketzero-style names and the retired Crow secret names.
+# socketzero-style names and the retired Crow secret names. The unsigned-path
+# gate in .github/workflows/release.yml copies this helper so presence checks
+# use the same first-non-empty alias semantics (CROW-1199).
 first_set() {
   local val
   for val in "$@"; do
