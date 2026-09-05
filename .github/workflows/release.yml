@@ -13,7 +13,7 @@ jobs:
     name: Test
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -38,7 +38,7 @@ jobs:
 
       - name: Upload coverage summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-summary-macos
           path: coverage/
@@ -49,7 +49,7 @@ jobs:
     name: Shell Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check scripts
         run: shellcheck scripts/*.sh
@@ -77,7 +77,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -114,7 +114,7 @@ jobs:
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -182,7 +182,7 @@ jobs:
 
       - name: Upload artifacts
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: crow-${{ env.CROW_VERSION }}-macos-universal
           path: |
@@ -212,7 +212,7 @@ jobs:
 
       - name: Create GitHub Release
         if: github.event_name != 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz
