@@ -112,14 +112,15 @@ private func makeExecutable(_ url: URL) throws -> String {
 }
 
 @Test func unsupportedPlatformReportsCleanlyInsteadOfFailing() throws {
-    let service = UnsupportedAutostart(platform: "linux")
+    let service = UnsupportedAutostart(platform: "windows")
 
     let status = try service.status(expected: AutostartSpec(binaryPath: "/usr/bin/crowd"))
 
     #expect(!status.supported)
     #expect(!status.enabled)
-    #expect(status.platform == "linux")
-    #expect(status.message.contains("645"))
+    #expect(status.platform == "windows")
+    #expect(status.message.contains("not supported"))
+    #expect(!status.message.contains("645"))
     #expect(throws: AutostartError.self) {
         _ = try service.install(AutostartSpec(binaryPath: "/usr/bin/crowd"))
     }

@@ -56,7 +56,7 @@ crow/
 │   │                                #   web-access auth, terminal WebSocket
 │   ├── CrowCLI/                     # CLI command definitions (CrowCommand + subcommands)
 │   ├── CrowIPC/                     # Unix socket JSON-RPC protocol (SocketServer/SocketClient)
-│   ├── CrowAutostart/               # Login-item installer (launchd LaunchAgent) for crowd
+│   ├── CrowAutostart/               # Login-item installer (launchd on macOS, systemd --user on Linux)
 │   ├── CrowTerminal/                # tmux backend + terminal cockpit
 │   ├── CrowGit/                     # Git operations
 │   ├── CrowProvider/                # GitHub/GitLab/Jira provider abstraction
@@ -90,7 +90,7 @@ There are two `CrowCLI` directories:
 | **EventHub**               | `Packages/CrowDaemon/`                                 | Fan-out hub that pushes `changed` nudges to every connected `/rpc` client so UIs re-fetch reactively              |
 | **TmuxBackend / cockpit**  | `Packages/CrowTerminal/`                               | Owns the tmux server and the shared cockpit; each session terminal is a tmux window. `crowd` opens a private grouped view per browser connection |
 | **SocketServer**           | `Packages/CrowIPC/`                                    | Unix socket server at `~/.local/share/crow/crow.sock` — receives JSON-RPC from the `crow` CLI                     |
-| **AutostartService**       | `Packages/CrowAutostart/`                              | Registers `crowd` to start at login (launchd LaunchAgent on macOS). Shared by `crow autostart` and the daemon's local-only `/autostart` routes; the protocol leaves room for a systemd `--user` backend |
+| **AutostartService**       | `Packages/CrowAutostart/`                              | Registers `crowd` to start at login (launchd LaunchAgent on macOS, systemd `--user` unit on Linux). Shared by `crow autostart` and the daemon's local-only `/autostart` routes |
 | **HostBridge**             | `Packages/CrowEngine/.../HostBridge.swift`             | Seam for host affordances (clipboard, open-in-editor, notifications). `crowd` uses a no-op default; the browser provides these itself where it can |
 | **JSONStore**              | `Packages/CrowPersistence/`                            | NSLock-serialized JSON persistence for sessions, worktrees, links, terminals                                      |
 

@@ -67,7 +67,7 @@ jobs:
       - name: Build & test Linux packages
         run: |
           LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \
-                          CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowMuse CrowPersistence CrowProvider CrowCLI)
+                          CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowMuse CrowPersistence CrowProvider CrowCLI CrowAutostart)
           for pkg in "${LINUX_PACKAGES[@]}"; do
             echo "==> Building & testing $pkg on Linux..."
             # --enable-code-coverage on BOTH invocations, deliberately: toggling
@@ -98,12 +98,8 @@ jobs:
       # This lane measures only what LINUX_PACKAGES lists; the rest of the tree is
       # ~64% of the lines and refreshes at release tags, per ADR 0007.
       #
-      # "Not in the allow-list" is not the same as "cannot build here":
-      # CrowAutostart is #if canImport-guarded and CrowCLI links it, so it does
-      # compile on Linux and shows up in the report as a "—" row (linked, never
-      # tested in this lane) rather than as a measured number. Adding it to
-      # LINUX_PACKAGES would turn that into a real figure — deliberately left as
-      # a follow-up, since ADR 0007 wants allow-list changes made consciously.
+      # CrowAutostart ships a systemd --user backend (CROW-1201) and is now
+      # in LINUX_PACKAGES so its injected-systemctl tests run on every PR.
       - name: Summarize coverage
         if: always()
         run: bash scripts/coverage-summary.sh --allow-empty

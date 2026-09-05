@@ -38,7 +38,7 @@ jobs:
         run: |
           bash scripts/generate-build-info.sh
           LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \
-                          CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowMuse CrowPersistence CrowProvider CrowCLI)
+                          CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowMuse CrowPersistence CrowProvider CrowCLI CrowAutostart)
           for pkg in "${LINUX_PACKAGES[@]}"; do
             echo "==> Building $pkg on Linux..."
             swift build --package-path "Packages/$pkg"

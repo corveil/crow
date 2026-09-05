@@ -132,7 +132,8 @@ private func emit(_ status: AutostartStatus, json: Bool) {
         print("  crowd:    \(installedPath)\(status.stale ? "  (stale — reinstall to re-point)" : "")")
     }
     if let plistPath = status.plistPath, status.enabled {
-        print("  plist:    \(plistPath)")
+        let kind = plistPath.hasSuffix(".service") ? "unit:" : "plist:"
+        print("  \(kind)    \(plistPath)")
     }
     if let logPath = status.logPath, status.enabled {
         print("  log:      \(logPath)")

@@ -60,11 +60,11 @@ crow add-merge-label --session <uuid>           → {"ok":true,"session_id":"...
 
 ### Daemon Autostart
 
-Runs locally, not over the socket — these work with `crowd` down (CROW-769). macOS only for now.
+Runs locally, not over the socket — these work with `crowd` down (CROW-769). macOS (launchd) and Linux (systemd `--user`).
 
 ```
 crow autostart install [--binary PATH] [--host H] [--port N] [--dev-root PATH] [--socket PATH]
-                                                → registers a launchd LaunchAgent so crowd starts at login (idempotent; re-points after an upgrade)
+  → registers a login item so crowd starts at login (idempotent; re-points after an upgrade)
 crow autostart uninstall                        → removes the login item
 crow autostart status [--json]                  → {enabled, running, loaded, stale, plistPath, logPath, ...}
 ```

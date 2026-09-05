@@ -12,9 +12,10 @@ import Glibc
 /// nothing and needs no method to exist. It backs two things:
 ///   - `AutostartStatus.running`, so status can report enabled-vs-running
 ///     separately, and
-///   - the install-time decision to *not* touch launchd while a daemon is
-///     already up (`LaunchdAutostart.install`) — bootstrapping a second one
-///     would trip `crowd`'s single-instance / store-writer locks.
+///   - the install-time decision to *not* start a second instance while a
+///     daemon is already up (`LaunchdAutostart.install` /
+///     `SystemdAutostart.install`) — that would trip `crowd`'s
+///     single-instance / store-writer locks.
 public enum DaemonProbe {
     /// The well-known socket, matching `SocketServer.defaultSocketPath()` and
     /// the `CROW_SOCKET` override the CLI and hooks honor. Duplicated rather

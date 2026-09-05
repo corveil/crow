@@ -1,13 +1,13 @@
 import Foundation
 
-/// Registering `crowd` to start at login (CROW-769).
+/// Registering `crowd` to start at login (CROW-769, CROW-1201).
 ///
 /// ADR-0010 retired the macOS app, which used to launch at login and bring its
 /// daemon with it. `crowd` had no equivalent, so after a reboot Crow simply
 /// wasn't running until the user started it by hand. This package closes that
-/// gap behind a platform-neutral protocol: macOS gets a launchd LaunchAgent
-/// today, and the Linux daemon effort (#645) can add a `systemctl --user` unit
-/// without reshaping the API or the `crow autostart` CLI surface.
+/// gap behind a platform-neutral protocol: macOS gets a launchd LaunchAgent,
+/// Linux a systemd `--user` unit. The `crow autostart` CLI and `/autostart`
+/// routes stay the same on both.
 public protocol AutostartService: Sendable {
     /// Register (or re-point) the login item and report the resulting state.
     /// Idempotent: installing twice leaves exactly one registration.
@@ -185,12 +185,14 @@ public let systemCommandRunner: CommandRunner = { executable, arguments in
 // MARK: - Factory
 
 public enum Autostart {
-    /// The backend for the host platform. macOS → launchd LaunchAgent; anything
-    /// else → an `UnsupportedAutostart` that reports cleanly instead of failing
-    /// obscurely, until #645 adds the systemd `--user` backend.
+    /// The backend for the host platform. macOS → launchd LaunchAgent; Linux →
+    /// systemd `--user`; anything else → an `UnsupportedAutostart` that reports
+    /// cleanly instead of failing obscurely.
     public static func service() -> AutostartService {
         #if os(macOS)
         return LaunchdAutostart()
+        #elseif os(Linux)
+        return SystemdAutostart()
         #else
         return UnsupportedAutostart()
         #endif
@@ -218,7 +220,7 @@ public struct UnsupportedAutostart: AutostartService {
 
     private var explanation: String {
         "Autostart is not supported on \(platform) yet — start crowd yourself (a terminal, tmux, "
-            + "or your own systemd --user unit). Tracking: https://github.com/corveil/crow/issues/645"
+            + "or your own init unit)."
     }
 
     public func install(_ spec: AutostartSpec) throws -> AutostartStatus {
