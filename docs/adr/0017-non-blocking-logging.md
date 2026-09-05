@@ -118,6 +118,7 @@ Two sites also passed a 64-bit `Int` to `%d`, which worked only by ABI accident.
   (the log directory resolves to a temp dir under a test runner)
 - Code: `Packages/CrowCore/Sources/CrowCore/CrowLog.swift`,
   `Packages/CrowAutostart/Sources/CrowAutostart/LaunchdAutostart.swift`,
+  `Packages/CrowAutostart/Sources/CrowAutostart/SystemdAutostart.swift`,
   `scripts/check-no-nslog.sh`,
   `Packages/CrowTerminal/Sources/CrowTerminal/TmuxController.swift` (the bounded-drain
   half of the same defect class),

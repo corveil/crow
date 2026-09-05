@@ -33,7 +33,7 @@ This is one of two subcommands that do not require a running daemon (see `crow a
 
 ### `crow autostart install | uninstall | status`
 
-Registers `crowd` to start at login — a launchd LaunchAgent at `~/Library/LaunchAgents/com.corveil.crowd.plist`, logging to `~/Library/Logs/crow/crowd.log`. Runs locally instead of over the socket, so it works with the daemon down (which is the point). macOS only for now; on other platforms it reports `supported: false` rather than pretending to register anything. The same control lives at Settings → General → Autostart for a local browser.
+Registers `crowd` to start at login. On macOS this is a launchd LaunchAgent at `~/Library/LaunchAgents/com.corveil.crowd.plist`, logging to `~/Library/Logs/crow/crowd.log`. On Linux it is a systemd `--user` unit at `~/.config/systemd/user/com.corveil.crowd.service`, logging to `$XDG_STATE_HOME/crow/crowd.log` (falling back to `~/.local/state/crow/crowd.log`). Runs locally instead of over the socket, so it works with the daemon down (which is the point). Other platforms report `supported: false` rather than pretending to register anything. The same control lives at Settings → General → Autostart for a local browser.
 
 ```bash
 crow autostart install
@@ -42,7 +42,7 @@ crow autostart status --json
 crow autostart uninstall
 ```
 
-Bare `crow autostart` is `status`. `install` is idempotent and re-points the login item at the current `crowd` on every run, so an upgrade never leaves a stale plist. When a `crowd` is already running, `install` writes the login item and leaves launchd alone — it takes effect at next login rather than spawning a duplicate the single-instance guard would refuse.
+Bare `crow autostart` is `status`. `install` is idempotent and re-points the login item at the current `crowd` on every run, so an upgrade never leaves a stale registration. When a `crowd` is already running, `install` writes the login item and leaves the live process alone — it takes effect at next login rather than spawning a duplicate the single-instance guard would refuse.
 
 | Flag         | Applies to        | Description                                                              |
 | ------------ | ----------------- | ------------------------------------------------------------------------ |
@@ -53,7 +53,7 @@ Bare `crow autostart` is `status`. `install` is idempotent and re-points the log
 | `--socket`   | install           | Unix socket path passed to `crowd`                                       |
 | `--json`     | all               | Print the status object instead of the human summary                     |
 
-The status object reports `enabled` (registered at login), `running` (a `crowd` is answering right now), `loaded` (launchd knows it in this session), and `stale` (the registration points at a different binary than `--binary` / the resolved one).
+The status object reports `enabled` (registered at login), `running` (a `crowd` is answering right now), `loaded` (launchd / systemd knows it in this session), and `stale` (the registration points at a different binary than `--binary` / the resolved one).
 
 ---
 
