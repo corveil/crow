@@ -261,11 +261,14 @@ enum LaunchScaffold {
         // Grok Build has no arm here, by design (not omission): it installs no
         // global config a prior Crow could leave behind — its hooks are the
         // per-worktree `.grok/hooks/crow.json` written by the engine's generic
-        // `agent.hookConfigWriter` path, its trust store is seeded per-worktree by
-        // `GrokTrustSeeder`, and it has no dev-root scaffold or global MCP bridge
-        // in Phase A (the launcher prompt uses `acli` for Jira). Nothing to clean
-        // up at daemon boot, so there's no `AgentRegistry.shared.agent(for: .grok)`
-        // block (#861 review r8).
+        // `agent.hookConfigWriter` path and its trust store is seeded
+        // per-worktree by `GrokTrustSeeder`. The Jira MCP bridge is NOT run
+        // here: gating it on "a `grok` binary is on PATH" would copy the user's
+        // token onto a box that never launches a Crow Grok session. Instead it
+        // runs when a Grok agent actually launches — from `SessionService`,
+        // same launch-gated posture as Cursor (#829 / CROW-1205). Nothing to
+        // clean up at daemon boot, so there's no
+        // `AgentRegistry.shared.agent(for: .grok)` block (#861 review r8).
         //
         // Muse Code is the same shape (#1033): per-worktree `.muse/hooks.json`
         // written by the engine, per-launch `--trust-workspace` (no durable

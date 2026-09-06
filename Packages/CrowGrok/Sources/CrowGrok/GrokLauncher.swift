@@ -10,8 +10,9 @@ import CrowCore
 /// run-then-continue commands from the pre-written prompt file. Seeded `.work`
 /// (this type's `launchCommand`, plus `setup.sh` `launch_grok`) uses grok
 /// 1.0.5's positional `[PROMPT]` so the TUI is steerable from turn one
-/// (CROW-1144). Jira MCP bridge is deferred to Phase B — the ticket fetch
-/// falls back to `acli`, like Codex.
+/// (CROW-1144). The Jira arm prefers the `jira` MCP (`GrokMCPConfigWriter`
+/// mirrors it from `~/.claude.json` into `config.toml` at launch) and keeps
+/// `acli` only as the no-MCP fallback.
 public actor GrokLauncher {
     public init() {}
 
@@ -20,7 +21,8 @@ public actor GrokLauncher {
         worktrees: [SessionWorktree],
         ticketURL: String?,
         provider: Provider?,
-        codeProvider: Provider? = nil
+        codeProvider: Provider? = nil,
+        jiraMCPAvailable: Bool = false
     ) -> String {
         var lines: [String] = []
         lines.append("Before editing anything, sketch a brief plan covering:")
@@ -54,9 +56,18 @@ public actor GrokLauncher {
                 lines.append("```")
             case .jira:
                 if let key = Validation.jiraKey(from: url) {
-                    lines.append("```bash")
-                    lines.append("acli jira workitem view \(key) --fields summary,status,description,comment")
-                    lines.append("```")
+                    if jiraMCPAvailable {
+                        // Prefer the mirrored `jira` MCP (`GrokMCPConfigWriter`
+                        // writes `[mcp_servers.jira]` at launch), with `acli`
+                        // as the fallback for the no-bridge case.
+                        lines.append("Fetch this work item via the **`jira` MCP server** (bridged into this session): call `jira_get_issue` for key `\(key)`, and use the `jira_*` MCP tools for any Jira read/create/transition/comment. If the `jira` MCP isn't available, fall back to `acli jira workitem view \(key) --fields summary,status,description,comment`.")
+                    } else {
+                        lines.append("```bash")
+                        lines.append("acli jira workitem view \(key) --fields summary,status,description,comment")
+                        lines.append("```")
+                    }
+                } else if jiraMCPAvailable {
+                    lines.append("URL: \(url) — fetch it via the `jira` MCP server (`jira_get_issue`), or `acli` if the MCP isn't available.")
                 } else {
                     lines.append("URL: \(url)")
                 }

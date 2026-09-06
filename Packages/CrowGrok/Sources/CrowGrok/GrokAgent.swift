@@ -155,7 +155,8 @@ public struct GrokAgent: CodingAgent {
             worktrees: worktrees,
             ticketURL: ticketURL,
             provider: provider,
-            codeProvider: codeProvider
+            codeProvider: codeProvider,
+            jiraMCPAvailable: GrokMCPConfigWriter.claudeHasJiraServer()
         )
     }
 
