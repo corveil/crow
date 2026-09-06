@@ -34,7 +34,8 @@ struct GrokLauncherTests {
         #expect(prompt.contains("gh issue view https://github.com/o/r/issues/7 --comments"))
     }
 
-    @Test func jiraTicketFallsBackToAcliNotMCP() async {
+    @Test func jiraTicketFallsBackToAcliWhenNoBridge() async {
+        // A Grok-primary host with no Claude Jira MCP stays on `acli`.
         let session = Session(name: "s", agentKind: .grok)
         let prompt = await launcher.generatePrompt(
             session: session, worktrees: [worktree()],
@@ -42,6 +43,21 @@ struct GrokLauncherTests {
         #expect(prompt.contains("acli jira workitem view ABC-123"))
         #expect(prompt.contains("jira_get_issue") == false)
         #expect(prompt.lowercased().contains("mcp") == false)
+    }
+
+    @Test func jiraTicketNamesMCPToolsWhenBridgeExpected() async {
+        let session = Session(name: "s", agentKind: .grok)
+        let prompt = await launcher.generatePrompt(
+            session: session, worktrees: [worktree()],
+            ticketURL: "https://x.atlassian.net/browse/ABC-123", provider: .jira, codeProvider: nil,
+            jiraMCPAvailable: true)
+        #expect(prompt.contains("`jira` MCP server"))
+        #expect(prompt.contains("jira_get_issue"))
+        #expect(prompt.contains("jira_*"))
+        #expect(prompt.contains("ABC-123"))
+        // `acli` may still appear as a documented fallback, but not as the
+        // primary bare command block it used to be.
+        #expect(prompt.contains("```bash\nacli") == false)
     }
 
     @Test func workSeedMaterializesPromptWith0600AndInteractiveEval() async throws {

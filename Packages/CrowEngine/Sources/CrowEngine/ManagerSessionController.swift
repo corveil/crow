@@ -11,7 +11,7 @@ import CrowTerminal
 
 /// Manager-session lifecycle + AI-gateway resolution (CROW-1113), extracted from
 /// `SessionService`. Owns ensure/restart/create-Manager, the Manager launch
-/// command + hook config + gateway env writes, the Cursor MCP bridge sync, the
+/// command + hook config + gateway env writes, the Cursor/Grok MCP bridge sync, the
 /// exit monitor, and the pure workspace-gateway match rules (CROW-402/891/969).
 /// Behavior-preserving: same launch-command shape, same per-agent gateway/hook
 /// gating, same two-lookup workspace match. Reaches `appState`, the shared
@@ -215,6 +215,9 @@ final class ManagerSessionController {
         if session.agentKind == .cursor {
             syncCursorMCPBridge()
         }
+        if session.agentKind == .grok {
+            syncGrokMCPBridge()
+        }
         // Clean up any hook config a *previous* Manager agent left in dirPath, so
         // switching the Manager's agent (e.g. Cursor → Claude) doesn't leave a
         // stale `.cursor/hooks.json` pointing at a dead manager UUID. The
@@ -294,6 +297,16 @@ final class ManagerSessionController {
     func syncCursorMCPBridge() {
         Task.detached(priority: .utility) {
             CursorMCPConfigWriter.bridgeJiraMCPDefault()
+        }
+    }
+
+    /// Sync the user's Jira MCP into Grok's global `config.toml` when a Grok
+    /// agent is actually launching — same launch-gated posture as Cursor
+    /// (CROW-1205). A box that merely has `grok` on PATH never gets the token
+    /// copy. Off-main + fire-and-forget: the write is global and self-heals.
+    func syncGrokMCPBridge() {
+        Task.detached(priority: .utility) {
+            GrokMCPConfigWriter.bridgeJiraMCPDefault()
         }
     }
 
@@ -680,6 +693,7 @@ extension SessionService {
         manager.writeManagerHookConfig(for: session, dirPath: dirPath)
     }
     func syncCursorMCPBridge() { manager.syncCursorMCPBridge() }
+    func syncGrokMCPBridge() { manager.syncGrokMCPBridge() }
     func workspaceGatewayResolved(for sessionID: UUID) -> GatewayResolver.Resolved? {
         manager.workspaceGatewayResolved(for: sessionID)
     }

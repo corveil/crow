@@ -38,7 +38,7 @@ capabilities, update this table in the same PR.
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065); **`Interrupt` stays sync** (CROW-1177; mutates completion) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ✅ mirrored from `~/.claude.json` into `~/.grok/config.toml` (CROW-1205) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ positional `[PROMPT]` (`.work` seed, CROW-1144); run-then-`-c` (`.job`/`.review`) | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ | ⚠️ trust seed only (`--trust-workspace`, per-launch, withheld from `.review`) |
@@ -64,7 +64,7 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > |---|---|---|
 > | Resume / continue | Codex `resume --last`, OpenCode `--continue` (history caveat already closed by #547) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 |
 > | Auto-permission (Codex) | Codex `-a never -s workspace-write` | #830 ✅ landed — Cursor ✅ landed #829 |
-> | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 (file bridge) |
+> | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 (file bridge) — Grok ✅ landed #1205 (file bridge) |
 > | Review (Codex) | `codex review --base <branch>` / `codex exec review` | #830 ✅ landed |
 > | Hook → session scope | `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 |
 > | Remote control (Codex) | experimental `codex remote-control` / `--remote` | ✅ **closed [CROW-1001](https://github.com/corveil/crow/issues/1001)** — badge flipped on the `crow send` path; native RC pinned as non-viable |
@@ -740,10 +740,24 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   `LaunchScaffold` (CROW-831), the file-based analogue of Codex's `config.toml`
   mirror. It un-mirrors when the source `jira` disappears and skips user-authored
   entries via a `0600` provenance sidecar.
-- **Grok, Antigravity, Muse:** no MCP bridge yet — all three fall back to the
-  same `acli jira workitem view <key> --fields …` prompt line. The gap is
+- **Grok:** the `jira` MCP is **mirrored** into Grok's native
+  `<$GROK_HOME or ~/.grok>/config.toml` (`[mcp_servers.jira]`) by
+  `GrokMCPConfigWriter` (CROW-1205). Same launch-gated posture as Cursor: it
+  runs when a Grok agent actually launches (worker auto-launch, Manager,
+  handoff, brand-new-terminal paste), not at daemon boot, so a box that merely
+  has `grok` on PATH never gets the token copy. Merge-preserving / append-only
+  — a user-authored `[mcp_servers.jira]` is never overwritten; a `0600`
+  provenance sidecar lets Crow refresh or un-mirror its own write. The
+  `GrokLauncher` prompt instructs the `jira_*` MCP tools when a Claude `jira`
+  source is present, and keeps `acli` only as the no-MCP fallback. Grok's
+  compat scan of `~/.claude.json` / `.cursor/mcp.json` still exists; this is
+  the Crow-owned native table so a Grok-primary install (or
+  `[compat.claude] mcps = false`) is not the only path. Review clones still
+  strip `.grok/config.toml` (`stripGrokConfigFromReviewClone`).
+- **Antigravity, Muse:** no MCP bridge yet — both fall back to the same
+  `acli jira workitem view <key> --fields …` prompt line. The gap is
   **MCP**, not Jira ticket-fetch: every harness can fetch the ticket, just via
-  `acli` rather than the `jira` MCP server.
+  `acli` rather than the `jira` MCP server. (Tier-2; file separately.)
 
 ### Review (`/crow-review-pr`)
 

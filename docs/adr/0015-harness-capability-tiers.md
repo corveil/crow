@@ -396,9 +396,11 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    Jira ticket-fetch: every harness can still fetch the ticket via `acli`.
    *(Observed at authoring; since closed — Cursor bridges `jira` into
    `~/.cursor/mcp.json` (#829), Codex mirrors `~/.claude.json` into `config.toml`
-   (#830), and OpenCode mirrors it into `opencode.json`
-   ([CROW-831](https://github.com/corveil/crow/issues/831)). Grok / Antigravity /
-   Muse still fall back to `acli`. Live state: `docs/agent-harness-matrix.md`.)*
+   (#830), OpenCode mirrors it into `opencode.json`
+   ([CROW-831](https://github.com/corveil/crow/issues/831)), and Grok mirrors it
+   into `~/.grok/config.toml` ([CROW-1205](https://github.com/corveil/crow/issues/1205)).
+   Antigravity / Muse still fall back to `acli`. Live state:
+   `docs/agent-harness-matrix.md`.)*
 
 7. **Non-Claude hooks are global-scope, session resolved by `cwd`.** Only Claude
    writes a per-worktree config keyed by `--session <UUID>`. Cursor
