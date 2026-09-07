@@ -163,7 +163,8 @@ public struct AntigravityAgent: CodingAgent {
             worktrees: worktrees,
             ticketURL: ticketURL,
             provider: provider,
-            codeProvider: codeProvider
+            codeProvider: codeProvider,
+            jiraMCPAvailable: AntigravityMCPConfigWriter.claudeHasJiraServer()
         )
     }
 

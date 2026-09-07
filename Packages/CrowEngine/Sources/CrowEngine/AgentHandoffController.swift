@@ -156,7 +156,7 @@ final class AgentHandoffController {
             // separate `.grok/` file. Full double-fire rationale in the helper (r8).
             SessionService.stripPriorCompatHooksForGrokHandoff(worktreePath: worktree.worktreePath)
         }
-        // Handing off to Cursor / Grok → sync its global Jira MCP (this path
+        // Handing off to Cursor / Grok / Antigravity → sync its global Jira MCP (this path
         // selects the agent without touching config, so a boot-time gate
         // would miss it).
         //
@@ -172,6 +172,9 @@ final class AgentHandoffController {
         }
         if target.kind == .grok {
             owner.syncGrokMCPBridge()
+        }
+        if target.kind == .antigravity {
+            owner.syncAntigravityMCPBridge()
         }
 
         // Persist the new agent only after launch prep succeeds so register /

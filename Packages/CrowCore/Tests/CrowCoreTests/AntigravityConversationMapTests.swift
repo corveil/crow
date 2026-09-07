@@ -13,6 +13,22 @@ import Testing
         #expect(p == "/custom/gem/antigravity-cli")
     }
 
+    @Test func configHomeDefaultsToGeminiConfig() {
+        let p = AntigravityHome.configHome(environment: [:])
+        #expect(p.hasSuffix("/.gemini/config"))
+        #expect(AntigravityHome.mcpConfigPath(environment: [:])
+            .hasSuffix("/.gemini/config/mcp_config.json"))
+    }
+
+    @Test func configHomeHonorsGeminiConfigHomeAndTreatsEmptyAsUnset() {
+        #expect(AntigravityHome.configHome(environment: ["GEMINI_CONFIG_HOME": "/custom/cfg"])
+            == "/custom/cfg")
+        #expect(AntigravityHome.mcpConfigPath(environment: ["GEMINI_CONFIG_HOME": "/custom/cfg"])
+            == "/custom/cfg/mcp_config.json")
+        let fallback = AntigravityHome.configHome(environment: ["GEMINI_CONFIG_HOME": ""])
+        #expect(fallback.hasSuffix("/.gemini/config"))
+    }
+
     @Test func brainDirAndTranscriptPathDerivation() {
         let brain = AntigravityHome.brainDir(environment: ["GEMINI_HOME": "/g"])
         #expect(brain == "/g/antigravity-cli/brain")

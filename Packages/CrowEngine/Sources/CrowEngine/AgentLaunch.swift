@@ -1,5 +1,6 @@
 import Foundation
 import CrowCore
+import CrowAntigravity
 import CrowCursor
 import CrowGrok
 
@@ -34,10 +35,10 @@ public enum AgentLaunch {
                 CrowLog.info("[AgentLaunch] Failed to write hook config for session \(sessionID.uuidString): \(error.localizedDescription)")
             }
         }
-        // Cursor / Grok launching via a brand-new terminal (#408 deferred paste)
+        // Cursor / Grok / Antigravity launching via a brand-new terminal (#408 deferred paste)
         // or `crow send` — the auto-launch/Manager/handoff paths don't run
         // through here, so this is where those launches get the global Jira MCP
-        // synced (#829 / CROW-1205). Off-main + fire-and-forget: the bridge
+        // synced (#829 / CROW-1205 / CROW-1207). Off-main + fire-and-forget: the bridge
         // write is global and self-heals, so it must not block the launch text
         // return.
         if agent.kind == .cursor {
@@ -48,6 +49,11 @@ public enum AgentLaunch {
         if agent.kind == .grok {
             Task.detached(priority: .utility) {
                 GrokMCPConfigWriter.bridgeJiraMCPDefault()
+            }
+        }
+        if agent.kind == .antigravity {
+            Task.detached(priority: .utility) {
+                AntigravityMCPConfigWriter.bridgeJiraMCPDefault()
             }
         }
         // OTEL telemetry env vars are Claude-specific — Codex has no equivalent

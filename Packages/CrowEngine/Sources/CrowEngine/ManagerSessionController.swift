@@ -2,6 +2,7 @@ import Foundation
 import CrowClaude
 import CrowCodex
 import CrowCore
+import CrowAntigravity
 import CrowCursor
 import CrowGit
 import CrowGrok
@@ -11,7 +12,7 @@ import CrowTerminal
 
 /// Manager-session lifecycle + AI-gateway resolution (CROW-1113), extracted from
 /// `SessionService`. Owns ensure/restart/create-Manager, the Manager launch
-/// command + hook config + gateway env writes, the Cursor/Grok MCP bridge sync, the
+/// command + hook config + gateway env writes, the Cursor/Grok/Antigravity MCP bridge sync, the
 /// exit monitor, and the pure workspace-gateway match rules (CROW-402/891/969).
 /// Behavior-preserving: same launch-command shape, same per-agent gateway/hook
 /// gating, same two-lookup workspace match. Reaches `appState`, the shared
@@ -218,6 +219,9 @@ final class ManagerSessionController {
         if session.agentKind == .grok {
             syncGrokMCPBridge()
         }
+        if session.agentKind == .antigravity {
+            syncAntigravityMCPBridge()
+        }
         // Clean up any hook config a *previous* Manager agent left in dirPath, so
         // switching the Manager's agent (e.g. Cursor → Claude) doesn't leave a
         // stale `.cursor/hooks.json` pointing at a dead manager UUID. The
@@ -307,6 +311,17 @@ final class ManagerSessionController {
     func syncGrokMCPBridge() {
         Task.detached(priority: .utility) {
             GrokMCPConfigWriter.bridgeJiraMCPDefault()
+        }
+    }
+
+    /// Sync the user's Jira MCP into Antigravity's global `mcp_config.json` when
+    /// an Antigravity agent is actually launching — same launch-gated posture as
+    /// Cursor (#829) / Grok (CROW-1205). A box that merely has `agy` on PATH
+    /// never gets the token copy. Off-main + fire-and-forget: the write is
+    /// global and self-heals.
+    func syncAntigravityMCPBridge() {
+        Task.detached(priority: .utility) {
+            AntigravityMCPConfigWriter.bridgeJiraMCPDefault()
         }
     }
 
@@ -694,6 +709,7 @@ extension SessionService {
     }
     func syncCursorMCPBridge() { manager.syncCursorMCPBridge() }
     func syncGrokMCPBridge() { manager.syncGrokMCPBridge() }
+    func syncAntigravityMCPBridge() { manager.syncAntigravityMCPBridge() }
     func workspaceGatewayResolved(for sessionID: UUID) -> GatewayResolver.Resolved? {
         manager.workspaceGatewayResolved(for: sessionID)
     }
