@@ -27,6 +27,32 @@ public enum AntigravityHome {
         return (base as NSString).appendingPathComponent("antigravity-cli")
     }
 
+    /// User-scope config home (`hooks.json`, `mcp_config.json`). Honors
+    /// `$GEMINI_CONFIG_HOME` when set and non-empty, otherwise
+    /// `~/.gemini/config` — the path official Antigravity MCP docs name for
+    /// global servers (`~/.gemini/config/mcp_config.json`). Distinct from
+    /// `path()` (`$GEMINI_HOME` → `~/.gemini/antigravity-cli`, the CLI app-data
+    /// root). Empty `GEMINI_CONFIG_HOME=` is treated as unset so it never
+    /// becomes a CWD-relative path.
+    public static func configHome(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        if let env = environment["GEMINI_CONFIG_HOME"], !env.isEmpty {
+            return env
+        }
+        return NSString(string: "~/.gemini/config").expandingTildeInPath
+    }
+
+    /// `<configHome>/mcp_config.json` — the user-scope MCP file `agy` loads
+    /// (CROW-1207). Workspace-local `.agents/mcp_config.json` is a different
+    /// surface (stripped from review clones; Crow does not write it).
+    public static func mcpConfigPath(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        (configHome(environment: environment) as NSString)
+            .appendingPathComponent("mcp_config.json")
+    }
+
     /// `<home>/brain` — where `agy` pools every conversation's durable transcript,
     /// keyed only by conversation id (flat/global, like Codex's `sessions`).
     public static func brainDir(
@@ -82,9 +108,10 @@ public enum AntigravityHome {
 /// transcripts — a file with no map entry is dropped, never guessed (the same
 /// invariant as Codex's cwd filter).
 ///
-/// Lives in `CrowCore` because both the writer (`CrowEngine`) and the reader
-/// (`CrowAntigravity`) import CrowCore, and CrowEngine does not depend on
-/// CrowAntigravity.
+/// Lives in `CrowCore` because the backfill scanner (`CrowCore`) and the
+/// reader (`CrowAntigravity`) both need it. (CrowEngine also depends on
+/// CrowAntigravity for the Jira MCP bridge, CROW-1207, but the scanner
+/// cannot import that package.)
 ///
 /// ⚠️ **Docs-derived, pending live-verify (CROW-1107).** See `AntigravityHome`.
 /// The worktree is taken from Crow's own session ownership (never the payload), so

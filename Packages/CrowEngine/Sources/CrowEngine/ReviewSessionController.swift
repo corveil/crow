@@ -364,17 +364,19 @@ final class ReviewSessionController {
     /// whole plausibly-discovered surface rather than the native dir alone —
     /// mirroring `stripGrokConfigFromReviewClone`, which strips `.grok/` **plus**
     /// `.cursor/`/`.claude/`/`.mcp.json` for the same reason (#861 r12, Red):
-    ///  - `.agents/` — Antigravity's native project hooks (and any project-scope
-    ///    config Crow's deferred MCP bridge would place there, modeled on
-    ///    `CursorMCPConfigWriter`'s `.cursor/mcp.json`).
+    ///  - `.agents/` — Antigravity's native project hooks, plus workspace-local
+    ///    `.agents/mcp_config.json` (attacker-controlled MCP). Crow's user-scope
+    ///    Jira bridge writes `~/.gemini/config/mcp_config.json`
+    ///    (`AntigravityMCPConfigWriter`, CROW-1207), not this project file.
     ///  - `.gemini/` — `agy` is Gemini-derived (`GEMINI_CONFIG_HOME`, default
     ///    `~/.gemini/config`, `LaunchScaffold`), so a project-scope
     ///    `.gemini/settings.json` can carry `mcpServers` (a `{command,args}` server
     ///    spawned at startup) or an `always-proceed` approval mode that would
     ///    disarm the gate the review otherwise leans on. Stripped **defensively**
-    ///    pending the v1.1.7 probe (#902 review r7, Red): removing a path `agy`
-    ///    turns out not to read costs nothing on a throwaway review clone, and a
-    ///    miss here is unsandboxed RCE with no second layer.
+    ///    (#902 review r7, Red): removing a path `agy` turns out not to read
+    ///    costs nothing on a throwaway review clone, and a miss here is
+    ///    unsandboxed RCE with no second layer. User-scope MCP is a different
+    ///    surface from this attacker-controlled project layer.
     /// Working-tree removal only (the git index entry survives), same as
     /// `stripCursorConfigFromReviewClone` — so a *committed* `.agents/hooks.json`
     /// still trips `AntigravityHookConfigWriter`'s git-tracked guard and Crow's

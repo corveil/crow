@@ -245,14 +245,13 @@ enum LaunchScaffold {
             // workspace hooks and run both, so any global config a prior Crow
             // installed under `~/.gemini/config/` would double-fire every event —
             // strip our managed entries there (user entries survive). Doesn't need
-            // `crowPath`. No dev-root scaffold and no MCP bridge in Phase A: the
-            // launcher prompt uses `acli` for Jira (no MCP writer yet — deferred),
-            // and Antigravity reads no shared `AGENTS.md` we own.
-            //
-            // Empty `GEMINI_CONFIG_HOME=` treated as unset, same reason as
-            // `CODEX_HOME`/`CURSOR_CONFIG_DIR` above.
-            let geminiConfigHome = nonEmptyEnv("GEMINI_CONFIG_HOME")
-                ?? NSString(string: "~/.gemini/config").expandingTildeInPath
+            // `crowPath`. No dev-root scaffold, and the Jira MCP bridge is NOT run
+            // here: gating it on "agy is on PATH" would copy the user's token onto
+            // a box that never launches a Crow Antigravity session. Instead it
+            // runs when an Antigravity agent actually launches — from
+            // `SessionService`, same launch-gated posture as Cursor/Grok (#829 /
+            // CROW-1205 / CROW-1207). Antigravity reads no shared `AGENTS.md` we own.
+            let geminiConfigHome = AntigravityHome.configHome()
             attempt("Antigravity global hook cleanup") {
                 AntigravityHookConfigWriter.removeManagedGlobalConfig(geminiConfigHome: geminiConfigHome)
             }

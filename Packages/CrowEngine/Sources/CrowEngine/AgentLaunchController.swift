@@ -403,12 +403,15 @@ final class AgentLaunchController {
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: nil)
         }
-        // Cursor / Grok worker launching → ensure its global Jira MCP is synced.
+        // Cursor / Grok / Antigravity worker launching → ensure its global Jira MCP is synced.
         if agent.kind == .cursor {
             owner.syncCursorMCPBridge()
         }
         if agent.kind == .grok {
             owner.syncGrokMCPBridge()
+        }
+        if agent.kind == .antigravity {
+            owner.syncAntigravityMCPBridge()
         }
 
         let rcEnabled = appState.remoteControlEnabled

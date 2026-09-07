@@ -36,9 +36,8 @@ struct AntigravityLauncherTests {
         #expect(prompt.contains("gh issue view https://github.com/o/r/issues/7 --comments"))
     }
 
-    @Test func jiraTicketFallsBackToAcliNotMCP() async {
-        // Phase A has no MCP bridge for Antigravity — the Jira branch must
-        // instruct `acli`, never a `jira_*` MCP tool.
+    @Test func jiraTicketFallsBackToAcliWhenNoBridge() async {
+        // An Antigravity-primary host with no Claude Jira MCP stays on `acli`.
         let session = Session(name: "s", agentKind: .antigravity)
         let prompt = await launcher.generatePrompt(
             session: session, worktrees: [worktree()],
@@ -46,6 +45,19 @@ struct AntigravityLauncherTests {
         #expect(prompt.contains("acli jira workitem view ABC-123"))
         #expect(prompt.contains("jira_get_issue") == false)
         #expect(prompt.lowercased().contains("mcp") == false)
+    }
+
+    @Test func jiraTicketNamesMCPToolsWhenBridgeExpected() async {
+        let session = Session(name: "s", agentKind: .antigravity)
+        let prompt = await launcher.generatePrompt(
+            session: session, worktrees: [worktree()],
+            ticketURL: "https://x.atlassian.net/browse/ABC-123", provider: .jira, codeProvider: nil,
+            jiraMCPAvailable: true)
+        #expect(prompt.contains("`jira` MCP server"))
+        #expect(prompt.contains("jira_get_issue"))
+        #expect(prompt.contains("jira_*"))
+        #expect(prompt.contains("ABC-123"))
+        #expect(prompt.contains("```bash\nacli") == false)
     }
 
     // MARK: - launchCommand (handoff)

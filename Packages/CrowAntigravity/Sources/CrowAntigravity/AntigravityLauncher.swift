@@ -2,15 +2,11 @@ import Foundation
 import CrowCore
 
 /// Generates initial prompts for Antigravity (`agy`) sessions and materializes
-/// them for the agent-handoff path. Mirrors `CursorLauncher` / `CodexLauncher`
+/// them for the agent-handoff path. Mirrors `CursorLauncher` / `GrokLauncher`
 /// — plan-first preamble, workspace table, ticket info — with **no** Claude
-/// slash commands and **no** `jira` MCP routing.
-///
-/// Phase A ships no MCP config writer for Antigravity (deferred — file-based
-/// `mcp_config.json` bridge, like `CursorMCPConfigWriter`, is a follow-up), so
-/// the Jira branch instructs `acli` directly, matching Codex/OpenCode. Every
-/// harness can still fetch the ticket; the gap is the MCP transport, not the
-/// fetch (#860).
+/// slash commands. The Jira arm prefers the `jira` MCP
+/// (`AntigravityMCPConfigWriter` mirrors it from `~/.claude.json` into
+/// `mcp_config.json` at launch) and keeps `acli` only as the no-MCP fallback.
 public actor AntigravityLauncher {
     public init() {}
 
@@ -19,7 +15,8 @@ public actor AntigravityLauncher {
         worktrees: [SessionWorktree],
         ticketURL: String?,
         provider: Provider?,
-        codeProvider: Provider? = nil
+        codeProvider: Provider? = nil,
+        jiraMCPAvailable: Bool = false
     ) -> String {
         var lines: [String] = []
         lines.append("Before editing anything, sketch a brief plan covering:")
@@ -52,11 +49,17 @@ public actor AntigravityLauncher {
                 lines.append("glab issue view \(url) --comments")
                 lines.append("```")
             case .jira:
-                lines.append("")
                 if let key = Validation.jiraKey(from: url) {
-                    // No `jira` MCP bridge for Antigravity in Phase A — instruct
-                    // `acli` directly, like Codex/OpenCode.
-                    lines.append("Fetch this work item with `acli jira workitem view \(key) --fields summary,status,description,comment`.")
+                    if jiraMCPAvailable {
+                        // Prefer the mirrored `jira` MCP (`AntigravityMCPConfigWriter`
+                        // writes `mcpServers.jira` at launch), with `acli` as the
+                        // fallback for the no-bridge case.
+                        lines.append("Fetch this work item via the **`jira` MCP server** (bridged into this session): call `jira_get_issue` for key `\(key)`, and use the `jira_*` MCP tools for any Jira read/create/transition/comment. If the `jira` MCP isn't available, fall back to `acli jira workitem view \(key) --fields summary,status,description,comment`.")
+                    } else {
+                        lines.append("Fetch this work item with `acli jira workitem view \(key) --fields summary,status,description,comment`.")
+                    }
+                } else if jiraMCPAvailable {
+                    lines.append("URL: \(url) — fetch it via the `jira` MCP server (`jira_get_issue`), or `acli` if the MCP isn't available.")
                 } else {
                     lines.append("URL: \(url) — fetch it with `acli jira workitem view <KEY> --fields summary,status,description,comment`.")
                 }
