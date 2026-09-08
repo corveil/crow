@@ -399,9 +399,11 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    (#830), OpenCode mirrors it into `opencode.json`
    ([CROW-831](https://github.com/corveil/crow/issues/831)), Grok mirrors it
    into `~/.grok/config.toml` ([CROW-1205](https://github.com/corveil/crow/issues/1205)),
-   and Antigravity mirrors it into `~/.gemini/config/mcp_config.json`
-   ([CROW-1207](https://github.com/corveil/crow/issues/1207)).
-   Muse still falls back to `acli`. Live state:
+   Antigravity mirrors it into `~/.gemini/config/mcp_config.json`
+   ([CROW-1207](https://github.com/corveil/crow/issues/1207)),
+   and Muse mirrors it into `~/.config/muse/settings.json`
+   ([CROW-1209](https://github.com/corveil/crow/issues/1209)).
+   Live state:
    `docs/agent-harness-matrix.md`.)*
 
 7. **Non-Claude hooks are global-scope, session resolved by `cwd`.** Only Claude

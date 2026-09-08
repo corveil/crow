@@ -342,6 +342,10 @@ final class ReviewSessionController {
     ///    **project memory** (`<repo>/.agents/memory/`), which Muse injects
     ///    even in an untrusted workspace. Prompt injection, and the one
     ///    layer withholding `--trust-workspace` does not cover.
+    /// Crow's user-scope Jira bridge writes `~/.config/muse/settings.json`
+    /// (`MuseMCPConfigWriter`, CROW-1209), not a project MCP file — official
+    /// Muse docs put `mcp_servers` only in that user settings file. This strip
+    /// stays `.muse/` + `.agents/` (no extra project MCP path to remove).
     /// Working-tree removal only (the git index entry survives). Shared by
     /// `prepareReviewClone` and `prepareWorktreeForAgentLaunch`. Idempotent;
     /// each layer no-ops when absent. A genuine removal failure is audible.

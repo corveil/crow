@@ -26,10 +26,11 @@ let package = Package(
         .package(path: "../CrowCursor"),
         .package(path: "../CrowOpenCode"),
         // `CrowGrok` (Grok Build trust seeder + hook writer) linked by the
-        // library target below. `CrowAntigravity` (Jira MCP bridge, CROW-1207)
-        // same launch-gated posture as Cursor/Grok.
+        // library target below. `CrowAntigravity` / `CrowMuse` (Jira MCP
+        // bridges, CROW-1207 / CROW-1209) same launch-gated posture as Cursor/Grok.
         .package(path: "../CrowGrok"),
         .package(path: "../CrowAntigravity"),
+        .package(path: "../CrowMuse"),
     ],
     targets: [
         .target(
@@ -45,6 +46,7 @@ let package = Package(
                 "CrowCursor",
                 "CrowGrok",
                 "CrowAntigravity",
+                "CrowMuse",
                 "CrowIPC",
             ]
         ),
@@ -64,6 +66,7 @@ let package = Package(
                 "CrowOpenCode",
                 "CrowGrok",
                 "CrowAntigravity",
+                "CrowMuse",
             ]
         ),
     ]
