@@ -38,7 +38,7 @@ capabilities, update this table in the same PR.
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065); **`Interrupt` stays sync** (CROW-1177; mutates completion) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ✅ mirrored from `~/.claude.json` into `~/.grok/config.toml` (CROW-1205) | ✅ mirrored from `~/.claude.json` into `~/.gemini/config/mcp_config.json` (CROW-1207) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ✅ mirrored from `~/.claude.json` into `~/.grok/config.toml` (CROW-1205) | ✅ mirrored from `~/.claude.json` into `~/.gemini/config/mcp_config.json` (CROW-1207) | ✅ mirrored from `~/.claude.json` into `~/.config/muse/settings.json` (CROW-1209) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ positional `[PROMPT]` (`.work` seed, CROW-1144); run-then-`-c` (`.job`/`.review`) | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ | ⚠️ trust seed only (`--trust-workspace`, per-launch, withheld from `.review`) |
@@ -64,7 +64,7 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > |---|---|---|
 > | Resume / continue | Codex `resume --last`, OpenCode `--continue` (history caveat already closed by #547) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 |
 > | Auto-permission (Codex) | Codex `-a never -s workspace-write` | #830 ✅ landed — Cursor ✅ landed #829 |
-> | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 (file bridge) — Grok ✅ landed #1205 (file bridge) |
+> | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 (file bridge) — Grok ✅ landed #1205 — Antigravity ✅ landed #1207 — Muse ✅ landed #1209 (file bridge) |
 > | Review (Codex) | `codex review --base <branch>` / `codex exec review` | #830 ✅ landed |
 > | Hook → session scope | `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #830 ✅ / #831 ✅ landed — Cursor ✅ landed #829 |
 > | Remote control (Codex) | experimental `codex remote-control` / `--remote` | ✅ **closed [CROW-1001](https://github.com/corveil/crow/issues/1001)** — badge flipped on the `crow send` path; native RC pinned as non-viable |
@@ -771,10 +771,28 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   `.agents/` + `.gemini/` (`stripAntigravityConfigFromReviewClone`) —
   attacker-controlled project MCP is a different surface from the user's
   own convenience server.
-- **Muse:** no MCP bridge yet — falls back to the same
-  `acli jira workitem view <key> --fields …` prompt line. The gap is
-  **MCP**, not Jira ticket-fetch: every harness can fetch the ticket, just via
-  `acli` rather than the `jira` MCP server. (Tier-2; file separately.)
+- **Muse:** the `jira` MCP is **mirrored** into Muse's user-scope
+  `~/.config/muse/settings.json` (`mcp_servers.jira`) by
+  `MuseMCPConfigWriter` (CROW-1209). Official Muse docs (Configuration
+  and context + Extending and automating, confirmed 2026-09-08) name that
+  file for MCP — `transport: stdio` (`command`/`args`/`env`) or
+  `streamable_http` (`url`/`headers`); Crow writes `mode: "optional"` so a
+  down Jira MCP warns rather than aborting the run (Muse's default
+  `required` aborts). `settings.json` must include `"schema_version": 1`
+  or every `muse` command fails at startup; Crow injects that key when
+  creating or rewriting, and never overwrites an existing version.
+  Session journals live under `$XDG_DATA_HOME/muse` (`MuseHome.path()`) —
+  a different tree. Same launch-gated posture as Cursor: it runs when a
+  Muse agent actually launches (worker auto-launch, Manager, handoff,
+  brand-new-terminal paste), not at daemon boot, so a box that merely has
+  `muse` on PATH never gets the token copy. Merge-preserving — a
+  user-authored `jira` entry is never overwritten; a `0600` provenance
+  sidecar lets Crow refresh or un-mirror its own write. The `MuseLauncher`
+  prompt instructs the `jira_*` MCP tools when a Claude `jira` source is
+  present, and keeps `acli` only as the no-MCP fallback. Review clones
+  still strip `.muse/` + `.agents/` (`stripMuseConfigFromReviewClone`) —
+  official docs put MCP only in the user settings file, not a project
+  path Crow would write.
 
 ### Review (`/crow-review-pr`)
 
@@ -1157,4 +1175,5 @@ against current upstream CLIs.
 | Muse session-log layout + cwd-attribution key — `<${XDG_DATA_HOME:-~/.local/share}/muse>/sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`, cwd on the line-1 `runtime.session.metadata` record at `payload.record.workspace_root` | Meta dev cookbook (store path, read 2026-08-24) + `superbasedapp/observer` `internal/adapter/muse/doc.go` (the `workspace_root` key, 2026-08-06); **no live `session.jsonl`** verified (installer Meta-auth-gated) | `MuseAgent.logSources` / `MuseHome` · `TranscriptHeadReader.absorb` · `BackfillScanner.reconstructMuse` | 2026-08-24 (CROW-1106) — **operator opted to wire against 3rd-party evidence** rather than wait for the #1099 gate; a wrong key/path silently collects nothing (never misattributes). Confirm `workspace_root` (and the `subagent/` child-session shape) on a real journal when Muse becomes installable |
 | Muse `muse resume` without a session id is workspace-scoped most-recent (the exec-then-resume heuristic) | Official docs: `muse resume` opens the interactive UI; `muse exec --session-id` is the headless continue; `/resume --last` is a slash command | `MuseLaunchArgs.resumeTUICommand` | 2026-08-14 — **needs-eval**; `--session-id` capture is **wire-worthy** if bare `resume` is not last-session |
 | Muse `--subagent-worktree-isolation` creates git worktrees outside Crow's session tree | Official extending docs 2026-08-14; Crow never passes the flag; a user `settings.json` opt-in still can | `MuseLaunchArgs` (deliberately omitted) | 2026-08-14 — **wire-worthy** if a disable/isolate path appears; default is children share the lead workspace |
-| Muse review-clone strip list exhaustiveness: is any project-scope config `muse` reads **outside** `.muse/` + `.agents/` still uncovered? | Official docs: project hooks `.muse/hooks.json`; skills `.agents/skills` + `.claude/skills` + `.codex/skills` (skills load only after trust); memory `.agents/memory/` (loads **even untrusted**) | `stripMuseConfigFromReviewClone` | 2026-08-14 — strip covers `.muse/` + `.agents/` (memory). `.claude/skills` / `.codex/skills` load only after trust, which review withholds. Confirm no other untrusted-read surface before promoting out of Tier-2 |
+| Muse review-clone strip list exhaustiveness: is any project-scope config `muse` reads **outside** `.muse/` + `.agents/` still uncovered? | Official docs: project hooks `.muse/hooks.json`; skills `.agents/skills` + `.claude/skills` + `.codex/skills` (skills load only after trust); memory `.agents/memory/` (loads **even untrusted**). User-scope MCP is `~/.config/muse/settings.json` `mcp_servers` (`MuseMCPConfigWriter`, CROW-1209) — not a project file Crow writes | `stripMuseConfigFromReviewClone` | 2026-09-08 (CROW-1209) — official Extending docs put MCP only in the user settings file. The strip still removes `.muse/` **and** `.agents/` (hooks + untrusted-load memory). Confirm no other untrusted-read surface before promoting out of Tier-2 |
+| Muse user-scope MCP schema (`mcp_servers` in `settings.json`) | Official docs **2026-09-08** (https://ai.developer.meta.com/docs/muse-code/extending + configuration); **no local `muse --help`** (installer is Meta-auth-gated). `transport`: `stdio` (`command`/`args`/`env`) or `streamable_http` (`url`/`headers`); `mode` default `required` (Crow writes `optional`); file must set `"schema_version": 1` | `MuseMCPConfigWriter` / `MuseHome.configHome` | 2026-09-08 (CROW-1209) — schema confirmed against current docs, not a live binary. Re-probe if Muse adds a project MCP path or renames `mcp_servers` / `transport` |

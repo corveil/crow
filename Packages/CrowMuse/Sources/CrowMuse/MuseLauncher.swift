@@ -4,11 +4,10 @@ import CrowCore
 /// Generates initial prompts for Muse Code sessions and materializes them for
 /// the agent-handoff path. Mirrors `GrokLauncher` / `AntigravityLauncher` —
 /// plan-first preamble, workspace table, ticket-fetch instructions — with
-/// **no** Claude slash commands and **no** `jira` MCP routing.
-///
-/// Phase A ships no MCP config writer for Muse (deferred — file-based
-/// `mcp_servers` in `~/.config/muse/settings.json` is a follow-up), so the
-/// Jira branch instructs `acli` directly, matching Codex/OpenCode/Grok/Antigravity.
+/// **no** Claude slash commands. The Jira arm prefers the `jira` MCP
+/// (`MuseMCPConfigWriter` mirrors it from `~/.claude.json` into
+/// `settings.json` `mcp_servers` at launch) and keeps `acli` only as the
+/// no-MCP fallback.
 public actor MuseLauncher {
     public init() {}
 
@@ -17,7 +16,8 @@ public actor MuseLauncher {
         worktrees: [SessionWorktree],
         ticketURL: String?,
         provider: Provider?,
-        codeProvider: Provider? = nil
+        codeProvider: Provider? = nil,
+        jiraMCPAvailable: Bool = false
     ) -> String {
         var lines: [String] = []
         lines.append("Before editing anything, sketch a brief plan covering:")
@@ -50,9 +50,17 @@ public actor MuseLauncher {
                 lines.append("glab issue view \(url) --comments")
                 lines.append("```")
             case .jira:
-                lines.append("")
                 if let key = Validation.jiraKey(from: url) {
-                    lines.append("Fetch this work item with `acli jira workitem view \(key) --fields summary,status,description,comment`.")
+                    if jiraMCPAvailable {
+                        // Prefer the mirrored `jira` MCP (`MuseMCPConfigWriter`
+                        // writes `mcp_servers.jira` at launch), with `acli` as
+                        // the fallback for the no-bridge case.
+                        lines.append("Fetch this work item via the **`jira` MCP server** (bridged into this session): call `jira_get_issue` for key `\(key)`, and use the `jira_*` MCP tools for any Jira read/create/transition/comment. If the `jira` MCP isn't available, fall back to `acli jira workitem view \(key) --fields summary,status,description,comment`.")
+                    } else {
+                        lines.append("Fetch this work item with `acli jira workitem view \(key) --fields summary,status,description,comment`.")
+                    }
+                } else if jiraMCPAvailable {
+                    lines.append("URL: \(url) — fetch it via the `jira` MCP server (`jira_get_issue`), or `acli` if the MCP isn't available.")
                 } else {
                     lines.append("URL: \(url) — fetch it with `acli jira workitem view <KEY> --fields summary,status,description,comment`.")
                 }

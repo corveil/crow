@@ -145,7 +145,8 @@ public struct MuseAgent: CodingAgent {
             worktrees: worktrees,
             ticketURL: ticketURL,
             provider: provider,
-            codeProvider: codeProvider
+            codeProvider: codeProvider,
+            jiraMCPAvailable: MuseMCPConfigWriter.claudeHasJiraServer()
         )
     }
 

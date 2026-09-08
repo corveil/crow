@@ -34,4 +34,36 @@ public enum MuseHome {
     ) -> String {
         (path(environment: environment) as NSString).appendingPathComponent("sessions")
     }
+
+    /// User-scope config dir (`settings.json`, including `mcp_servers`). Official
+    /// Muse docs name `~/.config/muse/settings.json` (Configuration and context
+    /// + Extending and automating). Distinct from `path()` — journals live under
+    /// the XDG *data* tree; MCP does not.
+    ///
+    /// Honors `$XDG_CONFIG_HOME` when set and non-empty (`$XDG_CONFIG_HOME/muse`),
+    /// otherwise `~/.config/muse` — the XDG default that the docs pin. An empty
+    /// `XDG_CONFIG_HOME=` is treated as unset so it never yields a CWD-relative
+    /// path (same empty-is-unset rule as `path()` / `CodexHome` / `GrokHome`).
+    ///
+    /// ⚠️ Version-pinned re-check target: official docs spell the literal
+    /// `~/.config/muse/settings.json` and do not mention `$XDG_CONFIG_HOME`. If
+    /// Muse ignores a relocated config home, Crow would write a `jira` server
+    /// Muse never loads (fails open — the prompt still has an `acli` fallback).
+    public static func configHome(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        if let xdg = environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+            return (xdg as NSString).appendingPathComponent("muse")
+        }
+        return NSString(string: "~/.config/muse").expandingTildeInPath
+    }
+
+    /// `<configHome>/settings.json` — the user-scope file Muse loads for
+    /// `mcp_servers` (CROW-1209). Project `.muse/` is a different surface
+    /// (stripped from review clones; Crow does not write a project MCP file).
+    public static func settingsPath(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        (configHome(environment: environment) as NSString).appendingPathComponent("settings.json")
+    }
 }
