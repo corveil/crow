@@ -314,6 +314,44 @@ deliberate, documented gaps (full grid in the
 >    matrix Auto-permission cell is ⚠️ with that residual. Containment Escape
 >    is a security classifier, not a Crow gap — do not disable it.
 
+> **Amendment (2026-09-09, CROW-1215):** Claude Code **≥ 2.1.259** added
+> `--permission-prompts none` — CROW-1176's deny-not-allow sibling, not a
+> silent allow. Anything that would prompt is denied automatically while the
+> active permission mode (including `--permission-mode auto`) keeps deciding,
+> and Containment Escape still applies. The ticket asked whether that could
+> convert extra-workdir auto-mode Read stalls into denials so `JobScheduler`
+> / Manager do not wait forever on a tmux PTY prompt. Eval against official
+> docs (CLI reference + [headless](https://code.claude.com/docs/en/headless)
+> "Turn off permission prompts in unattended runs"; changelog 2.1.259):
+>
+> 1. **Print-mode only.** The CLI reference: *"Set who answers permission
+>    prompts in print mode."* The documented example is
+>    `claude -p --permission-prompts none "query"`. The headless page puts
+>    the flag under unattended `-p` runs (Agent SDK `canUseTool` host /
+>    `--permission-prompt-tool`); without a host, `-p` already denies those
+>    leftovers and the flag additionally tells Claude not to retry. Crow
+>    launches the **interactive TUI** with `--permission-mode auto` in a
+>    tmux PTY ([ADR 0001](./0001-tmux-only-terminal-backend.md)), not `-p`.
+>    A print-mode-only flag cannot convert a TUI stall into a denial.
+> 2. **Even if it were TUI-legal, Manager deny-fail is worse than a stall.**
+>    Extra-workdir Reads that today *prompt* (`$HOME` for `gh` creds,
+>    `$TMPDIR`, sibling worktrees outside a job/review cwd) would instead be
+>    *denied*. The Manager cwd is `{devRoot}` so workspace worktrees are
+>    inside, but `$HOME` / `$TMPDIR` are still outside — a deny there would
+>    break orchestration. The ticket already scoped any wiring to `.job`,
+>    not Manager; that scoping is moot while the flag is headless-only.
+> 3. **Containment Escape and auto classification still run** with the flag
+>    (changelog + headless docs). That is not a reason to wire it on a
+>    surface it does not apply to. It is also not `--dangerously-skip-permissions`
+>    / `bypassPermissions` — those remain brittle-reject.
+>
+> Per the ticket's rule: headless-only ⇒ **do not wire**. CROW-1176's stall
+> note stays the honest gap. Launch tests pin that no Claude path emits
+> `--permission-prompts`. Re-check only if the flag becomes TUI-legal
+> (interactive, no `-p`) *and* is documented as converting extra-workdir
+> auto-mode Read prompts into denials without dropping Containment Escape —
+> then re-evaluate for `.job` only, never Manager.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -465,7 +503,10 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   2026-08-13 amendment, and note that an upstream-only re-probe could not have
   caught it). Cursor `agent persist` (2026.08.26) was the same kind of
   re-check and **declined** rather than wired ([CROW-1175](https://github.com/corveil/crow/issues/1175) —
-  TTY-detach via a second tmux server; no-ops when `$TMUX` is set). The canonical
+  TTY-detach via a second tmux server; no-ops when `$TMUX` is set). Claude
+  `--permission-prompts none` (2.1.259) was the same kind of re-check of
+  CROW-1176's stall and **declined** ([CROW-1215](https://github.com/corveil/crow/issues/1215) —
+  print-mode / `-p` only; Crow launches the interactive TUI). The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);
@@ -473,7 +514,8 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   `codex_hooks`→`hooks`
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
   Claude's recap subagent (**≥ 2.1.108**), Claude's extra-workdir auto-mode
-  Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall; no silent bypass),
+  Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall; no silent bypass;
+  `--permission-prompts none` declined CROW-1215),
   OpenCode's `session.status` done
   signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
   `session.idle` question), and the one still-unpinned empirical timing
@@ -508,7 +550,7 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
 
 ## References
 
-- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175)
+- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175); `--permission-prompts none` re-check: [#1215](https://github.com/corveil/crow/issues/1215)
 - Related ADRs: [0014](./0014-pluggable-coding-agent-adapter.md) (the adapter),
   [0004](./0004-manager-auto-permission-mode.md) (`--permission-mode auto`),
   [0011](./0011-agent-handoff-preserves-session-not-chat.md) (handoff)
