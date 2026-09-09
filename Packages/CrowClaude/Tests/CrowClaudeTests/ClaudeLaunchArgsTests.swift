@@ -54,15 +54,17 @@ import CrowCore
 }
 
 @Test func claudeLaunchArgsAutoPermissionDoesNotBypassOrAddDir() {
-    // CROW-1176: Claude ≥ 2.1.257 can stall on the first extra-workdir Read in
-    // auto mode. Crow keeps `--permission-mode auto` and does not paper over
-    // that prompt with bypass or a blanket `--add-dir`.
+    // CROW-1176 / CROW-1215: Claude ≥ 2.1.257 can stall on the first extra-workdir
+    // Read in auto mode. Crow keeps `--permission-mode auto` and does not paper
+    // over that prompt with bypass, a blanket `--add-dir`, or `--permission-prompts
+    // none` (print-mode only; declined).
     let s = ClaudeLaunchArgs.argsSuffix(
         remoteControl: true, sessionName: "Manager", autoPermissionMode: true)
     #expect(s.contains("--permission-mode auto"))
     #expect(!s.contains("--dangerously-skip-permissions"))
     #expect(!s.contains("bypassPermissions"))
     #expect(!s.contains("--add-dir"))
+    #expect(!s.contains("--permission-prompts"))
     #expect(s == " --permission-mode auto --rc --name 'Manager'")
 }
 

@@ -74,6 +74,9 @@ public struct ClaudeCodeAgent: CodingAgent {
         telemetryPort: UInt16?
     ) -> String? {
         let claudePath = launchBinary() ?? "claude"
+        // CROW-1215: `argsSuffix` must not grow `--permission-prompts none`.
+        // That flag is print-mode only (`claude -p`); this path is the
+        // interactive TUI. Launch tests pin the omission.
         let rcArgs = ClaudeLaunchArgs.argsSuffix(
             remoteControl: remoteControlEnabled,
             sessionName: session.name,

@@ -32,7 +32,10 @@ public enum ClaudeLaunchArgs {
     ///     `permissions.blockReadsOutsideWorkingDirectories` only *blocks* those
     ///     Reads; `--dangerously-skip-permissions` / `bypassPermissions` would
     ///     also drop the same-release Containment Escape rule (brittle-reject).
-    ///     Crow still emits `--permission-mode auto` and nothing else.
+    ///     `--permission-prompts none` (≥ 2.1.259) is the deny-not-allow sibling
+    ///     and is **print-mode only** (`claude -p`); Crow launches the interactive
+    ///     TUI, so do **not** emit it (CROW-1215). Crow still emits
+    ///     `--permission-mode auto` and nothing else.
     public static func argsSuffix(
         remoteControl: Bool,
         sessionName: String?,
@@ -40,10 +43,11 @@ public enum ClaudeLaunchArgs {
     ) -> String {
         var s = ""
         if autoPermissionMode {
-            // CROW-1176: `--permission-mode auto` only. Do not append
-            // `--dangerously-skip-permissions`, `bypassPermissions`, or a
-            // blanket `--add-dir` — those would paper over the ≥ 2.1.257
-            // extra-workdir Read prompt (and bypass would drop Containment Escape).
+            // CROW-1176 / CROW-1215: `--permission-mode auto` only. Do not append
+            // `--dangerously-skip-permissions`, `bypassPermissions`, a blanket
+            // `--add-dir`, or `--permission-prompts none` (print-mode only; would
+            // not convert a TUI extra-workdir Read stall into a denial, and on
+            // Manager a deny of `$HOME`/`$TMPDIR` Reads is worse than a stall).
             s += " --permission-mode auto"
         }
         if remoteControl {

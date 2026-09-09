@@ -28,6 +28,13 @@ The trust scope is explicit: only the Manager. The user can disable Manager auto
 > `{devRoot}`, so workspace worktrees under it are inside the working set;
 > `$HOME` / `$TMPDIR` Reads can still stall. Live state:
 > [capability matrix Auto-permission](../agent-harness-matrix.md#auto-permission).
+>
+> **Amendment (2026-09-09, CROW-1215):** `--permission-prompts none` (≥ 2.1.259)
+> is CROW-1176's deny-not-allow sibling and was **declined**. It is print-mode
+> only (`claude -p`); Crow's Manager is an interactive TUI in a tmux PTY.
+> Even if it became TUI-legal, applying it on the Manager would deny extra-
+> workdir Reads (`$HOME` / `$TMPDIR`) that today only stall — worse than a
+> hang for orchestration. Do not emit it here.
 
 ## Consequences
 
@@ -49,7 +56,7 @@ The trust scope is explicit: only the Manager. The user can disable Manager auto
 
 ## References
 
-- PRs: [#189](https://github.com/corveil/crow/pull/189) (introduce `managerAutoPermissionMode`, default `true`); CROW-1176 (auto no longer stall-free — extra-workdir Read prompt ≥ 2.1.257)
+- PRs: [#189](https://github.com/corveil/crow/pull/189) (introduce `managerAutoPermissionMode`, default `true`); CROW-1176 (auto no longer stall-free — extra-workdir Read prompt ≥ 2.1.257); CROW-1215 (`--permission-prompts none` declined — print-mode only)
 - Code:
   - `Packages/CrowCore/Sources/CrowCore/Models/AppConfig.swift`
   - `Packages/CrowCore/Sources/CrowCore/AppState.swift`

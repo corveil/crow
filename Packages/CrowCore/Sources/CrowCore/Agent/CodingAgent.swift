@@ -298,7 +298,9 @@ public protocol CodingAgent: Sendable {
     /// `autoPermissionMode` mirrors `ClaudeCodeAgent`'s `--permission-mode auto`
     /// — agents that don't surface this concept can ignore it. As of Claude
     /// Code ≥ 2.1.257 that flag is no longer stall-free (extra-workdir Read
-    /// prompt; CROW-1176) — Crow still emits it and does not bypass. `telemetryPort`
+    /// prompt; CROW-1176) — Crow still emits it and does not bypass.
+    /// `--permission-prompts none` is print-mode only and is not emitted
+    /// (CROW-1215). `telemetryPort`
     /// is passed through for consistency with `autoLaunchCommand`; most
     /// agents won't need it for Manager terminals (CROW-433).
     func managerLaunchCommand(

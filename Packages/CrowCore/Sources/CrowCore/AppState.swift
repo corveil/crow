@@ -43,7 +43,8 @@ public final class AppState {
     /// Mirrors `AppConfig.managerAutoPermissionMode`. Applies only to the Manager
     /// launch; worker sessions and CLI-spawned terminals are unaffected.
     /// Claude Code ≥ 2.1.257 can still stall once on an extra-workdir Read
-    /// (CROW-1176); Crow does not bypass that prompt.
+    /// (CROW-1176); Crow does not bypass that prompt. `--permission-prompts none`
+    /// is print-mode only and is not emitted (CROW-1215).
     public var managerAutoPermissionMode: Bool = true
 
     /// Whether sessions launched by the Jobs scheduler start with

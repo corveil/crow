@@ -67,7 +67,8 @@ struct ClaudeCodeAgentLaunchTests {
     @Test func autoPermissionEmitsAutoModeWithoutBypassOrAddDir() throws {
         // CROW-1176: auto is no longer stall-free (≥ 2.1.257 extra-workdir Read
         // prompt). The launch line still carries `--permission-mode auto` and
-        // must not grow a silent bypass or blanket `--add-dir`.
+        // must not grow a silent bypass, blanket `--add-dir`, or
+        // `--permission-prompts none` (CROW-1215 — print-mode only).
         let cmd = try #require(agent.autoLaunchCommand(
             session: Session(name: "s", kind: .job, reviewPromptDispatched: true),
             worktreePath: "/tmp/wt",
@@ -79,6 +80,7 @@ struct ClaudeCodeAgentLaunchTests {
         #expect(!cmd.contains("--dangerously-skip-permissions"))
         #expect(!cmd.contains("bypassPermissions"))
         #expect(!cmd.contains("--add-dir"))
+        #expect(!cmd.contains("--permission-prompts"))
 
         let manager = agent.managerLaunchCommand(
             sessionName: "Manager",
@@ -89,5 +91,45 @@ struct ClaudeCodeAgentLaunchTests {
         #expect(manager.contains("--permission-mode auto"))
         #expect(!manager.contains("--dangerously-skip-permissions"))
         #expect(!manager.contains("--add-dir"))
+        #expect(!manager.contains("--permission-prompts"))
+    }
+
+    /// CROW-1215: `--permission-prompts none` is print-mode only (`claude -p`).
+    /// Crow launches the interactive TUI in a tmux PTY, so emitting it would
+    /// not convert extra-workdir auto-mode Read stalls into denials. Pin that
+    /// no launch path emits it — a future "wire it for `.job`" change has to
+    /// fail this first.
+    @Test func launchNeverEmitsPermissionPromptsNone() throws {
+        var resumed = Session(name: "review", kind: .review)
+        resumed.reviewPromptDispatched = true
+        var resumedJob = Session(name: "job", kind: .job)
+        resumedJob.reviewPromptDispatched = true
+
+        let sessions: [Session] = [
+            Session(name: "work", kind: .work),
+            Session(name: "job", kind: .job),
+            Session(name: "review", kind: .review),
+            Session(name: "manager", kind: .manager),
+            resumed,
+            resumedJob,
+        ]
+        for session in sessions {
+            let cmd = try #require(agent.autoLaunchCommand(
+                session: session,
+                worktreePath: "/tmp/wt",
+                remoteControlEnabled: true,
+                autoPermissionMode: true,
+                telemetryPort: nil))
+            #expect(!cmd.contains("--permission-prompts"),
+                    "\(session.kind) auto-launch emitted --permission-prompts")
+        }
+
+        let manager = agent.managerLaunchCommand(
+            sessionName: "Manager",
+            remoteControlEnabled: true,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(!manager.contains("--permission-prompts"))
     }
 }
