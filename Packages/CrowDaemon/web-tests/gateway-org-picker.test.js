@@ -250,6 +250,50 @@ const check = (name, cond) => {
       !!sel && Array.from(sel.options).some((o) => o.value === 'org_acme'));
   }
 
+  console.log('\nAdvanced manual clear drops the cached org selection:');
+  {
+    const h = await openAutomation({ config: connectedConfig(), local: true });
+    const sel = orgSelect(h.window);
+    sel.value = 'org_acme';
+    await sel.onchange();
+    await drain();
+    check('picked org is selected before clear', orgSelect(h.window).value === 'org_acme');
+    // In-place pick does not rebuild the Advanced editor, so it still offers
+    // "Set gateway" (no Clear). Empty URL+headers is apply(null) — a clear.
+    const details = h.window.document.querySelector('details.st-advanced-gateway');
+    const save = Array.from(details.querySelectorAll('button'))
+      .find((b) => /^(Set|Update) gateway$/.test(b.textContent));
+    check('Advanced save is still offered after a pick', !!save);
+    await save.onclick();
+    await drain();
+    const selAfter = orgSelect(h.window);
+    check('dropdown snaps back to the placeholder after manual clear',
+      !!selAfter && selAfter.value === '');
+    check('status no longer claims a Corveil-derived gateway',
+      !h.window.document.body.textContent.includes('Gateway set from your Corveil connection'));
+  }
+
+  console.log('\nAdvanced manual set also drops the cached org selection:');
+  {
+    const h = await openAutomation({ config: connectedConfig(), local: true });
+    const sel = orgSelect(h.window);
+    sel.value = 'org_acme';
+    await sel.onchange();
+    await drain();
+    const details = h.window.document.querySelector('details.st-advanced-gateway');
+    details.querySelector('input.st-input').value = 'https://gateway.example.com';
+    details.querySelector('textarea').value = 'X-Api-Key: sk-test';
+    const save = Array.from(details.querySelectorAll('button'))
+      .find((b) => /^(Set|Update) gateway$/.test(b.textContent));
+    await save.onclick();
+    await drain();
+    const selAfter = orgSelect(h.window);
+    check('dropdown is placeholder after a manual gateway write',
+      !!selAfter && selAfter.value === '');
+    check('status shows a manually-entered gateway',
+      h.window.document.body.textContent.includes('A manually-entered gateway is set'));
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });

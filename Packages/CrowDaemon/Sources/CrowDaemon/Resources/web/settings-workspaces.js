@@ -187,6 +187,9 @@
         await S.postConfig('/config/workspace-gateway',
           Object.assign({ workspaceId: d.id }, g ? { baseURL: g.baseURL, headers: g.customHeaders } : { clear: true }));
         d.gateway = g;
+        // Manual write/clear is not an org pick — drop the cached selection so
+        // the rebuilt dropdown does not keep showing the last org (#1213 review).
+        if (typeof S.forgetPickedOrg === 'function') S.forgetPickedOrg(d.id);
         S.render();
       };
       const manual = S.gatewayEditor(d.gateway || null, applyManual);

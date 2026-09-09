@@ -255,6 +255,23 @@ const check = (name, cond) => {
       orgSelect(h.window) === sel && sel.value === 'org_acme');
   }
 
+  console.log('\nAdvanced manual clear on a workspace drops the cached org selection:');
+  {
+    const h = load({ config: connectedConfig(), logSyncEnabled: true });
+    await openWorkspaceForm(h);
+    await pickOrg(h);
+    check('picked org is selected before clear', orgSelect(h.window).value === 'org_acme');
+    const details = h.window.document.querySelector('details.st-advanced-gateway');
+    const save = Array.from(details.querySelectorAll('button'))
+      .find((b) => /^(Set|Update) gateway$/.test(b.textContent));
+    check('Advanced save is still offered after a pick', !!save);
+    await save.onclick();
+    await drain();
+    const selAfter = orgSelect(h.window);
+    check('dropdown snaps back to the placeholder after manual clear',
+      !!selAfter && selAfter.value === '');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });

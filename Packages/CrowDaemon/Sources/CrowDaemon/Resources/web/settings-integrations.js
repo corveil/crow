@@ -109,7 +109,12 @@
       ui.status.hidden = true;
     }
 
-    const picked = pickedOrgByTarget[opts.target || ''] || '';
+    // A derived gateway is the only case where the cached pick is meaningful.
+    // Advanced manual set/clear (and any other non-derived current) must not
+    // keep showing the last org — pre-#1212 a full render always snapped back
+    // to the placeholder (review of corveil/crow#1213).
+    if (!derived) delete pickedOrgByTarget[opts.target || ''];
+    const picked = derived ? (pickedOrgByTarget[opts.target || ''] || '') : '';
     const sel = ui.sel;
     sel.innerHTML = '';
     const placeholder = el('option', null,
@@ -127,7 +132,11 @@
       if (org.org_id === picked) { o.selected = true; hasPicked = true; }
       sel.appendChild(o);
     }
-    sel.disabled = corveilOrgsLoading;
+    // Keep the select/refresh disabled for the whole in-flight pick, not just
+    // the corveil-list-orgs load — an overlapping Refresh completion used to
+    // re-enable the <select> mid-provision (optional harden, #1213 review).
+    const busy = corveilOrgsLoading || !!ui.picking;
+    sel.disabled = busy;
     sel.value = hasPicked ? picked : '';
 
     if (corveilOrgsError) {
@@ -142,7 +151,14 @@
       ui.note.textContent = '';
       ui.note.hidden = true;
     }
-    ui.refresh.disabled = corveilOrgsLoading;
+    ui.refresh.disabled = busy;
+  }
+
+  // Drop the modal-scoped pick for one gateway target. Called from the
+  // Advanced manual editor's apply/clear path so a following S.render()
+  // cannot resurrect the last org on a non-derived (or freshly cleared) gateway.
+  function forgetPickedOrg(target) {
+    delete pickedOrgByTarget[target || ''];
   }
 
   // The org-picker gateway control (corveil/crow#1123). Replaces the raw
@@ -179,13 +195,15 @@
     refresh.type = 'button';
     refresh.onclick = () => loadCorveilOrgs(true);
 
-    wrap._orgGw = { opts, status, sel, note, msg, refresh };
+    wrap._orgGw = { opts, status, sel, note, msg, refresh, picking: false };
     sel.onchange = async () => {
       const orgId = sel.value;
       if (!orgId) return;
       const org = (corveilOrgs || []).find((x) => x.org_id === orgId) || null;
       const label = (org && org.org_name) || orgId;
+      wrap._orgGw.picking = true;
       sel.disabled = true;
+      refresh.disabled = true;
       msg.textContent = 'Provisioning gateway for ' + label + '…';
       try {
         // Mint or reuse the org's one gateway key, then write the derived gateway.
@@ -196,9 +214,11 @@
         // placeholder so re-picking the SAME org fires `change` again: HTML `change`
         // does not re-fire for an unchanged value, which would otherwise strand this
         // ticket's primary control on the org that just failed.
+        wrap._orgGw.picking = false;
         msg.textContent = 'Failed: ' + (e && (e.message || e));
         sel.value = '';
         sel.disabled = false;
+        refresh.disabled = corveilOrgsLoading;
         return;
       }
       // The gateway is written. Everything past this point is success bookkeeping, so
@@ -219,6 +239,7 @@
       // metadata reflects the new key. A failure here leaves the gateway stored and
       // the picker correct, so it must not surface as a failed pick.
       try { await refreshCorveilConnection(); } catch (_) { /* best-effort */ }
+      wrap._orgGw.picking = false;
       msg.textContent = '';
       paintOrgGatewayPicker(wrap);
       if (typeof opts.onApplied === 'function') opts.onApplied(g);
@@ -518,6 +539,7 @@
 
   T.integrations = renderIntegrations;
   T.orgGatewayEditor = orgGatewayEditor;
+  T.forgetPickedOrg = forgetPickedOrg;
   T.corveilConnected = corveilConnected;
   T.resetCorveilConnectState = resetCorveilConnectState;
 })();

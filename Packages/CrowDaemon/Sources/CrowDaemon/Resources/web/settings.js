@@ -617,6 +617,7 @@
     iconBtn, setRowIcon, listRow, deepCopy, uuid,
     get corveilConnected() { return (window.CrowSettingsTabs || {}).corveilConnected; },
     get orgGatewayEditor() { return (window.CrowSettingsTabs || {}).orgGatewayEditor; },
+    get forgetPickedOrg() { return (window.CrowSettingsTabs || {}).forgetPickedOrg; },
   };
 
   window.openSettings = openSettings;
