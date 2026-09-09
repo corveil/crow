@@ -81,15 +81,25 @@ public enum OpenCodeMCPConfigWriter {
     ) -> Outcome {
         let fm = FileManager.default
 
-        // 1. Read the source `jira` server from the Claude config. Distinguish
-        //    "absent" (→ un-mirror) from "present but untranslatable" (→ leave
-        //    the mirror alone) from "unparseable" (→ refuse).
-        let claudePath = claudeJSONPath
-            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json").path
+        // 1. Read the source `jira` server via the shared Claude parse
+        //    (CROW-1214). Distinguish "absent" (→ un-mirror) from "present but
+        //    untranslatable" (→ leave the mirror alone) from "unparseable"
+        //    (→ refuse). Missing/unreadable stays fail-open (treat as absent).
+        let claudePath = claudeJSONPath ?? ClaudeMCPSource.defaultPath()
         let sourceServer: [String: Any]?
-        switch readClaudeJiraServer(claudeJSONPath: claudePath) {
-        case .success(let server): sourceServer = server
-        case .unparseable: return .skippedUnparseable
+        switch ClaudeMCPSource.lookupJira(from: claudePath) {
+        case .found(let entry, origin: let origin):
+            if case .project(let key) = origin {
+                CrowLog.info("[OpenCodeMCPConfigWriter] Promoting project-scoped `jira` MCP from \(key) into global opencode.json")
+            }
+            sourceServer = entry
+        case .absent, .sourceUnavailable:
+            // Missing ~/.claude.json historically reads as "no jira" (fail-open
+            // un-mirror). Parsed-but-absent is the same outcome for the caller.
+            sourceServer = nil
+        case .unparseable:
+            CrowLog.info("[OpenCodeMCPConfigWriter] \(claudePath) exists but is not a JSON object; ignoring")
+            return .skippedUnparseable
         }
 
         // 2. Load the Crow-owned `opencode.json` (if any).
@@ -256,29 +266,6 @@ public enum OpenCodeMCPConfigWriter {
         } catch {
             CrowLog.info("[OpenCodeMCPConfigWriter] Failed to write mirror record \(path): \(error.localizedDescription)")
         }
-    }
-
-    // MARK: - Source
-
-    enum ClaudeReadResult {
-        case success([String: Any]?)
-        case unparseable
-    }
-
-    /// The `mcpServers.jira` object from `~/.claude.json`, or `nil` when absent.
-    /// A file that exists but isn't a JSON object is reported as `.unparseable`
-    /// so the caller refuses to proceed (rather than silently overwriting).
-    static func readClaudeJiraServer(claudeJSONPath: String) -> ClaudeReadResult {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: claudeJSONPath) else { return .success(nil) }
-        guard let data = fm.contents(atPath: claudeJSONPath),
-              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        else {
-            CrowLog.info("[OpenCodeMCPConfigWriter] \(claudeJSONPath) exists but is not a JSON object; ignoring")
-            return .unparseable
-        }
-        let servers = root["mcpServers"] as? [String: Any]
-        return .success(servers?[serverName] as? [String: Any])
     }
 
     // MARK: - Translation

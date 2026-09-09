@@ -112,7 +112,7 @@ public enum CursorMCPConfigWriter {
         claudeJSONPath: String? = nil,
         cursorMCPPath: String? = nil
     ) {
-        let claudePath = claudeJSONPath ?? home(".claude.json")
+        let claudePath = claudeJSONPath ?? ClaudeMCPSource.defaultPath()
         let cursorPath = cursorMCPPath ?? home(".cursor/mcp.json")
 
         // Serialize the whole read-modify-write: the bridge fires unsynchronized
@@ -127,13 +127,18 @@ public enum CursorMCPConfigWriter {
         // file → do NOT touch cursor's config, or a bad read would delete a
         // valid bridged entry).
         let jiraEntry: [String: Any]
-        switch readClaudeJira(claudeJSONPath: claudePath) {
-        case .found(let entry):
+        switch ClaudeMCPSource.lookupJira(from: claudePath) {
+        case .found(let entry, origin: let origin):
+            if case .project(let key) = origin {
+                // Visibility: a project-scoped Claude MCP token is about to
+                // be promoted into Cursor's *global* config (every session).
+                CrowLog.info("[CursorMCPConfigWriter] Promoting project-scoped `jira` MCP from \(key) into global ~/.cursor/mcp.json")
+            }
             jiraEntry = entry
         case .absent:
             reapManagedJira(cursorMCPPath: cursorPath)
             return
-        case .sourceUnavailable:
+        case .sourceUnavailable, .unparseable:
             CrowLog.info("[CursorMCPConfigWriter] \(claudePath) missing/unreadable; leaving ~/.cursor/mcp.json untouched")
             return
         }
@@ -200,51 +205,6 @@ public enum CursorMCPConfigWriter {
             atomicWriteJSON(root, to: cursorMCPPath)
         }
         CrowLog.info("[CursorMCPConfigWriter] Reaped bridged `jira` MCP from \(cursorMCPPath) — no longer in Claude's config")
-    }
-
-    /// Outcome of looking for a `jira` server in Claude's config.
-    private enum ClaudeJiraLookup {
-        /// Found a `jira` server (user or project scope).
-        case found([String: Any])
-        /// `~/.claude.json` parsed cleanly but declares no `jira` anywhere —
-        /// the only signal that means "the user removed it" (safe to reap).
-        case absent
-        /// Missing, unreadable, or unparseable — do not act; a transient read
-        /// failure must not trigger a destructive reap.
-        case sourceUnavailable
-    }
-
-    /// Look for a `jira` server in Claude's config: root `mcpServers` (user
-    /// scope) preferred, else `projects[<path>].mcpServers` (local scope,
-    /// Claude's default). Project keys are scanned in **sorted** order so which
-    /// server wins is deterministic when multiple projects declare `jira`.
-    ///
-    /// Note the scope widening: a *project-local* Claude MCP is promoted into
-    /// Cursor's *global* `~/.cursor/mcp.json`, so a token scoped to one repo
-    /// becomes available to every Cursor session on the machine — the tradeoff
-    /// for MCP reachability across worktrees.
-    private static func readClaudeJira(claudeJSONPath: String) -> ClaudeJiraLookup {
-        guard let data = FileManager.default.contents(atPath: claudeJSONPath) else {
-            return .sourceUnavailable  // missing or unreadable
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .sourceUnavailable  // unparseable (e.g. truncated/interleaved read)
-        }
-        if let userScoped = (root["mcpServers"] as? [String: Any])?[serverKey] as? [String: Any] {
-            return .found(userScoped)
-        }
-        if let projects = root["projects"] as? [String: Any] {
-            for key in projects.keys.sorted() {
-                if let servers = (projects[key] as? [String: Any])?["mcpServers"] as? [String: Any],
-                   let jira = servers[serverKey] as? [String: Any] {
-                    // Visibility: a project-scoped Claude MCP token is about to
-                    // be promoted into Cursor's *global* config (every session).
-                    CrowLog.info("[CursorMCPConfigWriter] Promoting project-scoped `jira` MCP from \(key) into global ~/.cursor/mcp.json")
-                    return .found(jira)
-                }
-            }
-        }
-        return .absent  // parsed fine, no jira in any scope
     }
 
     private static func home(_ relative: String) -> String {

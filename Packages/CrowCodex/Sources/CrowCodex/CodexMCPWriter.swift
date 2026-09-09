@@ -1,3 +1,4 @@
+import CrowCore
 import Foundation
 
 /// Mirrors the user's Claude Code MCP servers into Codex so a Codex session
@@ -98,25 +99,24 @@ public enum CodexMCPWriter {
 
     // MARK: - Claude parsing
 
-    /// Parse `~/.claude.json`'s `mcpServers` object into translated `Server`s,
+    /// Parse `~/.claude.json`'s user-scope `mcpServers` into translated `Server`s,
     /// dropping any definition Codex can't express (neither `command` nor
     /// `url`). Server order follows JSON key order sorted for determinism.
+    ///
+    /// **Root-only:** project-scoped `projects[<path>].mcpServers` are not
+    /// mirrored — they'd need per-worktree Codex config, which the
+    /// per-worktree-hooks deferral already parks. The narrowing is
+    /// `includeProjectScope: false` on the shared `ClaudeMCPSource` helper
+    /// (CROW-1214), not a second JSON walk.
     static func readClaudeServers(claudeJSONPath: String?) -> [Server] {
-        let path = claudeJSONPath
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".claude.json").path
-        guard let data = FileManager.default.contents(atPath: path),
-              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let mcp = root["mcpServers"] as? [String: Any]
-        else { return [] }
-
-        var servers: [Server] = []
-        for name in mcp.keys.sorted() {
-            guard let def = mcp[name] as? [String: Any],
-                  let server = translate(name: name, def: def) else { continue }
-            servers.append(server)
+        switch ClaudeMCPSource.load(from: claudeJSONPath) {
+        case .parsed(let snapshot):
+            return snapshot.servers(includeProjectScope: false).compactMap { item in
+                translate(name: item.name, def: item.entry)
+            }
+        case .sourceUnavailable, .unparseable:
+            return []
         }
-        return servers
     }
 
     /// Translate one Claude `mcpServers.<name>` definition into a `Server`.

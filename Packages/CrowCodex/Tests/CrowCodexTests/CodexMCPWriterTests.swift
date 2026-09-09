@@ -257,6 +257,25 @@ struct CodexMCPWriterTests {
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.toml").path))
     }
 
+    @Test func installSkipsProjectScopedServers() throws {
+        // CROW-1214: Codex's root-only narrowing is `includeProjectScope: false`
+        // on ClaudeMCPSource, not a second JSON walk. A project-local jira
+        // must not land in the global config.toml.
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let claudePath = dir.appendingPathComponent("claude.json").path
+        try JSONSerialization.data(withJSONObject: [
+            "projects": [
+                "/repo": ["mcpServers": ["jira": ["command": "npx"]]],
+            ],
+        ]).write(to: URL(fileURLWithPath: claudePath))
+
+        let added = try CodexMCPWriter.installMCPConfig(codexHome: dir.path, claudeJSONPath: claudePath)
+        #expect(added.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.toml").path))
+    }
+
     @Test func installIsIdempotent() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

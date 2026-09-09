@@ -84,13 +84,14 @@ public enum GrokMCPConfigWriter {
         writeLock.lock()
         defer { writeLock.unlock() }
 
-        let claudePath = claudeJSONPath
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".claude.json").path
+        let claudePath = claudeJSONPath ?? ClaudeMCPSource.defaultPath()
 
         let sourceServer: [String: Any]?
-        switch readClaudeJira(claudeJSONPath: claudePath) {
-        case .found(let entry):
+        switch ClaudeMCPSource.lookupJira(from: claudePath) {
+        case .found(let entry, origin: let origin):
+            if case .project(let key) = origin {
+                CrowLog.info("[GrokMCPConfigWriter] Promoting project-scoped `jira` MCP from \(key) into global Grok config.toml")
+            }
             sourceServer = entry
         case .absent:
             sourceServer = nil
@@ -98,6 +99,7 @@ public enum GrokMCPConfigWriter {
             CrowLog.info("[GrokMCPConfigWriter] \(claudePath) missing/unreadable; leaving Grok config.toml untouched")
             return .noSource
         case .unparseable:
+            CrowLog.info("[GrokMCPConfigWriter] \(claudePath) exists but is not a JSON object; ignoring")
             return .skippedUnparseable
         }
 
@@ -177,51 +179,10 @@ public enum GrokMCPConfigWriter {
     /// `jira_*` only when a bridge is expected; a Grok-primary host with no
     /// Claude Jira MCP keeps the `acli` arm.
     public static func claudeHasJiraServer(claudeJSONPath: String? = nil) -> Bool {
-        let path = claudeJSONPath
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".claude.json").path
-        if case .found(let entry) = readClaudeJira(claudeJSONPath: path) {
+        if case .found(let entry, origin: _) = ClaudeMCPSource.lookupJira(from: claudeJSONPath) {
             return translateClaudeServer(name: serverName, def: entry) != nil
         }
         return false
-    }
-
-    // MARK: - Source
-
-    enum ClaudeJiraLookup {
-        case found([String: Any])
-        /// Parsed cleanly but declares no `jira` — safe to un-mirror.
-        case absent
-        /// Missing or unreadable — do not act.
-        case sourceUnavailable
-        /// Exists but isn't a JSON object.
-        case unparseable
-    }
-
-    /// Root `mcpServers` (user scope) preferred, else the first project-scoped
-    /// `jira` in sorted `projects[<path>].mcpServers` order — same widening
-    /// Cursor uses so Claude's default local-scope `mcp add` isn't missed.
-    static func readClaudeJira(claudeJSONPath: String) -> ClaudeJiraLookup {
-        guard let data = FileManager.default.contents(atPath: claudeJSONPath) else {
-            return .sourceUnavailable
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            CrowLog.info("[GrokMCPConfigWriter] \(claudeJSONPath) exists but is not a JSON object; ignoring")
-            return .unparseable
-        }
-        if let userScoped = (root["mcpServers"] as? [String: Any])?[serverName] as? [String: Any] {
-            return .found(userScoped)
-        }
-        if let projects = root["projects"] as? [String: Any] {
-            for key in projects.keys.sorted() {
-                if let servers = (projects[key] as? [String: Any])?["mcpServers"] as? [String: Any],
-                   let jira = servers[serverName] as? [String: Any] {
-                    CrowLog.info("[GrokMCPConfigWriter] Promoting project-scoped `jira` MCP from \(key) into global Grok config.toml")
-                    return .found(jira)
-                }
-            }
-        }
-        return .absent
     }
 
     // MARK: - Translation
