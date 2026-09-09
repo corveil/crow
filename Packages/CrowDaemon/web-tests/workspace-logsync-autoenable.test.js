@@ -182,6 +182,9 @@ const check = (name, cond) => {
       !JSON.stringify(h.calls.gatewayPosts).toLowerCase().includes('sk-citadel'));
     const cb = logSyncCheckbox(h.window);
     check('the "Upload session transcripts" box is now checked in the open form', !!cb && cb.checked === true);
+    const sel = orgSelect(h.window);
+    check('dropdown still shows the picked org (no snap-back to placeholder)',
+      !!sel && sel.value === 'org_acme');
   }
 
   console.log('\nThe opt-in survives Cancel + Save (not just the discarded draft):');
@@ -220,6 +223,53 @@ const check = (name, cond) => {
     const branch = h.window.document.querySelector('.settings-subform-overlay .settings-body .st-input')
       || h.window.document.querySelector('.settings-body .st-input');
     if (branch) { branch.value = 'x/'; if (branch.oninput) branch.oninput(); }
+  }
+
+  console.log('\nLazy org load / pick do not rebuild the workspace sub-form:');
+  {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const h = load({ config: connectedConfig(), logSyncEnabled: true });
+    h.hooks.listOrgs = () => pending.then(() => ({ orgs: [
+      { org_id: 'org_acme', org_name: 'Acme Corp', role: 'admin', is_active: true, provisioned: false },
+    ] }));
+    await h.T.openSettings('workspaces');
+    const edit = byText(h.window, 'button[title="Edit"]', /.?/) ||
+      Array.from(h.window.document.querySelectorAll('button')).find((b) => b.title === 'Edit');
+    edit.onclick();
+    await drain();
+    const overlay = h.window.document.querySelector('.settings-subform-overlay');
+    const sel = orgSelect(h.window);
+    check('workspace overlay rendered while orgs load', !!overlay && !!sel);
+    release();
+    await drain();
+    check('same overlay after orgs arrive (no full-modal flicker)',
+      h.window.document.querySelector('.settings-subform-overlay') === overlay);
+    check('same <select> after orgs arrive', orgSelect(h.window) === sel);
+    sel.value = 'org_acme';
+    await sel.onchange();
+    await drain();
+    check('same overlay after pick',
+      h.window.document.querySelector('.settings-subform-overlay') === overlay);
+    check('same <select> after pick still showing the org',
+      orgSelect(h.window) === sel && sel.value === 'org_acme');
+  }
+
+  console.log('\nAdvanced manual clear on a workspace drops the cached org selection:');
+  {
+    const h = load({ config: connectedConfig(), logSyncEnabled: true });
+    await openWorkspaceForm(h);
+    await pickOrg(h);
+    check('picked org is selected before clear', orgSelect(h.window).value === 'org_acme');
+    const details = h.window.document.querySelector('details.st-advanced-gateway');
+    const save = Array.from(details.querySelectorAll('button'))
+      .find((b) => /^(Set|Update) gateway$/.test(b.textContent));
+    check('Advanced save is still offered after a pick', !!save);
+    await save.onclick();
+    await drain();
+    const selAfter = orgSelect(h.window);
+    check('dropdown snaps back to the placeholder after manual clear',
+      !!selAfter && selAfter.value === '');
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

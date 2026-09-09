@@ -40,27 +40,36 @@
   // Org-dropdown state for the gateway editors (corveil/crow#1123), shared by the
   // Manager (Automation tab) and per-workspace (Workspaces tab) pickers — both bind
   // the same connection's memberships. Lazily loaded once through the local-only
-  // `corveil-list-orgs` RPC (which caches server-side), then reused across renders.
+  // `corveil-list-orgs` RPC (which caches server-side), then reused across paints.
   // `corveilOrgs === null` means "not fetched yet"; an array (possibly empty) means
   // "fetched". Reset when Settings (re)opens, exactly like the connect-flow state.
   let corveilOrgs = null;          // [{org_id, org_name, provisioned, is_active, role}] | null
   let corveilOrgsLoading = false;  // a list fetch is in flight
   let corveilOrgsError = '';       // last fetch error, shown inline
+  // Org the user picked during THIS Settings modal, keyed by picker target
+  // ('manager' | workspace id). A derived gateway cannot recover which org
+  // produced it (key stripped in transport, every org shares the base URL), so
+  // this is how the <select> stays on the choice for the life of the modal
+  // (corveil/crow#1212). Fresh reopen → placeholder, which is honest.
+  let pickedOrgByTarget = Object.create(null);
   function resetCorveilOrgState() {
     corveilOrgs = null;
     corveilOrgsLoading = false;
     corveilOrgsError = '';
+    pickedOrgByTarget = Object.create(null);
   }
 
   // Fetch the user's Corveil orgs through the local-only provisioning RPC and
-  // re-render when done. Guarded so overlapping renders can't stack fetches; the
-  // finally-render lets the picker repaint from `corveilOrgs`/`corveilOrgsError`.
-  // `force` re-fetches past the server-side cache (the explicit Refresh).
+  // repaint live pickers when done. Guarded so overlapping paints can't stack
+  // fetches. Must NOT call S.render() — that tears down both Settings layers
+  // via innerHTML and is the flicker in corveil/crow#1212 (lazy load after
+  // Connect, and every subsequent pick). `force` re-fetches past the server-side
+  // cache (the explicit Refresh) and shows the loading state in place.
   async function loadCorveilOrgs(force) {
     if (corveilOrgsLoading) return;
     corveilOrgsLoading = true;
     corveilOrgsError = '';
-    if (force) S.render();
+    if (force) refreshOrgGatewayPickers();
     try {
       const res = await rpc('corveil-list-orgs', force ? { refresh: true } : {});
       corveilOrgs = (res && res.orgs) || [];
@@ -69,8 +78,87 @@
       corveilOrgsError = (e && (e.message || String(e))) || 'could not load organizations';
     } finally {
       corveilOrgsLoading = false;
-      S.render();
+      refreshOrgGatewayPickers();
     }
+  }
+
+  // Patch every mounted org-picker in place (select options, loading/disabled,
+  // status line). The wrap stays in the tree, so the surrounding workspace /
+  // Automation form keeps focus and scroll.
+  function refreshOrgGatewayPickers() {
+    document.querySelectorAll('.st-org-gateway').forEach(paintOrgGatewayPicker);
+  }
+
+  function paintOrgGatewayPicker(wrap) {
+    const ui = wrap._orgGw;
+    if (!ui) return;
+    const opts = ui.opts;
+    const conn = S.cfg.corveilConnection || null;
+    const current = opts.current;
+    const derived = !!(current && conn
+      && (current.baseURL || '') === (conn.baseURL || '')
+      && current.customHeaders
+      && Object.keys(current.customHeaders).some((k) => k.toLowerCase() === 'x-citadel-api-key'));
+    if (current && current.baseURL) {
+      ui.status.textContent = derived
+        ? 'Gateway set from your Corveil connection (' + current.baseURL + ').'
+        : 'A manually-entered gateway is set (' + current.baseURL + ').';
+      ui.status.hidden = false;
+    } else {
+      ui.status.textContent = '';
+      ui.status.hidden = true;
+    }
+
+    // A derived gateway is the only case where the cached pick is meaningful.
+    // Advanced manual set/clear (and any other non-derived current) must not
+    // keep showing the last org — pre-#1212 a full render always snapped back
+    // to the placeholder (review of corveil/crow#1213).
+    if (!derived) delete pickedOrgByTarget[opts.target || ''];
+    const picked = derived ? (pickedOrgByTarget[opts.target || ''] || '') : '';
+    const sel = ui.sel;
+    sel.innerHTML = '';
+    const placeholder = el('option', null,
+      corveilOrgsLoading ? 'Loading organizations…' : 'Choose an organization…');
+    placeholder.value = '';
+    sel.appendChild(placeholder);
+    let hasPicked = false;
+    for (const org of (corveilOrgs || [])) {
+      const bits = [];
+      if (org.provisioned) bits.push('key ready');
+      if (org.is_active === false) bits.push('inactive');
+      const o = el('option', null,
+        (org.org_name || org.org_id || '(unnamed org)') + (bits.length ? ' · ' + bits.join(' · ') : ''));
+      o.value = org.org_id;
+      if (org.org_id === picked) { o.selected = true; hasPicked = true; }
+      sel.appendChild(o);
+    }
+    // Keep the select/refresh disabled for the whole in-flight pick, not just
+    // the corveil-list-orgs load — an overlapping Refresh completion used to
+    // re-enable the <select> mid-provision (optional harden, #1213 review).
+    const busy = corveilOrgsLoading || !!ui.picking;
+    sel.disabled = busy;
+    sel.value = hasPicked ? picked : '';
+
+    if (corveilOrgsError) {
+      ui.note.textContent = 'Could not load organizations: ' + corveilOrgsError;
+      ui.note.className = 'st-perm-status';
+      ui.note.hidden = false;
+    } else if (corveilOrgs && !corveilOrgs.length && !corveilOrgsLoading) {
+      ui.note.textContent = 'No Corveil organizations found for your account.';
+      ui.note.className = 'st-help';
+      ui.note.hidden = false;
+    } else {
+      ui.note.textContent = '';
+      ui.note.hidden = true;
+    }
+    ui.refresh.disabled = busy;
+  }
+
+  // Drop the modal-scoped pick for one gateway target. Called from the
+  // Advanced manual editor's apply/clear path so a following S.render()
+  // cannot resurrect the last org on a non-derived (or freshly cleared) gateway.
+  function forgetPickedOrg(target) {
+    delete pickedOrgByTarget[target || ''];
   }
 
   // The org-picker gateway control (corveil/crow#1123). Replaces the raw
@@ -80,54 +168,42 @@
   // manual editor uses, but with { orgId } so the daemon fills in the key secret it
   // never hands the browser. The manual editor stays reachable under "Advanced".
   //
+  //   opts.target       — 'manager' | workspace id; keys pickedOrgByTarget.
   //   opts.current      — the stored gateway ({baseURL, customHeaders}) or null.
   //   opts.postOrg(id)  — POST the derived gateway ({ orgId: id }); returns a Promise.
   //   opts.setGateway(g)— set the local gateway (cfg.managerGateway / draft.gateway).
+  //   opts.onApplied(g) — optional; parent patches sibling controls (session-log
+  //                       checkbox) without a full-modal S.render().
   //   opts.manual       — the manual gatewayEditor node (the Advanced fallback).
   function orgGatewayEditor(opts) {
-    const wrap = el('div');
+    const wrap = el('div', 'st-org-gateway');
     const conn = S.cfg.corveilConnection || null;
 
-    // Whether the stored gateway looks derived from this connection (its base URL
-    // matches and it carries the x-citadel-api-key header). We can't tell WHICH org
-    // it came from — the key value is stripped in transport and every org shares the
-    // base URL — so we note "set from Corveil" without claiming an org (honest).
-    const current = opts.current;
-    const derived = !!(current && conn
-      && (current.baseURL || '') === (conn.baseURL || '')
-      && current.customHeaders
-      && Object.keys(current.customHeaders).some((k) => k.toLowerCase() === 'x-citadel-api-key'));
-    if (current && current.baseURL) {
-      wrap.appendChild(el('div', 'st-perm-status', derived
-        ? 'Gateway set from your Corveil connection (' + current.baseURL + ').'
-        : 'A manually-entered gateway is set (' + current.baseURL + ').'));
-    }
+    const status = el('div', 'st-perm-status');
+    status.hidden = true;
+    wrap.appendChild(status);
 
-    // Kick the lazy load on first paint; the finally-render repaints with options.
+    // Kick the lazy load on first paint; finally-refreshOrgGatewayPickers
+    // swaps options on THIS wrap instead of rebuilding the modal.
     if (corveilOrgs === null && !corveilOrgsLoading) loadCorveilOrgs(false);
 
     const msg = el('div', 'st-perm-status', '');
     const sel = el('select', 'st-select');
-    const placeholder = el('option', null,
-      corveilOrgsLoading ? 'Loading organizations…' : 'Choose an organization…');
-    placeholder.value = '';
-    sel.appendChild(placeholder);
-    for (const org of (corveilOrgs || [])) {
-      const bits = [];
-      if (org.provisioned) bits.push('key ready');
-      if (org.is_active === false) bits.push('inactive');
-      const o = el('option', null,
-        (org.org_name || org.org_id || '(unnamed org)') + (bits.length ? ' · ' + bits.join(' · ') : ''));
-      o.value = org.org_id;
-      sel.appendChild(o);
-    }
-    sel.disabled = corveilOrgsLoading;
+    const note = el('div', 'st-perm-status');
+    note.hidden = true;
+    const refresh = el('button', 'action-btn', 'Refresh organizations');
+    refresh.type = 'button';
+    refresh.onclick = () => loadCorveilOrgs(true);
+
+    wrap._orgGw = { opts, status, sel, note, msg, refresh, picking: false };
     sel.onchange = async () => {
       const orgId = sel.value;
       if (!orgId) return;
       const org = (corveilOrgs || []).find((x) => x.org_id === orgId) || null;
       const label = (org && org.org_name) || orgId;
+      wrap._orgGw.picking = true;
       sel.disabled = true;
+      refresh.disabled = true;
       msg.textContent = 'Provisioning gateway for ' + label + '…';
       try {
         // Mint or reuse the org's one gateway key, then write the derived gateway.
@@ -138,9 +214,11 @@
         // placeholder so re-picking the SAME org fires `change` again: HTML `change`
         // does not re-fire for an unchanged value, which would otherwise strand this
         // ticket's primary control on the org that just failed.
+        wrap._orgGw.picking = false;
         msg.textContent = 'Failed: ' + (e && (e.message || e));
         sel.value = '';
         sel.disabled = false;
+        refresh.disabled = corveilOrgsLoading;
         return;
       }
       // The gateway is written. Everything past this point is success bookkeeping, so
@@ -149,37 +227,38 @@
       // then show the derived gateway locally — the header value is a secret we don't
       // hold, so blank it, exactly how a stored gateway reads back after stripping.
       if (org) org.provisioned = true;
-      opts.setGateway({ baseURL: (conn && conn.baseURL) || '',
-        customHeaders: { 'x-citadel-api-key': '' } });
+      const g = { baseURL: (conn && conn.baseURL) || '',
+        customHeaders: { 'x-citadel-api-key': '' } };
+      opts.setGateway(g);
+      // Keep the just-picked org selected for the life of the modal, and point
+      // opts.current at the derived gateway so the in-place status line updates
+      // (S.render() used to rebuild the whole modal from cfg/draft).
+      opts.current = g;
+      pickedOrgByTarget[opts.target || ''] = orgId;
       // Best-effort: refresh the connection so the Integrations tab's per-org key
       // metadata reflects the new key. A failure here leaves the gateway stored and
       // the picker correct, so it must not surface as a failed pick.
       try { await refreshCorveilConnection(); } catch (_) { /* best-effort */ }
-      S.render();
+      wrap._orgGw.picking = false;
+      msg.textContent = '';
+      paintOrgGatewayPicker(wrap);
+      if (typeof opts.onApplied === 'function') opts.onApplied(g);
     };
     wrap.appendChild(S.field('Organization', sel,
       'Pick a Corveil organization — Crow provisions its gateway key and points this gateway at it.'));
-
-    if (corveilOrgsError) {
-      wrap.appendChild(el('div', 'st-perm-status', 'Could not load organizations: ' + corveilOrgsError));
-    } else if (corveilOrgs && !corveilOrgs.length && !corveilOrgsLoading) {
-      wrap.appendChild(el('div', 'st-help', 'No Corveil organizations found for your account.'));
-    }
+    wrap.appendChild(note);
     wrap.appendChild(msg);
-
-    const refresh = el('button', 'action-btn', 'Refresh organizations');
-    refresh.type = 'button';
-    refresh.disabled = corveilOrgsLoading;
-    refresh.onclick = () => loadCorveilOrgs(true);
     wrap.appendChild(S.field(null, refresh));
 
     // Manual entry stays available as an advanced fallback. Native <details> keeps
-    // it collapsed by default and needs no extra render state.
+    // it collapsed by default and needs no extra render state. paintOrgGatewayPicker
+    // never rebuilds this node, so an expanded Advanced panel survives org load/pick.
     const adv = el('details', 'st-advanced-gateway');
     const sum = el('summary', 'st-advanced-summary', 'Enter a gateway manually');
     adv.appendChild(sum);
     adv.appendChild(opts.manual);
     wrap.appendChild(adv);
+    paintOrgGatewayPicker(wrap);
     return wrap;
   }
 
@@ -460,6 +539,7 @@
 
   T.integrations = renderIntegrations;
   T.orgGatewayEditor = orgGatewayEditor;
+  T.forgetPickedOrg = forgetPickedOrg;
   T.corveilConnected = corveilConnected;
   T.resetCorveilConnectState = resetCorveilConnectState;
 })();

@@ -44,12 +44,16 @@
       const applyManual = async (g) => {
         await S.postConfig('/config/manager-gateway', g ? { baseURL: g.baseURL, headers: g.customHeaders } : { clear: true });
         S.cfg.managerGateway = g;
+        // Manual write/clear is not an org pick — drop the cached selection so
+        // the rebuilt dropdown does not keep showing the last org (#1213 review).
+        if (typeof S.forgetPickedOrg === 'function') S.forgetPickedOrg('manager');
         S.render();
       };
       const manual = S.gatewayEditor(S.cfg.managerGateway || null, applyManual);
       // Connected → org picker (manual under Advanced); otherwise the raw editor.
       if (S.corveilConnected(S.cfg.corveilConnection)) {
         body.appendChild(S.orgGatewayEditor({
+          target: 'manager',
           current: S.cfg.managerGateway || null,
           postOrg: (orgId) => S.postConfig('/config/manager-gateway', { orgId }),
           setGateway: (g) => { S.cfg.managerGateway = g; },
