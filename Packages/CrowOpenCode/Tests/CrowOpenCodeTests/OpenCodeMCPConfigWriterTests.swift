@@ -338,4 +338,33 @@ struct OpenCodeMCPConfigWriterTests {
         let jira = try #require((root["mcp"] as? [String: Any])?["jira"] as? [String: Any])
         #expect(jira["url"] as? String == "https://mine.example.net")
     }
+
+    @Test func promotesProjectScopedClaudeJira() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-mcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let claude = tmp.appendingPathComponent(".claude.json")
+        try JSONSerialization.data(withJSONObject: [
+            "projects": [
+                "/some/repo": [
+                    "mcpServers": ["jira": ["command": "uvx", "args": ["mcp-atlassian"]]],
+                ],
+            ],
+        ]).write(to: claude)
+
+        let configHome = tmp.appendingPathComponent("opencode")
+        try FileManager.default.createDirectory(at: configHome, withIntermediateDirectories: true)
+        let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path,
+            claudeJSONPath: claude.path,
+            mirrorRecordPath: tmp.appendingPathComponent("mirror.json").path)
+        #expect(outcome == .registered)
+        let root = try #require(
+            FileManager.default.contents(atPath: configHome.appendingPathComponent("opencode.json").path)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        let jira = try #require((root["mcp"] as? [String: Any])?["jira"] as? [String: Any])
+        #expect(jira["command"] as? [String] == ["uvx", "mcp-atlassian"])
+    }
 }
