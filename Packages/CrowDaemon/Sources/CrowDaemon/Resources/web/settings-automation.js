@@ -50,6 +50,7 @@
       // Connected → org picker (manual under Advanced); otherwise the raw editor.
       if (S.corveilConnected(S.cfg.corveilConnection)) {
         body.appendChild(S.orgGatewayEditor({
+          target: 'manager',
           current: S.cfg.managerGateway || null,
           postOrg: (orgId) => S.postConfig('/config/manager-gateway', { orgId }),
           setGateway: (g) => { S.cfg.managerGateway = g; },

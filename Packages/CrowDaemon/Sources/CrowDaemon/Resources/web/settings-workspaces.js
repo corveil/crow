@@ -39,6 +39,40 @@
 
   // ---- Workspace sub-form -------------------------------------------------
 
+  const SESSION_LOGS_NEED_GATEWAY = 'Turn on the AI Gateway for this workspace first — the upload reuses its URL and credential.';
+  const SESSION_LOGS_HELP_ON = 'Uploads this workspace’s coding-session transcripts to Corveil, reusing its AI-gateway URL and credential (no second key or host needed). That’s the only setting required — collector timing and size limits live under Settings → General → Session logs.';
+  const SESSION_LOGS_HELP_OFF = 'Turn on the AI Gateway for this workspace above first — the upload reuses its URL and credential.';
+
+  function workspaceHasGateway(d) {
+    return !!(d.gateway && (d.gateway.baseURL
+      || (d.gateway.customHeaders && Object.keys(d.gateway.customHeaders).length)));
+  }
+
+  // Org pick paints the picker in place and no longer S.render()s the sub-form
+  // (corveil/crow#1212). Keep the session-log checkbox, help, and backfill
+  // button in sync with the draft so they still enable/check after a pick.
+  function syncWorkspaceGatewayDependents(d) {
+    const overlay = document.querySelector('.settings-subform-overlay');
+    if (!overlay) return;
+    const hasGateway = workspaceHasGateway(d);
+    const row = overlay.querySelector('.st-session-logs-row');
+    if (row) {
+      const cb = row.querySelector('input');
+      if (cb) {
+        cb.checked = !!d.uploadSessionLogs;
+        cb.disabled = !hasGateway;
+      }
+      row.title = hasGateway ? '' : SESSION_LOGS_NEED_GATEWAY;
+    }
+    const help = overlay.querySelector('.st-session-logs-help');
+    if (help) help.textContent = hasGateway ? SESSION_LOGS_HELP_ON : SESSION_LOGS_HELP_OFF;
+    const bfBtn = overlay.querySelector('.st-backfill-btn');
+    if (bfBtn) {
+      bfBtn.disabled = !hasGateway;
+      bfBtn.title = hasGateway ? '' : SESSION_LOGS_NEED_GATEWAY;
+    }
+  }
+
   function renderWorkspaceForm(body) {
     const d = S.subForm.draft;
     body.appendChild(S.textField('Name', d, 'name', { placeholder: 'MyOrg' }));
@@ -158,6 +192,7 @@
       const manual = S.gatewayEditor(d.gateway || null, applyManual);
       if (S.corveilConnected(S.cfg.corveilConnection)) {
         body.appendChild(S.orgGatewayEditor({
+          target: d.id,
           current: d.gateway || null,
           // Picking an org derives this workspace's gateway from that org's key AND —
           // because the log upload reuses that same gateway — the daemon auto-enables
@@ -179,6 +214,10 @@
             return res;
           },
           setGateway: (g) => { d.gateway = g; },
+          // Org pick no longer S.render()s the whole modal (corveil/crow#1212).
+          // Patch the session-log checkbox / backfill button in place so they
+          // still reflect the new gateway without tearing down the sub-form.
+          onApplied: () => { syncWorkspaceGatewayDependents(d); },
           manual,
         }));
       } else {
@@ -193,22 +232,20 @@
     // disabled with a tooltip otherwise. There is no separate master switch — a
     // ticked box plus a configured gateway is the whole opt-in.
     body.appendChild(S.group('Session logs'));
-    const hasGateway = !!(d.gateway && (d.gateway.baseURL
-      || (d.gateway.customHeaders && Object.keys(d.gateway.customHeaders).length)));
-    const slRow = el('label', 'st-switch-row');
+    const hasGateway = workspaceHasGateway(d);
+    const slRow = el('label', 'st-switch-row st-session-logs-row');
     const slCb = el('input', 'st-switch');
     slCb.type = 'checkbox';
     slCb.checked = !!d.uploadSessionLogs;
     slCb.disabled = !hasGateway;
-    if (!hasGateway) slRow.title = 'Turn on the AI Gateway for this workspace first — the upload reuses its URL and credential.';
+    if (!hasGateway) slRow.title = SESSION_LOGS_NEED_GATEWAY;
     slCb.onchange = () => { d.uploadSessionLogs = slCb.checked; S.markDirty(); };
     slRow.appendChild(slCb);
     slRow.appendChild(el('span', 'st-switch-label', 'Upload session transcripts to Corveil'));
     const slField = el('div', 'st-field');
     slField.appendChild(slRow);
-    slField.appendChild(el('div', 'st-help', hasGateway
-      ? 'Uploads this workspace’s coding-session transcripts to Corveil, reusing its AI-gateway URL and credential (no second key or host needed). That’s the only setting required — collector timing and size limits live under Settings → General → Session logs.'
-      : 'Turn on the AI Gateway for this workspace above first — the upload reuses its URL and credential.'));
+    slField.appendChild(el('div', 'st-help st-session-logs-help',
+      hasGateway ? SESSION_LOGS_HELP_ON : SESSION_LOGS_HELP_OFF));
     body.appendChild(slField);
 
     // Historical backfill (CROW-1075): reconcile the transcripts already on disk
@@ -216,10 +253,10 @@
     // choose. Reuses this workspace's gateway for the upload, so it's gated on one
     // being configured, exactly like the checkbox above.
     const bfField = el('div', 'st-field');
-    const bfBtn = el('button', 'action-btn', 'Backfill history…');
+    const bfBtn = el('button', 'action-btn st-backfill-btn', 'Backfill history…');
     bfBtn.type = 'button';
     bfBtn.disabled = !hasGateway;
-    if (!hasGateway) bfBtn.title = 'Turn on the AI Gateway for this workspace first — the upload reuses its URL and credential.';
+    if (!hasGateway) bfBtn.title = SESSION_LOGS_NEED_GATEWAY;
     bfBtn.onclick = () => openBackfillDialog(d.name);
     bfField.appendChild(bfBtn);
     bfField.appendChild(el('div', 'st-help',

@@ -8,16 +8,20 @@ const { loadClientSource, loadSettingsSource } = require('./load-client');
 // Automation tab.
 //
 // Guards the three behaviours that are invisible in a string check and were the
-// round-1 review's Yellow findings:
+// round-1 review's Yellow findings, plus the CROW-1212 picker-state / flicker
+// regressions:
 //   1. Happy path: connected → an org dropdown is offered; picking an org calls
 //      corveil-select-org, POSTs { orgId } to /config/manager-gateway, and the card
 //      then shows the derived gateway. The browser never sends the key secret.
+//      The dropdown STAYS on the picked org (no snap-back to the placeholder).
 //   2. A failed pick RESETS the <select> back to the placeholder, so re-picking the
 //      SAME org fires `change` again (HTML `change` won't re-fire for an unchanged
 //      value, which would otherwise strand this ticket's primary control).
 //   3. A best-effort connection refresh that throws AFTER the gateway is written must
 //      NOT report the pick as failed — the gateway is stored, so the card shows it
 //      set and never prints "Failed:".
+//   4. Lazy corveil-list-orgs load and a successful pick update the picker in place
+//      — the settings modal node identity is unchanged (no innerHTML teardown).
 
 const epilogue = `
 ;globalThis.__t = {
@@ -185,6 +189,11 @@ const check = (name, cond) => {
       h.window.document.body.textContent.includes('Gateway set from your Corveil connection'));
     check('no key secret ever left the browser (POST body has no x-citadel value)',
       !JSON.stringify(h.calls.gatewayPosts).toLowerCase().includes('sk-citadel'));
+    const selAfter = orgSelect(h.window);
+    check('dropdown still shows the picked org (no snap-back to placeholder)',
+      !!selAfter && selAfter.value === 'org_acme');
+    check('same <select> after pick (picker updated in place, not via S.render)',
+      selAfter === sel);
   }
 
   console.log('\nA failed pick resets the select so the same org can be retried:');
@@ -216,6 +225,29 @@ const check = (name, cond) => {
       h.window.document.body.textContent.includes('Gateway set from your Corveil connection'));
     check('the pick was NOT reported as failed',
       !h.window.document.body.textContent.includes('Failed:'));
+  }
+
+  console.log('\nLazy org load does not rebuild the settings modal:');
+  {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const h = load({ config: connectedConfig(), local: true });
+    h.hooks.listOrgs = () => pending.then(() => ({ orgs: [
+      { org_id: 'org_acme', org_name: 'Acme Corp', role: 'admin', is_active: true, provisioned: false },
+    ] }));
+    await h.T.openSettings('automation');
+    await drain();
+    const modal = h.window.document.querySelector('.settings-modal');
+    const sel = orgSelect(h.window);
+    check('loading placeholder shown before orgs arrive',
+      !!sel && /Loading/i.test(sel.options[0] && sel.options[0].textContent));
+    release();
+    await drain();
+    check('same settings modal after orgs arrive (no full-modal flicker)',
+      h.window.document.querySelector('.settings-modal') === modal);
+    check('same <select> after orgs arrive', orgSelect(h.window) === sel);
+    check('membership now in the dropdown',
+      !!sel && Array.from(sel.options).some((o) => o.value === 'org_acme'));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
