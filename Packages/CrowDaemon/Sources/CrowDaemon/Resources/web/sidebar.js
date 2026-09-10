@@ -19,8 +19,8 @@ let liveById = {};
 // Boards (Ticket Board / Reviews), mirroring the desktop's full-pane boards.
 // Served by `crowd` off its own IssueTracker (CROW-581 M-C), so they populate
 // whether or not the desktop app is running.
-let selectedBoard = null; // 'tickets' | 'reviews' | 'scorecard' | 'grid' | null
-const boardData = { tickets: null, reviews: null, scorecard: null };
+let selectedBoard = null; // 'tickets' | 'reviews' | 'scorecard' | 'grid' | 'scratch' | null
+const boardData = { tickets: null, reviews: null, scorecard: null, scratch: null };
 
 // Session grid (CROW-1153): an ordered per-browser pin list. Pinned ids lead
 // the wall; remaining slots auto-fill with active/in-review sessions. Caps at
@@ -311,6 +311,7 @@ function sidebarSignature() {
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
+    boardData.scratch && (boardData.scratch.todos || []).length,
     // The bell's unread badge (CROW-909) — not store-backed, so name it here so
     // an appended notification actually repaints the badge.
     notifUnreadCount(),
@@ -456,6 +457,28 @@ async function bulkDeleteSelected() {
 
 // Tickets summary card: title + refresh + 5 status mini-counts. Click opens the
 // Ticket Board (TicketBoardSidebarRow).
+function scratchCard() {
+  const card = el('div', 'tickets-card scratch-card' + (selectedBoard === 'scratch' ? ' selected' : ''));
+  card.onclick = () => selectBoard('scratch');
+  const head = el('div', 'tickets-head');
+  head.appendChild(el('span', 'tickets-title', 'Scratch'));
+  head.appendChild(el('span', 'scratch-head-spacer'));
+  const count = scratchOpenCount();
+  if (count) {
+    const badge = el('span', 'scratch-count', String(count));
+    badge.title = count + ' open idea' + (count === 1 ? '' : 's');
+    head.appendChild(badge);
+  }
+  card.appendChild(head);
+  card.appendChild(el('div', 'scratch-sub', 'Pre-ticket ideas'));
+  return card;
+}
+
+function scratchOpenCount() {
+  const todos = (boardData.scratch && boardData.scratch.todos) || [];
+  return todos.filter((t) => t.state !== 'done' && t.state !== 'dropped').length;
+}
+
 function ticketsCard() {
   const card = el('div', 'tickets-card' + (selectedBoard === 'tickets' ? ' selected' : ''));
   card.onclick = () => selectBoard('tickets');
@@ -638,6 +661,7 @@ function sidebarIconColumn() {
 function sidebarLeftStack() {
   const wrap = el('div', 'sidebar-left');
   wrap.appendChild(ticketsCard());
+  wrap.appendChild(scratchCard());
 
   // Row 1: Grid · Reviews · Scorecard (each its own non-wrapping flex line).
   const row1 = el('div', 'nav-pills-row');

@@ -132,9 +132,10 @@
 
     const scopeSel = el('select', 'st-select');
     for (const [value, label] of [
-      ['sessions:read board:read', 'sessions:read + board:read'],
+      ['sessions:read board:read todos:read', 'all read scopes'],
       ['sessions:read', 'sessions:read only'],
       ['board:read', 'board:read only'],
+      ['todos:read', 'todos:read only'],
     ]) {
       const opt = el('option', null, label);
       opt.value = value;

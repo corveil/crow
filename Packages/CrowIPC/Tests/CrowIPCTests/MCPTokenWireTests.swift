@@ -84,11 +84,11 @@ struct MCPTokenWireTests {
         }
     }
 
-    @Test("The scope vocabulary is exactly the read-only pair v1 defines")
+    @Test("The scope vocabulary is exactly the read-only set currently defined")
     func scopeVocabularyIsPinned() {
         // No prompt:send, no sessions:write, no admin — and adding one has to be a
         // deliberate edit here, not a side effect of some other change.
-        #expect(Set(MCPScope.allCases.map(\.rawValue)) == ["sessions:read", "board:read"])
+        #expect(Set(MCPScope.allCases.map(\.rawValue)) == ["board:read", "sessions:read", "todos:read"])
     }
 
     // MARK: - Redaction

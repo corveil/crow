@@ -44,8 +44,8 @@ public struct MCPServe: ParsableCommand {
         other `crow` verb — a token would gate nothing. Remote clients use \
         `POST /mcp` with a token from `crow mcp token mint` instead.
 
-        The surface is read-only either way, and identical: six tools over five \
-        read RPCs. This command cannot send prompts, create sessions, or write \
+        The surface is read-only either way, and identical: eight tools over \
+        seven read RPCs. This command cannot send prompts, create sessions, or write \
         anything.
 
         Unlike every other `crow` verb, stdout here carries framed JSON-RPC rather \

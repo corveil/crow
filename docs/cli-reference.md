@@ -643,6 +643,117 @@ crow job duplicate --id <job-uuid>
 ```
 ---
 
+## Todo Commands
+
+Pre-ticket ideas (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. The collection lives in the shared `store.json` (the same `JSONStore` sessions use) and is **not** visited by the session retention reaper: a parked idea persists until someone acts on it.
+
+Every subcommand goes through the running daemon's RPC socket. Items are addressed by UUID (`--id`), which `crow todo list` prints.
+
+### `crow todo add`
+
+```bash
+crow todo add "native scratch list" --tag crow,cli --priority p2 --note "explore before filing"
+```
+
+| Flag         | Required | Description                         |
+| ------------ | -------- | ----------------------------------- |
+| `<text>`     | yes      | Idea text (positional)             |
+| `--tag`     | no       | Comma-separated tags                 |
+| `--priority`| no       | `p1`, `p2`, `p3`, or `p4`           |
+| `--note`    | no       | Longer note                         |
+
+### `crow todo list`
+
+```bash
+crow todo list
+crow todo list --state captured --tag crow
+```
+
+### `crow todo get`
+
+```bash
+crow todo get --id <todo-uuid>
+```
+
+### `crow todo edit`
+
+```bash
+crow todo edit --id <todo-uuid> --text "changed" --add-tag cli --remove-tag ios
+```
+
+`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list.
+
+### `crow todo done`
+
+```bash
+crow todo done --id <todo-uuid>
+```
+
+### `crow todo reopen`
+
+```bash
+crow todo reopen --id <todo-uuid>
+```
+
+### `crow todo park`
+
+```bash
+crow todo park --id <todo-uuid>
+```
+
+### `crow todo drop`
+
+```bash
+crow todo drop --id <todo-uuid>
+```
+
+### `crow todo delete`
+
+```bash
+crow todo delete --id <todo-uuid>
+```
+
+### `crow todo link`
+
+```bash
+crow todo link --id <todo-uuid> --type ticket --url https://github.com/owner/repo/issues/1
+crow todo link --id <todo-uuid> --type session --session <session-uuid> --label explore
+```
+
+### `crow todo explore`
+
+Create a Manager, seed the item as a pre-ticket explore brief, attach the session, and move state to `exploring`. Needs tmux.
+
+```bash
+crow todo explore --id <todo-uuid>
+crow todo explore --id <todo-uuid> --agent cursor
+```
+
+### `crow todo ticket`
+
+File a ticket from the item body via the workspace's task provider, attach the URL, and move state to `ticketed`. `--repo` is required unless the workspace has exactly one always-include repo (or a Jira project key).
+
+```bash
+crow todo ticket --id <todo-uuid> --workspace Corveil --repo corveil/crow
+```
+
+### `crow todo work`
+
+Types `/crow-workspace` for the linked ticket into the primary Manager. Needs a ticket link.
+
+```bash
+crow todo work --id <todo-uuid>
+```
+
+### `crow todo talk`
+
+Send text to the item's linked exploring Manager.
+
+```bash
+crow todo talk --id <todo-uuid> "keep going — skip the ticket"
+```
+---
+
 ## Agent Commands
 
 Which coding harness Crow launches — `AppConfig.defaultAgentKind` plus the per-role overrides in `AppConfig.agentsByKind`, the same fields the web Settings → General "Agent" pickers edit. Resolution is `agentsByKind[<role>]` falling back to `defaultAgentKind`.

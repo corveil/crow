@@ -35,6 +35,11 @@ public struct StoreData: Codable, Sendable {
     /// keep their persisted values; only weeks the DB still covers are
     /// overwritten.
     public var managerUsageWeekly: [String: ManagerWeeklyUsage]?
+    /// Durable pre-ticket idea list (CROW-1231). Optional so older `store.json`
+    /// files lacking the key still decode. Explicitly **not** visited by the
+    /// session retention reaper — a parked idea must persist until acted on,
+    /// unlike completed sessions which wipe after `cleanup.retentionHours`.
+    public var todos: [TodoItem]?
 
     public init(
         sessions: [Session] = [],
@@ -44,7 +49,8 @@ public struct StoreData: Codable, Sendable {
         hookStates: [String: PersistedHookState]? = nil,
         analyticsSnapshots: [String: SessionAnalyticsSnapshot]? = nil,
         prAttributions: [String: PRSessionAttribution]? = nil,
-        managerUsageWeekly: [String: ManagerWeeklyUsage]? = nil
+        managerUsageWeekly: [String: ManagerWeeklyUsage]? = nil,
+        todos: [TodoItem]? = nil
     ) {
         self.sessions = sessions
         self.worktrees = worktrees
@@ -54,6 +60,7 @@ public struct StoreData: Codable, Sendable {
         self.analyticsSnapshots = analyticsSnapshots
         self.prAttributions = prAttributions
         self.managerUsageWeekly = managerUsageWeekly
+        self.todos = todos
     }
 }
 

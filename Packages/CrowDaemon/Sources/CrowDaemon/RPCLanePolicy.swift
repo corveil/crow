@@ -184,6 +184,27 @@ enum RPCLanePolicy {
         "job-run": .on("job_id"),
         "run-job": .on("job_id"),
 
+        // MARK: Scratch / pre-ticket ideas (CROW-1231)
+        // New items have nothing to order against (same reasoning as
+        // `new-session`). Mutations key on the item so two edits of one
+        // cannot tear. Explore/work/talk type into a Manager (new, primary,
+        // or the item's linked explore Manager), so they share the manager
+        // lane with `create-manager` / `work-on-issue` / `send` — otherwise
+        // a talk can interleave with seedExploreBrief or work-on-issue and
+        // corrupt the prompt.
+        "todo-add": .concurrent,
+        "todo-edit": .on("todo_id"),
+        "todo-delete": .on("todo_id"),
+        "todo-done": .on("todo_id"),
+        "todo-reopen": .on("todo_id"),
+        "todo-park": .on("todo_id"),
+        "todo-drop": .on("todo_id"),
+        "todo-link": .on("todo_id"),
+        "todo-explore": .fixed(.manager),
+        "todo-ticket": .on("todo_id"),
+        "todo-work": .fixed(.manager),
+        "todo-talk": .fixed(.manager),
+
         // MARK: Hooks
         // Never reaches `/rpc` — `RPCWebSocketHandler.localOnlyDenial` denies it
         // — but declared so the ledger gate stays complete rather than carrying

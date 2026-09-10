@@ -21,7 +21,7 @@
 // Only the addressable view lives in the URL — scroll position, open menus,
 // selection mode and board filters stay out of it on purpose.
 // ---------------------------------------------------------------------------
-const ROUTE_BOARDS = ['tickets', 'reviews', 'scorecard', 'grid'];
+const ROUTE_BOARDS = ['tickets', 'reviews', 'scorecard', 'grid', 'scratch'];
 // Mirrors TABS in settings.js. An unknown tab degrades to 'general' rather than
 // 404ing, so a link from an older/newer build still opens Settings.
 const ROUTE_SETTINGS_TABS = [

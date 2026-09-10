@@ -193,6 +193,33 @@ crow job duplicate --id <job-uuid>              → {"job":{...}}   the copy sta
 - On `edit`, any `--prompt` replaces the **whole** prompt list and any schedule flag replaces the **whole** schedule — so changing `--weekdays` means restating `--daily-at`. Use `enable`/`disable` instead of `edit` to toggle enabled.
 - `job run` can take a while on first run (it may clone the repo); the run continues in the app even if the CLI stops waiting.
 
+### Todo Commands
+
+Durable pre-ticket ideas (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. Lives in the shared `JSONStore` (not `config.json`) and is **not** reaped by session cleanup.
+
+```
+crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."]
+crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
+crow todo get --id <uuid>
+crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--add-tag ...] [--remove-tag ...]
+crow todo done --id <uuid>
+crow todo reopen --id <uuid>
+crow todo park --id <uuid>
+crow todo drop --id <uuid>
+crow todo delete --id <uuid>
+crow todo link --id <uuid> --type session|ticket|pr|custom [--url ...] [--session <uuid>] [--label "..."]
+crow todo explore --id <uuid> [--agent claude-code]   → create-manager, seed an explore brief, state → exploring
+crow todo ticket --id <uuid> --workspace W [--repo owner/repo]  → file a ticket, attach the URL, state → ticketed
+crow todo work --id <uuid>                            → /crow-workspace off the linked ticket, state → working
+crow todo talk --id <uuid> "..."                      → crow send to the item's linked Manager
+```
+
+- Items persist until acted on — unlike completed sessions, they are exempt from the 24h cleanup reaper.
+- `explore` automates the create-manager + send dance; if the Manager is still starting, `seeded` is false and `todo talk` can finish the brief.
+- `ticket` needs a workspace; `--repo` is required unless that workspace has exactly one always-include repo (or a Jira project key).
+- `work` needs a linked ticket (`todo ticket` or `todo link --type ticket`).
+- Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]
@@ -351,10 +378,10 @@ crow backfill upload --workspace NAME (--session UID … | --all-high-confidence
 
 ### MCP
 
-Crow's read-only MCP surface (CROW-1004) — six tools over five read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
+Crow's read-only MCP surface (CROW-1004) — eight tools over seven read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
 
 ```
-crow mcp serve [--scope sessions:read] [--scope board:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
+crow mcp serve [--scope sessions:read] [--scope board:read] [--scope todos:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
 crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N}
 crow mcp token mint --name N --scope S [--expires-in 90d | --no-expiry]
                                                               → {"saved":true,"token":"crow_mcp_…","warning":"…","record":{…}}
@@ -364,7 +391,7 @@ crow mcp token revoke --id <uuid> | --name N                  → {"revoked":tru
 - **Two transports, two trust models.** `crow mcp serve` bridges stdio to the Unix socket with **no token** — a caller who can run it can already run every other `crow` verb. Off-box clients POST to `/mcp` with `Authorization: Bearer <token>`.
 - `mcp serve` is the one verb whose **stdout is not a single JSON object**: it streams framed JSON-RPC. Diagnostics go to stderr.
 - The three `token` verbs are **local-only** (like `gateway`/`web-password`) — a remote peer must not mint the credential that gates remote access. Settings → Web access has the same controls, local browser only.
-- Scopes are exactly `sessions:read` and `board:read`. `tools/list` is filtered **by the token**, so a `board:read` client never learns the session tools exist.
+- Scopes are `sessions:read`, `board:read`, and `todos:read`. `tools/list` is filtered **by the token**, so a `board:read` client never learns the session tools exist.
 - Expiry defaults to **90 days**; `--no-expiry` must be typed. `--expires-in` needs a unit (`90d`, `12h`, `2w`) — a bare `90` is rejected as ambiguous.
 - The token is printed **once** and stored as a SHA-256 hash; there is no `--reveal`. A lost token is replaced, not recovered.
 

@@ -3,10 +3,11 @@ import Foundation
 /// A capability an MCP caller may exercise (CROW-1004).
 ///
 /// Deliberately coarse and deliberately short. v1 is read-only, so there are
-/// exactly two: one for the session surface and one for the boards. There is no
-/// `prompt:send`, no `sessions:write`, and no `admin` — not "not yet implemented"
-/// but *not defined*, so a token cannot name a capability the server might later
-/// grow into. Adding a write scope is a decision someone has to make in this file.
+/// three scopes: sessions, the ticket/review boards, and the Scratch list.
+/// There is no `prompt:send`, no `sessions:write`, and no `admin` — not "not
+/// yet implemented" but *not defined*, so a token cannot name a capability the
+/// server might later grow into. Adding a write scope is a decision someone
+/// has to make in this file.
 ///
 /// The raw values are the wire form: they appear in `config.json`, in
 /// `crow mcp token mint --scope`, and in the Settings UI, so they are part of the
@@ -17,6 +18,8 @@ public enum MCPScope: String, Codable, Sendable, Equatable, CaseIterable, Compar
     case sessionsRead = "sessions:read"
     /// Read the ticket and review boards.
     case boardRead = "board:read"
+    /// Read the durable pre-ticket Scratch list (CROW-1231).
+    case todosRead = "todos:read"
 
     /// Sorted output everywhere (token listings, `tools/list` order, error text)
     /// so the same inputs always render the same bytes.

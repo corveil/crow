@@ -32,6 +32,8 @@ public struct SessionRepository: Sendable {
     /// trailing-4-week baseline must survive session deletion (ADR 0008, #690).
     /// `prAttributions` is likewise NOT cascaded: merged-PR-per-window counts
     /// must survive session deletion (ADR 0008, #693).
+    /// `todos` is likewise NOT cascaded (CROW-1231): a Scratch item's provenance
+    /// trail must outlive the Manager / work session it spawned.
     public func delete(id: UUID) {
         store.mutate { data in
             data.sessions.removeAll { $0.id == id }
