@@ -54,12 +54,14 @@ import CrowPersistence
         #expect(defaults?["branch_prefix"] == .string("feature/"))
         #expect(defaults?["exclude_review_repos"] == .array([]))
         #expect(defaults?["binaries"] == .object([:]))
-        // Echoes all nine even though `set` writes seven — hiding the two
+        // Echoes all eleven even though `set` writes nine — hiding the two
         // without a CLI flag would make `get` a worse answer to "what is my
         // config?", and neither has a web editor either.
         #expect(defaults?["mirror_claude_mcp_to_codex"] == .bool(true))
+        #expect(defaults?["corveil_auto_update"] == .bool(false))
+        #expect(defaults?["corveil_version"] == .string("latest"))
         #expect(defaults?["exclude_dirs"] != nil)
-        #expect(defaults?.count == 9)
+        #expect(defaults?.count == 11)
         // No config on disk, so the defaults genuinely do apply.
         #expect(resp.result?["config_readable"] == .bool(true))
     }
@@ -83,6 +85,24 @@ import CrowPersistence
     }
 
     // MARK: - Patch semantics
+
+    @Test @MainActor func setPatchesCorveilAutoUpdateAndVersion() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let resp = await call("defaults-set", [
+            "corveil_auto_update": .bool(true),
+            "corveil_version": .string("0.4.32"),
+        ], devRoot: devRoot)
+
+        #expect(resp.error == nil)
+        #expect(resp.result?["defaults"]?.objectValue?["corveil_auto_update"] == .bool(true))
+        #expect(resp.result?["defaults"]?.objectValue?["corveil_version"] == .string("v0.4.32"))
+        #expect(resp.result?["restart_required"] == .bool(false))
+        let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.defaults.corveilAutoUpdate)
+        #expect(onDisk.defaults.corveilVersion == "v0.4.32")
+    }
 
     @Test @MainActor func setPatchesOnlyProvidedFields() async throws {
         let devRoot = tempDevRoot()
@@ -350,6 +370,8 @@ import CrowPersistence
             ["add_exclude_review_repos": .array([.int(1)])],
             ["add_exclude_review_repos": .string("acme/docs")],
             ["clear_exclude_review_repos": .string("yes")],
+            ["corveil_version": .string("../escape")],
+            ["corveil_auto_update": .string("yes")],
             [
                 "clear_exclude_review_repos": .bool(true),
                 "add_exclude_review_repos": .array([.string("acme/docs")]),

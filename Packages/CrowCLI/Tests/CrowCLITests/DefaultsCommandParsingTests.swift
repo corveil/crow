@@ -39,6 +39,21 @@ private func defaultsSetParseError(_ args: [String]) -> String {
     #expect(cmd.clearExcludeReviewRepos == false)
 }
 
+@Test func defaultsSetParsesCorveilAutoUpdateFlags() throws {
+    let cmd = try DefaultsSet.parse([
+        "--corveil-auto-update", "true",
+        "--corveil-version", "v0.4.32",
+    ])
+    #expect(cmd.corveilAutoUpdate == true)
+    #expect(cmd.corveilVersion == "v0.4.32")
+}
+
+@Test func defaultsSetRejectsInvalidCorveilVersion() {
+    #expect(throws: (any Error).self) {
+        _ = try DefaultsSet.parse(["--corveil-version", "../escape"])
+    }
+}
+
 @Test func defaultsSetRequiresAtLeastOneField() {
     #expect(throws: (any Error).self) { _ = try DefaultsSet.parse([]) }
     #expect(defaultsSetParseError([]).contains("Nothing to set"))

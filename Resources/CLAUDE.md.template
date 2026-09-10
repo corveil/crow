@@ -59,9 +59,10 @@ crow version --check                                                    → comp
 crow version check                                                      → same as --check
 crow version get                                                        → {"version_update":{…},"status":{…}}
 crow version set [--enabled true|false] [--interval-hours N]            → patch; interval floored at 1h
-crow defaults get                                                       → {"defaults":{…9 fields…},"config_readable":bool}
+crow defaults get                                                       → {"defaults":{…11 fields…},"config_readable":bool}
 crow defaults set [--provider github|gitlab] [--cli gh|glab] [--branch-prefix 'feat/']
 crow defaults set --binary NAME=PATH                                    → merge; NAME= removes. Local-only; needs a crowd restart
+crow defaults set --corveil-auto-update true|false [--corveil-version latest|vX.Y.Z]
 crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R | --clear-exclude-review-repos
                   (same trio for --…-exclude-ticket-repo and --…-ignore-review-label)
 ```

@@ -1243,6 +1243,19 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     /// deliberately keeps credentials in one place can suppress the duplication.
     public var mirrorClaudeMCPToCodex: Bool
 
+    /// When true, Crow downloads the host-platform `corveil` CLI from the public
+    /// `corveil/corveil-releases` GitHub repo and links it under Application
+    /// Support (CROW-1210). Default **off** so existing source-build workflows
+    /// are unchanged until an operator opts in.
+    ///
+    /// Auto-manage is skipped when `binaries["corveil"]` is set to a path
+    /// outside Crow's managed dir — a local `out/` build always wins.
+    public var corveilAutoUpdate: Bool
+
+    /// Which `corveil-releases` tag to keep linked: `"latest"` or a pin like
+    /// `"v0.4.32"`. Ignored unless `corveilAutoUpdate` is on.
+    public var corveilVersion: String
+
     /// Forge providers the Settings → Workspaces picker offers.
     ///
     /// Lives on the model, not in the CLI or the RPC layer, so `crow defaults
@@ -1278,6 +1291,35 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         return !name.contains("/") && !name.contains("\\") && name != "." && name != ".."
     }
 
+    /// Sentinel for `corveilVersion`: resolve the current
+    /// `corveil/corveil-releases` GitHub release at check time (CROW-1210).
+    public static let corveilVersionLatest = "latest"
+
+    /// Canonicalize a `corveilVersion` value: `"latest"`, or a `vX.Y.Z` tag.
+    ///
+    /// Shared by `crow defaults set --corveil-version` and `defaults-set` so the
+    /// CLI and the daemon cannot drift on what a pin looks like. A path-like
+    /// value is rejected — the string becomes a directory name under Application
+    /// Support, and `..` / `/` would escape it.
+    public static func normalizedCorveilVersion(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.lowercased() == corveilVersionLatest { return corveilVersionLatest }
+        if trimmed.contains("/") || trimmed.contains("\\") || trimmed.contains("..") {
+            return nil
+        }
+        let rest: String
+        if trimmed.first == "v" || trimmed.first == "V" {
+            rest = String(trimmed.dropFirst())
+        } else {
+            rest = trimmed
+        }
+        guard rest.range(of: #"^\d+\.\d+\.\d+([.-][0-9A-Za-z]+)*$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        return "v" + rest
+    }
+
     /// Characters that are invalid in git ref names (see `git check-ref-format`).
     private static let invalidBranchChars = CharacterSet(charactersIn: " ~^:?*[\\")
 
@@ -1305,7 +1347,9 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         excludeTicketRepos: [String] = [],
         ignoreReviewLabels: [String] = [],
         binaries: [String: String] = [:],
-        mirrorClaudeMCPToCodex: Bool = true
+        mirrorClaudeMCPToCodex: Bool = true,
+        corveilAutoUpdate: Bool = false,
+        corveilVersion: String = ConfigDefaults.corveilVersionLatest
     ) {
         self.provider = provider
         self.cli = cli
@@ -1316,6 +1360,8 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         self.ignoreReviewLabels = ignoreReviewLabels
         self.binaries = binaries
         self.mirrorClaudeMCPToCodex = mirrorClaudeMCPToCodex
+        self.corveilAutoUpdate = corveilAutoUpdate
+        self.corveilVersion = Self.normalizedCorveilVersion(corveilVersion) ?? Self.corveilVersionLatest
     }
 
     public init(from decoder: Decoder) throws {
@@ -1329,10 +1375,17 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         ignoreReviewLabels = try container.decodeIfPresent([String].self, forKey: .ignoreReviewLabels) ?? []
         binaries = try container.decodeIfPresent([String: String].self, forKey: .binaries) ?? [:]
         mirrorClaudeMCPToCodex = try container.decodeIfPresent(Bool.self, forKey: .mirrorClaudeMCPToCodex) ?? true
+        corveilAutoUpdate = try container.decodeIfPresent(Bool.self, forKey: .corveilAutoUpdate) ?? false
+        if let raw = try container.decodeIfPresent(String.self, forKey: .corveilVersion),
+           let normalized = Self.normalizedCorveilVersion(raw) {
+            corveilVersion = normalized
+        } else {
+            corveilVersion = Self.corveilVersionLatest
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels, binaries, mirrorClaudeMCPToCodex
+        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels, binaries, mirrorClaudeMCPToCodex, corveilAutoUpdate, corveilVersion
     }
 }
 

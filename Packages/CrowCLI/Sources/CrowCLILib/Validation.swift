@@ -257,6 +257,14 @@ func validateBranchPrefix(_ value: String) throws {
     }
 }
 
+/// Validate `crow defaults set --corveil-version` against the model's own
+/// `ConfigDefaults.normalizedCorveilVersion` (CROW-1210).
+func validateCorveilVersion(_ value: String) throws {
+    guard ConfigDefaults.normalizedCorveilVersion(value) != nil else {
+        throw ValidationError("'\(value)' is not a valid corveil version. Expected 'latest' or a release tag like v0.4.32.")
+    }
+}
+
 /// Parse repeatable `crow defaults set --binary NAME=PATH` values into the map
 /// the `binaries` param carries (#810). Returns a value rather than `Void` like
 /// most of its neighbours because `validate()` and `run()` share it.

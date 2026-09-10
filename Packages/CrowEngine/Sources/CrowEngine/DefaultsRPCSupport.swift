@@ -297,6 +297,20 @@ public enum DefaultsRPC {
         return result
     }
 
+    /// - Returns: `nil` when the key is absent or null.
+    /// - Throws: `RPCError.invalidParams` when present but not `"latest"` or a
+    ///   `vX.Y.Z` release tag.
+    public static func patchCorveilVersion(
+        _ params: [String: JSONValue], _ key: String = "corveil_version"
+    ) throws -> String? {
+        guard let raw = try patchString(params, key) else { return nil }
+        guard let normalized = ConfigDefaults.normalizedCorveilVersion(raw) else {
+            throw RPCError.invalidParams(
+                "\(key) must be 'latest' or a release tag like v0.4.32")
+        }
+        return normalized
+    }
+
     // MARK: - Response encoding
 
     /// The whole `ConfigDefaults` subtree, snake_cased.
@@ -306,7 +320,7 @@ public enum DefaultsRPC {
     /// shape reviewable at a glance and free of any Bool-vs-number coercion
     /// difference between Darwin Foundation and swift-corelibs-foundation.
     ///
-    /// All nine fields are echoed even though `defaults-set` writes seven —
+    /// All eleven fields are echoed even though `defaults-set` writes nine —
     /// `exclude_dirs` and `mirror_claude_mcp_to_codex` have no web editor either,
     /// and hiding them would make `get` a worse answer to "what is my config?".
     /// Carries no credentials, so unlike `get-config` this needs no
@@ -322,6 +336,8 @@ public enum DefaultsRPC {
             "ignore_review_labels": .array(defaults.ignoreReviewLabels.map { .string($0) }),
             "binaries": .object(defaults.binaries.mapValues { .string($0) }),
             "mirror_claude_mcp_to_codex": .bool(defaults.mirrorClaudeMCPToCodex),
+            "corveil_auto_update": .bool(defaults.corveilAutoUpdate),
+            "corveil_version": .string(defaults.corveilVersion),
         ])
     }
 

@@ -787,7 +787,7 @@ View or change workspace and automation defaults.
 crow defaults <get|set>
 ```
 
-These are the `defaults` block of config.json: the forge provider and CLI used for new workspaces, the branch prefix for new session branches, the repo/label lists that filter the review and ticket boards, and the binary path overrides.
+These are the `defaults` block of config.json: the forge provider and CLI used for new workspaces, the branch prefix for new session branches, the repo/label lists that filter the review and ticket boards, and the binary path overrides. --corveil-auto-update downloads the host-platform CLI from corveil/corveil-releases (skipped when binaries[corveil] is a source-build path).
 
 Subcommands: [`get`](#crow-defaults-get), [`set`](#crow-defaults-set).
 
@@ -812,14 +812,14 @@ Echoes the whole defaults block, including `exclude_dirs` and `mirror_claude_mcp
 Change workspace and automation defaults.
 
 ```
-crow defaults set [--provider <provider>] [--cli <cli>] [--branch-prefix <branch-prefix>] [--binary <binary> ...] [--add-exclude-review-repo <add-exclude-review-repo> ...] [--remove-exclude-review-repo <remove-exclude-review-repo> ...] [--clear-exclude-review-repos] [--add-exclude-ticket-repo <add-exclude-ticket-repo> ...] [--remove-exclude-ticket-repo <remove-exclude-ticket-repo> ...] [--clear-exclude-ticket-repos] [--add-ignore-review-label <add-ignore-review-label> ...] [--remove-ignore-review-label <remove-ignore-review-label> ...] [--clear-ignore-review-labels]
+crow defaults set [--provider <provider>] [--cli <cli>] [--branch-prefix <branch-prefix>] [--binary <binary> ...] [--corveil-auto-update <corveil-auto-update>] [--corveil-version <corveil-version>] [--add-exclude-review-repo <add-exclude-review-repo> ...] [--remove-exclude-review-repo <remove-exclude-review-repo> ...] [--clear-exclude-review-repos] [--add-exclude-ticket-repo <add-exclude-ticket-repo> ...] [--remove-exclude-ticket-repo <remove-exclude-ticket-repo> ...] [--clear-exclude-ticket-repos] [--add-ignore-review-label <add-ignore-review-label> ...] [--remove-ignore-review-label <remove-ignore-review-label> ...] [--clear-ignore-review-labels]
 ```
 
 Only the flags you pass change; at least one is required.
 
 Most of these are live. The provider and CLI are re-read on each repo scan, the board lists are re-read on each board poll (about a minute), and the branch prefix is read when a workspace is created. --binary is the exception: agent binary discovery and the .claude/bin symlinks are both set up at startup, so a change there returns "restart_required" and needs a crowd restart — including when you remove one, since the stale symlink keeps shadowing PATH until then.
 
---provider and --cli are stored independently and neither implies the other, matching how GitManager reads them; setting only one warns if the resulting pair is crossed.
+--provider and --cli are stored independently and neither implies the other, matching how GitManager reads them; setting only one warns if the resulting pair is crossed. --corveil-auto-update is live: Crow downloads from corveil/corveil-releases, verifies checksums, and hot-swaps the symlink; a source-build binaries[corveil] path is never overwritten.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -827,6 +827,8 @@ Most of these are live. The provider and CLI are re-read on each repo scan, the 
 | `--cli` | `<cli>` | no | Forge CLI for new workspaces (gh or glab) |
 | `--branch-prefix` | `<branch-prefix>` | no | Prefix for new session branches, e.g. 'feature/' (empty for none) |
 | `--binary` | `<binary>` _(repeatable)_ | no | Binary path override as NAME=PATH, e.g. corveil=/opt/corveil/bin/corveil; NAME= removes it (repeatable) |
+| `--corveil-auto-update` | `<corveil-auto-update>` | no | Download and link the host-platform corveil CLI from corveil/corveil-releases (true or false) |
+| `--corveil-version` | `<corveil-version>` | no | corveil-releases tag to keep linked: 'latest' or a pin like v0.4.32 |
 | `--add-exclude-review-repo` | `<add-exclude-review-repo>` _(repeatable)_ | no | Repo to hide from the review board; supports one wildcard, e.g. 'owner/*' (repeatable) |
 | `--remove-exclude-review-repo` | `<remove-exclude-review-repo>` _(repeatable)_ | no | Repo to stop hiding from the review board (repeatable) |
 | `--clear-exclude-review-repos` | — | no | Empty the review-board repo exclusions |

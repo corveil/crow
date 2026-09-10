@@ -11,6 +11,7 @@ import Foundation
 /// Extracted from `makeCommandRouter`'s dictionary literal (CROW-1134).
 func makeSettingsHandlers(
     versionUpdateService: VersionUpdateService?,
+    corveilAutoUpdateService: CorveilAutoUpdateService? = nil,
     devRoot: String,
     soundLibrary: CustomSoundLibrary = .live
 ) -> [String: CommandRouter.Handler] {
@@ -447,13 +448,17 @@ func makeSettingsHandlers(
                     try DefaultsRPC.patchStringList(params, "exclude_ticket_repos")
                 let ignoreReviewLabels =
                     try DefaultsRPC.patchStringList(params, "ignore_review_labels")
+                let corveilAutoUpdate = try SettingsRPC.patchBool(params, "corveil_auto_update")
+                let corveilVersion = try DefaultsRPC.patchCorveilVersion(params)
 
                 guard provider != nil || cli != nil || branchPrefix != nil || binaries != nil
                         || excludeReviewRepos != nil || excludeTicketRepos != nil
-                        || ignoreReviewLabels != nil else {
+                        || ignoreReviewLabels != nil
+                        || corveilAutoUpdate != nil || corveilVersion != nil else {
                     throw RPCError.invalidParams(
                         "Nothing to set — provide at least one of provider, cli, branch_prefix, "
-                      + "binaries, or an add_/remove_/clear_ param for a list.")
+                      + "binaries, corveil_auto_update, corveil_version, "
+                      + "or an add_/remove_/clear_ param for a list.")
                 }
 
                 let (old, new) = try mutateConfig(devRoot: devRoot) {
@@ -478,7 +483,16 @@ func makeSettingsHandlers(
                         config.defaults.ignoreReviewLabels =
                             patch.apply(to: config.defaults.ignoreReviewLabels)
                     }
+                    if let corveilAutoUpdate { config.defaults.corveilAutoUpdate = corveilAutoUpdate }
+                    if let corveilVersion { config.defaults.corveilVersion = corveilVersion }
                     return (before, config.defaults)
+                }
+
+                let autoUpdateKick = new.corveilAutoUpdate
+                    && (old.corveilAutoUpdate != new.corveilAutoUpdate
+                        || old.corveilVersion != new.corveilVersion)
+                if autoUpdateKick, let corveilAutoUpdateService {
+                    Task { _ = await corveilAutoUpdateService.runCheck() }
                 }
 
                 return [

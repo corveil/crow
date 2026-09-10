@@ -640,12 +640,15 @@ public enum ParityLedger {
         .field("defaults.excludeTicketRepos", read: "defaults get", write: "defaults set"),
         .field("defaults.ignoreReviewLabels", read: "defaults get", write: "defaults set"),
         .field("defaults.binaries", read: "defaults get", write: "defaults set"),
+        .field("defaults.corveilAutoUpdate", read: "defaults get", write: "defaults set"),
+        .field("defaults.corveilVersion", read: "defaults get", write: "defaults set"),
         .field(
             "defaults.excludeDirs",
             read: "defaults get",
             writeNoCLI: """
                 Returned by `defaults get` but `defaults set` has no flag for it \
-                (CROW-810 shipped seven of the nine fields writable). Directory-scan \
+                (CROW-810 shipped seven of the nine fields writable; CROW-1210 added \
+                two more writable fields). Directory-scan \
                 exclusions for repo discovery; web Settings tab is still the only \
                 way to change them.
                 """),
@@ -654,7 +657,8 @@ public enum ParityLedger {
             read: "defaults get",
             writeNoCLI: """
                 Returned by `defaults get` but `defaults set` has no flag for it \
-                (CROW-810 shipped seven of the nine fields writable). Whether Codex \
+                (CROW-810 shipped seven of the nine fields writable; CROW-1210 added \
+                two more writable fields). Whether Codex \
                 sessions inherit Claude's MCP servers; web Settings tab only.
                 """),
 
