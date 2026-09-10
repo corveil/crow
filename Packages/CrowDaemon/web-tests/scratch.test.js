@@ -69,6 +69,25 @@ check('Explore action', board.textContent.includes('Explore'));
 check('Ticket action', board.textContent.includes('Ticket'));
 check('Work action', board.textContent.includes('Work'));
 check('Done action', board.textContent.includes('Done'));
+const capturedTicket = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Ticket');
+const capturedWork = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Work');
+check('Ticket enabled before a ticket exists', capturedTicket && !capturedTicket.disabled);
+check('Work disabled before a ticket exists', capturedWork && capturedWork.disabled);
+
+const ticketed = {
+  ...item,
+  state: 'ticketed',
+  links: [{ type: 'ticket', url: 'https://github.com/corveil/crow/issues/1', label: '#1' }],
+};
+T.boardData.scratch = { todos: [ticketed] };
+T.renderBoard();
+const ticketedTicket = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Ticket');
+const ticketedWork = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Work');
+check('Ticket disabled once a ticket exists', ticketedTicket && ticketedTicket.disabled);
+check('Work enabled once a ticket exists', ticketedWork && !ticketedWork.disabled);
+
+T.boardData.scratch = { todos: [item] };
+T.renderBoard();
 
 const card = T.scratchCard();
 check('sidebar card label', card.textContent.includes('Scratch'));

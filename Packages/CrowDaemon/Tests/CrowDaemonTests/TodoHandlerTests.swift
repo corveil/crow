@@ -112,6 +112,23 @@ import CrowEngine
         #expect(resp.error?.message.contains("ticket") == true)
     }
 
+    @Test @MainActor func ticketWhenAlreadyLinkedDoesNotFileAgain() async {
+        let (router, _) = harness()
+        let added = await call(router, "todo-add", ["text": .string("already filed")])
+        let id = added.result?["todo"]?.objectValue?["id"]?.stringValue ?? ""
+        _ = await call(router, "todo-link", [
+            "todo_id": .string(id),
+            "type": .string("ticket"),
+            "url": .string("https://github.com/corveil/crow/issues/1"),
+        ])
+        let resp = await call(router, "todo-ticket", [
+            "todo_id": .string(id),
+            "workspace": .string("Corveil"),
+        ])
+        #expect(resp.error != nil)
+        #expect(resp.error?.message.contains("already has a ticket") == true)
+    }
+
     @Test @MainActor func talkWithoutExploreErrors() async {
         let (router, _) = harness()
         let added = await call(router, "todo-add", ["text": .string("no manager")])

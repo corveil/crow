@@ -1436,9 +1436,14 @@ function scratchRow(item) {
   const actions = el('div', 'card-actions');
   const exploring = item.state === 'exploring' || item.state === 'ticketed' || item.state === 'working';
   actions.appendChild(scratchAction('Explore', (btn) => scratchSpawn(btn, 'todo-explore', { todo_id: item.id }, 'Explore')));
-  actions.appendChild(scratchAction('Ticket', (btn) => scratchTicket(btn, item)));
+  const ticketURL = scratchTicketURL(item);
+  const ticket = el('button', 'action-btn', 'Ticket');
+  ticket.disabled = !!ticketURL;
+  if (ticketURL) ticket.title = 'Already filed';
+  ticket.onclick = (e) => { e.stopPropagation(); scratchTicket(ticket, item); };
+  actions.appendChild(ticket);
   const work = el('button', 'action-btn', 'Work');
-  work.disabled = !scratchTicketURL(item);
+  work.disabled = !ticketURL;
   work.onclick = (e) => { e.stopPropagation(); scratchSpawn(work, 'todo-work', { todo_id: item.id }, 'Work'); };
   actions.appendChild(work);
   if (item.state !== 'done') {

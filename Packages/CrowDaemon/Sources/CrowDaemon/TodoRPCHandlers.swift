@@ -247,6 +247,10 @@ private func fileTicket(
     devRoot: String
 ) async throws -> [String: JSONValue] {
     var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
+    if let existing = item.linkedTicketURL {
+        throw RPCError.applicationError(
+            "This item already has a ticket (\(existing)). Use `crow todo work` to start a session.")
+    }
     guard let workspaceRef = params["workspace"]?.stringValue?
         .trimmingCharacters(in: .whitespacesAndNewlines),
           !workspaceRef.isEmpty else {
