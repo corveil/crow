@@ -162,6 +162,19 @@ func makeEngineTerminalHandlers(
                 }
                 capturedAppState.terminals[sessionID, default: []].append(terminal)
                 capturedStore.mutate { $0.terminals.append(terminal) }
+                // CROW-1219: if this is a managed agent terminal and the
+                // session still has no worktree row, the cwd we just
+                // persisted is enough to reconstruct one. Poll recovery
+                // covers already-running sessions; this catches the
+                // bootstrap race at create time.
+                if isManaged {
+                    _ = MissingWorktreeRecovery.recoverIfNeeded(
+                        sessionID: sessionID,
+                        appState: capturedAppState,
+                        store: capturedStore,
+                        devRoot: devRoot
+                    )
+                }
                 if trackReadiness {
                     TerminalRouter.trackReadiness(for: terminal)
                 }

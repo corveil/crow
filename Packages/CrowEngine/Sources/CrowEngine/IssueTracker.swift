@@ -445,6 +445,17 @@ public final class IssueTracker {
 
     public func refresh() async {
         guard !isRefreshing else { return }
+
+        // CROW-1219: local git + store only — does not create a checkout, and
+        // does not need GitHub. Runs even when the poll is rate-limited so
+        // `primaryWorktree(for:)` / merge labels recover without waiting on
+        // `gh`. Sync on MainActor (no await) so a second refresh cannot
+        // double-append.
+        if let devRoot = ConfigStore.loadDevRoot() {
+            _ = MissingWorktreeRecovery.recoverAll(
+                appState: appState, store: store, devRoot: devRoot)
+        }
+
         guard shouldPoll() else {
             if let suspendedUntil {
                 print("[IssueTracker] skipping refresh — rate-limited until \(suspendedUntil)")
