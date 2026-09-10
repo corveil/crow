@@ -833,6 +833,29 @@ body.update-banner-visible #back-to-sidebar {
 }
 .tickets-card:hover { border-color: var(--border-strong); }
 .tickets-card.selected { border-color: var(--gold); }
+.scratch-card { min-height: 48px; }
+.scratch-card .tickets-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.scratch-card .tickets-title { grid-column: unset; text-align: left; }
+.scratch-head-spacer { display: none; }
+.scratch-count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--gold); color: var(--bg); font-size: 11px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.scratch-sub { color: var(--text-muted); font-size: 11px; padding: 2px 2px 0; }
+.scratch-capture { display: flex; gap: 8px; margin: 8px 0 16px; }
+.scratch-input {
+  flex: 1; min-width: 0; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary);
+}
+.scratch-input:focus { outline: none; border-color: var(--gold); }
+.scratch-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.scratch-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+button.scratch-link {
+  border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--blue);
+  border-radius: 6px; padding: 2px 8px; font-size: 12px; cursor: pointer;
+}
+button.scratch-link:hover { border-color: var(--blue); }
 /* Centred title, refresh right (CROW-924): now the .tickets-card is full-width (CROW-922)
    the compact-card overlap that forced a left-aligned space-between row (CROW-913) is gone.
    A 3-column grid — a left spacer track that mirrors the button width via --tk-refresh, the

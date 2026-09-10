@@ -98,14 +98,18 @@ struct MCPTokenRecordTests {
     func scopeRawValues() {
         #expect(MCPScope.sessionsRead.rawValue == "sessions:read")
         #expect(MCPScope.boardRead.rawValue == "board:read")
+        #expect(MCPScope.todosRead.rawValue == "todos:read")
         #expect(MCPScope.parse(" board:read ") == .boardRead)
+        #expect(MCPScope.parse(" todos:read ") == .todosRead)
         #expect(MCPScope.parse("board:write") == nil)
         #expect(MCPScope.parse("") == nil)
     }
 
     @Test("Scopes sort deterministically")
     func scopeOrdering() {
-        #expect([MCPScope.sessionsRead, .boardRead].sorted() == [.boardRead, .sessionsRead])
+        #expect(
+            [MCPScope.sessionsRead, .todosRead, .boardRead].sorted()
+                == [.boardRead, .sessionsRead, .todosRead])
     }
 }
 

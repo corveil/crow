@@ -306,3 +306,27 @@ import Testing
     repo.delete(id: session.id)
     #expect(repo.find(id: session.id) == nil)
 }
+
+// CROW-1231: Scratch items are the pre-ticket trail and must survive the
+// session they spawned being reaped.
+@Test func deleteDoesNotCascadeTodos() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = JSONStore(directory: dir)
+    let repo = SessionRepository(store: store)
+
+    let sessionID = UUID()
+    repo.save(Session(id: sessionID, name: "explore-manager"))
+    let item = TodoItem(
+        text: "idea",
+        state: .exploring,
+        links: [TodoLink(type: .session, sessionID: sessionID, label: "explore")]
+    )
+    store.mutate { $0.todos = [item] }
+
+    repo.delete(id: sessionID)
+
+    #expect(repo.find(id: sessionID) == nil)
+    #expect(store.data.todos == [item])
+}

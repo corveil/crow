@@ -73,6 +73,7 @@ import Testing
         for method in [
             "create-manager", "restart-manager", "work-on-issue",
             "batch-work-on-issues", "restart-tmux-server", "reload-tmux-config",
+            "todo-explore", "todo-work",
         ] {
             #expect(RPCLanePolicy.lane(for: request(method)) == .manager, "\(method)")
         }

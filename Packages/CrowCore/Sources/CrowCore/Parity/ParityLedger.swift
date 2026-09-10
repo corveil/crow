@@ -427,6 +427,23 @@ public enum ParityLedger {
                 run must honour. `crow job run` is the user-facing verb.
                 """),
 
+        // Scratch / pre-ticket ideas (CROW-1231). Reads are MCP-exported at
+        // `todos:read`; writes stay CLI/web-only (ADR 0019).
+        .read("todo-list", cli: "todo list", mcp: .read(scope: .todosRead)),
+        .read("todo-get", cli: "todo get", mcp: .read(scope: .todosRead)),
+        .write("todo-add", cli: "todo add"),
+        .write("todo-edit", cli: "todo edit"),
+        .write("todo-delete", cli: "todo delete"),
+        .write("todo-done", cli: "todo done"),
+        .write("todo-reopen", cli: "todo reopen"),
+        .write("todo-park", cli: "todo park"),
+        .write("todo-drop", cli: "todo drop"),
+        .write("todo-link", cli: "todo link"),
+        .write("todo-explore", cli: "todo explore"),
+        .write("todo-ticket", cli: "todo ticket"),
+        .write("todo-work", cli: "todo work"),
+        .write("todo-talk", cli: "todo talk"),
+
         // Agent hooks — emitted by agent hook processes over the 0600 Unix
         // socket only; local-only on `/rpc` (RPCWebSocketHandler.localOnlyDenial,
         // #903) so a remote peer can't forge session state or poison the

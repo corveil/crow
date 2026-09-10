@@ -59,6 +59,7 @@ public enum MCPToolCatalog {
     /// clients can cache the list and prompt caches stay warm.
     public static let all: [MCPTool] = [
         boardSummary, listSessions, getSession, listStuckSessions, listTickets, listReviews,
+        listTodos, getTodo,
     ]
 
     /// The tools a caller holding `scopes` may see and call.
@@ -361,6 +362,81 @@ public enum MCPToolCatalog {
             ])
         })
 
+    static let listTodos = MCPTool(
+        name: "list_todos",
+        title: "List Crow Scratch items",
+        description: """
+            Pre-ticket ideas captured in Crow Scratch. Filter by state or tag. \
+            Each row includes its provenance trail (explore session, filed ticket, PR).
+            """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "properties": .object([
+                "state": .object([
+                    "type": .string("string"),
+                    "enum": .array(todoStates.map { .string($0) }),
+                    "description": .string("Only items in this state."),
+                ]),
+                "tag": .object([
+                    "type": .string("string"),
+                    "description": .string("Only items carrying this tag."),
+                ]),
+                "limit": limitSchema(default: 50),
+            ]),
+            "additionalProperties": .bool(false),
+        ]),
+        scope: .todosRead,
+        backingMethods: ["todo-list"],
+        run: { arguments, invoke in
+            let state = try optionalEnum(arguments, "state", allowed: todoStates)
+            let tag = arguments["tag"]?.stringValue
+            let limit = try limit(from: arguments, default: 50)
+
+            var params: [String: JSONValue] = [:]
+            if let state { params["state"] = .string(state) }
+            if let tag, !tag.isEmpty { params["tag"] = .string(tag) }
+            let result = try await invoke("todo-list", params)
+            let todos = (result["todos"]?.arrayValue ?? []).compactMap(\.objectValue)
+            let trimmed = todos.prefix(limit).map { JSONValue.object(pick($0, todoFields)) }
+            return .object([
+                "todos": .array(Array(trimmed)),
+                "returned": .int(trimmed.count),
+                "total_matching": .int(todos.count),
+            ])
+        })
+
+    static let getTodo = MCPTool(
+        name: "get_todo",
+        title: "Get one Crow Scratch item",
+        description: """
+            One Scratch item in full: text, note, tags, state, and the provenance \
+            trail of sessions, tickets and PRs. Takes the id from list_todos.
+            """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "properties": .object([
+                "todo_id": .object([
+                    "type": .string("string"),
+                    "description": .string("Todo UUID, as returned by list_todos."),
+                ]),
+            ]),
+            "required": .array([.string("todo_id")]),
+            "additionalProperties": .bool(false),
+        ]),
+        scope: .todosRead,
+        backingMethods: ["todo-get"],
+        run: { arguments, invoke in
+            guard let todoID = arguments["todo_id"]?.stringValue, !todoID.isEmpty else {
+                throw MCPToolInputError("todo_id is required")
+            }
+            guard UUID(uuidString: todoID) != nil else {
+                throw MCPToolInputError(
+                    "todo_id must be a UUID (got \"\(todoID)\") — use the id from list_todos, not the idea text")
+            }
+            let result = try await invoke("todo-get", ["todo_id": .string(todoID)])
+            return .object(result)
+        })
+
     // MARK: - Shared vocabulary
 
     /// Mirrors `SessionStatus` / `SessionKind`. Restated rather than derived from
@@ -371,6 +447,9 @@ public enum MCPToolCatalog {
     static let sessionKinds = ["work", "review", "job", "manager"]
     static let reviewGroups = [
         "in_review", "not_approved_yet", "waiting_on_author", "recently_completed",
+    ]
+    static let todoStates = [
+        "captured", "exploring", "ticketed", "working", "done", "parked", "dropped",
     ]
 
     /// The subset of a `list-sessions` row worth handing a model. Drops the
@@ -389,6 +468,11 @@ public enum MCPToolCatalog {
         "pr_url", "updated_at", "project_status", "labels", "author", "created_at",
         "comments_count", "pr_state", "checks", "linked_session_id",
         "linked_session_is_explore",
+    ]
+
+    static let todoFields = [
+        "id", "text", "note", "tags", "priority", "state", "links",
+        "created_at", "updated_at",
     ]
 
     // MARK: - Helpers

@@ -90,10 +90,13 @@ setInterval(refreshLive, 4000);
 // before first open.
 refreshBoard('tickets');
 refreshBoard('reviews');
-// Keep the open ticket/review board fresh.
+refreshBoard('scratch');
+// Keep the open ticket/review/scratch board fresh.
 // Slow fallback — board changes are push-driven via the daemon's poll nudge.
 setInterval(() => {
-  if (selectedBoard === 'tickets' || selectedBoard === 'reviews') refreshBoard(selectedBoard);
+  if (selectedBoard === 'tickets' || selectedBoard === 'reviews' || selectedBoard === 'scratch') {
+    refreshBoard(selectedBoard);
+  }
 }, 20000);
 // Poll the selected session's images — new files aren't store-backed, so no
 // `changed` nudge fires for them; a light 5s scan makes drops appear live.

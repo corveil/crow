@@ -12,8 +12,8 @@ Crow-launched agent session.
 
 ## What it can and cannot do
 
-**Read-only, and structurally so.** The tool catalog is a closed allowlist of six
-tools over five read RPC methods. There is no passthrough tool and no way to name an
+**Read-only, and structurally so.** The tool catalog is a closed allowlist of eight
+tools over seven read RPC methods. There is no passthrough tool and no way to name an
 RPC method from the wire, so the local-only surfaces — gateways, the web password,
 MCP tokens themselves, `run-setup`, hook events, host-app launches, the Corveil CLI
 verify/reinstall actions — are unreachable regardless of transport or scope.
@@ -40,6 +40,7 @@ expiring token.
 | --- | --- |
 | `sessions:read` | `get_board_summary`, `list_sessions`, `get_session`, `list_stuck_sessions` |
 | `board:read` | `list_tickets`, `list_reviews` |
+| `todos:read` | `list_todos`, `get_todo` |
 
 There is no `sessions:write`, no `prompt:send`, and no `admin` — not "not yet
 implemented" but *not defined*, so a token cannot name a capability the server might
@@ -59,6 +60,8 @@ deny-after-call would still teach the model that they do.
 | `list_stuck_sessions` | `sessions:read` | What needs a human, and why |
 | `list_tickets` | `board:read` | The ticket board (issue bodies omitted) |
 | `list_reviews` | `board:read` | The reviews board, by group |
+| `list_todos` | `todos:read` | Pre-ticket Scratch items, with their provenance trail |
+| `get_todo` | `todos:read` | One Scratch item in full, by UUID |
 
 `list_stuck_sessions` is the one worth knowing about. It joins two payloads that are
 disjoint on their own — `list-sessions` carries the agent's activity and pending

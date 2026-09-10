@@ -13,6 +13,7 @@ import Testing
     #expect(data.worktrees.isEmpty)
     #expect(data.links.isEmpty)
     #expect(data.terminals.isEmpty)
+    #expect(data.todos == nil)
 }
 
 @Test func mutatePersistsToFile() throws {

@@ -133,6 +133,21 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow terminal`](#crow-terminal) | View or change terminal wheel-scroll speed |
 | [`crow terminal get`](#crow-terminal-get) | Show the current terminal wheel-scroll settings |
 | [`crow terminal set`](#crow-terminal-set) | Change terminal wheel-scroll speed |
+| [`crow todo`](#crow-todo) | Capture and promote pre-ticket ideas |
+| [`crow todo add`](#crow-todo-add) | Capture a pre-ticket idea |
+| [`crow todo delete`](#crow-todo-delete) | Delete a Scratch item |
+| [`crow todo done`](#crow-todo-done) | Mark a Scratch item done |
+| [`crow todo drop`](#crow-todo-drop) | Drop a Scratch item without filing a ticket |
+| [`crow todo edit`](#crow-todo-edit) | Update fields on an existing Scratch item |
+| [`crow todo explore`](#crow-todo-explore) | Open a Manager and seed the item as an explore brief |
+| [`crow todo get`](#crow-todo-get) | Show one Scratch item |
+| [`crow todo link`](#crow-todo-link) | Attach a session, ticket, PR, or custom URL to a Scratch item |
+| [`crow todo list`](#crow-todo-list) | List Scratch items |
+| [`crow todo park`](#crow-todo-park) | Park a Scratch item for later |
+| [`crow todo reopen`](#crow-todo-reopen) | Reopen a done, parked, or dropped item |
+| [`crow todo talk`](#crow-todo-talk) | Send text to the item's linked Manager |
+| [`crow todo ticket`](#crow-todo-ticket) | File a ticket from the item body and attach the URL |
+| [`crow todo work`](#crow-todo-work) | Start a work session from the item's linked ticket |
 | [`crow transition-ticket`](#crow-transition-ticket) | Transition a session's ticket to a pipeline status |
 | [`crow ui`](#crow-ui) | View or change UI display preferences |
 | [`crow ui get`](#crow-ui-get) | Show the current UI display preferences |
@@ -1419,13 +1434,13 @@ Speaks MCP on stdin/stdout and forwards each tool call to the running `crowd` ov
 
 No token is needed. The socket is 0600 and reachable only from this machine, so a caller that can run this command could already run every other `crow` verb — a token would gate nothing. Remote clients use `POST /mcp` with a token from `crow mcp token mint` instead.
 
-The surface is read-only either way, and identical: six tools over five read RPCs. This command cannot send prompts, create sessions, or write anything.
+The surface is read-only either way, and identical: eight tools over seven read RPCs. This command cannot send prompts, create sessions, or write anything.
 
 Unlike every other `crow` verb, stdout here carries framed JSON-RPC rather than one JSON object — it is a transport, not a query. Diagnostics go to stderr.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| `--scope` | `<scope>` _(repeatable)_ | no | Limit the served tools to these scopes (repeatable). Defaults to all read scopes: board:read, sessions:read. |
+| `--scope` | `<scope>` _(repeatable)_ | no | Limit the served tools to these scopes (repeatable). Defaults to all read scopes: board:read, sessions:read, todos:read. |
 
 ---
 
@@ -1470,7 +1485,7 @@ Expiry defaults to 90 days. Pass --expires-in to choose another, or --no-expiry 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--name` | `<name>` | yes | A label for this token, e.g. "grok-bot" |
-| `--scope` | `<scope>` _(repeatable)_ | no | Capability to grant (repeatable). One of: board:read, sessions:read. |
+| `--scope` | `<scope>` _(repeatable)_ | no | Capability to grant (repeatable). One of: board:read, sessions:read, todos:read. |
 | `--expires-in` | `<expires-in>` | no | Lifetime — a number with a unit: s (seconds), m (minutes), h (hours), d (days), w (weeks) — e.g. 90d. Defaults to 90d. |
 | `--no-expiry` | — | no | Mint a token that never expires (mutually exclusive with --expires-in) |
 
@@ -2060,6 +2075,233 @@ Only the flags you pass change; at least one is required. Connected browsers pic
 | --- | --- | --- | --- |
 | `--wheel-scroll-lines` | `<wheel-scroll-lines>` | no | Scrollback lines per wheel notch on plain-shell/review surfaces (minimum 1, default 3) |
 | `--agent-wheel-notches` | `<agent-wheel-notches>` | no | Wheel notches forwarded to the agent per physical notch (minimum 1, default 1) |
+
+---
+
+## `crow todo`
+
+Capture and promote pre-ticket ideas.
+
+```
+crow todo <add|list|get|edit|done|reopen|park|drop|delete|link|explore|ticket|work|talk>
+```
+
+Subcommands: [`add`](#crow-todo-add), [`list`](#crow-todo-list), [`get`](#crow-todo-get), [`edit`](#crow-todo-edit), [`done`](#crow-todo-done), [`reopen`](#crow-todo-reopen), [`park`](#crow-todo-park), [`drop`](#crow-todo-drop), [`delete`](#crow-todo-delete), [`link`](#crow-todo-link), [`explore`](#crow-todo-explore), [`ticket`](#crow-todo-ticket), [`work`](#crow-todo-work), [`talk`](#crow-todo-talk).
+
+---
+
+## `crow todo add`
+
+Capture a pre-ticket idea.
+
+```
+crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| _(positional)_ | `<text>` | yes | Idea text |
+| `--tag` | `<tag>` | no | Comma-separated tags |
+| `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
+| `--note` | `<note>` | no | Longer note |
+
+---
+
+## `crow todo delete`
+
+Delete a Scratch item.
+
+```
+crow todo delete --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+
+---
+
+## `crow todo done`
+
+Mark a Scratch item done.
+
+```
+crow todo done --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+
+---
+
+## `crow todo drop`
+
+Drop a Scratch item without filing a ticket.
+
+```
+crow todo drop --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+
+---
+
+## `crow todo edit`
+
+Update fields on an existing Scratch item.
+
+```
+crow todo edit --id <id> [--text <text>] [--note <note>] [--priority <priority>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
+```
+
+Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+| `--text` | `<text>` | no | Replacement idea text |
+| `--note` | `<note>` | no | Replacement note |
+| `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
+| `--add-tag` | `<add-tag>` _(repeatable)_ | no | Tag to add (repeatable) |
+| `--remove-tag` | `<remove-tag>` _(repeatable)_ | no | Tag to remove (repeatable) |
+
+---
+
+## `crow todo explore`
+
+Open a Manager and seed the item as an explore brief.
+
+```
+crow todo explore --id <id> [--agent <agent>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+| `--agent` | `<agent>` | no | Coding agent kind; default Manager agent when omitted |
+
+---
+
+## `crow todo get`
+
+Show one Scratch item.
+
+```
+crow todo get --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+
+---
+
+## `crow todo link`
+
+Attach a session, ticket, PR, or custom URL to a Scratch item.
+
+```
+crow todo link --id <id> --type <type> [--url <url>] [--session <session>] [--label <label>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+| `--type` | `<type>` | yes | Link type: session, ticket, pr, or custom |
+| `--url` | `<url>` | no | URL (required for ticket/pr/custom) |
+| `--session` | `<session>` | no | Session UUID (for --type session) |
+| `--label` | `<label>` | no | Badge label |
+
+---
+
+## `crow todo list`
+
+List Scratch items.
+
+```
+crow todo list [--state <state>] [--tag <tag>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--state` | `<state>` | no | Only items in this state |
+| `--tag` | `<tag>` | no | Only items with this tag |
+
+---
+
+## `crow todo park`
+
+Park a Scratch item for later.
+
+```
+crow todo park --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+
+---
+
+## `crow todo reopen`
+
+Reopen a done, parked, or dropped item.
+
+```
+crow todo reopen --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+
+---
+
+## `crow todo talk`
+
+Send text to the item's linked Manager.
+
+```
+crow todo talk --id <id> <text>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+| _(positional)_ | `<text>` | yes | Text to send (a trailing newline is added if missing) |
+
+---
+
+## `crow todo ticket`
+
+File a ticket from the item body and attach the URL.
+
+```
+crow todo ticket --id <id> --workspace <workspace> [--repo <repo>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
+| `--workspace` | `<workspace>` | yes | Workspace name or UUID |
+| `--repo` | `<repo>` | no | owner/repo slug (or Jira project key); defaults to the workspace's sole always-include repo |
+
+---
+
+## `crow todo work`
+
+Start a work session from the item's linked ticket.
+
+```
+crow todo work --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Todo UUID |
 
 ---
 

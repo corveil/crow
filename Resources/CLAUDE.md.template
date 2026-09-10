@@ -72,16 +72,16 @@ crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R |
 
 ### MCP
 
-Crow's read-only MCP surface (CROW-1004): six tools over five read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
+Crow's read-only MCP surface (CROW-1004): eight tools over seven read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
 ```
-crow mcp serve [--scope sessions:read] [--scope board:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
+crow mcp serve [--scope sessions:read] [--scope board:read] [--scope todos:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
 crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N}
 crow mcp token mint --name N --scope S [--expires-in 90d | --no-expiry]
                                                               → {"saved":true,"token":"crow_mcp_…","warning":"…","record":{…}}
 crow mcp token revoke --id <uuid> | --name N                  → {"revoked":true,"id":"…","name":"…","remaining":N}
 ```
 
-Two transports, two trust models: `crow mcp serve` bridges stdio to the Unix socket with **no token** (a caller who can run it can already run every other `crow` verb), while off-box clients POST to `/mcp` with `Authorization: Bearer <token>`. `mcp serve` is the one verb whose stdout is framed JSON-RPC rather than a single JSON object. The three `token` verbs are **local-only**, like `gateway`/`web-password`. Scopes are exactly `sessions:read` and `board:read`, and `tools/list` is filtered by the token. Expiry defaults to 90 days; `--no-expiry` must be typed, and `--expires-in` needs a unit (`90d`, not `90`). The token is printed once and stored as a SHA-256 hash — there is no `--reveal`.
+Two transports, two trust models: `crow mcp serve` bridges stdio to the Unix socket with **no token** (a caller who can run it can already run every other `crow` verb), while off-box clients POST to `/mcp` with `Authorization: Bearer <token>`. `mcp serve` is the one verb whose stdout is framed JSON-RPC rather than a single JSON object. The three `token` verbs are **local-only**, like `gateway`/`web-password`. Scopes are `sessions:read`, `board:read`, and `todos:read`, and `tools/list` is filtered by the token. Expiry defaults to 90 days; `--no-expiry` must be typed, and `--expires-in` needs a unit (`90d`, not `90`). The token is printed once and stored as a SHA-256 hash — there is no `--reveal`.
 
 ### Automation Commands
 
@@ -113,6 +113,26 @@ crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"ga
 ```
 
 `--workspace` takes a name (case-insensitive) or UUID. Field flags for `add`/`edit`: `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, plus `--clear-*` for each list/map. Scalars clear with `""`; repeatable flags replace the whole list. `--review-blocking-severity` picks which review findings force `--request-changes` (unset = `red` + `yellow`; at least one required; non-blocking findings are still reported, and the policy is advisory — Crow can't validate the verdict the agent posts). Rename and remove refuse while sessions/jobs reference the workspace (`--force` overrides) and never touch the filesystem. The per-workspace AI gateway stays with `crow gateway` (local-only).
+
+### Todo Commands
+```
+crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."]
+crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
+crow todo get --id <uuid>
+crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--add-tag ...] [--remove-tag ...]
+crow todo done --id <uuid>
+crow todo reopen --id <uuid>
+crow todo park --id <uuid>
+crow todo drop --id <uuid>
+crow todo delete --id <uuid>
+crow todo link --id <uuid> --type session|ticket|pr|custom [--url ...] [--session <uuid>] [--label "..."]
+crow todo explore --id <uuid> [--agent claude-code]
+crow todo ticket --id <uuid> --workspace W [--repo owner/repo]
+crow todo work --id <uuid>
+crow todo talk --id <uuid> "..."
+```
+
+Durable pre-ticket ideas (CROW-1231). Not reaped by session cleanup. `explore` opens a Manager; `ticket` files from the item body; `work` types `/crow-workspace` off the linked ticket.
 
 ### Worktree Commands
 ```

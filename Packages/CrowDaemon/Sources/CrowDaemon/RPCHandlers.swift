@@ -79,6 +79,10 @@ func makeCommandRouter(
             jobScheduler: jobScheduler, tracker: tracker, devRoot: devRoot)
     ) { existing, _ in existing }
     handlers.merge(
+        makeTodoHandlers(
+            appState: appState, store: store, sessionService: sessionService, devRoot: devRoot)
+    ) { existing, _ in existing }
+    handlers.merge(
         makeSettingsHandlers(
             versionUpdateService: versionUpdateService,
             corveilAutoUpdateService: corveilAutoUpdateService,

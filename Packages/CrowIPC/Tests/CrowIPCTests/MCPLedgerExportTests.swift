@@ -108,7 +108,7 @@ struct MCPLedgerExportTests {
             "localOnlyRPCMethods names methods with no ledger row: \(unknown.sorted()) — likely a typo.")
     }
 
-    @Test("The exported set is exactly the five read methods v1 approved")
+    @Test("The exported set is exactly the seven read methods currently approved")
     func exportedSetIsPinned() {
         // A snapshot, so *growing* the MCP surface is a deliberate edit to this
         // list and shows up in the diff a reviewer reads — which is the same
@@ -117,6 +117,7 @@ struct MCPLedgerExportTests {
             MCPToolCatalog.exportedMethods == [
                 "list-sessions", "list-sessions-live", "get-session",
                 "list-tickets", "list-reviews",
+                "todo-list", "todo-get",
             ])
     }
 
@@ -164,5 +165,6 @@ struct MCPLedgerExportTests {
         #expect(Set(MCPToolCatalog.sessionStatuses) == Set(SessionStatus.allCases.map(\.rawValue)))
         #expect(Set(MCPToolCatalog.sessionKinds) == Set(SessionKind.allCases.map(\.rawValue)))
         #expect(Set(MCPToolCatalog.reviewGroups) == Set(ReviewGroup.allCases.map(\.rawValue)))
+        #expect(Set(MCPToolCatalog.todoStates) == Set(TodoState.allCases.map(\.rawValue)))
     }
 }
