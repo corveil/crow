@@ -60,7 +60,9 @@ for f in skills/crow-workspace/SKILL.md Resources/crow-workspace-SKILL.md.templa
         "{custom_instructions}" \
         "## Custom Instructions" \
         "verbatim" \
-        'do not** read `defaults`'
+        'do not** read `defaults`' \
+        'crow add-link --session "$CROW_SESSION_ID"' \
+        '--type pr'
 done
 
 # /crow-batch-workspace skill + its scaffold template.

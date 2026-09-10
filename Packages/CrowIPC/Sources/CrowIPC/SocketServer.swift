@@ -237,4 +237,14 @@ public enum SocketError: Error, LocalizedError {
         case .responseTooLarge: "Response exceeded maximum size"
         }
     }
+
+    /// True when the CLI never reached a listening peer — the trigger for the
+    /// loopback `POST /rpc` fallback (CROW-1220). Timeouts and oversize replies
+    /// mean the socket *did* connect, so they must not fall through to HTTP.
+    public var isConnectFailure: Bool {
+        switch self {
+        case .createFailed, .connectionFailed: true
+        default: false
+        }
+    }
 }

@@ -29,7 +29,7 @@ Architectural decisions live in [`docs/adr/`](docs/adr/). Read [`docs/adr/README
 
 ## crow CLI Reference
 
-The `crow` CLI communicates with the Crow app via Unix socket at `~/.local/share/crow/crow.sock`. The app must be running for commands to work. **All `crow`, `gh`, `glab`, and `git worktree` commands require `dangerouslyDisableSandbox: true`** and return JSON.
+The `crow` CLI communicates with the Crow app via Unix socket at `~/.local/share/crow/crow.sock`. The app must be running for commands to work. **All `crow`, `gh`, `glab`, and `git worktree` commands require `dangerouslyDisableSandbox: true`** and return JSON. When `crow.sock` is unreachable (Cursor sandbox), `crow` retries over loopback `POST /rpc` (`http://127.0.0.1:8787/rpc`; `CROW_HTTP_URL` / `CROW_HTTP_PORT`).
 
 ### Session Commands
 ```

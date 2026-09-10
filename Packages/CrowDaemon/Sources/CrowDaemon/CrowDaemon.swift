@@ -540,6 +540,12 @@ public enum CrowDaemon {
         // Web-access password gate + /login + /logout (CROW-593). Added before the
         // asset/board routes so the middleware wraps them.
         WebAuthRoutes.mount(on: httpRouter, sessions: sessions, loginLimiter: loginLimiter, devRoot: options.devRoot, webDir: options.webDir)
+        // One-shot JSON-RPC for sandboxed `crow` CLIs that cannot reach crow.sock
+        // (CROW-1220). Same router + gates as the /rpc WebSocket; POST only, so it
+        // does not collide with the WS upgrade on GET.
+        RPCHTTPHandler.mount(
+            on: httpRouter, commandRouter: commandRouter, boundHost: options.host,
+            devRoot: options.devRoot)
         // Local-only secret management (web password + AI gateways) as
         // Origin-checked HTTP POSTs, gated to a local-direct peer (CROW-593).
         SecretRoutes.mount(on: httpRouter, boundHost: options.host, devRoot: options.devRoot)

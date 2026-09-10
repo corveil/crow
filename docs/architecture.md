@@ -12,7 +12,7 @@ flowchart TB
     end
 
     subgraph daemon["crowd — the sole authority"]
-        HTTP["HTTP + WebSocket server<br/>/rpc · /terminal · web + login"]
+        HTTP["HTTP + WebSocket server<br/>/rpc WS + POST /rpc · /terminal · web + login"]
         ENGINE["CrowEngine<br/>SessionService · spawn / lifecycle"]
         BOARDS["IssueTracker<br/>JobScheduler · auto-respond / -review"]
         HUB["EventHub — server push"]
@@ -82,7 +82,7 @@ There are two `CrowCLI` directories:
 | -------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | **CrowDaemon.run()**       | `Packages/CrowDaemon/.../CrowDaemon.swift`             | Boots the daemon: HTTP/WS server, Unix socket, board poll, automations, spawn engine. `crowd` is always the authority |
 | **RPC handlers**           | `Packages/CrowDaemon/.../*RPCHandlers.swift`           | The daemon's command router — `RPCHandlers.swift` assembles per-concern maps (`new-session`, `list-tickets`, `create-manager`, config, …) that run locally against `AppState` + `JSONStore`. Methods the daemon does not own (`hook-event`, `send`, `get-session`, …) fall back to `Packages/CrowEngine/.../Engine*RPCHandlers.swift` via `makeEngineRouter` |
-| **HTTP/WebSocket server**  | `Packages/CrowDaemon/`                                 | Serves the web UI, xterm assets, `/rpc` (JSON-RPC + push), `/terminal` (byte stream), and web-access auth (`WebAuth*`, CROW-593) |
+| **HTTP/WebSocket server**  | `Packages/CrowDaemon/`                                 | Serves the web UI, xterm assets, `/rpc` (JSON-RPC WebSocket + one-shot `POST /rpc` for sandboxed CLIs, CROW-1220), `/terminal` (byte stream), and web-access auth (`WebAuth*`, CROW-593) |
 | **SessionService**         | `Packages/CrowEngine/.../SessionService.swift`         | CRUD for sessions/worktrees/terminals, spawn orchestration, terminal-readiness tracking, orphan recovery on startup |
 | **IssueTracker**           | `Packages/CrowEngine/.../IssueTracker.swift`           | Polls providers every 60s for assigned issues, PR status, project board status; auto-completes merged sessions    |
 | **AutoRespondCoordinator** | `Packages/CrowEngine/`                                 | Watches PR review / CI signals and types follow-up instructions into the linked Claude Code terminal              |

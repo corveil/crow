@@ -63,7 +63,7 @@ public struct SetGoal: ParsableCommand {
 
 /// Add a link to a session.
 public struct AddLink: ParsableCommand {
-    public static let configuration = CommandConfiguration(commandName: "add-link", abstract: "Add a link to a session")
+    public static let configuration = CommandConfiguration(commandName: "add-link", abstract: "Add a link to a session (idempotent for --type pr)")
     @Option(name: .long, help: "Session UUID") var session: String
     @Option(name: .long, help: "Link label") var label: String
     @Option(name: .long, help: "Link URL") var url: String

@@ -7,7 +7,8 @@ session, worktree, and metadata operations.
 ## Crow CLI Reference
 
 The `crow` CLI talks to the Crow app over a Unix socket. The app must be
-running. Commands return JSON on stdout.
+running. Commands return JSON on stdout. When the socket is unreachable
+(Cursor sandbox), `crow` retries over loopback `POST /rpc`.
 
 ### Sessions
 ```

@@ -25,12 +25,27 @@ func makeEngineLinkHandlers(
                   let url = params["url"]?.stringValue, !url.isEmpty else {
                 throw RPCError.invalidParams("session_id, label, url required (non-empty)")
             }
-            let link = SessionLink(sessionID: sessionID, label: label, url: url,
-                                   linkType: LinkType(rawValue: params["type"]?.stringValue ?? "custom") ?? .custom)
+            let linkType = LinkType(rawValue: params["type"]?.stringValue ?? "custom") ?? .custom
+            let link = SessionLink(sessionID: sessionID, label: label, url: url, linkType: linkType)
             return await MainActor.run {
+                // CROW-1220: `--type pr` is idempotent so the coder can re-run
+                // after `gh pr create` without stacking extras. Automation
+                // reads `links.first(where: { $0.linkType == .pr })` (#946);
+                // a second PR row is ignored, not a second PR.
+                let existing = capturedAppState.links(for: sessionID)
+                if let match = existing.first(where: { $0.url == url })
+                    ?? (linkType == .pr ? existing.first(where: { $0.linkType == .pr }) : nil) {
+                    return [
+                        "link_id": .string(match.id.uuidString),
+                        "skipped": .bool(true),
+                    ]
+                }
                 capturedAppState.links[sessionID, default: []].append(link)
                 capturedStore.mutate { $0.links.append(link) }
-                return ["link_id": .string(link.id.uuidString)]
+                return [
+                    "link_id": .string(link.id.uuidString),
+                    "skipped": .bool(false),
+                ]
             }
         },
 
