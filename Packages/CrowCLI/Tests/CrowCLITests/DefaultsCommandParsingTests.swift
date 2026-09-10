@@ -40,12 +40,15 @@ private func defaultsSetParseError(_ args: [String]) -> String {
 }
 
 @Test func defaultsSetParsesCorveilAutoUpdateFlags() throws {
-    let cmd = try DefaultsSet.parse([
+    let on = try DefaultsSet.parse([
         "--corveil-auto-update", "true",
         "--corveil-version", "v0.4.32",
     ])
-    #expect(cmd.corveilAutoUpdate == true)
-    #expect(cmd.corveilVersion == "v0.4.32")
+    #expect(on.corveilAutoUpdate == true)
+    #expect(on.corveilVersion == "v0.4.32")
+
+    let off = try DefaultsSet.parse(["--corveil-auto-update", "false"])
+    #expect(off.corveilAutoUpdate == false)
 }
 
 @Test func defaultsSetRejectsInvalidCorveilVersion() {

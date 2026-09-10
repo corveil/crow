@@ -1245,8 +1245,9 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
 
     /// When true, Crow downloads the host-platform `corveil` CLI from the public
     /// `corveil/corveil-releases` GitHub repo and links it under Application
-    /// Support (CROW-1210). Default **off** so existing source-build workflows
-    /// are unchanged until an operator opts in.
+    /// Support (CROW-1210). Default **on** (CROW-1229) so a fresh install gets a
+    /// CLI without pointing `binaries["corveil"]` at a build. A missing key
+    /// decodes as on; an explicit `false` stays off.
     ///
     /// Auto-manage is skipped when `binaries["corveil"]` is set to a path
     /// outside Crow's managed dir — a local `out/` build always wins.
@@ -1348,7 +1349,7 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         ignoreReviewLabels: [String] = [],
         binaries: [String: String] = [:],
         mirrorClaudeMCPToCodex: Bool = true,
-        corveilAutoUpdate: Bool = false,
+        corveilAutoUpdate: Bool = true,
         corveilVersion: String = ConfigDefaults.corveilVersionLatest
     ) {
         self.provider = provider
@@ -1375,7 +1376,7 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         ignoreReviewLabels = try container.decodeIfPresent([String].self, forKey: .ignoreReviewLabels) ?? []
         binaries = try container.decodeIfPresent([String: String].self, forKey: .binaries) ?? [:]
         mirrorClaudeMCPToCodex = try container.decodeIfPresent(Bool.self, forKey: .mirrorClaudeMCPToCodex) ?? true
-        corveilAutoUpdate = try container.decodeIfPresent(Bool.self, forKey: .corveilAutoUpdate) ?? false
+        corveilAutoUpdate = try container.decodeIfPresent(Bool.self, forKey: .corveilAutoUpdate) ?? true
         if let raw = try container.decodeIfPresent(String.self, forKey: .corveilVersion),
            let normalized = Self.normalizedCorveilVersion(raw) {
             corveilVersion = normalized

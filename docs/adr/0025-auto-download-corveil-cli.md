@@ -23,9 +23,13 @@ Application Support directory.
 
 ## Decision
 
-1. **Opt-in config.** `defaults.corveilAutoUpdate` (bool, default **off**) and
-   `defaults.corveilVersion` (`"latest"` or a `vX.Y.Z` pin). Exposed via
-   `crow defaults get/set` and Settings → General.
+1. **Config, default on.** `defaults.corveilAutoUpdate` (bool, default **on**; a
+   missing key decodes as on) and `defaults.corveilVersion` (`"latest"` or a
+   `vX.Y.Z` pin). Exposed via `crow defaults get/set` and Settings → General. An
+   explicit `false` stays off. CROW-1210 shipped this off so source-build
+   workflows were not surprised; CROW-1229 flipped it after a live fetch of
+   `corveil-darwin-arm64` from `corveil/corveil-releases` v0.4.41 checksum-verified,
+   ran `corveil --version`, and hot-swapped the symlink.
 2. **Operator path wins.** Auto-manage runs only when the configured
    `binaries["corveil"]` is unset or already points into
    `~/Library/Application Support/crow/bin/corveil/`. A source-build path is
@@ -44,15 +48,18 @@ Application Support directory.
 
 ## Consequences
 
-Operators can stay current without a Go toolchain. Developers with a local
-`out/` build keep using it. The `-releases` lag vs source tags remains a
-publish-cadence issue, not Crow's. Quarantine stripping is a pragmatic
-workaround until `-releases` artifacts are notarized.
+Fresh Crow installs get a `corveil` CLI without pointing `binaries["corveil"]`
+at a build. Developers with a local `out/` build keep using it. Operators who
+do not want downloads pass `--corveil-auto-update false`. The `-releases` lag
+vs source tags remains a publish-cadence issue, not Crow's. Quarantine
+stripping is a pragmatic workaround until `-releases` artifacts are notarized.
 
 ## Alternatives considered
 
-- **Default on.** Would surprise existing source-build workflows; opt-in
-  first, reconsider once the path is proven.
+- **Default off (CROW-1210).** Shipped first so existing source-build workflows
+  were unchanged until an operator opted in. Reconsidered once the download
+  path was proven; CROW-1229 made on the default. Operator `binaries["corveil"]`
+  still wins.
 - **Build from `corveil/corveil` source.** Needs a Go toolchain and private-repo
   auth; binaries already exist.
 - **Require a daemon restart after swap.** Unnecessary: the PATH prepend
@@ -61,6 +68,7 @@ workaround until `-releases` artifacts are notarized.
 ## References
 
 - Ticket: https://github.com/corveil/crow/issues/1210
+- Follow-up (default on): https://github.com/corveil/crow/issues/1229
 - Related ADRs: [0012](./0012-tests-never-touch-live-data.md) (tests inject a
   temp managed root), [0016](./0016-cli-control-plane-parity.md)
 - Code: `Packages/CrowEngine/Sources/CrowEngine/CorveilAutoUpdate.swift`,

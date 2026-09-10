@@ -55,10 +55,12 @@
       ? corveilField()
       : S.textField('Path to corveil binary', S.cfg.defaults.binaries, 'corveil',
         { readonly: true, help: 'The corveil binary path is editable only from a local browser (on the machine running crowd).' }));
-    S.cfg.defaults.corveilAutoUpdate = !!S.cfg.defaults.corveilAutoUpdate;
+    if (typeof S.cfg.defaults.corveilAutoUpdate !== 'boolean') {
+      S.cfg.defaults.corveilAutoUpdate = true;
+    }
     S.cfg.defaults.corveilVersion = S.cfg.defaults.corveilVersion || 'latest';
     body.appendChild(S.toggleField('Auto-download corveil CLI', S.cfg.defaults, 'corveilAutoUpdate',
-      'When on, Crow downloads the host-platform binary from the public corveil/corveil-releases repo, verifies its checksum, and links it. A custom path above is never overwritten.'));
+      'On by default. Crow downloads the host-platform binary from the public corveil/corveil-releases repo, verifies its checksum, and links it. A custom path above is never overwritten.'));
     body.appendChild(S.textField('corveil version', S.cfg.defaults, 'corveilVersion',
       { help: "Use 'latest' or pin a tag such as v0.4.32. The -releases mirror can trail source by a day." }));
 
