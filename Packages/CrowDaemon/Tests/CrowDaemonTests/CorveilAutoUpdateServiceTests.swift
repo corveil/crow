@@ -197,4 +197,37 @@ import FoundationNetworking
         #expect(status.state == .disabled)
         #expect(hits.value == 0)
     }
+
+    /// Hits the public `corveil/corveil-releases` repo over the live network.
+    /// Off in CI. Run with:
+    /// `CROW_LIVE_CORVEIL_UPDATE=1 swift test --package-path Packages/CrowDaemon --filter liveGitHubDownloadInstallsHostBinary`
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CROW_LIVE_CORVEIL_UPDATE"] == "1"))
+    func liveGitHubDownloadInstallsHostBinary() async throws {
+        let devRoot = try tempDir("crowd-corveil-live-dev")
+        let managed = try tempDir("crowd-corveil-live-bin")
+        defer {
+            try? FileManager.default.removeItem(at: devRoot)
+            try? FileManager.default.removeItem(at: managed)
+        }
+        var config = AppConfig()
+        config.defaults.corveilAutoUpdate = true
+        try ConfigStore.saveConfig(config, devRoot: devRoot.path)
+
+        let service = CorveilAutoUpdateService(
+            devRoot: devRoot.path,
+            managedRoot: managed,
+            userAgent: "Crow/live-test")
+        let status = await service.runCheck()
+        #expect(status.state == .updated, "live update failed: \(status.message ?? "no message")")
+        let version = try #require(status.version)
+        let path = try #require(status.path)
+        #expect(FileManager.default.isExecutableFile(atPath: path))
+        #expect(CorveilAutoUpdate.isManagedPath(path, managedRoot: managed))
+        let outcome = CorveilCLI.verify(path: path)
+        #expect(outcome.ok, "verify: \(outcome.message)")
+        #expect(CorveilAutoUpdate.verifyMessage(outcome.message, matchesTag: version))
+        #expect(ConfigStore.loadConfig(devRoot: devRoot.path)?.defaults.binaries["corveil"] == path)
+        let link = (devRoot.path as NSString).appendingPathComponent(".claude/bin/corveil")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link) == path)
+    }
 }
