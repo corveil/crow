@@ -934,13 +934,21 @@ import Testing
     #expect(config.defaults.binaries.isEmpty)
 }
 
-@Test func corveilAutoUpdateDefaultsOffWhenKeyMissing() throws {
+@Test func corveilAutoUpdateDefaultsOnWhenKeyMissing() throws {
     let json = """
     {"defaults": {"provider": "github", "cli": "gh", "branchPrefix": "feature/", "excludeDirs": []}}
     """.data(using: .utf8)!
     let config = try JSONDecoder().decode(AppConfig.self, from: json)
-    #expect(config.defaults.corveilAutoUpdate == false)
+    #expect(config.defaults.corveilAutoUpdate)
     #expect(config.defaults.corveilVersion == "latest")
+}
+
+@Test func corveilAutoUpdateExplicitFalseStaysOff() throws {
+    let json = """
+    {"defaults": {"corveilAutoUpdate": false}}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.defaults.corveilAutoUpdate == false)
 }
 
 @Test func corveilAutoUpdateRoundTrip() throws {
@@ -950,6 +958,10 @@ import Testing
     let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
     #expect(decoded.defaults.corveilAutoUpdate)
     #expect(decoded.defaults.corveilVersion == "v0.4.32")
+
+    let off = AppConfig(defaults: ConfigDefaults(corveilAutoUpdate: false))
+    let offDecoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(off))
+    #expect(offDecoded.defaults.corveilAutoUpdate == false)
 }
 
 @Test func normalizedCorveilVersionAcceptsLatestAndTags() {

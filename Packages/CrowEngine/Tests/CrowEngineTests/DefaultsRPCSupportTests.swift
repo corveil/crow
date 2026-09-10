@@ -290,7 +290,7 @@ struct DefaultsRPCSupportTests {
             "ignore_review_labels": .array([]),
             "binaries": .object(["corveil": .string("/opt/corveil")]),
             "mirror_claude_mcp_to_codex": .bool(true),
-            "corveil_auto_update": .bool(false),
+            "corveil_auto_update": .bool(true),
             "corveil_version": .string("latest"),
         ]))
     }

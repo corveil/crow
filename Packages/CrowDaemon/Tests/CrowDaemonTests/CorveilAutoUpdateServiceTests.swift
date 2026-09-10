@@ -91,7 +91,7 @@ import FoundationNetworking
             try? FileManager.default.removeItem(at: managed)
         }
         var config = AppConfig()
-        config.defaults.corveilAutoUpdate = true
+        #expect(config.defaults.corveilAutoUpdate)
         config.defaults.binaries["corveil"] = "/Users/jane/dev/corveil/out/corveil"
         try ConfigStore.saveConfig(config, devRoot: devRoot.path)
 
@@ -194,6 +194,34 @@ import FoundationNetworking
             transport: transport,
             hooks: hooks())
         let status = await service.checkIfDue(enabled: false, intervalHours: 1)
+        #expect(status.state == .disabled)
+        #expect(hits.value == 0)
+    }
+
+    @Test func explicitFalseInConfigDoesNotFetch() async throws {
+        let devRoot = try tempDir("crowd-corveil-dev")
+        let managed = try tempDir("crowd-corveil-bin")
+        defer {
+            try? FileManager.default.removeItem(at: devRoot)
+            try? FileManager.default.removeItem(at: managed)
+        }
+        var config = AppConfig()
+        config.defaults.corveilAutoUpdate = false
+        try ConfigStore.saveConfig(config, devRoot: devRoot.path)
+
+        let hits = HitCount()
+        let transport: @Sendable (URLRequest) async throws -> (Data, URLResponse) = { request in
+            hits.value += 1
+            return (Data(), HTTPURLResponse(
+                url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!)
+        }
+        let service = CorveilAutoUpdateService(
+            devRoot: devRoot.path,
+            managedRoot: managed,
+            userAgent: "Crow/test",
+            transport: transport,
+            hooks: hooks())
+        let status = await service.runCheck()
         #expect(status.state == .disabled)
         #expect(hits.value == 0)
     }

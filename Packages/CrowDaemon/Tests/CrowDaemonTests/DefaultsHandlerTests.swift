@@ -58,7 +58,7 @@ import CrowPersistence
         // without a CLI flag would make `get` a worse answer to "what is my
         // config?", and neither has a web editor either.
         #expect(defaults?["mirror_claude_mcp_to_codex"] == .bool(true))
-        #expect(defaults?["corveil_auto_update"] == .bool(false))
+        #expect(defaults?["corveil_auto_update"] == .bool(true))
         #expect(defaults?["corveil_version"] == .string("latest"))
         #expect(defaults?["exclude_dirs"] != nil)
         #expect(defaults?.count == 11)
@@ -102,6 +102,21 @@ import CrowPersistence
         let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
         #expect(onDisk.defaults.corveilAutoUpdate)
         #expect(onDisk.defaults.corveilVersion == "v0.4.32")
+    }
+
+    @Test @MainActor func setPatchesCorveilAutoUpdateOff() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let resp = await call("defaults-set", [
+            "corveil_auto_update": .bool(false),
+        ], devRoot: devRoot)
+
+        #expect(resp.error == nil)
+        #expect(resp.result?["defaults"]?.objectValue?["corveil_auto_update"] == .bool(false))
+        let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.defaults.corveilAutoUpdate == false)
     }
 
     @Test @MainActor func setPatchesOnlyProvidedFields() async throws {

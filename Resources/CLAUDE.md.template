@@ -63,6 +63,7 @@ crow defaults get                                                       → {"de
 crow defaults set [--provider github|gitlab] [--cli gh|glab] [--branch-prefix 'feat/']
 crow defaults set --binary NAME=PATH                                    → merge; NAME= removes. Local-only; needs a crowd restart
 crow defaults set --corveil-auto-update true|false [--corveil-version latest|vX.Y.Z]
+                                                                        → download/link corveil from corveil/corveil-releases; default on
 crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R | --clear-exclude-review-repos
                   (same trio for --…-exclude-ticket-repo and --…-ignore-review-label)
 ```
