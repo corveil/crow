@@ -880,9 +880,10 @@ create_session() {
 # attribution.commit so commits include a `Crow-Session: <uuid>` trailer
 # alongside the standard `Co-Authored-By: Claude` line, and — when this workspace
 # has an AI gateway (CROW-402) — an `env` block so manual `claude` re-runs in the
-# terminal inherit the gateway. Runs for every worktree (primary and secondary)
-# regardless of --skip-launch, so any worktree the user later opens with Claude
-# Code picks up both overrides.
+# terminal inherit the gateway. Always bakes `CROW_SESSION_ID` into that env
+# block when SESSION_ID is set (CROW-1220). Runs for every worktree (primary and
+# secondary) regardless of --skip-launch, so any worktree the user later opens
+# with Claude Code picks up both overrides.
 write_settings_local() {
   # Resolve the gateway and session env first so their blocks are written even
   # when attribution trailers are disabled.
@@ -898,8 +899,8 @@ write_settings_local() {
     log "Attribution trailers disabled via config"
   fi
 
-  if [[ "$want_attribution" != true && "$WS_HAS_GATEWAY" != true && -z "$WS_SESSION_ENV" ]]; then
-    log "No attribution trailer, gateway, or session env to write; skipping settings.local.json"
+  if [[ "$want_attribution" != true && "$WS_HAS_GATEWAY" != true && -z "$WS_SESSION_ENV" && -z "$SESSION_ID" ]]; then
+    log "No attribution trailer, gateway, session env, or CROW_SESSION_ID to write; skipping settings.local.json"
     return
   fi
 
@@ -950,6 +951,16 @@ Crow-Session: $SESSION_ID"
     done <<< "$WS_SESSION_ENV"
   fi
 
+  # CROW-1220: always bake the session id so the coder prompt's
+  # `crow add-link --session "$CROW_SESSION_ID"` works even when the harness
+  # sandbox does not inherit tmux extraEnv. Applied last so it cannot be
+  # clobbered by a same-named sessionEnv key (same rule as gateway keys).
+  if [[ -n "$SESSION_ID" ]]; then
+    if ! session_env_json=$(jq --arg v "$SESSION_ID" '.CROW_SESSION_ID = $v' <<< "$session_env_json"); then
+      die "settings_local" "jq failed to set CROW_SESSION_ID"
+    fi
+  fi
+
   local merged
   if ! merged=$(jq \
     --argjson want_attr "$want_attribution" \
@@ -973,7 +984,7 @@ Crow-Session: $SESSION_ID"
   local wrote=""
   [[ "$want_attribution" == true ]] && wrote="attribution"
   [[ "$WS_HAS_GATEWAY" == true ]] && wrote="${wrote:+$wrote + }gateway env"
-  [[ -n "$WS_SESSION_ENV" ]] && wrote="${wrote:+$wrote + }session env"
+  [[ -n "$WS_SESSION_ENV" || -n "$SESSION_ID" ]] && wrote="${wrote:+$wrote + }session env"
   log "Wrote settings.local.json ($wrote) to $settings_path (agent: $display_name)"
 
   # Belt-and-suspenders: add the file to the per-worktree git exclude so it

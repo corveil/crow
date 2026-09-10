@@ -188,6 +188,9 @@ agent_display_name() {
     cursor)      echo "Cursor" ;;
     codex)       echo "OpenAI Codex" ;;
     opencode)    echo "OpenCode" ;;
+    grok)        echo "Grok Build" ;;
+    antigravity) echo "Antigravity" ;;
+    muse)        echo "Muse Code" ;;
     *)           echo "Claude Code" ;;
   esac
 }
@@ -389,7 +392,7 @@ Optional:
   --pr-url <url>             Existing PR URL
   --pr-branch <branch>       Existing PR branch name
   --prompt-content <path>    Path to LLM-written prompt file
-  --agent-kind <kind>        Coding agent: claude-code | cursor | codex | opencode.
+  --agent-kind <kind>        Coding agent: claude-code | cursor | codex | opencode | grok | muse.
                              Defaults to agentsByKind["work"] then
                              defaultAgentKind from {devRoot}/.claude/config.json
                              (final fallback: claude-code).
@@ -475,8 +478,8 @@ parse_args() {
   # Validate --agent-kind early so bad values fail fast rather than at launch.
   if [[ -n "$AGENT_KIND" ]]; then
     case "$AGENT_KIND" in
-      claude-code|cursor|codex|opencode) ;;
-      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode)" ;;
+      claude-code|cursor|codex|opencode|grok|muse) ;;
+      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode | grok | muse)" ;;
     esac
   fi
 
@@ -877,9 +880,10 @@ create_session() {
 # attribution.commit so commits include a `Crow-Session: <uuid>` trailer
 # alongside the standard `Co-Authored-By: Claude` line, and — when this workspace
 # has an AI gateway (CROW-402) — an `env` block so manual `claude` re-runs in the
-# terminal inherit the gateway. Runs for every worktree (primary and secondary)
-# regardless of --skip-launch, so any worktree the user later opens with Claude
-# Code picks up both overrides.
+# terminal inherit the gateway. Always bakes `CROW_SESSION_ID` into that env
+# block when SESSION_ID is set (CROW-1220). Runs for every worktree (primary and
+# secondary) regardless of --skip-launch, so any worktree the user later opens
+# with Claude Code picks up both overrides.
 write_settings_local() {
   # Resolve the gateway and session env first so their blocks are written even
   # when attribution trailers are disabled.
@@ -895,8 +899,8 @@ write_settings_local() {
     log "Attribution trailers disabled via config"
   fi
 
-  if [[ "$want_attribution" != true && "$WS_HAS_GATEWAY" != true && -z "$WS_SESSION_ENV" ]]; then
-    log "No attribution trailer, gateway, or session env to write; skipping settings.local.json"
+  if [[ "$want_attribution" != true && "$WS_HAS_GATEWAY" != true && -z "$WS_SESSION_ENV" && -z "$SESSION_ID" ]]; then
+    log "No attribution trailer, gateway, session env, or CROW_SESSION_ID to write; skipping settings.local.json"
     return
   fi
 
@@ -947,6 +951,16 @@ Crow-Session: $SESSION_ID"
     done <<< "$WS_SESSION_ENV"
   fi
 
+  # CROW-1220: always bake the session id so the coder prompt's
+  # `crow add-link --session "$CROW_SESSION_ID"` works even when the harness
+  # sandbox does not inherit tmux extraEnv. Applied last so it cannot be
+  # clobbered by a same-named sessionEnv key (same rule as gateway keys).
+  if [[ -n "$SESSION_ID" ]]; then
+    if ! session_env_json=$(jq --arg v "$SESSION_ID" '.CROW_SESSION_ID = $v' <<< "$session_env_json"); then
+      die "settings_local" "jq failed to set CROW_SESSION_ID"
+    fi
+  fi
+
   local merged
   if ! merged=$(jq \
     --argjson want_attr "$want_attribution" \
@@ -970,7 +984,7 @@ Crow-Session: $SESSION_ID"
   local wrote=""
   [[ "$want_attribution" == true ]] && wrote="attribution"
   [[ "$WS_HAS_GATEWAY" == true ]] && wrote="${wrote:+$wrote + }gateway env"
-  [[ -n "$WS_SESSION_ENV" ]] && wrote="${wrote:+$wrote + }session env"
+  [[ -n "$WS_SESSION_ENV" || -n "$SESSION_ID" ]] && wrote="${wrote:+$wrote + }session env"
   log "Wrote settings.local.json ($wrote) to $settings_path (agent: $display_name)"
 
   # Belt-and-suspenders: add the file to the per-worktree git exclude so it
@@ -1221,7 +1235,16 @@ GRAPHQL
   project_id=$(echo "$item_result" | grep -o '"id":"[^"]*"' | tail -1 | cut -d'"' -f4)
 
   if [[ -z "$item_id" || -z "$project_id" || "$item_id" == "$project_id" ]]; then
-    log "Issue not on any project, skipping status update"
+    # CROW-790: no board to mutate — delegate to the app, which represents
+    # In Progress with the `crow:in-progress` fallback label instead of
+    # dropping the transition on the floor. Best-effort, never fatal.
+    if [[ -n "$CROW_BIN" && -n "$SESSION_ID" ]]; then
+      log "Issue not on any project, using the crow:in-progress label fallback"
+      "$CROW_BIN" transition-ticket --session "$SESSION_ID" --to inProgress >/dev/null 2>&1 \
+        || log "Warning: in-progress label fallback failed (non-fatal)"
+    else
+      log "Issue not on any project, skipping status update"
+    fi
     return 0
   fi
 
@@ -1441,6 +1464,85 @@ launch_opencode() {
   create_agent_terminal "OpenCode" "$launch_cmd"
 }
 
+launch_grok() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    bin=$(resolve_binary "grok" "grok" \
+      "/opt/homebrew/bin/grok" \
+      "/usr/local/bin/grok" \
+      "$HOME/.local/bin/grok" \
+      "$HOME/.grok/bin/grok") || \
+      die "launch_agent" "grok binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.grok in config.json (note: 'grok' collides with superagent-ai/grok-cli — pin xAI's Grok Build there)"
+  fi
+  log "Resolved grok binary: $bin"
+  # Grok 1.0.5 positional [PROMPT] seeds the *interactive* TUI
+  # (`grok "fix the bug"`). `--prompt-file` / `-p` are single-turn headless
+  # and a "turn" is the whole agentic loop, so the old
+  # `--prompt-file; grok -c` chain blocked the TUI until the entire ticket
+  # finished (CROW-1144). This `/crow-workspace` path only ever launches
+  # `.work`, so we seed via `eval_prompt_launch` — same argv form as
+  # Claude/Cursor/Codex — with `--` because grok 1.0.5 clap says to pass a
+  # hyphen-leading operand as `-- --bogus`.
+  #
+  # ARG_MAX guard (128 KiB = GrokLaunchArgs.argvPromptByteLimit — keep in
+  # lockstep): a seed past that falls back to the headless chain rather
+  # than a `command too long` abort. Ticket prompts are small; the fallback
+  # is the safety valve, not the happy path.
+  #
+  # Shell-quoting matches Swift exactly: `$bin`/`$prompt_path`/`$WORKTREE_PATH`
+  # are POSIX single-quoted via `posix_quote` because `grok` collides with
+  # superagent-ai/grok-cli, so pinning a (possibly spaced)
+  # `defaults.binaries.grok` is the *expected* config here. Single quotes
+  # (not double) so a `$`/backtick/`\` in the pinned path is preserved
+  # literally rather than re-expanded when `crow new-terminal --command`
+  # pastes it — exact parity with Swift's `GrokLaunchArgs.shellQuote`
+  # (#861 review r10). No auto-permission flags (this path has never
+  # emitted them; Crow Auto on `.work` is `autoLaunchCommand` / a restart).
+  local size
+  size=$(wc -c < "$prompt_path" | tr -d '[:space:]')
+  local launch_cmd
+  if [[ "${size:-0}" -le 131072 ]]; then
+    launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && $(eval_prompt_launch "$(posix_quote "$bin") --" "$prompt_path")"
+  else
+    log "Grok work seed is ${size} bytes (>128KiB); falling back to headless --prompt-file"
+    launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && { $(posix_quote "$bin") --prompt-file $(posix_quote "$prompt_path"); $(posix_quote "$bin") -c; }"
+  fi
+  create_agent_terminal "Grok Build" "$launch_cmd"
+}
+
+launch_muse() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    bin=$(resolve_binary "muse" "muse" \
+      "/opt/homebrew/bin/muse" \
+      "/usr/local/bin/muse" \
+      "$HOME/.local/bin/muse" \
+      "$HOME/.muse/bin/muse") || \
+      die "launch_agent" "muse binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.muse in config.json (note: 'muse' collides with Muse Sequencer — pin Meta's Muse Code there)"
+  fi
+  log "Resolved muse binary: $bin"
+  # Muse: any prompt arg is headless-only (`muse exec`), so exec
+  # `--prompt-file` consumes the prompt, then `; resume` reopens the
+  # interactive TUI. `--prompt-file` (not `$(cat …)`) so a large prompt
+  # never becomes a giant argv. Brace group keeps both commands gated on
+  # a successful `cd`. Mirrors the *no-auto-flags* form of
+  # MuseLaunchArgs.firstLaunchChainedCommand: this `/crow-workspace` path
+  # only ever launches `.work` (interactive). Trust the Crow-created
+  # worktree so project hooks/skills/rules load. Never `--yolo`. Quoted
+  # like Grok because `muse` is collision-prone and a spaced
+  # `defaults.binaries.muse` pin is the expected escape hatch.
+  local launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && { $(posix_quote "$bin") exec --trust-workspace --prompt-file $(posix_quote "$prompt_path"); $(posix_quote "$bin") --trust-workspace resume; }"
+  create_agent_terminal "Muse Code" "$launch_cmd"
+}
+
 # Shared terminal creation + readiness polling, used by every launch_<kind>.
 # Sets TERMINAL_ID on success. Polls `crow list-terminals` for up to 15s.
 create_agent_terminal() {
@@ -1531,7 +1633,9 @@ launch_agent() {
     cursor)      launch_cursor "$prompt_path" "$override_bin" ;;
     codex)       launch_codex "$prompt_path" "$override_bin" ;;
     opencode)    launch_opencode "$prompt_path" "$override_bin" ;;
-    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex | opencode)" ;;
+    grok)        launch_grok "$prompt_path" "$override_bin" ;;
+    muse)        launch_muse "$prompt_path" "$override_bin" ;;
+    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex | opencode | grok | muse)" ;;
   esac
 }
 

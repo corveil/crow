@@ -445,7 +445,9 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 
 | Variable              | Purpose                                                                                            | Default                        |
 | --------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `CROW_SOCKET`         | Override the Unix socket path for CLI ↔ server IPC (also the `crowd` bind path)                    | `~/.local/share/crow/crow.sock` |
+| `CROW_SOCKET`         | Override the Unix socket path for CLI ↔ server IPC (also the `crowd` bind path). When set, the HTTP `/rpc` fallback is off unless `CROW_HTTP_URL`/`CROW_HTTP_PORT` is also set. | `~/.local/share/crow/crow.sock` |
+| `CROW_HTTP_URL`       | Full URL for the CLI's loopback JSON-RPC fallback when `crow.sock` is unreachable (CROW-1220). Path defaults to `/rpc` if omitted. | `http://127.0.0.1:8787/rpc` |
+| `CROW_HTTP_PORT`      | Port for that fallback when `CROW_HTTP_URL` is unset | `8787` |
 | `TMPDIR`              | Temporary file directory (used by the terminal subsystem)                                          | System default                 |
 | `GITLAB_HOST`         | GitLab instance hostname (set automatically per workspace from `host` in `config.json`)            | —                              |
 | `CROW_HOOK_DEBUG`     | Set to `1` to enable `[hook-event]` debug logging                                                  | unset                          |

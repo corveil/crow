@@ -1,6 +1,6 @@
 # `crow` CLI Reference
 
-The `crow` CLI communicates over a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). A server must be listening on it for RPC commands to succeed — the `crowd` daemon owns this socket. `crow setup` and `crow autostart` are the only subcommands that work with nothing listening.
+The `crow` CLI communicates over a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). A server must be listening on it for RPC commands to succeed — the `crowd` daemon owns this socket. When the socket is unreachable (Cursor sandbox), the CLI retries over loopback `POST /rpc` (`http://127.0.0.1:8787/rpc`; `CROW_HTTP_URL` / `CROW_HTTP_PORT`). An explicit `CROW_SOCKET` disables that fallback unless an HTTP override is also set. `crow setup` and `crow autostart` are the only subcommands that work with nothing listening.
 
 All commands print JSON to stdout on success. Session and terminal identifiers are full UUIDs (e.g. `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) — short names are not accepted.
 
@@ -280,6 +280,8 @@ crow set-goal --session <uuid> --clear
 ### `crow add-link`
 
 Add a link (issue, PR, repo, or custom) to a session.
+
+`--type pr` is **idempotent** (CROW-1220): if the session already has a `.pr` link, or this URL is already linked, the call returns the existing `link_id` with `"skipped": true` and does not stack extras. Automation uses `links.first(where: { $0.linkType == .pr })`.
 
 ```bash
 crow add-link --session <uuid> --label "Issue #123" --url "https://..." --type ticket

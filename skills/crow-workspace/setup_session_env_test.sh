@@ -111,6 +111,7 @@ settings="$WORKTREE_PATH/.claude/settings.local.json"
 check "settings.local.json written" "yes" "$([[ -f "$settings" ]] && echo yes || echo no)"
 contains "env.COORD_SESSION_NAME = resolved session name" "$(cat "$settings")" '"COORD_SESSION_NAME": "crow-543-session-env"'
 contains "env.STATIC_KEY present" "$(cat "$settings")" '"STATIC_KEY": "fixed-value"'
+contains "CROW_SESSION_ID always injected" "$(cat "$settings")" '"CROW_SESSION_ID": "ABCD-1234"'
 contains "attribution still written alongside session env" "$(cat "$settings")" '"attribution"'
 check "settings.local.json is 0600" "600" "$(stat -f '%Lp' "$settings" 2>/dev/null || stat -c '%a' "$settings")"
 
@@ -149,9 +150,10 @@ resolve_session_env
 check "WS_SESSION_ENV empty" "" "$WS_SESSION_ENV"
 write_settings_local
 settings="$WORKTREE_PATH/.claude/settings.local.json"
-# Attribution still writes (SESSION_ID set), but there must be no .env block.
+# Attribution still writes (SESSION_ID set); CROW_SESSION_ID is always
+# injected into .env so the coder prompt can crow add-link (CROW-1220).
 check "settings.local.json written for attribution" "yes" "$([[ -f "$settings" ]] && echo yes || echo no)"
-not_contains "no .env key when no session env / gateway" "$(cat "$settings")" '"env"'
+contains "CROW_SESSION_ID always injected" "$(cat "$settings")" '"CROW_SESSION_ID": "ABCD-1234"'
 contains "attribution present" "$(cat "$settings")" '"attribution"'
 
 # ── 5. Coexistence with a gateway ──────────────────────────────────────────────

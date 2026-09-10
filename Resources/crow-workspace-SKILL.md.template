@@ -16,7 +16,7 @@ Orchestrates work sessions in **Crow** by setting up git worktrees and creating 
 
 ## Important: Sandbox Bypass
 
-All `crow`, `gh`, `glab`, and `git worktree` commands require `dangerouslyDisableSandbox: true` because they communicate via Unix socket, need network/TLS access, or write outside the sandbox-allowed directories.
+All `crow`, `gh`, `glab`, and `git worktree` commands require `dangerouslyDisableSandbox: true` because they communicate via Unix socket, need network/TLS access, or write outside the sandbox-allowed directories. Sandboxed Cursor (and similar harnesses) can still run `crow` without that: the CLI falls back to loopback `POST /rpc` when `crow.sock` is unreachable (CROW-1220). `gh`/`glab`/`git` still need network.
 
 ## Activation
 
@@ -112,7 +112,7 @@ The example above lets the SecurityScorecard coordination layer's SessionStart `
 
 **Template tokens** (resolved from setup.sh's per-session vars): `{{session_name}}`, `{{slug}}`, `{{branch}}`, `{{ticket_number}}`, `{{repo}}`, `{{workspace}}`, `{{worktree_path}}`, `{{ticket_url}}`. Unknown tokens are left untouched.
 
-Backward-compatible: with no `sessionEnv` map and no `--session-env` flag, `setup.sh` writes no `.env` block beyond what attribution/gateway already require. The file is `chmod 600` and stays in the worktree's git exclude list. Note that `sessionEnv` is **not** a credential store: unlike a gateway header, its values are kept as plaintext in `config.json`, are not stripped by `SettingsSecrets`, and are readable through the remote `workspace-list` / `workspace-get` RPCs. Put tokens in a workspace gateway header (`crow gateway set`) instead — the `chmod 600` here is defence in depth, not a reason to store one. Gateway and attribution keys are never clobbered by a same-named session-env key.
+When `SESSION_ID` is set, `setup.sh` always writes `CROW_SESSION_ID` into the `.env` block so the coder prompt's `crow add-link --session "$CROW_SESSION_ID"` works even if tmux extraEnv does not reach a sandboxed harness (CROW-1220). Gateway, attribution, and `CROW_SESSION_ID` keys are never clobbered by a same-named session-env key. The file is `chmod 600` and stays in the worktree's git exclude list. Note that `sessionEnv` is **not** a credential store: unlike a gateway header, its values are kept as plaintext in `config.json`, are not stripped by `SettingsSecrets`, and are readable through the remote `workspace-list` / `workspace-get` RPCs. Put tokens in a workspace gateway header (`crow gateway set`) instead — the `chmod 600` here is defence in depth, not a reason to store one.
 
 ## Multi-Workspace Discovery
 
@@ -513,6 +513,14 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 gh pr create --title "<summary>" --body "Closes #{number}" --base {base_branch}
 ```
 
+7. Register that PR with the Crow session **once**. `add-link --type pr` is idempotent (skips if a `.pr` link already exists, or if this URL is already linked — do not stack extras; automation uses the first `.pr`):
+
+```bash
+# $CROW_SESSION_ID is in the environment (tmux + settings.local.json env)
+gh pr view --json url,number
+crow add-link --session "$CROW_SESSION_ID" --label "PR #<number>" --url "<pr-url>" --type pr
+```
+
 ## Custom Instructions
 
 {custom_instructions}
@@ -581,7 +589,9 @@ it.
 
 On step 6, substitute the real ticket number into `{number}` in the PR body (same substitution as `{base_branch}`) so the body reads e.g. `Closes #654` — the closing keyword with the real number is what makes GitHub link the PR to the issue and auto-close it on merge into the default branch. When no ticket number is available, drop the `--body` and fall back to `gh pr create --fill`.
 
-For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the description and fall back to `glab mr create --fill`.
+After a successful `gh pr create`, always run step 7 (`gh pr view --json url,number` then `crow add-link --session "$CROW_SESSION_ID" … --type pr`). Crow does **not** learn about the PR from GitHub's `Closes #N` keyword; the issue-tracker poller only attaches a `.pr` when a registered worktree branch matches. The coder must register the URL once. `add-link --type pr` is idempotent.
+
+For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the description and fall back to `glab mr create --fill`. On step 7 use `glab mr view --output json` (or the MR URL printed by `glab mr create`) with the same `crow add-link --type pr` call.
 
 ### Embedding pre-fetched content
 
@@ -629,9 +639,14 @@ And update the Instructions section to:
 3. Implement the plan
 4. Commit the changes with a descriptive message
 5. Push the branch — this updates the existing PR automatically; do NOT open a new one
+6. Ensure Crow has this PR on the session (`add-link --type pr` is idempotent — skip if a `.pr` already exists):
+
+```bash
+crow add-link --session "$CROW_SESSION_ID" --label "PR #{pr_number}" --url "{pr_url}" --type pr
+```
 ~~~
 
-For MyGitLab, add: `6. If any changes to my-project are required, create a new worktree with a feature branch before making modifications`
+For MyGitLab, add: `7. If any changes to my-project are required, create a new worktree with a feature branch before making modifications`
 
 ### CLI Commands for Fetching Issues
 
@@ -695,7 +710,7 @@ crow remove-link --session <uuid> --id <link-uuid> | --url "..."
 crow edit-link --session <uuid> --id <link-uuid> | --url "..." [--label "..."] [--new-url "..."] [--type ticket|pr|repo|custom]
 ```
 
-All commands return JSON and require `dangerouslyDisableSandbox: true`.
+All commands return JSON. `$CROW_SESSION_ID` is set in every Crow-launched agent terminal (and in `.claude/settings.local.json` `env`); prefer it over copying a UUID. `add-link --type pr` is idempotent. Prefer the Unix socket at `crow.sock`; when that connect fails (Cursor sandbox), `crow` retries over loopback `POST /rpc`. `gh`/`glab`/`git worktree` still need `dangerouslyDisableSandbox: true` for TLS / paths.
 
 ## Examples
 

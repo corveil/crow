@@ -15,7 +15,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 
 | Command | Summary |
 | --- | --- |
-| [`crow add-link`](#crow-add-link) | Add a link to a session |
+| [`crow add-link`](#crow-add-link) | Add a link to a session (idempotent for --type pr) |
 | [`crow add-merge-label`](#crow-add-merge-label) | Add the crow:merge label to the session's PR |
 | [`crow add-worktree`](#crow-add-worktree) | Register a worktree for a session |
 | [`crow agents`](#crow-agents) | Show and change which coding agent Crow launches |
@@ -157,7 +157,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 
 ## `crow add-link`
 
-Add a link to a session.
+Add a link to a session (idempotent for --type pr).
 
 ```
 crow add-link --session <session> --label <label> --url <url> [--type <type>]

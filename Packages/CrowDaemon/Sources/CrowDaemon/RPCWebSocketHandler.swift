@@ -314,10 +314,13 @@ enum RPCWebSocketHandler {
     /// gated above. So the remote-reachable surface here is strictly smaller than
     /// the `set-config` it replaces.
     ///
-    /// Note this gate only guards the HTTP/WebSocket `/rpc` path. Every method here
-    /// also has a `crow` CLI verb (CROW-818), and the CLI reaches the daemon over its
-    /// 0600 Unix socket, which never passes through `localOnlyDenial` — a CLI caller
-    /// is local by construction, so that is the intended trust model, not a bypass.
+    /// Note this gate only guards the HTTP/WebSocket `/rpc` path (WS upgrade and
+    /// `POST /rpc`). Every method here also has a `crow` CLI verb (CROW-818). The
+    /// CLI prefers the 0600 Unix socket, which never passes through
+    /// `localOnlyDenial`; when that socket is unreachable it falls back to loopback
+    /// `POST /rpc` (CROW-1220), which *does* hit this gate — a loopback peer is
+    /// `local-direct`, so local-only methods still succeed. A remote `/rpc` peer
+    /// is still refused.
     static func localOnlyDenial(for request: JSONRPCRequest, devRoot: String) -> String? {
         switch request.method {
         case "run-setup":

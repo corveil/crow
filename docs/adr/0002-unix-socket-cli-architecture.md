@@ -32,6 +32,7 @@ The socket directory is `0700` and the socket file is `0600`, so only the local 
 
 - The app must be running for the CLI to work. This is intentional — the CLI is a remote control, not a stand-alone tool — but it means scripts must check for the app or be tolerant of a missing socket.
 - Cross-machine use (e.g. SSH-ing in to drive Crow) needs SSH socket forwarding rather than a network port; we consider this a feature, not a limitation.
+- Sandboxed harnesses (Cursor) may refuse `AF_UNIX` to `crow.sock` even while `crowd` is running. CROW-1220 adds a **fallback**, not a new primary transport: `crow` retries over loopback `POST /rpc` (the HTTP listener the web UI already requires). Origin-empty native clients on loopback stay `local-direct`. The Unix socket remains the default.
 
 ## Alternatives considered
 
