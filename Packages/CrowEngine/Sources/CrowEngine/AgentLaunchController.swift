@@ -50,6 +50,12 @@ final class AgentLaunchController {
             return
         }
 
+        if let session = appState.sessions.first(where: { $0.id == sessionID }),
+           !appState.isReadyToLaunchAgent(session) {
+            refuseWorkSessionLaunch(terminalID: terminalID, sessionID: sessionID, session: session)
+            return
+        }
+
         // Apply the same prep the legacy `crow send` path got from the `send`
         // RPC (hook config + OTEL env vars) so hooks route back to this session
         // and Claude telemetry is exported — via the shared helper so the two
@@ -85,6 +91,19 @@ final class AgentLaunchController {
         }
         // Ensure a trailing newline so TmuxBackend.sendText delivers Enter.
         TerminalRouter.send(routedTerminal, text: text.hasSuffix("\n") ? text : text + "\n")
+        appState.terminalReadiness[terminalID] = .agentLaunched
+    }
+
+    /// Surface a refused `.work` launch in the pane instead of starting the
+    /// agent with no Crow worktree row (CROW-1218). Parks readiness so the
+    /// deferred-launch loop doesn't keep retrying; recovery is `add-worktree`
+    /// then Retry / recreate (infer-from-cwd is a sibling ticket).
+    private func refuseWorkSessionLaunch(terminalID: UUID, sessionID: UUID, session: Session) {
+        CrowLog.info("[SessionService] refusing to launch work session \(sessionID.uuidString) (\(session.name)): no registered worktree with a branch")
+        if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
+            let msg = "echo '⚠️  Crow: refusing to launch this work session — no registered worktree with a branch. Run crow add-worktree --session \(sessionID.uuidString) --repo … --path <worktree> --branch <branch>, then Retry.'\n"
+            TerminalRouter.send(routedTerminal, text: msg)
+        }
         appState.terminalReadiness[terminalID] = .agentLaunched
     }
 
@@ -341,8 +360,15 @@ final class AgentLaunchController {
             terminals.contains(where: { $0.id == terminalID })
         })?.key,
               let session = appState.sessions.first(where: { $0.id == sessionID }),
-              let worktree = appState.primaryWorktree(for: sessionID),
               let agent = AgentRegistry.shared.agent(for: session.agentKind) else { return }
+
+        guard appState.isReadyToLaunchAgent(session),
+              let worktree = appState.primaryWorktree(for: sessionID) else {
+            if session.kind == .work {
+                refuseWorkSessionLaunch(terminalID: terminalID, sessionID: sessionID, session: session)
+            }
+            return
+        }
 
         // Strip a Grok `.review` clone's committed config, then pre-seed folder
         // trust — one shared gate so a launch path can't do one without the other

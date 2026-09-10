@@ -12,7 +12,7 @@ public struct AddWorktree: ParsableCommand {
     @Option(name: .long, help: "Worktree path") var path: String
     @Option(name: .long, help: "Branch name") var branch: String
     @Option(name: .customLong("repo-path"), help: "Main repo path (for git commands)") var repoPath: String?
-    @Flag(name: .long, help: "Mark as primary worktree") var primary: Bool = false
+    @Flag(name: .long, help: "Mark as primary worktree. The first worktree of a session is primary even without this flag.") var primary: Bool = false
 
     public init() {}
 

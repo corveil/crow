@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034
-# Unit tests for create_session's set-ticket handling (CROW-1166).
+# Unit tests for create_session's set-ticket handling (CROW-1166) and
+# worktree registration / launch gating (CROW-1218).
 #
 # Sources setup.sh (sourcing is side-effect free thanks to the BASH_SOURCE
-# guard at the bottom) and drives create_session against a fake `crow` that
-# records argv. Pin: a failed set-ticket must abort before add-link, and the
-# RPC error must land in the JSON die payload.
+# guard at the bottom) and drives create_session / launch_agent against a
+# fake `crow` that records argv.
 
 set -uo pipefail
 
@@ -53,13 +53,15 @@ TICKET_TITLE="setup.sh swallows set-ticket failure"
 TICKET_NUMBER="1166"
 PR_URL=""
 PR_NUMBER=""
+SKIP_LAUNCH=false
+AGENT_KIND="cursor"
 
 CROW_LOG="$TMP/crow.log"
 CROW_BIN="$TMP/fake-crow"
 cat > "$CROW_BIN" <<'SH'
 #!/usr/bin/env bash
 # argv[1] is the subcommand. Log every invocation, then succeed or fail
-# based on CROW_FAKE_SET_TICKET (ok|fail).
+# based on CROW_FAKE_* env.
 printf '%s\n' "$*" >> "${CROW_LOG:?}"
 case "$1" in
   set-ticket)
@@ -70,10 +72,17 @@ case "$1" in
     echo '{"session_id":"11112222-3333-4444-5555-666677778888"}'
     ;;
   add-worktree)
+    if [[ "${CROW_FAKE_ADD_WORKTREE:-ok}" == fail ]]; then
+      echo "Unknown session_id (no such session)" >&2
+      exit 1
+    fi
     echo '{"ok":true}'
     ;;
   add-link)
     echo '{"ok":true}'
+    ;;
+  list-worktrees)
+    echo "${CROW_FAKE_LIST_WORKTREES:-{\"worktrees\":[]}}"
     ;;
   *)
     echo "unexpected crow subcommand: $1" >&2
@@ -85,9 +94,18 @@ chmod +x "$CROW_BIN"
 export CROW_LOG
 
 reset_log() { : > "$CROW_LOG"; }
+reset_session_globals() {
+  PRIMARY=false
+  SKIP_LAUNCH=false
+  CROW_FAKE_SET_TICKET=ok
+  CROW_FAKE_ADD_WORKTREE=ok
+  CROW_FAKE_LIST_WORKTREES='{"worktrees":[]}'
+  export CROW_FAKE_SET_TICKET CROW_FAKE_ADD_WORKTREE CROW_FAKE_LIST_WORKTREES
+}
 
 echo "== set-ticket failure aborts before add-link =="
 reset_log
+reset_session_globals
 CROW_FAKE_SET_TICKET=fail
 export CROW_FAKE_SET_TICKET
 fail_out=$(create_session 2>&1)
@@ -104,19 +122,20 @@ not_contains "no leftover warning" "$fail_out" "may already be set"
 
 echo "== set-ticket success continues to add-worktree + add-link =="
 reset_log
-CROW_FAKE_SET_TICKET=ok
-export CROW_FAKE_SET_TICKET
+reset_session_globals
 ok_out=$(create_session 2>&1)
 ok_status=$?
 check "create_session succeeds" "0" "$ok_status"
 contains "set-ticket called with url" "$(cat "$CROW_LOG")" "--url $TICKET_URL"
 contains "set-ticket called with number" "$(cat "$CROW_LOG")" "--number $TICKET_NUMBER"
 contains "add-worktree invoked" "$(cat "$CROW_LOG")" "add-worktree"
+contains "first worktree is --primary" "$(cat "$CROW_LOG")" "--primary"
 contains "add-link invoked" "$(cat "$CROW_LOG")" "add-link"
 not_contains "no error JSON on success" "$ok_out" '"status":"error"'
 
 echo "== no ticket URL skips set-ticket =="
 reset_log
+reset_session_globals
 saved_url="$TICKET_URL"
 TICKET_URL=""
 create_session >/dev/null 2>&1
@@ -125,6 +144,51 @@ TICKET_URL="$saved_url"
 check "create_session succeeds without ticket" "0" "$skip_status"
 not_contains "set-ticket not invoked" "$(cat "$CROW_LOG")" "set-ticket"
 contains "add-worktree still invoked" "$(cat "$CROW_LOG")" "add-worktree"
+
+echo "== add-worktree failure aborts before add-link (CROW-1218) =="
+reset_log
+reset_session_globals
+CROW_FAKE_ADD_WORKTREE=fail
+export CROW_FAKE_ADD_WORKTREE
+wt_fail_out=$(create_session 2>&1)
+wt_fail_status=$?
+check "create_session exits non-zero" "1" "$wt_fail_status"
+contains "JSON step is add_worktree" "$wt_fail_out" '"step":"add_worktree"'
+contains "RPC stderr is in the message" "$wt_fail_out" "Unknown session_id"
+not_contains "add-link not invoked after add-worktree fail" "$(cat "$CROW_LOG")" "add-link"
+
+echo "== secondary worktree does not force --primary (CROW-1218) =="
+reset_log
+reset_session_globals
+CROW_FAKE_LIST_WORKTREES='{"worktrees":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","repo":"crow","path":"/wt","branch":"feature/existing","primary":true}]}'
+export CROW_FAKE_LIST_WORKTREES
+create_session >/dev/null 2>&1
+sec_status=$?
+check "create_session succeeds for secondary" "0" "$sec_status"
+contains "add-worktree still invoked for secondary" "$(cat "$CROW_LOG")" "add-worktree"
+not_contains "secondary omits --primary" "$(cat "$CROW_LOG")" "--primary"
+
+echo "== launch_agent dies when list-worktrees is empty (CROW-1218) =="
+reset_log
+reset_session_globals
+CROW_FAKE_LIST_WORKTREES='{"worktrees":[]}'
+export CROW_FAKE_LIST_WORKTREES
+launch_out=$(launch_agent 2>&1)
+launch_status=$?
+check "launch_agent exits non-zero" "1" "$launch_status"
+contains "JSON step is launch_agent" "$launch_out" '"step":"launch_agent"'
+contains "message names missing worktree" "$launch_out" "no registered worktree"
+not_contains "new-terminal not invoked" "$(cat "$CROW_LOG")" "new-terminal"
+
+echo "== launch_agent skip-launch does not require worktrees =="
+reset_log
+reset_session_globals
+SKIP_LAUNCH=true
+skip_launch_out=$(launch_agent 2>&1)
+skip_launch_status=$?
+check "skip-launch returns zero" "0" "$skip_launch_status"
+not_contains "list-worktrees not required when skipping launch" "$(cat "$CROW_LOG")" "list-worktrees"
+not_contains "no error JSON on skip-launch" "$skip_launch_out" '"status":"error"'
 
 echo
 if [[ "$fail" -eq 0 ]]; then

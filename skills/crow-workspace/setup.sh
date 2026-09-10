@@ -97,6 +97,19 @@ terminal_readiness() {
     | grep -o '"readiness":"[^"]*"' | cut -d'"' -f4 | head -1
 }
 
+# True when `crow list-worktrees` reports at least one worktree with a
+# non-empty branch. `json_val` only extracts strings; an empty
+# `"worktrees":[]` array yields nothing. Used to default `--primary` on
+# the first worktree and to refuse launch without a registered row (CROW-1218).
+session_has_registered_worktree() {
+  [[ -n "$SESSION_ID" ]] || return 1
+  local result
+  result=$("$CROW_BIN" list-worktrees --session "$SESSION_ID" 2>/dev/null) || return 1
+  local branch
+  branch=$(json_val "branch" <<< "$result")
+  [[ -n "$branch" ]]
+}
+
 # POSIX single-quote an arg so it's safe to interpolate into a shell command.
 # Mirrors Swift's shellQuote() in ClaudeLaunchArgs: wraps value in '...' and
 # escapes embedded single-quotes as '\''.
@@ -408,7 +421,7 @@ Optional:
                              {{ticket_number}} {{repo}} {{workspace}}
                              {{worktree_path}} {{ticket_url}}.
   --base-branch <branch>     Default base branch (auto-detected from origin/HEAD if omitted)
-  --primary                  Mark worktree as primary
+  --primary                  Mark worktree as primary (default for the session's first worktree)
   --skip-launch              Skip agent launch
   --skip-assign              Skip auto-assign
   --skip-project-status      Skip project status mutation
@@ -837,7 +850,14 @@ create_session() {
     fi
   fi
 
-  # Step 3: Register worktree
+  # Step 3: Register worktree. The first worktree of a session is primary
+  # even when the caller omitted --primary (CROW-1218) — PR auto-link and
+  # launch both key off that row. Secondary repos attach to a session that
+  # already has one, so they stay non-primary unless --primary was passed.
+  if [[ "$PRIMARY" != "true" ]] && ! session_has_registered_worktree; then
+    PRIMARY=true
+    log "Marking first worktree as primary"
+  fi
   log "Registering worktree..."
   local wt_args=("$CROW_BIN" add-worktree --session "$SESSION_ID"
     --repo "$REPO"
@@ -1607,6 +1627,14 @@ launch_agent() {
   if [[ "$SKIP_LAUNCH" == "true" ]]; then
     log "Skipping agent launch (--skip-launch)"
     return
+  fi
+
+  # A git checkout is not enough — PR auto-link matches the *registered*
+  # worktree branch (CROW-1218). Refuse to create the managed terminal until
+  # crow list-worktrees shows one. add-worktree already died on failure;
+  # this catches a skipped or swallowed registration (same class as #1166).
+  if ! session_has_registered_worktree; then
+    die "launch_agent" "session has no registered worktree with a branch; crow add-worktree must succeed before launch"
   fi
 
   # Resolve agent kind: explicit flag > config.json (agentsByKind["work"]

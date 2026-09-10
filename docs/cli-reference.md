@@ -1024,7 +1024,7 @@ crow add-worktree \
 | `--path`      | yes      | Worktree path                                                              |
 | `--branch`    | yes      | Branch name                                                                |
 | `--repo-path` | no       | Main repo path (used when shelling out to git against the primary repo)    |
-| `--primary`   | no       | Flag — mark this as the primary worktree for the session                   |
+| `--primary`   | no       | Flag — mark this as the primary worktree for the session. The **first** worktree of a session is primary even without this flag (CROW-1218). |
 
 > Note: `add-worktree` does **not** support a `--workspace` flag. Workspace association is derived from `--repo-path`.
 

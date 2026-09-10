@@ -155,6 +155,27 @@ for f in skills/crow-workspace/setup.sh Resources/crow-workspace-setup.sh.templa
     fi
 done
 
+# CROW-1218: first worktree is primary; launch_agent refuses an empty
+# list-worktrees. A git checkout Crow doesn't know about never auto-links a PR.
+for f in skills/crow-workspace/setup.sh Resources/crow-workspace-setup.sh.template; do
+    require "$f" \
+        'session_has_registered_worktree' \
+        'die "add_worktree"' \
+        'die "launch_agent"' \
+        'no registered worktree' \
+        'Marking first worktree as primary'
+    if grep -Fq 'Warning: add-worktree failed' "$f"; then
+        echo "DRIFT: $f still swallows add-worktree failure" >&2
+        fail=1
+    fi
+done
+# shellcheck disable=SC2016  # backticks in the needles are literal, not command substitution
+for f in skills/crow-workspace/SKILL.md Resources/crow-workspace-SKILL.md.template; do
+    require "$f" \
+        'do not continue into `new-terminal`' \
+        'Do not assemble a work session with raw CLI and skip `add-worktree`'
+done
+
 if [ "$fail" -ne 0 ]; then
     echo "check-workspace-custom-instructions: FAILED (see #683)" >&2
     exit 1
