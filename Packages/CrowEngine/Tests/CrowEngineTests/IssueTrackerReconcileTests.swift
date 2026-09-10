@@ -486,3 +486,231 @@ struct IssueTrackerReconcileKeyScenarioTests {
         #expect(Set(final.map(\.url)).count == final.count)
     }
 }
+
+@Suite("IssueTracker ticket-URL slug extraction (CROW-1221)")
+struct IssueTrackerTicketSlugTests {
+    @Test func parsesGitHubIssueURL() {
+        #expect(
+            IssueTracker.repoSlug(fromTicketURL: "https://github.com/corveil/shell-crm/issues/473")
+                == "corveil/shell-crm"
+        )
+    }
+
+    @Test func parsesGitHubIssueURLWithQueryAndFragment() {
+        #expect(
+            IssueTracker.repoSlug(fromTicketURL: "https://github.com/org/repo/issues/42?tab=comments")
+                == "org/repo"
+        )
+        #expect(
+            IssueTracker.repoSlug(fromTicketURL: "https://github.com/org/repo/issues/42#issuecomment-1")
+                == "org/repo"
+        )
+    }
+
+    @Test func stillParsesPRURLs() {
+        #expect(
+            IssueTracker.repoSlug(fromTicketURL: "https://github.com/owner/repo/pull/123")
+                == "owner/repo"
+        )
+    }
+
+    @Test func returnsEmptyForUnrecognized() {
+        #expect(IssueTracker.repoSlug(fromTicketURL: "") == "")
+        #expect(IssueTracker.repoSlug(fromTicketURL: "github.com/org/repo/issues/1") == "")
+    }
+}
+
+@Suite("IssueTracker GitHub issue-number candidate (CROW-1221)")
+struct IssueTrackerGitHubIssueCandidateTests {
+
+    private let sid = UUID()
+
+    private func candidate(
+        ticketURL: String?,
+        ticketNumber: Int?,
+        provider: Provider?,
+        codeProvider: Provider? = nil,
+        worktreeSlug: String = "",
+        worktreeHost: String = ""
+    ) -> IssueTracker.ReconcileKeyCandidate? {
+        IssueTracker.githubIssueKeyCandidate(
+            sessionID: sid,
+            ticketURL: ticketURL,
+            ticketNumber: ticketNumber,
+            provider: provider,
+            codeProvider: codeProvider,
+            worktreeSlug: worktreeSlug,
+            worktreeHost: worktreeHost
+        )
+    }
+
+    @Test func slugFromTicketURLDoesNotNeedWorktree() {
+        // The #1218 session: ticket URL encodes owner/repo, no registered worktree.
+        let cand = candidate(
+            ticketURL: "https://github.com/corveil/shell-crm/issues/473",
+            ticketNumber: 473,
+            provider: .github
+        )
+        #expect(cand?.repoSlug == "corveil/shell-crm")
+        #expect(cand?.key == "#473")
+        #expect(cand?.provider == .github)
+        #expect(cand?.sessionID == sid)
+    }
+
+    @Test func fallsBackToWorktreeSlugWhenURLMissing() {
+        let cand = candidate(
+            ticketURL: nil,
+            ticketNumber: 473,
+            provider: .github,
+            worktreeSlug: "corveil/shell-crm",
+            worktreeHost: "github.com"
+        )
+        #expect(cand?.repoSlug == "corveil/shell-crm")
+        #expect(cand?.key == "#473")
+    }
+
+    @Test func prefersTicketURLSlugOverWorktree() {
+        let cand = candidate(
+            ticketURL: "https://github.com/corveil/shell-crm/issues/473",
+            ticketNumber: 473,
+            provider: .github,
+            worktreeSlug: "other/repo",
+            worktreeHost: "github.com"
+        )
+        #expect(cand?.repoSlug == "corveil/shell-crm")
+    }
+
+    @Test func numberFromURLWhenTicketNumberNil() {
+        #expect(
+            IssueTracker.githubIssueNumber(
+                ticketURL: "https://github.com/org/repo/issues/42?tab=comments",
+                ticketNumber: nil
+            ) == 42
+        )
+        let cand = candidate(
+            ticketURL: "https://github.com/org/repo/issues/42?tab=comments",
+            ticketNumber: nil,
+            provider: .github
+        )
+        #expect(cand?.key == "#42")
+    }
+
+    @Test func skipsJiraTaskOnly() {
+        #expect(candidate(
+            ticketURL: "https://acme.atlassian.net/browse/MAXX-6859",
+            ticketNumber: 6859,
+            provider: .jira,
+            codeProvider: .github,
+            worktreeSlug: "rm/max-monorepo"
+        ) == nil)
+    }
+
+    @Test func skipsGitLab() {
+        #expect(candidate(
+            ticketURL: "https://gitlab.com/org/repo/-/issues/7",
+            ticketNumber: 7,
+            provider: .gitlab,
+            worktreeSlug: "org/repo"
+        ) == nil)
+    }
+
+    @Test func skipsWhenNeitherURLNorWorktreeYieldsSlug() {
+        #expect(candidate(
+            ticketURL: nil,
+            ticketNumber: 473,
+            provider: .github
+        ) == nil)
+    }
+
+    @Test func skipsPullURLWithoutTicketNumber() {
+        #expect(
+            IssueTracker.githubIssueNumber(
+                ticketURL: "https://github.com/org/repo/pull/99",
+                ticketNumber: nil
+            ) == nil
+        )
+        #expect(candidate(
+            ticketURL: "https://github.com/org/repo/pull/99",
+            ticketNumber: nil,
+            provider: .github
+        ) == nil)
+    }
+
+    @Test func skipsMissingNumber() {
+        #expect(candidate(
+            ticketURL: "https://github.com/org/repo",
+            ticketNumber: nil,
+            provider: .github,
+            worktreeSlug: "org/repo"
+        ) == nil)
+    }
+}
+
+// CROW-1221: GitHub-tasked session whose worktree branch was renamed still
+// attaches the PR whose body says `Closes #473`. Contested across two issue
+// numbers still drops (same #520 rule).
+@Suite("IssueTracker reconcile GitHub issue scenario (CROW-1221)")
+struct IssueTrackerReconcileGitHubIssueScenarioTests {
+
+    private func keyCandidate(_ sid: UUID, _ key: String) -> IssueTracker.ReconcileKeyCandidate {
+        IssueTracker.ReconcileKeyCandidate(
+            sessionID: sid, provider: .github, repoSlug: "corveil/shell-crm", key: key, gitlabHost: nil
+        )
+    }
+
+    @Test func closesIssueNumberResolvesPRAndContestedDrops() {
+        let s473 = UUID()  // ticket 473 → PR #478 (Closes #473)
+        let s999 = UUID()  // ticket 999 → no PR; must not inherit #478
+
+        let candidates = [
+            keyCandidate(s473, "#473"),
+            keyCandidate(s999, "#999"),
+        ]
+        let kc473 = KeyCandidate(repoSlug: "corveil/shell-crm", key: "#473")
+        let backendMatches = [
+            KeyPRMatch(
+                candidate: kc473, number: 478,
+                url: "https://github.com/corveil/shell-crm/pull/478",
+                state: "OPEN", updatedAt: nil
+            )
+        ]
+
+        let fanned = IssueTracker.fanOutKeyMatches(backendMatches, across: candidates)
+        let decided = IssueTracker.decideReconcileLinks(matches: fanned)
+        let identity = [s473: "#473", s999: "#999"]
+        let final = IssueTracker.dedupeContestedPRs(decided, identityBySession: identity)
+
+        let bySession = Dictionary(grouping: final, by: { $0.sessionID })
+        #expect(bySession[s473]?.map(\.number) == [478])
+        #expect(bySession[s999] == nil)
+    }
+
+    @Test func contestedPRAcrossDistinctIssueNumbersDropsBoth() {
+        let s473 = UUID(); let s999 = UUID()
+        let url = "https://github.com/corveil/shell-crm/pull/478"
+        let out = IssueTracker.dedupeContestedPRs(
+            [
+                IssueTracker.ReconcileBranchMatch(
+                    sessionID: s473, number: 478, url: url, state: "OPEN", updatedAt: nil),
+                IssueTracker.ReconcileBranchMatch(
+                    sessionID: s999, number: 478, url: url, state: "OPEN", updatedAt: nil),
+            ],
+            identityBySession: [s473: "#473", s999: "#999"]
+        )
+        #expect(out.isEmpty)
+    }
+
+    @Test func picksOpenPROverMergedForSameIssue() {
+        let s = UUID()
+        let picks = IssueTracker.decideReconcileLinks(matches: [
+            IssueTracker.ReconcileBranchMatch(
+                sessionID: s, number: 10, url: "u10", state: "MERGED",
+                updatedAt: Date(timeIntervalSince1970: 500)),
+            IssueTracker.ReconcileBranchMatch(
+                sessionID: s, number: 478, url: "u478", state: "OPEN",
+                updatedAt: Date(timeIntervalSince1970: 100)),
+        ])
+        #expect(picks.count == 1)
+        #expect(picks[0].number == 478)
+    }
+}

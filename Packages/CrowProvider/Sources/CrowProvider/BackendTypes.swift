@@ -296,10 +296,11 @@ public struct BranchPRMatch: Sendable {
     }
 }
 
-/// Input to `CodeBackend.findPRsMatchingKeys` — one (repo, key) tuple, where
-/// `key` is a ticket key (e.g. a Jira key `MAXX-6859`) expected to appear in a
-/// PR's title/body/branch. Lets reconcile recover PR links for task-only
-/// trackers (Jira) whose PR branch doesn't match the session's worktree branch.
+/// Input to `CodeBackend.findPRsMatchingKeys` — one (repo, key) tuple.
+/// `key` is either a Jira ticket key (`MAXX-6859`, matched in title/head) or a
+/// GitHub issue number (`#473`, matched via Closes/Fixes/Resolves in title/body).
+/// Lets reconcile recover PR links when the registered worktree branch does
+/// not match the PR head.
 public struct KeyCandidate: Sendable, Hashable {
     public let repoSlug: String
     public let key: String

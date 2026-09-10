@@ -79,11 +79,11 @@ public protocol CodeBackend: Sendable {
     func findRecentPRsForBranches(_ candidates: [BranchCandidate]) async throws -> [BranchPRMatch]
 
     /// For each `(repoSlug, key)` candidate, search the repo for PRs that
-    /// reference `key` (e.g. a Jira key `MAXX-6859`) in their title/body/branch
-    /// and return the recent matches. Used by reconcile to link PRs for
-    /// task-only trackers (Jira) whose PR branch doesn't match the session's
-    /// worktree branch — branch matching can't find those. The default
-    /// implementation returns `[]` (no key search); GitHub overrides it.
+    /// reference `key` — a Jira key (`MAXX-6859`) in title/head, or a GitHub
+    /// issue number (`#473`) via Closes/Fixes/Resolves in title/body — and
+    /// return the recent matches. Used by reconcile when the PR head does not
+    /// match the session's worktree branch. The default implementation returns
+    /// `[]` (no key search); GitHub overrides it.
     func findPRsMatchingKeys(_ candidates: [KeyCandidate]) async throws -> [KeyPRMatch]
 
     /// Add the `crow:merge` auto-merge label to the PR at `prURL`.
@@ -132,8 +132,8 @@ public protocol CodeBackend: Sendable {
 public extension CodeBackend {
     /// Default: no key-based PR search. Backends that can search PRs by text
     /// (GitHub) override this; others (GitLab today, Corveil stub) inherit the
-    /// no-op so a Jira-key reconcile pass degrades to "no matches" rather than
-    /// forcing every conformer to implement it.
+    /// no-op so a Jira-key / GitHub-issue reconcile pass degrades to "no matches"
+    /// rather than forcing every conformer to implement it.
     func findPRsMatchingKeys(_ candidates: [KeyCandidate]) async throws -> [KeyPRMatch] { [] }
 
     /// Default: no default-branch commit scan. GitHub overrides this; others

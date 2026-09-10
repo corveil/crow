@@ -7,12 +7,13 @@ import CrowProvider
 /// Session ↔ PR link detection and reconciliation, extracted from
 /// `IssueTracker` (CROW-1094). The reactive `applySessionPRLinks` pass attaches
 /// links from the viewer-PR payload; `reconcileMissingPRLinks` queries providers
-/// directly by (repoSlug, branch) or ticket key for sessions still missing a
-/// `.pr` link. Writes links through the shared, injected `JSONStore`
-/// (ADR 0012 / #728) and `appState` via an unowned back-reference. Pure decision
-/// helpers stay `nonisolated static` for unit testing. `public` because the
-/// session-capability predicates `canAddMergeLabel` / `canSetProjectStatus` are
-/// cross-module API (re-exposed under the old `IssueTracker.` spelling).
+/// directly by (repoSlug, branch), Jira ticket key, or GitHub `Closes #N`
+/// (CROW-1221) for sessions still missing a `.pr` link. Writes links through
+/// the shared, injected `JSONStore` (ADR 0012 / #728) and `appState` via an
+/// unowned back-reference. Pure decision helpers stay `nonisolated static` for
+/// unit testing. `public` because the session-capability predicates
+/// `canAddMergeLabel` / `canSetProjectStatus` are cross-module API (re-exposed
+/// under the old `IssueTracker.` spelling).
 @MainActor
 public final class PRLinkReconciler {
     private unowned let owner: IssueTracker
@@ -244,7 +245,9 @@ public final class PRLinkReconciler {
         }
 
         // Jira-tasked sessions: find the PR by the ticket key it references,
-        // since the PR branch won't match the worktree branch. Feeds the same
+        // since the PR branch won't match the worktree branch. GitHub-tasked
+        // sessions: find the PR by `Closes #N` when the registered branch is
+        // missing, empty, or renamed (CROW-1221). Feeds the same
         // `decideReconcileLinks` so a key-found and branch-found PR for one
         // session resolve to a single best pick.
         matches.append(contentsOf: await fetchPRsByKeyForReconcile(candidates: keyCandidates))
@@ -304,11 +307,18 @@ public final class PRLinkReconciler {
         return out
     }
 
-    /// Build key-based reconcile candidates: Jira-tasked sessions missing a PR
-    /// link, whose PR is discoverable by the ticket key (e.g. `MAXX-6859`)
-    /// rather than by branch. Gated on a Jira ticket URL so GitHub/GitLab-tasked
-    /// sessions are untouched (they keep pure branch matching). Runs on
-    /// MainActor; safe to read appState directly.
+    /// Build key-based reconcile candidates for sessions missing a `.pr` link.
+    ///
+    /// - **Jira:** ticket key (`MAXX-6859`) from the browse URL or, for
+    ///   task-only trackers, from the worktree branch. Still needs a worktree
+    ///   to resolve `repoSlug` from the git remote — Jira URLs have no GitHub
+    ///   slug.
+    /// - **GitHub:** issue number (`#473`) from `ticketNumber` / `ticketURL`.
+    ///   `owner/repo` comes from the issue URL when present, so a missing
+    ///   worktree no longer drops the session (CROW-1221). GitLab stays on
+    ///   branch matching.
+    ///
+    /// Runs on MainActor; safe to read appState directly.
     private func buildReconcileKeyCandidates() -> [ReconcileKeyCandidate] {
         var out: [ReconcileKeyCandidate] = []
         for session in appState.sessions {
@@ -319,7 +329,7 @@ public final class PRLinkReconciler {
             guard !links.contains(where: { $0.linkType == .pr }) else { continue }
 
             let wts = appState.worktrees(for: session.id)
-            guard let primaryWt = wts.first(where: { $0.isPrimary }) ?? wts.first else { continue }
+            let primaryWt = wts.first(where: { $0.isPrimary }) ?? wts.first
 
             // Resolve the ticket key: prefer a Jira ticket URL, else derive it
             // from the worktree branch (e.g. `feature/max-monorepo-maxx-7035-…`
@@ -330,39 +340,110 @@ public final class PRLinkReconciler {
             // a lowercased branch can't distinguish a real Jira project ("maxx")
             // from an ordinary word/repo segment ("api"), so a GitHub/GitLab
             // issue branch like `feature/acme-api-197-fix` would yield a bogus
-            // "API-197" key. Those sessions resolve via the branch path instead.
+            // "API-197" key. Those sessions resolve via the GitHub issue-number
+            // path (below) or the branch path.
             let urlKey = session.ticketURL.flatMap {
                 Validation.isJiraSpec($0) ? Validation.jiraKey(from: $0) : nil
             }
             let branchKey = (session.provider?.isTaskOnly == true)
-                ? Validation.ticketKey(fromBranch: primaryWt.branch) : nil
-            guard let key = urlKey ?? branchKey else { continue }
+                ? primaryWt.flatMap { Validation.ticketKey(fromBranch: $0.branch) } : nil
+            if let key = urlKey ?? branchKey {
+                // Jira still needs a worktree: the browse URL has no GitHub slug.
+                guard let primaryWt else { continue }
+                let info = resolveRepoInfo(worktree: primaryWt)
+                guard !info.slug.isEmpty else { continue }
 
-            let info = resolveRepoInfo(worktree: primaryWt)
-            guard !info.slug.isEmpty else { continue }
+                let (provider, gitlabHost) = Self.resolveReconcileProvider(
+                    codeProvider: session.codeProvider,
+                    provider: session.provider,
+                    host: info.host
+                )
+                if provider == .gitlab, gitlabHost == nil { continue }
 
-            let (provider, gitlabHost) = Self.resolveReconcileProvider(
-                codeProvider: session.codeProvider,
-                provider: session.provider,
-                host: info.host
-            )
-            if provider == .gitlab, gitlabHost == nil { continue }
+                out.append(ReconcileKeyCandidate(
+                    sessionID: session.id,
+                    provider: provider,
+                    repoSlug: info.slug,
+                    key: key,
+                    gitlabHost: gitlabHost
+                ))
+                continue
+            }
 
-            out.append(ReconcileKeyCandidate(
+            // GitHub issue-number path — worktree optional when ticketURL
+            // already encodes owner/repo (CROW-1221).
+            let info = primaryWt.map { resolveRepoInfo(worktree: $0) }
+            if let cand = Self.githubIssueKeyCandidate(
                 sessionID: session.id,
-                provider: provider,
-                repoSlug: info.slug,
-                key: key,
-                gitlabHost: gitlabHost
-            ))
+                ticketURL: session.ticketURL,
+                ticketNumber: session.ticketNumber,
+                provider: session.provider,
+                codeProvider: session.codeProvider,
+                worktreeSlug: info?.slug ?? "",
+                worktreeHost: info?.host ?? ""
+            ) {
+                out.append(cand)
+            }
         }
         return out
     }
 
-    /// Resolve PR links for Jira-tasked sessions by searching the code repo for
-    /// the ticket key. GitHub only today (the `CodeBackend` default returns no
-    /// matches for providers without text PR search). Best-effort: a backend
-    /// error skips the cycle rather than dropping links.
+    /// Pure builder for a GitHub-tasked `#<ticketNumber>` reconcile candidate.
+    /// Returns nil for Jira (task-only), GitLab, missing number, or when neither
+    /// the issue URL nor a worktree can supply `owner/repo`. Prefers the slug
+    /// parsed from `ticketURL` so a session with no registered worktree still
+    /// reconciles (CROW-1221 / #1218).
+    nonisolated static func githubIssueKeyCandidate(
+        sessionID: UUID,
+        ticketURL: String?,
+        ticketNumber: Int?,
+        provider: Provider?,
+        codeProvider: Provider?,
+        worktreeSlug: String,
+        worktreeHost: String
+    ) -> ReconcileKeyCandidate? {
+        if provider?.isTaskOnly == true || provider == .gitlab { return nil }
+        if let url = ticketURL, !url.contains("github.com") { return nil }
+
+        guard let number = githubIssueNumber(ticketURL: ticketURL, ticketNumber: ticketNumber) else {
+            return nil
+        }
+
+        let urlSlug = repoSlug(fromTicketURL: ticketURL ?? "")
+        let slug = urlSlug.isEmpty ? worktreeSlug : urlSlug
+        guard !slug.isEmpty else { return nil }
+        let host = urlSlug.isEmpty ? worktreeHost : "github.com"
+
+        let (resolved, gitlabHost) = resolveReconcileProvider(
+            codeProvider: codeProvider, provider: provider, host: host)
+        guard resolved == .github else { return nil }
+
+        return ReconcileKeyCandidate(
+            sessionID: sessionID,
+            provider: .github,
+            repoSlug: slug,
+            key: "#\(number)",
+            gitlabHost: gitlabHost
+        )
+    }
+
+    /// Issue number for GitHub-tasked reconcile: `ticketNumber` when set,
+    /// otherwise the `/issues/<n>` tail of a github.com ticket URL (query and
+    /// fragment stripped). Ignores `/pull/<n>` URLs — those are PRs, not tickets.
+    nonisolated static func githubIssueNumber(ticketURL: String?, ticketNumber: Int?) -> Int? {
+        if let ticketNumber, ticketNumber > 0 { return ticketNumber }
+        guard let url = ticketURL, url.contains("github.com") else { return nil }
+        guard let range = url.range(of: "/issues/", options: .caseInsensitive) else { return nil }
+        let rest = url[range.upperBound...]
+        let digits = rest.prefix { $0.isNumber }
+        guard let n = Int(digits), n > 0 else { return nil }
+        return n
+    }
+
+    /// Resolve PR links by searching the code repo for a ticket key (`MAXX-6859`)
+    /// or GitHub issue number (`#473`). GitHub only today (the `CodeBackend`
+    /// default returns no matches for providers without text PR search).
+    /// Best-effort: a backend error skips the cycle rather than dropping links.
     private func fetchPRsByKeyForReconcile(candidates: [ReconcileKeyCandidate]) async -> [ReconcileBranchMatch] {
         let github = candidates.filter { $0.provider == .github }
         guard !github.isEmpty, let backend = providerManager.codeBackend(for: .github) else { return [] }
@@ -615,6 +696,17 @@ public final class PRLinkReconciler {
     /// URL can't be parsed. Distinct from `extractSlug(fromRemote:)`, which
     /// parses git *remote* URLs (no `/pull/...` suffix).
     nonisolated static func repoSlug(fromPRURL url: String) -> String {
+        repoSlug(fromWebURL: url, stoppingAt: ["pull", "merge_requests", "-"])
+    }
+
+    /// Same as `repoSlug(fromPRURL:)` but also stops at `issues`, so a GitHub
+    /// ticket URL (`https://github.com/owner/repo/issues/473`) yields `owner/repo`
+    /// without needing a worktree remote (CROW-1221).
+    nonisolated static func repoSlug(fromTicketURL url: String) -> String {
+        repoSlug(fromWebURL: url, stoppingAt: ["pull", "merge_requests", "-", "issues"])
+    }
+
+    private nonisolated static func repoSlug(fromWebURL url: String, stoppingAt markers: Set<String>) -> String {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let range = trimmed.range(of: #"^https?://[^/]+/"#, options: .regularExpression) else {
             return ""
@@ -622,7 +714,7 @@ public final class PRLinkReconciler {
         let path = String(trimmed[range.upperBound...])
         var segments: [String] = []
         for segment in path.split(separator: "/").map(String.init) {
-            if segment == "pull" || segment == "merge_requests" || segment == "-" { break }
+            if markers.contains(segment) { break }
             segments.append(segment)
         }
         return segments.joined(separator: "/")
@@ -719,6 +811,34 @@ extension IssueTracker {
 
     nonisolated static func repoSlug(fromPRURL url: String) -> String {
         PRLinkReconciler.repoSlug(fromPRURL: url)
+    }
+
+    nonisolated static func repoSlug(fromTicketURL url: String) -> String {
+        PRLinkReconciler.repoSlug(fromTicketURL: url)
+    }
+
+    nonisolated static func githubIssueKeyCandidate(
+        sessionID: UUID,
+        ticketURL: String?,
+        ticketNumber: Int?,
+        provider: Provider?,
+        codeProvider: Provider?,
+        worktreeSlug: String,
+        worktreeHost: String
+    ) -> ReconcileKeyCandidate? {
+        PRLinkReconciler.githubIssueKeyCandidate(
+            sessionID: sessionID,
+            ticketURL: ticketURL,
+            ticketNumber: ticketNumber,
+            provider: provider,
+            codeProvider: codeProvider,
+            worktreeSlug: worktreeSlug,
+            worktreeHost: worktreeHost
+        )
+    }
+
+    nonisolated static func githubIssueNumber(ticketURL: String?, ticketNumber: Int?) -> Int? {
+        PRLinkReconciler.githubIssueNumber(ticketURL: ticketURL, ticketNumber: ticketNumber)
     }
 
     public nonisolated static func canAddMergeLabel(session: Session, providerManager: ProviderManager) -> Bool {
