@@ -934,6 +934,38 @@ import Testing
     #expect(config.defaults.binaries.isEmpty)
 }
 
+@Test func corveilAutoUpdateDefaultsOffWhenKeyMissing() throws {
+    let json = """
+    {"defaults": {"provider": "github", "cli": "gh", "branchPrefix": "feature/", "excludeDirs": []}}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.defaults.corveilAutoUpdate == false)
+    #expect(config.defaults.corveilVersion == "latest")
+}
+
+@Test func corveilAutoUpdateRoundTrip() throws {
+    let config = AppConfig(
+        defaults: ConfigDefaults(corveilAutoUpdate: true, corveilVersion: "v0.4.32"))
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.defaults.corveilAutoUpdate)
+    #expect(decoded.defaults.corveilVersion == "v0.4.32")
+}
+
+@Test func normalizedCorveilVersionAcceptsLatestAndTags() {
+    #expect(ConfigDefaults.normalizedCorveilVersion("latest") == "latest")
+    #expect(ConfigDefaults.normalizedCorveilVersion("LATEST") == "latest")
+    #expect(ConfigDefaults.normalizedCorveilVersion("v0.4.32") == "v0.4.32")
+    #expect(ConfigDefaults.normalizedCorveilVersion("0.4.32") == "v0.4.32")
+    #expect(ConfigDefaults.normalizedCorveilVersion("v0.4.32-rc.1") == "v0.4.32-rc.1")
+}
+
+@Test func normalizedCorveilVersionRejectsPathLikeAndGarbage() {
+    for bad in ["", "  ", "../escape", "v0.4.32/bin", "corveil", "v", "main"] {
+        #expect(ConfigDefaults.normalizedCorveilVersion(bad) == nil, "expected '\(bad)' to be rejected")
+    }
+}
+
 // MARK: - AI gateway (CROW-402)
 
 @Test func workspaceGatewayRoundTrip() throws {

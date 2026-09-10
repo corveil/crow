@@ -28,7 +28,9 @@ public struct Defaults: ParsableCommand {
         These are the `defaults` block of config.json: the forge provider and \
         CLI used for new workspaces, the branch prefix for new session branches, \
         the repo/label lists that filter the review and ticket boards, and the \
-        binary path overrides.
+        binary path overrides. --corveil-auto-update downloads the host-platform \
+        CLI from corveil/corveil-releases (skipped when binaries[corveil] is a \
+        source-build path).
         """,
         subcommands: [DefaultsGet.self, DefaultsSet.self]
     )
@@ -80,7 +82,10 @@ public struct DefaultsSet: ParsableCommand {
 
         --provider and --cli are stored independently and neither implies the \
         other, matching how GitManager reads them; setting only one warns if the \
-        resulting pair is crossed.
+        resulting pair is crossed. --corveil-auto-update is live: Crow \
+        downloads from corveil/corveil-releases, verifies checksums, and \
+        hot-swaps the symlink; a source-build binaries[corveil] path is never \
+        overwritten.
         """
     )
 
@@ -99,6 +104,16 @@ public struct DefaultsSet: ParsableCommand {
         name: .long, parsing: .singleValue,
         help: "Binary path override as NAME=PATH, e.g. corveil=/opt/corveil/bin/corveil; NAME= removes it (repeatable)")
     var binary: [String] = []
+
+    @Option(
+        name: .customLong("corveil-auto-update"),
+        help: "Download and link the host-platform corveil CLI from corveil/corveil-releases (true or false)")
+    var corveilAutoUpdate: Bool?
+
+    @Option(
+        name: .customLong("corveil-version"),
+        help: "corveil-releases tag to keep linked: 'latest' or a pin like v0.4.32")
+    var corveilVersion: String?
 
     @Option(
         name: .customLong("add-exclude-review-repo"), parsing: .singleValue,
@@ -161,14 +176,15 @@ public struct DefaultsSet: ParsableCommand {
 
     public func validate() throws {
         guard provider != nil || cli != nil || branchPrefix != nil || !binary.isEmpty
-                || hasListEdit else {
+                || hasListEdit || corveilAutoUpdate != nil || corveilVersion != nil else {
             throw ValidationError(
-                "Nothing to set — provide at least one of --provider, --cli, --branch-prefix, --binary, or an --add-/--remove-/--clear- flag for a list.")
+                "Nothing to set — provide at least one of --provider, --cli, --branch-prefix, --binary, --corveil-auto-update, --corveil-version, or an --add-/--remove-/--clear- flag for a list.")
         }
         if let provider { try validateProvider(provider) }
         if let cli { try validateForgeCLI(cli) }
         if let branchPrefix { try validateBranchPrefix(branchPrefix) }
         if !binary.isEmpty { _ = try parseBinaryOverrides(binary) }
+        if let corveilVersion { try validateCorveilVersion(corveilVersion) }
         // Per list, not globally: clearing one list while adding to another is a
         // perfectly good call.
         for edit in listEdits where edit.clear && !(edit.add.isEmpty && edit.remove.isEmpty) {
@@ -196,6 +212,8 @@ public struct DefaultsSet: ParsableCommand {
             params["binaries"] = .object(
                 try parseBinaryOverrides(binary).mapValues { .string($0) })
         }
+        if let corveilAutoUpdate { params["corveil_auto_update"] = .bool(corveilAutoUpdate) }
+        if let corveilVersion { params["corveil_version"] = .string(corveilVersion) }
         for edit in listEdits {
             if !edit.add.isEmpty {
                 params["add_\(edit.field)"] = .array(

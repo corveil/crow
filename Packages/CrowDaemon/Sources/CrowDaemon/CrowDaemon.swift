@@ -466,6 +466,19 @@ public enum CrowDaemon {
         startVersionUpdatePoll(
             service: versionUpdateService, devRoot: options.devRoot, eventHub: eventHub)
 
+        let corveilManagedRoot = JSONStore.defaultDirectory
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("corveil", isDirectory: true)
+        let corveilAutoUpdateService = CorveilAutoUpdateService(
+            devRoot: options.devRoot,
+            managedRoot: corveilManagedRoot,
+            userAgent: "Crow/\(buildInfo.version)",
+            onSkillWarning: { warning in
+                await MainActor.run { appState.corveilSkillInstallWarning = warning }
+            })
+        startCorveilAutoUpdatePoll(
+            service: corveilAutoUpdateService, devRoot: options.devRoot, eventHub: eventHub)
+
         // Delegate any method the daemon's curated router doesn't explicitly own
         // to the app's FULL engine router (hook-event, send, link/ticket ops,
         // resync-jira, get-session, list-worktrees, …). This makes a "missing
@@ -498,6 +511,7 @@ public enum CrowDaemon {
             cockpit: cockpit, tracker: tracker,
             sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler,
             rebuildScorecard: rebuildScorecard, versionUpdateService: versionUpdateService,
+            corveilAutoUpdateService: corveilAutoUpdateService,
             soundLibrary: soundLibrary,
             fallback: engineFallback)
 

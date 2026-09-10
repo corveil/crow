@@ -812,7 +812,7 @@ Echoes the whole defaults block, including `exclude_dirs` and `mirror_claude_mcp
 Change workspace and automation defaults.
 
 ```
-crow defaults set [--provider <provider>] [--cli <cli>] [--branch-prefix <branch-prefix>] [--binary <binary> ...] [--add-exclude-review-repo <add-exclude-review-repo> ...] [--remove-exclude-review-repo <remove-exclude-review-repo> ...] [--clear-exclude-review-repos] [--add-exclude-ticket-repo <add-exclude-ticket-repo> ...] [--remove-exclude-ticket-repo <remove-exclude-ticket-repo> ...] [--clear-exclude-ticket-repos] [--add-ignore-review-label <add-ignore-review-label> ...] [--remove-ignore-review-label <remove-ignore-review-label> ...] [--clear-ignore-review-labels]
+crow defaults set [--provider <provider>] [--cli <cli>] [--branch-prefix <branch-prefix>] [--binary <binary> ...] [--corveil-auto-update <true|false>] [--corveil-version <version>] [--add-exclude-review-repo <add-exclude-review-repo> ...] [--remove-exclude-review-repo <remove-exclude-review-repo> ...] [--clear-exclude-review-repos] [--add-exclude-ticket-repo <add-exclude-ticket-repo> ...] [--remove-exclude-ticket-repo <remove-exclude-ticket-repo> ...] [--clear-exclude-ticket-repos] [--add-ignore-review-label <add-ignore-review-label> ...] [--remove-ignore-review-label <remove-ignore-review-label> ...] [--clear-ignore-review-labels]
 ```
 
 Only the flags you pass change; at least one is required.
@@ -827,6 +827,8 @@ Most of these are live. The provider and CLI are re-read on each repo scan, the 
 | `--cli` | `<cli>` | no | Forge CLI for new workspaces (gh or glab) |
 | `--branch-prefix` | `<branch-prefix>` | no | Prefix for new session branches, e.g. 'feature/' (empty for none) |
 | `--binary` | `<binary>` _(repeatable)_ | no | Binary path override as NAME=PATH, e.g. corveil=/opt/corveil/bin/corveil; NAME= removes it (repeatable) |
+| `--corveil-auto-update` | `true` or `false` | no | Download and link the host-platform corveil CLI from corveil/corveil-releases |
+| `--corveil-version` | `<version>` | no | Tag to keep linked: `latest` or a pin like v0.4.32 |
 | `--add-exclude-review-repo` | `<add-exclude-review-repo>` _(repeatable)_ | no | Repo to hide from the review board; supports one wildcard, e.g. 'owner/*' (repeatable) |
 | `--remove-exclude-review-repo` | `<remove-exclude-review-repo>` _(repeatable)_ | no | Repo to stop hiding from the review board (repeatable) |
 | `--clear-exclude-review-repos` | — | no | Empty the review-board repo exclusions |

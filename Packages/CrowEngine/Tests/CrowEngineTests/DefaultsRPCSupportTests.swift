@@ -274,7 +274,7 @@ struct DefaultsRPCSupportTests {
 
     // MARK: - Response encoding
 
-    @Test func defaultsJSONEchoesAllNineFieldsSnakeCased() throws {
+    @Test func defaultsJSONEchoesAllElevenFieldsSnakeCased() throws {
         var defaults = ConfigDefaults()
         defaults.excludeReviewRepos = ["acme/docs"]
         defaults.binaries = ["corveil": "/opt/corveil"]
@@ -290,6 +290,8 @@ struct DefaultsRPCSupportTests {
             "ignore_review_labels": .array([]),
             "binaries": .object(["corveil": .string("/opt/corveil")]),
             "mirror_claude_mcp_to_codex": .bool(true),
+            "corveil_auto_update": .bool(false),
+            "corveil_version": .string("latest"),
         ]))
     }
 
@@ -339,5 +341,14 @@ struct DefaultsRPCSupportTests {
         #expect(DefaultsRPC.providerCLIMismatch(provider: "github", cli: "glab"))
         #expect(!DefaultsRPC.providerCLIMismatch(provider: "github", cli: "gh"))
         #expect(!DefaultsRPC.providerCLIMismatch(provider: "gitlab", cli: "glab"))
+    }
+
+    @Test func patchCorveilVersionNormalizesLatestAndTags() throws {
+        #expect(try DefaultsRPC.patchCorveilVersion(["corveil_version": .string("latest")]) == "latest")
+        #expect(try DefaultsRPC.patchCorveilVersion(["corveil_version": .string("0.4.32")]) == "v0.4.32")
+        #expect(try DefaultsRPC.patchCorveilVersion([:]) == nil)
+        #expect(throws: RPCError.self) {
+            _ = try DefaultsRPC.patchCorveilVersion(["corveil_version": .string("../escape")])
+        }
     }
 }

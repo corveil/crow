@@ -43,6 +43,7 @@ func makeCommandRouter(
     // is off (there'd be no DB to rebuild from).
     rebuildScorecard: (@MainActor @Sendable () async -> Void)? = nil,
     versionUpdateService: VersionUpdateService? = nil,
+    corveilAutoUpdateService: CorveilAutoUpdateService? = nil,
     // The Corveil org-list cache (CROW-1121), shared between the connection verbs
     // (so `corveil-disconnect` can invalidate it) and the provisioning verbs.
     // Injectable so a test can observe the invalidation; one per router otherwise.
@@ -79,7 +80,9 @@ func makeCommandRouter(
     ) { existing, _ in existing }
     handlers.merge(
         makeSettingsHandlers(
-            versionUpdateService: versionUpdateService, devRoot: devRoot,
+            versionUpdateService: versionUpdateService,
+            corveilAutoUpdateService: corveilAutoUpdateService,
+            devRoot: devRoot,
             soundLibrary: soundLibrary)
     ) { existing, _ in existing }
     handlers.merge(makeWorkspaceHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }

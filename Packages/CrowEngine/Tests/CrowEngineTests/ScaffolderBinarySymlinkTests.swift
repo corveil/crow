@@ -152,6 +152,30 @@ struct ScaffolderBinarySymlinkTests {
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: corveilLink) == secondPath)
     }
 
+    @Test func replaceBinarySymlinkDoesNotReapOtherLinks() throws {
+        let devRoot = try Self.makeTempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let toolsDir = (devRoot as NSString).appendingPathComponent("_tools")
+        try FileManager.default.createDirectory(atPath: toolsDir, withIntermediateDirectories: true)
+        let corveilPath = try Self.makeExecutable(in: toolsDir, name: "corveil")
+        let codexPath = try Self.makeExecutable(in: toolsDir, name: "codex")
+        let updated = try Self.makeExecutable(in: toolsDir, name: "corveil-new")
+
+        let scaffolder = Scaffolder(devRoot: devRoot)
+        _ = try scaffolder.scaffold(
+            workspaceNames: [],
+            binaryOverrides: ["corveil": corveilPath, "codex": codexPath])
+
+        #expect(scaffolder.replaceBinarySymlink(name: "corveil", target: updated))
+
+        let binDir = (devRoot as NSString).appendingPathComponent(".claude/bin")
+        #expect(try FileManager.default.destinationOfSymbolicLink(
+            atPath: (binDir as NSString).appendingPathComponent("corveil")) == updated)
+        #expect(try FileManager.default.destinationOfSymbolicLink(
+            atPath: (binDir as NSString).appendingPathComponent("codex")) == codexPath)
+    }
+
     @Test func crowCLISymlinkAlwaysMaterialized() throws {
         let devRoot = try Self.makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }

@@ -217,6 +217,44 @@ public struct Scaffolder {
         return ScaffoldResult(warning: warning)
     }
 
+    /// Point `{devRoot}/.claude/bin/<name>` at `target` without reaping other
+    /// links (CROW-1210). `installBinarySymlinks` would delete every key not in
+    /// the map it is given, so a one-key hot-swap after an auto-download must
+    /// not go through that loop.
+    ///
+    /// Returns `false` when the target is missing/non-executable or the link
+    /// could not be created; callers keep the last-good binary in that case.
+    @discardableResult
+    public func replaceBinarySymlink(name: String, target: String) -> Bool {
+        let fm = FileManager.default
+        let claudeDir = (devRoot as NSString).appendingPathComponent(".claude")
+        let binDir = (claudeDir as NSString).appendingPathComponent("bin")
+        do {
+            try fm.createDirectory(atPath: binDir, withIntermediateDirectories: true)
+        } catch {
+            CrowLog.info("[Scaffolder] could not create bin dir \(binDir): \(error.localizedDescription)")
+            return false
+        }
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let link = (binDir as NSString).appendingPathComponent(name)
+        guard !trimmed.isEmpty, fm.isExecutableFile(atPath: trimmed) else {
+            CrowLog.info("[Scaffolder] replaceBinarySymlink \(name) skipped — not executable: \(trimmed)")
+            return false
+        }
+        let tmp = link + ".tmp"
+        try? fm.removeItem(atPath: tmp)
+        do {
+            try fm.createSymbolicLink(atPath: tmp, withDestinationPath: trimmed)
+            try? fm.removeItem(atPath: link)
+            try fm.moveItem(atPath: tmp, toPath: link)
+            return true
+        } catch {
+            try? fm.removeItem(atPath: tmp)
+            CrowLog.info("[Scaffolder] replaceBinarySymlink \(name) failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// Materialize `{devRoot}/.claude/bin/<name>` symlinks for every
     /// `defaults.binaries.<name>` whose target is an executable file
     /// (CROW-487). Idempotent — re-run on every Scaffolder pass:
