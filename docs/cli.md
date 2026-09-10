@@ -205,7 +205,7 @@ crow add-worktree --session <session> --repo <repo> --path <path> --branch <bran
 | `--path` | `<path>` | yes | Worktree path |
 | `--branch` | `<branch>` | yes | Branch name |
 | `--repo-path` | `<repo-path>` | no | Main repo path (for git commands) |
-| `--primary` | — | no | Mark as primary worktree |
+| `--primary` | — | no | Mark as primary worktree. The first worktree of a session is primary even without this flag. |
 
 ---
 

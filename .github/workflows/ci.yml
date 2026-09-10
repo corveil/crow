@@ -143,7 +143,7 @@ jobs:
       - name: Workspace custom-instructions skill guard (#683)
         run: bash scripts/check-workspace-custom-instructions.sh
 
-      - name: setup.sh set-ticket failure (CROW-1166)
+      - name: setup.sh set-ticket / worktree launch gate (CROW-1166 / CROW-1218)
         run: bash skills/crow-workspace/setup_session_test.sh
 
       - name: NSLog ban (CROW-874)

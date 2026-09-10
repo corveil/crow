@@ -641,6 +641,19 @@ public final class AppState {
         worktrees[sessionID]?.first(where: { $0.isPrimary }) ?? worktrees[sessionID]?.first
     }
 
+    /// Whether this session may have its coding agent launched (CROW-1218).
+    ///
+    /// `.work` sessions (including explore) need at least one registered
+    /// worktree with a non-empty branch. PR auto-link matches that branch, so a
+    /// git checkout Crow does not know about is not enough. Other kinds skip
+    /// this: the Manager has no worktree by design; review and job register a
+    /// primary at create.
+    public func isReadyToLaunchAgent(_ session: Session) -> Bool {
+        guard session.kind == .work else { return true }
+        guard let wt = primaryWorktree(for: session.id) else { return false }
+        return !wt.branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     // MARK: - Ticket Board Helpers
 
     /// Issues after applying repo exclusion filter.

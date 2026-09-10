@@ -280,16 +280,25 @@ func makeSessionHandlers(
                     throw DaemonRPCError.applicationError("git worktree add failed: \(error.localizedDescription)")
                 }
             }
-            let worktree = SessionWorktree(
-                sessionID: sessionID, repoName: repo, repoPath: repoPath, worktreePath: path,
-                branch: branch, isPrimary: params["primary"]?.boolValue ?? false)
+            let requestedPrimary = params["primary"]?.boolValue ?? false
             return await MainActor.run {
+                // First worktree of a session is primary even without `--primary`
+                // (CROW-1218). PR auto-link and launch both key off the primary
+                // (falling back to the first row); leaving the first unmarked
+                // meant a Manager that forgot the flag still stored a branch
+                // Crow would not treat as the session's.
+                let isPrimary = requestedPrimary
+                    || (appState.worktrees[sessionID] ?? []).isEmpty
+                let worktree = SessionWorktree(
+                    sessionID: sessionID, repoName: repo, repoPath: repoPath, worktreePath: path,
+                    branch: branch, isPrimary: isPrimary)
                 appState.worktrees[sessionID, default: []].append(worktree)
                 store.mutate { $0.worktrees.append(worktree) }
                 return [
                     "worktree_id": .string(worktree.id.uuidString),
                     "session_id": .string(idStr),
                     "path": .string(path),
+                    "primary": .bool(isPrimary),
                 ]
             }
         },

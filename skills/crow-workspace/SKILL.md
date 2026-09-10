@@ -673,7 +673,7 @@ GITLAB_HOST=gitlab.example.com glab mr view {number} --repo {org/repo} --comment
 If `setup.sh` returns a JSON error (`"status": "error"`):
 1. Read the `step` and `message` fields to understand what failed
 2. If the error indicates a usage problem (wrong arg format, missing param), fix the invocation and retry
-3. If `partial.session_id` is present, the session was created before the failure — you can pass `--session-id` to retry without recreating the session
+3. If `partial.session_id` is present, the session was created before the failure — you can pass `--session-id` to retry without recreating the session. A retry must still run `add-worktree` successfully before launch (CROW-1218); do not skip to `new-terminal`.
 4. If the error is in `git_worktree_add`, the branch may already exist — try with a different slug
 5. Append a one-line correction to `{devRoot}/CLAUDE.md` under "## Known Issues / Corrections"
 
@@ -684,7 +684,8 @@ If `setup.sh` returns a JSON error (`"status": "error"`):
 | `git_worktree_add` — worktree creation failed | Branch may exist; script auto-retries after cleanup |
 | `new_session` — crow new-session failed | Crow app may not be running. Inform user. |
 | `set_ticket` — crow set-ticket failed | Ticket metadata is required. Read `message` for the RPC error; retry with `--session-id` from `partial.session_id`. A ticket link is not a substitute — do not continue. |
-| `add_worktree` — crow add-worktree failed | Use full UUID from session, check paths |
+| `add_worktree` — crow add-worktree failed | Worktree registration is required for PR auto-link. Read `message` for the RPC error; retry with `--session-id`. A git checkout is not a substitute — do not continue into `new-terminal` / launch. |
+| `launch_agent` — no registered worktree | `crow list-worktrees` was empty. Call `crow add-worktree` (the first worktree is primary even without `--primary`) and re-run setup with `--session-id`. Do not launch. |
 | `new_terminal` — crow new-terminal failed / could not create window | Session may not exist (check session_id), or tmux couldn't spawn a window under load |
 | `write_prompt` — prompt file not found | Verify prompt was written before calling setup.sh |
 
@@ -711,6 +712,8 @@ crow edit-link --session <uuid> --id <link-uuid> | --url "..." [--label "..."] [
 ```
 
 All commands return JSON. `$CROW_SESSION_ID` is set in every Crow-launched agent terminal (and in `.claude/settings.local.json` `env`); prefer it over copying a UUID. `add-link --type pr` is idempotent. Prefer the Unix socket at `crow.sock`; when that connect fails (Cursor sandbox), `crow` retries over loopback `POST /rpc`. `gh`/`glab`/`git worktree` still need `dangerouslyDisableSandbox: true` for TLS / paths.
+
+**Do not assemble a work session with raw CLI and skip `add-worktree`.** Prefer `setup.sh`. If you must hand-roll, `crow add-worktree` must succeed (the first worktree is primary even without `--primary`) and `crow list-worktrees` must be non-empty before `crow new-terminal --managed --command`. A git checkout Crow does not know about will never auto-link the PR.
 
 ## Examples
 
