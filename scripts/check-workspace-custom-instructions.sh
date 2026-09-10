@@ -169,6 +169,7 @@ for f in skills/crow-workspace/setup.sh Resources/crow-workspace-setup.sh.templa
         fail=1
     fi
 done
+# shellcheck disable=SC2016  # backticks in the needles are literal, not command substitution
 for f in skills/crow-workspace/SKILL.md Resources/crow-workspace-SKILL.md.template; do
     require "$f" \
         'do not continue into `new-terminal`' \
