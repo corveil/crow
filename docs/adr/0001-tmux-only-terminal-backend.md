@@ -46,8 +46,15 @@ A single-instance lock at `$TMPDIR/crow-instance.lock` prevents two Crow process
 - PRs: [#229](https://github.com/corveil/crow/pull/229) (feature flag), [#302](https://github.com/corveil/crow/pull/302) (default backend), [#334](https://github.com/corveil/crow/pull/334) (remove legacy Ghostty path), [#324](https://github.com/corveil/crow/pull/324) (Manager on tmux), [#353](https://github.com/corveil/crow/pull/353) (persist across restarts), [#377](https://github.com/corveil/crow/pull/377) (restart-server menu)
 - Research: [`docs/terminal-runtime-research.md`](../terminal-runtime-research.md)
 - Code:
-  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxBackend.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxBackend.swift` (facade + shared state; CROW-1222)
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxServerLifecycle.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxWindowLifecycle.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxInput.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxScrollbackHealth.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxCockpitReaper.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxReadinessWatch.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxManagerExitMonitor.swift`
   - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxController.swift`
   - `Packages/CrowTerminal/Sources/CrowTerminal/SentinelWaiter.swift`
-  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxOrphanReaper.swift`
+  - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxOrphanReaper.swift` (legacy PID-socket reaper, not cockpit-window reaping)
   - `Sources/Crow/App/TmuxDiscovery.swift`
