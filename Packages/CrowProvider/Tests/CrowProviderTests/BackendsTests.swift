@@ -1332,6 +1332,85 @@ final class BackendsTests: XCTestCase {
         XCTAssertTrue(matches.isEmpty)
     }
 
+    func testGitHubIssueKeyShape() {
+        XCTAssertTrue(GitHubCodeBackend.isGitHubIssueKey("#473"))
+        XCTAssertTrue(GitHubCodeBackend.isGitHubIssueKey("#1"))
+        XCTAssertFalse(GitHubCodeBackend.isGitHubIssueKey("MAXX-6859"))
+        XCTAssertFalse(GitHubCodeBackend.isGitHubIssueKey("473"))
+        XCTAssertFalse(GitHubCodeBackend.isGitHubIssueKey("#"))
+        XCTAssertFalse(GitHubCodeBackend.isGitHubIssueKey("#0"))
+        XCTAssertFalse(GitHubCodeBackend.isGitHubIssueKey("#47a"))
+    }
+
+    func testGitHubCodeBackendFindPRsMatchingIssueNumberClosesInBody() async throws {
+        // CROW-1221: a GitHub-tasked session finds the PR by `Closes #473` in
+        // the body even when the head branch was renamed. Jira's title/head
+        // filter would have dropped this.
+        let fake = FakeShellRunner()
+        let json = """
+        [
+          {"number":478,"url":"https://github.com/corveil/shell-crm/pull/478","state":"OPEN","updatedAt":"2026-01-02T00:00:00Z","title":"feat: reconcile","headRefName":"feature/renamed-head","body":"Closes #473"},
+          {"number":479,"url":"https://github.com/corveil/shell-crm/pull/479","state":"OPEN","updatedAt":"2026-01-03T00:00:00Z","title":"unrelated","headRefName":"feature/other","body":"related to #473"},
+          {"number":480,"url":"https://github.com/corveil/shell-crm/pull/480","state":"MERGED","updatedAt":"2026-01-01T00:00:00Z","title":"Fixes #4730 overflow","headRefName":"feature/overflow","body":""},
+          {"number":481,"url":"https://github.com/corveil/shell-crm/pull/481","state":"OPEN","updatedAt":"2026-01-04T00:00:00Z","title":"Fixes #473 keyboard","headRefName":"feature/kb","body":""}
+        ]
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let matches = try await backend.findPRsMatchingKeys([
+            KeyCandidate(repoSlug: "corveil/shell-crm", key: "#473")
+        ])
+        XCTAssertEqual(Set(matches.map(\.number)), [478, 481])
+        let args = fake.calls[0].args
+        XCTAssertEqual(Array(args.prefix(3)), ["gh", "pr", "list"])
+        XCTAssertTrue(args.contains("#473 in:title,body"))
+        XCTAssertTrue(args.contains("corveil/shell-crm"))
+    }
+
+    func testParseGitHubIssuePRMatchesHonorsClosingKeywords() {
+        let candidate = KeyCandidate(repoSlug: "org/repo", key: "#42")
+        func json(_ n: Int, title: String, body: String) -> String {
+            """
+            [{"number":\(n),"url":"https://github.com/org/repo/pull/\(n)","state":"OPEN","updatedAt":"2026-01-01T00:00:00Z","title":"\(title)","headRefName":"x","body":"\(body)"}]
+            """
+        }
+
+        XCTAssertEqual(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(1, title: "n", body: "Closes #42"), candidate: candidate
+            ).map(\.number), [1])
+        XCTAssertEqual(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(2, title: "n", body: "Fixes: #42"), candidate: candidate
+            ).map(\.number), [2])
+        XCTAssertEqual(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(3, title: "n", body: "Resolved #42"), candidate: candidate
+            ).map(\.number), [3])
+        XCTAssertEqual(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(4, title: "n", body: "Closes https://github.com/org/repo/issues/42"),
+                candidate: candidate
+            ).map(\.number), [4])
+        XCTAssertEqual(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(5, title: "n", body: "Fixes org/repo#42"), candidate: candidate
+            ).map(\.number), [5])
+        XCTAssertTrue(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(6, title: "n", body: "related to #42"), candidate: candidate
+            ).isEmpty)
+        XCTAssertTrue(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(7, title: "n", body: "Closes #41"), candidate: candidate
+            ).isEmpty)
+        XCTAssertTrue(
+            GitHubCodeBackend.parseGitHubIssuePRMatches(
+                json(8, title: "n", body: "Closes https://github.com/other/repo/issues/42"),
+                candidate: candidate
+            ).isEmpty)
+    }
+
     // MARK: - GitLab backends
 
     func testGitLabTaskBackendDeclaresNoCapabilities() {

@@ -333,10 +333,11 @@ public struct GitHubCodeBackend: CodeBackend {
         return Self.parseRecentPRsResponse(output, parsed: parsed)
     }
 
-    /// Search each repo for PRs whose title/body references `key` (e.g. a Jira
-    /// key like `MAXX-6859`). One `gh pr list --search` call per candidate
-    /// (the candidate set is small — only Jira-tasked sessions missing a PR
-    /// link). Best-effort per repo: a failing repo is skipped, not fatal.
+    /// Search each repo for PRs whose title/body references `key`. `key` is
+    /// either a Jira ticket key (`MAXX-6859`) or a GitHub issue number (`#473`).
+    /// One `gh pr list --search` call per candidate (the set is small — sessions
+    /// missing a PR link). Best-effort per repo: a failing repo is skipped, not
+    /// fatal.
     public func findPRsMatchingKeys(_ candidates: [KeyCandidate]) async throws -> [KeyPRMatch] {
         var out: [KeyPRMatch] = []
         for c in candidates {
@@ -355,9 +356,22 @@ public struct GitHubCodeBackend: CodeBackend {
             } catch {
                 continue
             }
-            out.append(contentsOf: Self.parseKeyPRMatches(output, candidate: c))
+            if Self.isGitHubIssueKey(c.key) {
+                out.append(contentsOf: Self.parseGitHubIssuePRMatches(output, candidate: c))
+            } else {
+                out.append(contentsOf: Self.parseKeyPRMatches(output, candidate: c))
+            }
         }
         return out
+    }
+
+    /// A GitHub issue-number key is `#` plus digits (`#473`). Distinct from a
+    /// Jira key (`MAXX-6859`) so the two post-filters cannot be confused.
+    static func isGitHubIssueKey(_ key: String) -> Bool {
+        guard key.first == "#" else { return false }
+        let digits = key.dropFirst()
+        guard !digits.isEmpty, digits.allSatisfy(\.isNumber), let n = Int(digits) else { return false }
+        return n > 0
     }
 
     /// Parse `gh pr list --json …` output into `KeyPRMatch`es. Post-filters to
@@ -384,6 +398,53 @@ public struct GitHubCodeBackend: CodeBackend {
             ))
         }
         return matches
+    }
+
+    /// Parse `gh pr list --json …` for a GitHub issue-number candidate (`#473`).
+    /// Unlike the Jira-key filter, a match in the **body** is the whole point:
+    /// Crow's workspace skill writes `Closes #N` there. Require a GitHub closing
+    /// keyword (`close[sd]?` / `fix(e[sd])?` / `resolve[sd]?`) so a passing
+    /// "related to #473" does not attach a phantom PR (#520 analog, CROW-1221).
+    static func parseGitHubIssuePRMatches(_ output: String, candidate: KeyCandidate) -> [KeyPRMatch] {
+        guard let issueNumber = Int(candidate.key.dropFirst()), issueNumber > 0,
+              let data = output.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        var matches: [KeyPRMatch] = []
+        for node in arr {
+            guard let number = node["number"] as? Int,
+                  let url = node["url"] as? String,
+                  let state = node["state"] as? String else { continue }
+            let title = node["title"] as? String ?? ""
+            let body = node["body"] as? String ?? ""
+            guard prReferencesGitHubIssue(
+                title: title, body: body, repoSlug: candidate.repoSlug, number: issueNumber
+            ) else { continue }
+            let updatedAt = IssueDate.parse(node["updatedAt"] as? String)
+            matches.append(KeyPRMatch(
+                candidate: candidate, number: number, url: url, state: state, updatedAt: updatedAt
+            ))
+        }
+        return matches
+    }
+
+    /// Whether `title`/`body` reference GitHub issue `number` with a closing
+    /// keyword GitHub itself honors: close/closes/closed, fix/fixes/fixed,
+    /// resolve/resolves/resolved, optional colon, then `#N`, `owner/repo#N`,
+    /// or `https://github.com/owner/repo/issues/N`. Bare `#N` without a keyword
+    /// is not enough — that is how "related to #473" attached the wrong PR.
+    static func prReferencesGitHubIssue(
+        title: String, body: String, repoSlug: String, number: Int
+    ) -> Bool {
+        let n = String(number)
+        let escapedSlug = NSRegularExpression.escapedPattern(for: repoSlug)
+        let keyword = #"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*"#
+        let haystack = title + "\n" + body
+        let patterns = [
+            keyword + "#\(n)\\b",
+            keyword + "https?://github\\.com/\(escapedSlug)/issues/\(n)\\b",
+            keyword + "\(escapedSlug)#\(n)\\b",
+        ]
+        return patterns.contains { haystack.range(of: $0, options: .regularExpression) != nil }
     }
 
     // MARK: - enableAutoMerge / updateBranch
