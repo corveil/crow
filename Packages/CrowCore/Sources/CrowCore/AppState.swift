@@ -393,6 +393,13 @@ public final class AppState {
         _sessionState.removeValue(forKey: sessionID)
     }
 
+    /// Reset live hook signals for a session whose agent pane was torn down
+    /// and relaunched. No-op when the session never had hook state (do not
+    /// instantiate an empty wrapper just to clear it).
+    public func resetHookStateForAgentRelaunch(sessionID: UUID) {
+        existingHookState(for: sessionID)?.resetForAgentRelaunch()
+    }
+
     /// Snapshot every session's color-driving hook state for persistence (#367).
     public func allHookStateSnapshots() -> [UUID: PersistedHookState] {
         _sessionState.mapValues { $0.persistedSnapshot }
@@ -895,6 +902,18 @@ public final class SessionHookState {
     /// graded waste.
     public func noteCompactionEvent(_ eventName: String) {
         if eventName == Self.compactionEventName { compactionCount += 1 }
+    }
+
+    /// Drop live agent signals so a relaunched pane cannot look "already
+    /// announced" from the previous process's SessionStart (CROW-1233).
+    /// Analytics / compaction counts stay — those are session-lifetime, not
+    /// this TUI instance. Callers: `restartManager`, `recreateTerminalSurface`.
+    public func resetForAgentRelaunch() {
+        activityState = .idle
+        pendingNotification = nil
+        lastToolActivity = nil
+        hookEvents = []
+        lastTopLevelStopAt = nil
     }
 }
 

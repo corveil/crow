@@ -30,3 +30,37 @@ import Testing
     #expect(event.eventName == "Notification")
     #expect(event.summary == "Task complete")
 }
+
+@Test @MainActor func resetForAgentRelaunchDropsLiveSignalsAndKeepsAnalytics() {
+    let sessionID = UUID()
+    let state = SessionHookState()
+    state.activityState = .working
+    state.pendingNotification = HookNotification(message: "n", notificationType: "permission")
+    state.hookEvents = [
+        HookEvent(sessionID: sessionID, eventName: "SessionStart", summary: "up"),
+        HookEvent(sessionID: sessionID, eventName: "Stop", summary: "done"),
+    ]
+    state.lastTopLevelStopAt = Date()
+    state.compactionCount = 3
+    state.resetForAgentRelaunch()
+    #expect(state.hookEvents.isEmpty)
+    #expect(state.activityState == .idle)
+    #expect(state.pendingNotification == nil)
+    #expect(state.lastToolActivity == nil)
+    #expect(state.lastTopLevelStopAt == nil)
+    #expect(state.compactionCount == 3)
+}
+
+@Test @MainActor func resetHookStateForAgentRelaunchIsANoOpWhenEmpty() {
+    let app = AppState()
+    let sid = UUID()
+    app.resetHookStateForAgentRelaunch(sessionID: sid)
+    #expect(app.existingHookState(for: sid) == nil)
+
+    let state = app.hookState(for: sid)
+    state.activityState = .waiting
+    state.hookEvents = [HookEvent(sessionID: sid, eventName: "SessionStart", summary: "up")]
+    app.resetHookStateForAgentRelaunch(sessionID: sid)
+    #expect(state.activityState == .idle)
+    #expect(state.hookEvents.isEmpty)
+}

@@ -195,7 +195,7 @@ crow job duplicate --id <job-uuid>              → {"job":{...}}   the copy sta
 
 ### Todo Commands
 
-Durable pre-ticket ideas (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. Lives in the shared `JSONStore` (not `config.json`) and is **not** reaped by session cleanup.
+Durable Scratch items (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. Lives in the shared `JSONStore` (not `config.json`) and is **not** reaped by session cleanup.
 
 ```
 crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."]

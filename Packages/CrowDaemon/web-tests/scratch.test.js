@@ -9,7 +9,7 @@ const epilogue = `
   set selectedBoard(v){ selectedBoard = v; },
   set rpc(v){ rpc = v; },
   renderBoard(){ return renderBoard(); },
-  scratchCard(){ return scratchCard(); },
+  sidebarLeftStack(){ return sidebarLeftStack(); },
   scratchOpenCount(){ return scratchOpenCount(); },
 };
 `;
@@ -63,7 +63,7 @@ T.renderBoard();
 const board = window.document.getElementById('board');
 check('board title', board.textContent.includes('Scratch'));
 check('capture form', !!board.querySelector('.scratch-capture'));
-check('idea text', board.textContent.includes('native scratch list'));
+check('item text', board.textContent.includes('native scratch list'));
 check('state chip', board.textContent.includes('captured'));
 check('Explore action', board.textContent.includes('Explore'));
 check('Ticket action', board.textContent.includes('Ticket'));
@@ -89,16 +89,26 @@ check('Work enabled once a ticket exists', ticketedWork && !ticketedWork.disable
 T.boardData.scratch = { todos: [item] };
 T.renderBoard();
 
-const card = T.scratchCard();
-check('sidebar card label', card.textContent.includes('Scratch'));
+const stack = T.sidebarLeftStack();
+const pills = [...stack.querySelectorAll('.nav-pill .pill-label')].map((n) => n.textContent);
+check('Scratch is a nav pill', pills.indexOf('Scratch') !== -1);
+check('Scratch sits after Scorecard', pills.indexOf('Scorecard') < pills.indexOf('Scratch'));
+check('Scratch is not a Tickets-style card', !stack.querySelector('.scratch-card'));
 check('open count', T.scratchOpenCount() === 1);
+const scratchPill = [...stack.querySelectorAll('.nav-pill')].find((p) => p.querySelector('.pill-label')?.textContent === 'Scratch');
+check('open-count badge on the pill', scratchPill && scratchPill.textContent.includes('1'));
 
 item.state = 'done';
 T.boardData.scratch = { todos: [item] };
 check('done items are not open', T.scratchOpenCount() === 0);
 
 T.renderBoard();
-check('hides done by default', !board.textContent.includes('native scratch list') || board.textContent.includes('No open ideas'));
+check('hides done by default', !board.textContent.includes('native scratch list') || board.textContent.includes('Nothing open'));
+check('empty state does not say idea', !board.textContent.toLowerCase().includes('idea'));
+T.boardData.scratch = { todos: [] };
+T.renderBoard();
+check('blank-board copy does not say idea', !board.textContent.toLowerCase().includes('idea'));
+check('capture placeholder', board.querySelector('.scratch-input')?.placeholder === 'Capture to Scratch…');
 
 if (failed) { console.log('\n' + failed + ' failed'); process.exit(1); }
 console.log('\nscratch board ok');

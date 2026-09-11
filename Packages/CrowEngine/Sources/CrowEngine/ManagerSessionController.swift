@@ -139,6 +139,10 @@ final class ManagerSessionController {
         }
 
         appState.managerProcessExited = false
+        // The pane is gone; drop the previous process's SessionStart so
+        // sendToManager cannot treat stale hookEvents as "composer ready"
+        // (CROW-1233 review).
+        appState.resetHookStateForAgentRelaunch(sessionID: managerID)
         CrowLog.info("[CrowTelemetry manager:restart]")
 
         // Session row still exists, so this only recreates the terminal.

@@ -366,7 +366,7 @@ public enum MCPToolCatalog {
         name: "list_todos",
         title: "List Crow Scratch items",
         description: """
-            Pre-ticket ideas captured in Crow Scratch. Filter by state or tag. \
+            Items captured in Crow Scratch. Filter by state or tag. \
             Each row includes its provenance trail (explore session, filed ticket, PR).
             """,
         inputSchema: .object([
@@ -431,7 +431,7 @@ public enum MCPToolCatalog {
             }
             guard UUID(uuidString: todoID) != nil else {
                 throw MCPToolInputError(
-                    "todo_id must be a UUID (got \"\(todoID)\") — use the id from list_todos, not the idea text")
+                    "todo_id must be a UUID (got \"\(todoID)\") — use the id from list_todos, not the item text")
             }
             let result = try await invoke("todo-get", ["todo_id": .string(todoID)])
             return .object(result)

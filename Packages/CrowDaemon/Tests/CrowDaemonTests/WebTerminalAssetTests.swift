@@ -628,6 +628,23 @@ import Testing
             "the relocated Select toggle needs its .nav-select styles")
     }
 
+    /// CROW-1233: Scratch is a fourth nav pill on the Grid/Reviews/Scorecard
+    /// row, not a Tickets-style card stacked under Tickets.
+    @Test func scratchIsANavPillNotACardUnderTickets() throws {
+        let js = try Self.webClientJS()
+        let stack = try Self.stripComments(String(Self.functionBody("sidebarLeftStack", in: js)))
+        #expect(
+            stack.contains("scratchPill") && !stack.contains("scratchCard"),
+            "sidebarLeftStack must render Scratch via scratchPill, not a second tickets-card")
+        #expect(
+            try Self.functionBody("scratchPill", in: js).contains("'Scratch'"),
+            "scratchPill must label the pill Scratch")
+        let css = try Self.webAsset("app.css")
+        #expect(
+            !css.contains(".scratch-card") && !css.contains(".scratch-sub"),
+            "the Scratch-as-card CSS is dead once Scratch is a nav pill")
+    }
+
     /// CROW-917/922: layout decisions with no other pin, verified to regress silently
     /// (reverting any leaves every suite green). CROW-922 made the right column's icon
     /// buttons natural-size (`flex: 0 0 auto`) with a `min-height` floor above the WCAG

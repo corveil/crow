@@ -41,6 +41,7 @@ const RPC_TIMEOUTS_MS = {
   'list-tickets': 60000,
   'list-reviews': 60000,
   'todo-explore': 90000,
+  'todo-talk': 90000,
   'todo-ticket': 60000,
   'todo-work': 60000,
   'get-state': 60000,

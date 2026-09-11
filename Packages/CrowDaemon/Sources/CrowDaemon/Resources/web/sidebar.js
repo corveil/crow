@@ -455,23 +455,15 @@ async function bulkDeleteSelected() {
   if (failed) alertModal(failed + ' session(s) could not be deleted.');
 }
 
-// Tickets summary card: title + refresh + 5 status mini-counts. Click opens the
-// Ticket Board (TicketBoardSidebarRow).
-function scratchCard() {
-  const card = el('div', 'tickets-card scratch-card' + (selectedBoard === 'scratch' ? ' selected' : ''));
-  card.onclick = () => selectBoard('scratch');
-  const head = el('div', 'tickets-head');
-  head.appendChild(el('span', 'tickets-title', 'Scratch'));
-  head.appendChild(el('span', 'scratch-head-spacer'));
+function scratchPill() {
+  const pill = navPill('Scratch', selectedBoard === 'scratch', () => selectBoard('scratch'));
   const count = scratchOpenCount();
   if (count) {
-    const badge = el('span', 'scratch-count', String(count));
-    badge.title = count + ' open idea' + (count === 1 ? '' : 's');
-    head.appendChild(badge);
+    const badge = el('span', 'pill-badge', String(count));
+    badge.title = count + ' open item' + (count === 1 ? '' : 's');
+    pill.appendChild(badge);
   }
-  card.appendChild(head);
-  card.appendChild(el('div', 'scratch-sub', 'Pre-ticket ideas'));
-  return card;
+  return pill;
 }
 
 function scratchOpenCount() {
@@ -479,6 +471,8 @@ function scratchOpenCount() {
   return todos.filter((t) => t.state !== 'done' && t.state !== 'dropped').length;
 }
 
+// Tickets summary card: title + refresh + 5 status mini-counts. Click opens the
+// Ticket Board (TicketBoardSidebarRow).
 function ticketsCard() {
   const card = el('div', 'tickets-card' + (selectedBoard === 'tickets' ? ' selected' : ''));
   card.onclick = () => selectBoard('tickets');
@@ -656,14 +650,14 @@ function sidebarIconColumn() {
   return col;
 }
 
-// Left sidebar-top stack (CROW-917): the Tickets card over two nav-pill rows —
-// row 1 Grid · Reviews · Scorecard, row 2 the full-width Manager pill.
+// Left sidebar-top stack (CROW-917 / CROW-1233): the Tickets card over two
+// nav-pill rows — row 1 Grid · Reviews · Scorecard · Scratch, row 2 the
+// full-width Manager pill.
 function sidebarLeftStack() {
   const wrap = el('div', 'sidebar-left');
   wrap.appendChild(ticketsCard());
-  wrap.appendChild(scratchCard());
 
-  // Row 1: Grid · Reviews · Scorecard (each its own non-wrapping flex line).
+  // Row 1: Grid · Reviews · Scorecard · Scratch (each its own non-wrapping flex line).
   const row1 = el('div', 'nav-pills-row');
   row1.appendChild(navPill('Grid', selectedBoard === 'grid', () => selectBoard('grid')));
   const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
@@ -671,6 +665,7 @@ function sidebarLeftStack() {
   if (unseen) rev.appendChild(el('span', 'pill-badge', String(unseen)));
   row1.appendChild(rev);
   row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
+  row1.appendChild(scratchPill());
   wrap.appendChild(row1);
 
   // Row 2: the primary Manager pill, spanning the full left-column width. Only

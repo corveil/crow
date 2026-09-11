@@ -240,6 +240,8 @@ console.log('\nnav pill:');
   const pills = [...stack.querySelectorAll('.nav-pill .pill-label')].map((n) => n.textContent);
   check('Grid is a nav pill', pills.indexOf('Grid') !== -1);
   check('Grid sits before Reviews', pills.indexOf('Grid') < pills.indexOf('Reviews'));
+  check('Scratch is a nav pill', pills.indexOf('Scratch') !== -1);
+  check('Scratch sits after Scorecard', pills.indexOf('Scorecard') < pills.indexOf('Scratch'));
 }
 
 console.log('\ncontext menu Pin to grid:');

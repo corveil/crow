@@ -133,8 +133,8 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow terminal`](#crow-terminal) | View or change terminal wheel-scroll speed |
 | [`crow terminal get`](#crow-terminal-get) | Show the current terminal wheel-scroll settings |
 | [`crow terminal set`](#crow-terminal-set) | Change terminal wheel-scroll speed |
-| [`crow todo`](#crow-todo) | Capture and promote pre-ticket ideas |
-| [`crow todo add`](#crow-todo-add) | Capture a pre-ticket idea |
+| [`crow todo`](#crow-todo) | Capture and promote Scratch items |
+| [`crow todo add`](#crow-todo-add) | Capture a Scratch item |
 | [`crow todo delete`](#crow-todo-delete) | Delete a Scratch item |
 | [`crow todo done`](#crow-todo-done) | Mark a Scratch item done |
 | [`crow todo drop`](#crow-todo-drop) | Drop a Scratch item without filing a ticket |
@@ -2080,7 +2080,7 @@ Only the flags you pass change; at least one is required. Connected browsers pic
 
 ## `crow todo`
 
-Capture and promote pre-ticket ideas.
+Capture and promote Scratch items.
 
 ```
 crow todo <add|list|get|edit|done|reopen|park|drop|delete|link|explore|ticket|work|talk>
@@ -2092,7 +2092,7 @@ Subcommands: [`add`](#crow-todo-add), [`list`](#crow-todo-list), [`get`](#crow-t
 
 ## `crow todo add`
 
-Capture a pre-ticket idea.
+Capture a Scratch item.
 
 ```
 crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>]
@@ -2100,7 +2100,7 @@ crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>]
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| _(positional)_ | `<text>` | yes | Idea text |
+| _(positional)_ | `<text>` | yes | Item text |
 | `--tag` | `<tag>` | no | Comma-separated tags |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
 | `--note` | `<note>` | no | Longer note |
@@ -2162,7 +2162,7 @@ Only the provided flags change. --add-tag / --remove-tag compose; they do not re
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--id` | `<id>` | yes | Todo UUID |
-| `--text` | `<text>` | no | Replacement idea text |
+| `--text` | `<text>` | no | Replacement item text |
 | `--note` | `<note>` | no | Replacement note |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
 | `--add-tag` | `<add-tag>` _(repeatable)_ | no | Tag to add (repeatable) |
