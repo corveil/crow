@@ -93,6 +93,10 @@ const stack = T.sidebarLeftStack();
 const pills = [...stack.querySelectorAll('.nav-pill .pill-label')].map((n) => n.textContent);
 check('Scratch is a nav pill', pills.indexOf('Scratch') !== -1);
 check('Scratch sits after Scorecard', pills.indexOf('Scorecard') < pills.indexOf('Scratch'));
+const rows = [...stack.querySelectorAll('.nav-pills-row')].map((row) =>
+  [...row.querySelectorAll('.nav-pill .pill-label')].map((n) => n.textContent));
+check('row 1 is Grid · Scorecard', rows[0] && rows[0][0] === 'Grid' && rows[0][1] === 'Scorecard' && rows[0].length === 2);
+check('row 2 is Reviews · Scratch', rows[1] && rows[1][0] === 'Reviews' && rows[1][1] === 'Scratch' && rows[1].length === 2);
 check('Scratch is not a Tickets-style card', !stack.querySelector('.scratch-card'));
 check('open count', T.scratchOpenCount() === 1);
 const scratchPill = [...stack.querySelectorAll('.nav-pill')].find((p) => p.querySelector('.pill-label')?.textContent === 'Scratch');

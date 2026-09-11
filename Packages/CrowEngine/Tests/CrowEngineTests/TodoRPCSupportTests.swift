@@ -85,14 +85,55 @@ struct TodoRPCSupportTests {
         let item = TodoItem(text: "try this", tags: ["ios"], priority: "p2")
         let brief = TodoRPC.exploreBrief(for: item)
         #expect(brief.hasSuffix("\n"))
-        #expect(brief.contains("## Item"))
+        #expect(brief.contains("## Scratch item"))
         #expect(!brief.contains("## Idea"))
         #expect(!brief.localizedCaseInsensitiveContains("idea"))
         #expect(brief.contains("try this"))
+        #expect(brief.contains("Start now"))
+        #expect(brief.contains("inspect related code"))
         #expect(!brief.contains("## Notes"))
         #expect(brief.contains("Tags: ios"))
         #expect(brief.contains("Priority: p2"))
         #expect(brief.contains("Do not file a ticket"))
+    }
+
+    @Test func seedLaunchCommandIsJobStyleEvalAndEndOfOptionsForCursor() {
+        let path = "/tmp/crow-explore.md"
+        let cursor = TodoRPC.seedLaunchCommand(
+            baseCommand: "'/opt/homebrew/bin/cursor-agent' --trust",
+            promptPath: path, agentKind: .cursor)
+        #expect(cursor.contains("_CROW_P=$(< '/tmp/crow-explore.md')"))
+        #expect(cursor.contains("-- "))
+        #expect(TodoRPC.seedsExplorePromptWithEndOfOptions(.cursor))
+        #expect(TodoRPC.seedsExplorePromptWithEndOfOptions(.grok))
+        #expect(!TodoRPC.seedsExplorePromptWithEndOfOptions(.claudeCode))
+        let claude = TodoRPC.seedLaunchCommand(
+            baseCommand: "claude --permission-mode auto",
+            promptPath: path, agentKind: .claudeCode)
+        #expect(claude.contains("_CROW_P=$(< '/tmp/crow-explore.md')"))
+        #expect(!claude.contains("-- $(printf"))
+    }
+
+    @Test func paneLooksLikeAgentRejectsShellsAndAcceptsHarnessTokens() {
+        #expect(!TodoRPC.paneLooksLikeAgent(""))
+        #expect(!TodoRPC.paneLooksLikeAgent("zsh"))
+        #expect(!TodoRPC.paneLooksLikeAgent("/bin/bash"))
+        #expect(!TodoRPC.paneLooksLikeAgent("crow-shell-wrapper.sh"))
+        #expect(!TodoRPC.paneLooksLikeAgent("ssh-agent"))
+        #expect(TodoRPC.paneLooksLikeAgent("cursor-agent"))
+        #expect(TodoRPC.paneLooksLikeAgent("/Users/x/.local/bin/cursor-agent"))
+        #expect(TodoRPC.paneLooksLikeAgent("claude"))
+        #expect(TodoRPC.paneLooksLikeAgent("agent"))
+        #expect(TodoRPC.paneLooksLikeAgent("codex"))
+    }
+
+    @Test func promptWasAcceptedOnSubmitOrWorking() {
+        #expect(TodoRPC.promptWasAccepted(
+            hookEventNames: ["SessionStart", "UserPromptSubmit"], activity: .idle))
+        #expect(TodoRPC.promptWasAccepted(hookEventNames: ["SessionStart"], activity: .working))
+        #expect(TodoRPC.promptWasAccepted(hookEventNames: [], activity: .waiting))
+        #expect(!TodoRPC.promptWasAccepted(hookEventNames: ["SessionStart"], activity: .idle))
+        #expect(!TodoRPC.promptWasAccepted(hookEventNames: [], activity: .done))
     }
 
     @Test func ticketBodyIncludesNoteAndScratchAttribution() {
@@ -109,9 +150,28 @@ struct TodoRPCSupportTests {
         #expect(!TodoRPC.shouldRetryEnter(activity: .working, agentAnnounced: true))
         #expect(!TodoRPC.shouldRetryEnter(activity: .waiting, agentAnnounced: true))
         #expect(!TodoRPC.shouldRetryEnter(activity: .idle, agentAnnounced: false))
+        #expect(!TodoRPC.shouldRetryEnter(
+            activity: .idle, agentAnnounced: true, promptAccepted: true))
         #expect(TodoRPC.agentHasAnnounced(hookEventNames: ["SessionStart"]))
         #expect(TodoRPC.agentHasAnnounced(hookEventNames: ["UserPromptSubmit", "SessionStart"]))
         #expect(!TodoRPC.agentHasAnnounced(hookEventNames: []))
         #expect(!TodoRPC.agentHasAnnounced(hookEventNames: ["UserPromptSubmit"]))
+    }
+
+    @Test func exploreSeedLaunchCommandWritesPromptAndWrapsLaunch() throws {
+        let session = Session(name: "Scratch item", kind: .manager, agentKind: .cursor)
+        let cmd = try #require(ManagerSessionController.exploreSeedLaunchCommand(
+            session: session,
+            baseCommand: "'/opt/homebrew/bin/cursor-agent' --trust",
+            prompt: "Start now.\n"))
+        #expect(cmd.contains("_CROW_P=$(<"))
+        #expect(cmd.contains("-- "))
+        let path = TodoRPC.explorePromptPath(sessionID: session.id)
+        let body = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(body.contains("Start now."))
+        #expect(ManagerSessionController.exploreSeedLaunchCommand(
+            session: session, baseCommand: "claude", prompt: nil) == nil)
+        #expect(ManagerSessionController.exploreSeedLaunchCommand(
+            session: session, baseCommand: "claude", prompt: "   ") == nil)
     }
 }

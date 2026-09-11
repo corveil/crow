@@ -242,6 +242,10 @@ console.log('\nnav pill:');
   check('Grid sits before Reviews', pills.indexOf('Grid') < pills.indexOf('Reviews'));
   check('Scratch is a nav pill', pills.indexOf('Scratch') !== -1);
   check('Scratch sits after Scorecard', pills.indexOf('Scorecard') < pills.indexOf('Scratch'));
+  const rows = [...stack.querySelectorAll('.nav-pills-row')].map((row) =>
+    [...row.querySelectorAll('.nav-pill .pill-label')].map((n) => n.textContent));
+  check('row 1 is Grid · Scorecard', rows[0] && rows[0].join(' · ') === 'Grid · Scorecard');
+  check('row 2 is Reviews · Scratch', rows[1] && rows[1].join(' · ') === 'Reviews · Scratch');
 }
 
 console.log('\ncontext menu Pin to grid:');

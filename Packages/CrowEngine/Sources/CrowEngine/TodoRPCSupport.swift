@@ -141,13 +141,16 @@ public enum TodoRPC {
         return fallback.isEmpty ? "Scratch" : fallback
     }
 
-    /// The prompt pasted into the exploring Manager. Read/explain only — this
-    /// is the Scratch sibling of `/crow-workspace --explore`.
+    /// The prompt seeded into the exploring Manager. Read/explain only — this
+    /// is the Scratch sibling of `/crow-workspace --explore`. Tells the agent
+    /// what to start looking at (the item, this cwd, a recommended next step)
+    /// so a submitted brief actually kicks off work (CROW-1237).
     public static func exploreBrief(for item: TodoItem) -> String {
         var lines = [
-            "This is from Crow Scratch. Explore it. Do not file a ticket, create a worktree, or start a work session unless I ask.",
+            "You are exploring a Crow Scratch item in this Manager session. Start now: read the item below, inspect related code in this working directory, and report what it means, what already exists, and a recommended next step.",
+            "Do not file a ticket, create a worktree, or start a work session unless I ask.",
             "",
-            "## Item",
+            "## Scratch item",
             item.text,
         ]
         if !item.note.isEmpty {
@@ -161,6 +164,68 @@ public enum TodoRPC {
         }
         lines.append("")
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Temp file the Explore Manager launch reads as its initial prompt.
+    /// Unique per session so two concurrent Explores cannot clobber each other.
+    public static func explorePromptPath(sessionID: UUID) -> String {
+        (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crow-explore-\(sessionID.uuidString).md")
+    }
+
+    /// Wrap a Manager launch command so the explore brief is argv (job-style
+    /// `evalPromptLaunch`), not a TUI paste. Cursor/Grok need `--` so a brief
+    /// whose first character is `-` is not parsed as a flag.
+    public static func seedLaunchCommand(
+        baseCommand: String, promptPath: String, agentKind: AgentKind
+    ) -> String {
+        ShellLaunchArgs.evalPromptLaunch(
+            prefix: baseCommand,
+            promptPath: promptPath,
+            endOfOptions: seedsExplorePromptWithEndOfOptions(agentKind)
+        )
+    }
+
+    public static func seedsExplorePromptWithEndOfOptions(_ agentKind: AgentKind) -> Bool {
+        agentKind == .cursor || agentKind == .grok
+    }
+
+    /// `#{pane_current_command}` looks like a coding-agent TUI, not the
+    /// wrapper/shell the Manager window is born as. SessionStart can fire
+    /// before the composer owns stdin (Cursor especially); pasting into
+    /// zsh is the "first characters go to the shell" failure (CROW-1237).
+    public static func paneLooksLikeAgent(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let token = (trimmed as NSString).lastPathComponent.lowercased()
+        let shells: Set<String> = [
+            "zsh", "bash", "sh", "fish", "dash", "login", "tmux",
+            "crow-shell-wrapper.sh",
+        ]
+        if shells.contains(token) { return false }
+        let agents = [
+            "claude", "cursor-agent", "codex", "grok", "opencode",
+            "muse", "agy", "antigravity",
+        ]
+        if agents.contains(where: { token == $0 || token.hasPrefix($0) }) {
+            return true
+        }
+        // Cursor's unambiguous name is `cursor-agent`; the colliding `agent`
+        // token is accepted only as an exact basename (not `ssh-agent`).
+        return token == "agent"
+    }
+
+    /// Hook name that means the TUI accepted a prompt (argv or paste).
+    public static let userPromptSubmitEventName = "UserPromptSubmit"
+
+    public static func promptWasAccepted(
+        hookEventNames: [String], activity: AgentActivityState
+    ) -> Bool {
+        if hookEventNames.contains(userPromptSubmitEventName) { return true }
+        switch activity {
+        case .working, .waiting: return true
+        case .idle, .done: return false
+        }
     }
 
     /// Body filed with `todo ticket` — the item plus its note, tagged as
@@ -211,14 +276,17 @@ public enum TodoRPC {
         hookEventNames.contains(sessionStartEventName)
     }
 
-    /// Retry a bare Enter only when the agent announced itself and then
-    /// stayed idle after the paste — "words in the box, agent idle".
-    /// Skip the retry when hooks never fired (don't double-submit an
-    /// agent that accepted Enter but has no hook pipeline).
+    /// Retry a bare Enter only when the agent is up and then stayed idle
+    /// after the paste — "words in the box, agent idle". Skip when hooks
+    /// never fired (don't double-submit an agent that accepted Enter but
+    /// has no hook pipeline) and when UserPromptSubmit / working already
+    /// proved the brief landed (CROW-1237).
     public static func shouldRetryEnter(
-        activity: AgentActivityState, agentAnnounced: Bool
+        activity: AgentActivityState,
+        agentAnnounced: Bool,
+        promptAccepted: Bool = false
     ) -> Bool {
-        guard agentAnnounced else { return false }
+        guard agentAnnounced, !promptAccepted else { return false }
         switch activity {
         case .working, .waiting: return false
         case .idle, .done: return true
