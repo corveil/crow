@@ -14,9 +14,10 @@ import Darwin
 public enum CorveilAutoUpdate {
     public static let checksumsAssetName = "checksums.txt"
     public static let binaryFileName = "corveil"
-    /// Upper bound on a downloaded asset. The published CLIs are tens of MB;
-    /// anything larger is treated as a bad/malicious payload rather than written.
-    public static let maxAssetBytes = 80 * 1024 * 1024
+    /// Upper bound on a downloaded asset. Published CLIs are ~100–110 MiB
+    /// (v0.4.41 darwin-amd64 is 111_143_664 bytes); anything larger is treated
+    /// as a bad/malicious payload rather than written.
+    public static let maxAssetBytes = 256 * 1024 * 1024
 
     public static var hostOperatingSystem: String {
         #if os(macOS)
