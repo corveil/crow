@@ -3,7 +3,8 @@ import Testing
 @testable import CrowDaemon
 
 /// Drift guard for the notification center served out of `Resources/web/notifications.js`
-/// and `sidebar.js` (CROW-909 / CROW-1155). There's no JS test runner in this repo, so — like
+/// and `sidebar-chrome.js` (`openNotificationPanel`; CROW-909 / CROW-1155 / CROW-1238).
+/// There's no JS test runner in this repo, so — like
 /// `WebTerminalAssetTests` — these pin the non-obvious invariants of the feature
 /// against the classic client source a reviewer actually edits. The bugs each one
 /// guards were all live at first review (PR #910): a detached-anchor mispositon,

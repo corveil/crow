@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CROW-1238 — Split `sidebar.js` (~1.6k lines) into a state kernel plus focused classic scripts (`sidebar-chrome.js`, `pr-glyphs.js`, `session-row.js`, `session-menu.js`). Shared `let`/`const` (`sessions`, `GRID_*`, `ICONS`) stay on the kernel; `index.html` load order matches `StaticAssets.uiJavaScriptFiles`. No ES modules, bundler, hash-route, or sidebar-behavior change — same pattern as CROW-1155 / CROW-1160.
+
 - CROW-1229 — **Default `defaults.corveilAutoUpdate` on.** A missing key decodes as on so a fresh Crow install downloads and links `corveil` from public `corveil/corveil-releases` without an operator toggle. An explicit `false` in `config.json` (Settings / `crow defaults set --corveil-auto-update false`) stays off. An operator-set source-build `binaries["corveil"]` is still skipped (`shouldAutoManage` / `isManagedPath`). Decision: [ADR 0025](docs/adr/0025-auto-download-corveil-cli.md).
 
 - CROW-1222 — Split `TmuxBackend.swift` (~1.6k lines) into a thin facade plus focused `extension TmuxBackend` files (`TmuxServerLifecycle`, `TmuxWindowLifecycle`, `TmuxInput`, `TmuxScrollbackHealth`, `TmuxCockpitReaper`, `TmuxReadinessWatch`, `TmuxManagerExitMonitor`). Call sites keep `TmuxBackend.shared.*`; paste-Enter settle, alt-buffer latch, and the 50k history floor are unchanged.
