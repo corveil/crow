@@ -14,12 +14,14 @@ import NIOCore
 /// live from that source directory instead of the compiled bundle — edit +
 /// refresh, no rebuild.
 enum StaticAssets {
-    /// Classic client scripts in `index.html` load order (CROW-1155 / CROW-1160).
-    /// Exact literal paths — `crowd` has no catch-all. Settings tab bodies load
-    /// before the Settings shell; `settings.js` is last.
+    /// Classic client scripts in `index.html` load order (CROW-1155 / CROW-1160 /
+    /// CROW-1238). Exact literal paths — `crowd` has no catch-all. Settings tab
+    /// bodies load before the Settings shell; `settings.js` is last.
     static let uiJavaScriptFiles = [
-        "rpc.js", "notifications.js", "sidebar.js", "switcher.js", "session.js",
-        "grid.js", "boards.js", "terminal.js", "setup.js", "router.js", "app.js",
+        "rpc.js", "notifications.js", "sidebar.js", "sidebar-chrome.js",
+        "pr-glyphs.js", "session-row.js", "session-menu.js", "switcher.js",
+        "session.js", "grid.js", "boards.js", "terminal.js", "setup.js",
+        "router.js", "app.js",
         "settings-general.js", "settings-automation.js", "settings-notifications.js",
         "settings-webaccess.js", "settings-integrations.js", "settings-workspaces.js",
         "settings-jobs.js", "settings-about.js", "settings.js",
