@@ -4,6 +4,12 @@ import Testing
 
 @Suite("Corveil auto-update helpers")
 struct CorveilAutoUpdateTests {
+    @Test func maxAssetBytesFitsPublishedCLIs() {
+        // v0.4.41 darwin-amd64 is 111_143_664 bytes; all four platform binaries
+        // sit just over 100 MiB. An 80 MiB cap rejected every published asset.
+        #expect(CorveilAutoUpdate.maxAssetBytes >= 200 * 1024 * 1024)
+    }
+
     @Test func assetNameMapsX86ToAmd64() {
         #expect(CorveilAutoUpdate.assetName(os: "darwin", arch: "arm64") == "corveil-darwin-arm64")
         #expect(CorveilAutoUpdate.assetName(os: "linux", arch: "x86_64") == "corveil-linux-amd64")

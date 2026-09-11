@@ -32,7 +32,8 @@ import FoundationNetworking
 
     private func assetName() -> String { CorveilAutoUpdate.assetName() }
 
-    private func transport(binary: Data, checksums: String, tag: String = "v0.4.32")
+    private func transport(binary: Data, checksums: String, tag: String = "v0.4.32",
+                           announcedSize: Int? = nil)
         -> @Sendable (URLRequest) async throws -> (Data, URLResponse)
     {
         let release: [String: Any] = [
@@ -41,7 +42,7 @@ import FoundationNetworking
                 [
                     "name": assetName(),
                     "browser_download_url": "https://example.test/\(assetName())",
-                    "size": binary.count,
+                    "size": announcedSize ?? binary.count,
                 ],
                 [
                     "name": "checksums.txt",
@@ -224,5 +225,160 @@ import FoundationNetworking
         let status = await service.runCheck()
         #expect(status.state == .disabled)
         #expect(hits.value == 0)
+    }
+
+    @Test func publishedAssetSizeIsAccepted() async throws {
+        let devRoot = try tempDir("crowd-corveil-dev")
+        let managed = try tempDir("crowd-corveil-bin")
+        defer {
+            try? FileManager.default.removeItem(at: devRoot)
+            try? FileManager.default.removeItem(at: managed)
+        }
+        var config = AppConfig()
+        config.defaults.corveilAutoUpdate = true
+        try ConfigStore.saveConfig(config, devRoot: devRoot.path)
+
+        // v0.4.41 darwin-arm64 — the 80 MiB cap rejected this before download.
+        let publishedSize = 105_344_594
+        let binary = Data("corveil-fixture".utf8)
+        let checksums = "\(fakeHash)  \(assetName())\n"
+        let service = CorveilAutoUpdateService(
+            devRoot: devRoot.path,
+            managedRoot: managed,
+            userAgent: "Crow/test",
+            transport: transport(binary: binary, checksums: checksums, announcedSize: publishedSize),
+            hooks: hooks())
+        let status = await service.runCheck()
+        #expect(status.state == .updated)
+        #expect(status.version == "v0.4.32")
+    }
+
+    @Test func announcedSizeOverCapFailsWithoutDownloadingBinary() async throws {
+        let devRoot = try tempDir("crowd-corveil-dev")
+        let managed = try tempDir("crowd-corveil-bin")
+        defer {
+            try? FileManager.default.removeItem(at: devRoot)
+            try? FileManager.default.removeItem(at: managed)
+        }
+        var config = AppConfig()
+        config.defaults.corveilAutoUpdate = true
+        try ConfigStore.saveConfig(config, devRoot: devRoot.path)
+
+        let lastGood = CorveilAutoUpdate.binaryURL(tag: "v0.4.31", managedRoot: managed)
+        try FileManager.default.createDirectory(
+            at: lastGood.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: lastGood)
+
+        let over = CorveilAutoUpdate.maxAssetBytes + 1
+        let checksums = "\(fakeHash)  \(assetName())\n"
+        let release: [String: Any] = [
+            "tag_name": "v0.4.32",
+            "assets": [
+                [
+                    "name": assetName(),
+                    "browser_download_url": "https://example.test/\(assetName())",
+                    "size": over,
+                ],
+                [
+                    "name": "checksums.txt",
+                    "browser_download_url": "https://example.test/checksums.txt",
+                    "size": checksums.utf8.count,
+                ],
+            ],
+        ]
+        let releaseData = try JSONSerialization.data(withJSONObject: release)
+        let downloadHits = HitCount()
+        let transport: @Sendable (URLRequest) async throws -> (Data, URLResponse) = { request in
+            let url = request.url?.absoluteString ?? ""
+            let body: Data
+            if url.contains("/releases/") {
+                body = releaseData
+            } else {
+                downloadHits.value += 1
+                body = Data("should-not-download".utf8)
+            }
+            return (body, HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let service = CorveilAutoUpdateService(
+            devRoot: devRoot.path,
+            managedRoot: managed,
+            userAgent: "Crow/test",
+            transport: transport,
+            hooks: hooks())
+        let status = await service.runCheck()
+        #expect(status.state == .failed)
+        #expect(status.message?.contains("over the") == true)
+        #expect(downloadHits.value == 0)
+        #expect(FileManager.default.fileExists(atPath: lastGood.path))
+        #expect(ConfigStore.loadConfig(devRoot: devRoot.path)?.defaults.binaries["corveil"] == nil)
+    }
+
+    @Test func offlineFetchKeepsLastGood() async throws {
+        let devRoot = try tempDir("crowd-corveil-dev")
+        let managed = try tempDir("crowd-corveil-bin")
+        defer {
+            try? FileManager.default.removeItem(at: devRoot)
+            try? FileManager.default.removeItem(at: managed)
+        }
+        let lastGood = CorveilAutoUpdate.binaryURL(tag: "v0.4.31", managedRoot: managed)
+        try FileManager.default.createDirectory(
+            at: lastGood.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: lastGood)
+
+        var config = AppConfig()
+        config.defaults.corveilAutoUpdate = true
+        config.defaults.binaries["corveil"] = lastGood.path
+        try ConfigStore.saveConfig(config, devRoot: devRoot.path)
+
+        let transport: @Sendable (URLRequest) async throws -> (Data, URLResponse) = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        let service = CorveilAutoUpdateService(
+            devRoot: devRoot.path,
+            managedRoot: managed,
+            userAgent: "Crow/test",
+            transport: transport,
+            hooks: hooks())
+        let status = await service.runCheck()
+        #expect(status.state == .failed)
+        #expect(status.message?.contains("Could not fetch") == true)
+        #expect(FileManager.default.fileExists(atPath: lastGood.path))
+        #expect(try Data(contentsOf: lastGood) == Data("old".utf8))
+        #expect(ConfigStore.loadConfig(devRoot: devRoot.path)?.defaults.binaries["corveil"]
+                == lastGood.path)
+    }
+
+    /// Hits the public `corveil/corveil-releases` repo over the live network.
+    /// Off in CI. Run with:
+    /// `CROW_LIVE_CORVEIL_UPDATE=1 swift test --package-path Packages/CrowDaemon --filter liveGitHubDownloadInstallsHostBinary`
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CROW_LIVE_CORVEIL_UPDATE"] == "1"))
+    func liveGitHubDownloadInstallsHostBinary() async throws {
+        let devRoot = try tempDir("crowd-corveil-live-dev")
+        let managed = try tempDir("crowd-corveil-live-bin")
+        defer {
+            try? FileManager.default.removeItem(at: devRoot)
+            try? FileManager.default.removeItem(at: managed)
+        }
+        var config = AppConfig()
+        config.defaults.corveilAutoUpdate = true
+        try ConfigStore.saveConfig(config, devRoot: devRoot.path)
+
+        let service = CorveilAutoUpdateService(
+            devRoot: devRoot.path,
+            managedRoot: managed,
+            userAgent: "Crow/live-test")
+        let status = await service.runCheck()
+        #expect(status.state == .updated, "live update failed: \(status.message ?? "no message")")
+        let version = try #require(status.version)
+        let path = try #require(status.path)
+        #expect(FileManager.default.isExecutableFile(atPath: path))
+        #expect(CorveilAutoUpdate.isManagedPath(path, managedRoot: managed))
+        let outcome = CorveilCLI.verify(path: path)
+        #expect(outcome.ok, "verify: \(outcome.message)")
+        #expect(CorveilAutoUpdate.verifyMessage(outcome.message, matchesTag: version))
+        #expect(ConfigStore.loadConfig(devRoot: devRoot.path)?.defaults.binaries["corveil"] == path)
+        let link = (devRoot.path as NSString).appendingPathComponent(".claude/bin/corveil")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link) == path)
     }
 }
