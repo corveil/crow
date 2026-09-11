@@ -39,4 +39,11 @@ public enum TerminalRouter {
     public static func canSend(_ terminal: SessionTerminal) -> Bool {
         TmuxBackend.shared.isRegistered(id: terminal.id)
     }
+
+    /// Live foreground command in `terminal`'s pane, or nil if the window
+    /// is not bound / tmux failed. Explore uses this to wait for the agent
+    /// TUI before pasting (CROW-1237).
+    public static func paneCurrentCommand(_ terminal: SessionTerminal) -> String? {
+        TmuxBackend.shared.paneCurrentCommand(id: terminal.id)
+    }
 }

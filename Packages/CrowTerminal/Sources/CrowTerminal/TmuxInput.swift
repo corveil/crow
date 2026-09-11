@@ -147,6 +147,24 @@ extension TmuxBackend {
         }
     }
 
+    /// Live `#{pane_current_command}` for terminal `id`'s pane. Used by
+    /// Explore/Talk so a paste waits until the agent TUI owns stdin, not
+    /// the wrapper/shell the window is born as (CROW-1237). Nil on any
+    /// error so the caller can fall through to SessionStart.
+    public func paneCurrentCommand(id: UUID) -> String? {
+        guard let windowIndex = bindings[id] else { return nil }
+        do {
+            let ctrl = try ensureRunningServer()
+            let target = "\(ctrl.sessionName):\(windowIndex)"
+            let raw = try ctrl.displayMessage(target: target, format: "#{pane_current_command}")
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        } catch {
+            reportIfTimeout(error)
+            return nil
+        }
+    }
+
     /// Direction for `searchInScrollback`. `backward` walks toward older
     /// output (the common case for Cmd+F on terminal history); `forward`
     /// walks toward newer output.

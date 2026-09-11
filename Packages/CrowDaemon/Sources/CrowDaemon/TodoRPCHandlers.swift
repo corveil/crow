@@ -193,19 +193,20 @@ private func exploreTodo(
         }
     }
 
+    let brief = TodoRPC.exploreBrief(for: item)
     let (sessionID, name) = await MainActor.run { () -> (UUID, String) in
-        let existing = Set(appState.managerSessions.map(\.name))
-        var n = 2
-        while existing.contains("Manager \(n)") { n += 1 }
-        let id = sessionService.createManagerSession(
-            name: "Manager \(n)", cwd: devRoot, agentKind: requestedAgentKind)
+        // Name the session after the item at create time. A follow-up
+        // `renameSession` would paste `/rename` into the pane before the
+        // agent TUI owns stdin and offset/eat the explore brief (CROW-1237).
         let display = TodoRPC.managerName(from: item.text)
-        _ = sessionService.renameSession(sessionID: id, name: display)
+        let id = sessionService.createManagerSession(
+            name: display, cwd: devRoot, agentKind: requestedAgentKind,
+            initialPrompt: brief)
         return (id, display)
     }
 
     let seeded = await sendToManager(
-        sessionID: sessionID, text: TodoRPC.exploreBrief(for: item),
+        sessionID: sessionID, text: brief,
         appState: appState, waitForAgent: true)
     item.links.append(TodoLink(type: .session, sessionID: sessionID, label: name))
     item.state = .exploring
@@ -226,13 +227,17 @@ private func exploreTodo(
 }
 
 /// Wait for the Manager pane (and, on a fresh launch, for the agent to
-/// announce via SessionStart), paste `text`, then retry a bare Enter if
-/// the agent stayed idle. Managers do not track `TerminalReadiness` the
-/// way work sessions do, so SessionStart + a composer settle is the
-/// "ready to submit" signal (#1233 / #264 / #272). `seeded`/`sent`
-/// still mean "we delivered to a live pane", not "the agent started
-/// working" — the retry is what closes the "words in the box, agent
-/// idle" gap.
+/// announce via SessionStart or to own the pane), then deliver `text`.
+///
+/// Fresh Explore Managers seed the brief as argv on launch (job-style,
+/// CROW-1237) so this returns without pasting when UserPromptSubmit /
+/// `.working` already prove the agent started. Paste is the fallback for
+/// Talk, re-Explore, and harnesses that ignore a positional prompt.
+///
+/// After a paste: wait for acceptance, retry a bare Enter if the agent
+/// stayed idle ("words in the box"), then re-paste the full brief if
+/// Enter was not enough (paste eaten/offset). `seeded`/`sent` still mean
+/// "we delivered to a live pane" when no acceptance hook arrives.
 private func sendToManager(
     sessionID: UUID,
     text: String,
@@ -252,21 +257,47 @@ private func sendToManager(
             appState.hookState(for: sessionID).hookEvents.map(\.eventName)
         }
     }
+    func activity() async -> AgentActivityState {
+        await MainActor.run {
+            appState.hookState(for: sessionID).activityState
+        }
+    }
+    func promptAccepted() async -> Bool {
+        TodoRPC.promptWasAccepted(
+            hookEventNames: await hookEventNames(), activity: await activity())
+    }
+    func paneCommand() async -> String? {
+        await MainActor.run { TerminalRouter.paneCurrentCommand(terminal) }
+    }
+
     var announced = TodoRPC.agentHasAnnounced(hookEventNames: await hookEventNames())
+    var agentInPane = TodoRPC.paneLooksLikeAgent(await paneCommand() ?? "")
     let alreadyAnnounced = announced
-    if !announced {
+    if !announced && !agentInPane {
         let polls = waitForAgent
             ? TodoRPC.agentAnnouncePolls
             : TodoRPC.existingAgentAnnouncePolls
         for _ in 0..<polls {
             announced = TodoRPC.agentHasAnnounced(hookEventNames: await hookEventNames())
-            if announced { break }
+            agentInPane = TodoRPC.paneLooksLikeAgent(await paneCommand() ?? "")
+            if announced || agentInPane { break }
             try? await Task.sleep(nanoseconds: TodoRPC.agentAnnouncePollNanos)
         }
     }
+    let composerReady = announced || agentInPane
     try? await Task.sleep(nanoseconds: alreadyAnnounced
         ? TodoRPC.alreadyUpSettleNanos
         : TodoRPC.composerSettleNanos)
+
+    // Seed-at-launch already running — don't paste a second copy.
+    if await promptAccepted() { return true }
+    if waitForAgent && composerReady {
+        for _ in 0..<4 {
+            if await promptAccepted() { return true }
+            try? await Task.sleep(nanoseconds: TodoRPC.agentAnnouncePollNanos)
+        }
+        if await promptAccepted() { return true }
+    }
 
     var payload = text
     if !payload.hasSuffix("\n") { payload += "\n" }
@@ -275,12 +306,27 @@ private func sendToManager(
     }
 
     try? await Task.sleep(nanoseconds: TodoRPC.submitConfirmNanos)
-    let activity = await MainActor.run {
-        appState.hookState(for: sessionID).activityState
-    }
-    if TodoRPC.shouldRetryEnter(activity: activity, agentAnnounced: announced) {
+    if await promptAccepted() { return true }
+    if TodoRPC.shouldRetryEnter(
+        activity: await activity(),
+        agentAnnounced: composerReady,
+        promptAccepted: false
+    ) {
         await MainActor.run {
             TerminalRouter.send(terminal, text: "\n")
+        }
+        try? await Task.sleep(nanoseconds: TodoRPC.submitConfirmNanos)
+        if await promptAccepted() { return true }
+        // Paste was eaten or offset — Enter on leftover composer text is
+        // not enough. Re-send the whole brief (CROW-1237).
+        if TodoRPC.shouldRetryEnter(
+            activity: await activity(),
+            agentAnnounced: composerReady,
+            promptAccepted: false
+        ) {
+            await MainActor.run {
+                TerminalRouter.send(terminal, text: payload)
+            }
         }
     }
     return true

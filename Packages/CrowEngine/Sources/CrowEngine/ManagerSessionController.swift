@@ -562,9 +562,13 @@ final class ManagerSessionController {
     /// (#314): on tmux this registers a window and pastes the agent command
     /// into it via the shared xterm.js cockpit surface.
     /// `trackReadiness: false` matches the Manager's command-launches-agent
-    /// model — no readiness/launchClaude flow.
+    /// model — no readiness/launchClaude flow. Explore (CROW-1237) is the
+    /// exception: an `initialPrompt` is deferred like a job (`#408`) so the
+    /// brief is argv once the shell is live, not a composer paste race.
     @discardableResult
-    private func createManagerTerminal(session: Session, cwd: String) -> SessionTerminal {
+    private func createManagerTerminal(
+        session: Session, cwd: String, initialPrompt: String? = nil
+    ) -> SessionTerminal {
         let command = managerCommand(for: session)
         // CROW-539: install hook config so `crow hook-event` fires for the
         // Manager, driving the same activity indicators worker cards get. The
@@ -605,14 +609,31 @@ final class ManagerSessionController {
         } else if SessionService.readsClaudeCompatSettings(session.agentKind) {
             ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: nil)
         }
-        let rawTerminal = SessionTerminal(
+
+        // Persist the bare Manager command so recreate/hydrate still launches
+        // the TUI. The explore brief is a one-shot pending launch (#408) —
+        // stuffing it into `SessionTerminal.command` would re-fire on Recreate.
+        let seedCommand = Self.exploreSeedLaunchCommand(
+            session: session, baseCommand: command, prompt: initialPrompt)
+        var rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,
             cwd: cwd,
             command: command
         )
+        let deferSeed = seedCommand != nil
+        if let seedCommand {
+            // Seed readiness + pending-launch BEFORE register so a sentinel
+            // that fires on a later main-actor turn always finds them (#408).
+            appState.terminalReadiness[rawTerminal.id] = .uninitialized
+            appState.pendingLaunchCommands[rawTerminal.id] = seedCommand
+            appState.autoLaunchTerminals.insert(rawTerminal.id)
+        }
+        var toRegister = rawTerminal
+        if deferSeed { toRegister.command = nil }
+        var terminal = owner.prepareTerminal(toRegister, trackReadiness: deferSeed)
+        terminal.command = command
 
-        let terminal = owner.prepareTerminal(rawTerminal, trackReadiness: false)
         appState.terminals[session.id] = [terminal]
 
         store.mutate { data in
@@ -630,6 +651,30 @@ final class ManagerSessionController {
         return terminal
     }
 
+    /// Write the explore brief and wrap `baseCommand` so the agent starts
+    /// with it as argv. Nil when there is no prompt or the write failed —
+    /// the caller then falls back to a composer paste.
+    nonisolated static func exploreSeedLaunchCommand(
+        session: Session, baseCommand: String, prompt: String?
+    ) -> String? {
+        guard let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let path = TodoRPC.explorePromptPath(sessionID: session.id)
+        do {
+            try prompt.write(toFile: path, atomically: true, encoding: .utf8)
+        } catch {
+            CrowLog.info("[Manager] failed to write explore prompt \(path): \(error.localizedDescription)")
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: path) else {
+            CrowLog.info("[Manager] explore prompt missing at \(path) after write")
+            return nil
+        }
+        return TodoRPC.seedLaunchCommand(
+            baseCommand: baseCommand, promptPath: path, agentKind: session.agentKind)
+    }
+
     /// Create an additional (non-primary) Manager session in `cwd`. Returns the
     /// new session's id. The terminal is set up by `createManagerTerminal`.
     ///
@@ -637,13 +682,19 @@ final class ManagerSessionController {
     /// (#582): when supplied it wins over the configured default for this
     /// session only, without mutating `agentsByKind` / `defaultAgentKind`.
     /// `nil` falls back to the configured Manager agent.
+    ///
+    /// `initialPrompt` (Explore, CROW-1237) is fed as argv on first launch
+    /// the way jobs feed `.crow-job-prompt.md` — not pasted into the composer.
     @discardableResult
-    public func createManagerSession(name: String, cwd: String, agentKind override: AgentKind? = nil) -> UUID {
+    public func createManagerSession(
+        name: String, cwd: String, agentKind override: AgentKind? = nil,
+        initialPrompt: String? = nil
+    ) -> UUID {
         let agentKind = resolvedManagerAgentKind(override)
         let session = Session(name: name, status: .active, kind: .manager, agentKind: agentKind)
         appState.sessions.append(session)
         store.mutate { $0.sessions.append(session) }
-        createManagerTerminal(session: session, cwd: cwd)
+        createManagerTerminal(session: session, cwd: cwd, initialPrompt: initialPrompt)
         return session.id
     }
 
@@ -740,8 +791,12 @@ extension SessionService {
     }
 
     @discardableResult
-    public func createManagerSession(name: String, cwd: String, agentKind override: AgentKind? = nil) -> UUID {
-        manager.createManagerSession(name: name, cwd: cwd, agentKind: override)
+    public func createManagerSession(
+        name: String, cwd: String, agentKind override: AgentKind? = nil,
+        initialPrompt: String? = nil
+    ) -> UUID {
+        manager.createManagerSession(
+            name: name, cwd: cwd, agentKind: override, initialPrompt: initialPrompt)
     }
     func resolvedManagerAgentKind(_ explicit: AgentKind?) -> AgentKind {
         manager.resolvedManagerAgentKind(explicit)

@@ -197,41 +197,46 @@ function sidebarIconColumn() {
   return col;
 }
 
-// Left sidebar-top stack (CROW-917 / CROW-1233): the Tickets card over two
-// nav-pill rows — row 1 Grid · Reviews · Scorecard · Scratch, row 2 the
-// full-width Manager pill.
+// Left sidebar-top stack (CROW-917 / CROW-1237): the Tickets card over three
+// nav-pill rows — Grid · Scorecard, Reviews · Scratch, then the full-width
+// Manager pill. Four pills on one row ellipsize at the default sidebar width.
 function sidebarLeftStack() {
   const wrap = el('div', 'sidebar-left');
   wrap.appendChild(ticketsCard());
 
-  // Row 1: Grid · Reviews · Scorecard · Scratch (each its own non-wrapping flex line).
+  // Row 1: Grid · Scorecard (each .nav-pills-row is its own non-wrapping flex line).
   const row1 = el('div', 'nav-pills-row');
   row1.appendChild(navPill('Grid', selectedBoard === 'grid', () => selectBoard('grid')));
+  row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
+  wrap.appendChild(row1);
+
+  // Row 2: Reviews · Scratch. Open-count badge stays on Scratch — two labels
+  // still fit the left column where four did not (CROW-1237).
+  const row2 = el('div', 'nav-pills-row');
   const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
   const unseen = (boardData.reviews && boardData.reviews.unseen) || 0;
   if (unseen) rev.appendChild(el('span', 'pill-badge', String(unseen)));
-  row1.appendChild(rev);
-  row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
-  row1.appendChild(scratchPill());
-  wrap.appendChild(row1);
+  row2.appendChild(rev);
+  row2.appendChild(scratchPill());
+  wrap.appendChild(row2);
 
-  // Row 2: the primary Manager pill, spanning the full left-column width. Only
+  // Row 3: the primary Manager pill, spanning the full left-column width. Only
   // appended when a primary manager exists — an empty .nav-pills-row still consumes
-  // a flex-gap slot, so appending one would leave a stray 6px gap below row 1. (The
+  // a flex-gap slot, so appending one would leave a stray 6px gap below row 2. (The
   // right icon column no longer divides the left column's height — its buttons are a
   // fixed-size centered stack since CROW-922 — so a Manager-less render can't shrink
   // them below the WCAG floor.)
   const primaryManager = sessions.find((s) => s.kind === 'manager');
   if (primaryManager) {
-    const row2 = el('div', 'nav-pills-row');
+    const row3 = el('div', 'nav-pills-row');
     const mgr = navPill('Manager', selectedId === primaryManager.id, () => selectSession(primaryManager.id));
     const ind = activityIndicator(primaryManager);
     const dot = el('span', 'pill-dot' + (ind.pulse ? ' pulse' : ''));
     dot.style.background = ind.color;
     mgr.insertBefore(dot, mgr.firstChild);
     if (liveFor(primaryManager.id).remote_control_active) mgr.appendChild(rcGlyph());
-    row2.appendChild(mgr);
-    wrap.appendChild(row2);
+    row3.appendChild(mgr);
+    wrap.appendChild(row3);
   }
 
   return wrap;

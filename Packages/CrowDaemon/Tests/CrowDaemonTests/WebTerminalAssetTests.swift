@@ -628,8 +628,9 @@ import Testing
             "the relocated Select toggle needs its .nav-select styles")
     }
 
-    /// CROW-1233: Scratch is a fourth nav pill on the Grid/Reviews/Scorecard
-    /// row, not a Tickets-style card stacked under Tickets.
+    /// CROW-1237: Scratch is a nav pill on its own two-pill row with Reviews
+    /// (Grid · Scorecard above), not a fourth pill on one line and not a
+    /// Tickets-style card stacked under Tickets.
     @Test func scratchIsANavPillNotACardUnderTickets() throws {
         let js = try Self.webClientJS()
         let stack = try Self.stripComments(String(Self.functionBody("sidebarLeftStack", in: js)))
@@ -639,6 +640,12 @@ import Testing
         #expect(
             try Self.functionBody("scratchPill", in: js).contains("'Scratch'"),
             "scratchPill must label the pill Scratch")
+        #expect(
+            stack.contains("navPill('Grid'") && stack.contains("navPill('Scorecard'"),
+            "row 1 is Grid · Scorecard (CROW-1237)")
+        #expect(
+            stack.contains("navPill('Reviews'") && stack.contains("scratchPill()"),
+            "row 2 is Reviews · Scratch (CROW-1237)")
         let css = try Self.webAsset("app.css")
         #expect(
             !css.contains(".scratch-card") && !css.contains(".scratch-sub"),

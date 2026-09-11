@@ -990,10 +990,10 @@ button.scratch-link:hover { border-color: var(--blue); }
 .tk-dot { width: 7px; height: 7px; border-radius: 50%; }
 .tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* Left-column nav rows (CROW-917 / CROW-1233): row 1 Grid/Reviews/Scorecard/Scratch,
-   row 2 the full-width Manager pill. Each .nav-pills-row is its own non-wrapping
-   flex line so groups never reflow; the "+" and Select buttons live in the right
-   icon column. */
+/* Left-column nav rows (CROW-917 / CROW-1237): Grid · Scorecard, then
+   Reviews · Scratch, then the full-width Manager pill. Each .nav-pills-row is
+   its own non-wrapping flex line so groups never reflow; the "+" and Select
+   buttons live in the right icon column. Four pills on one row ellipsized. */
 .nav-pills-row { display: flex; gap: 6px; }
 .nav-pill {
   flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 5px;

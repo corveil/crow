@@ -202,6 +202,12 @@ struct TmuxBackendTests {
         }
     }
 
+    @Test func paneCurrentCommandUnknownTerminalIsNil() {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+        #expect(backend.paneCurrentCommand(id: UUID()) == nil)
+    }
+
     @Test func sendTextRoundTripsThroughBuffer() throws {
         let backend = makeBackend()
         defer { backend.shutdown() }
