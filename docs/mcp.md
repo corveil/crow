@@ -60,7 +60,7 @@ deny-after-call would still teach the model that they do.
 | `list_stuck_sessions` | `sessions:read` | What needs a human, and why |
 | `list_tickets` | `board:read` | The ticket board (issue bodies omitted) |
 | `list_reviews` | `board:read` | The reviews board, by group |
-| `list_todos` | `todos:read` | Pre-ticket Scratch items, with their provenance trail |
+| `list_todos` | `todos:read` | Scratch items, with their provenance trail |
 | `get_todo` | `todos:read` | One Scratch item in full, by UUID |
 
 `list_stuck_sessions` is the one worth knowing about. It joins two payloads that are

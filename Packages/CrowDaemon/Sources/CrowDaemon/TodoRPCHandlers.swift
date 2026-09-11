@@ -172,7 +172,9 @@ private func exploreTodo(
             appState.sessions.contains { $0.id == existing && $0.kind == .manager }
         }
         if alive {
-            let seeded = await seedExploreBrief(item: item, sessionID: existing, appState: appState)
+            let seeded = await sendToManager(
+                sessionID: existing, text: TodoRPC.exploreBrief(for: item),
+                appState: appState, waitForAgent: false)
             if item.state != .exploring {
                 item.state = .exploring
                 item.updatedAt = Date()
@@ -202,7 +204,9 @@ private func exploreTodo(
         return (id, display)
     }
 
-    let seeded = await seedExploreBrief(item: item, sessionID: sessionID, appState: appState)
+    let seeded = await sendToManager(
+        sessionID: sessionID, text: TodoRPC.exploreBrief(for: item),
+        appState: appState, waitForAgent: true)
     item.links.append(TodoLink(type: .session, sessionID: sessionID, label: name))
     item.state = .exploring
     item.updatedAt = Date()
@@ -221,22 +225,64 @@ private func exploreTodo(
     return result
 }
 
-/// Wait for the Manager pane, then paste the explore brief. Managers do not
-/// track readiness the way work sessions do, so we wait for the terminal row
-/// and a short settle rather than a sentinel.
-private func seedExploreBrief(
-    item: TodoItem, sessionID: UUID, appState: AppState
+/// Wait for the Manager pane (and, on a fresh launch, for the agent to
+/// announce via SessionStart), paste `text`, then retry a bare Enter if
+/// the agent stayed idle. Managers do not track `TerminalReadiness` the
+/// way work sessions do, so SessionStart + a composer settle is the
+/// "ready to submit" signal (#1233 / #264 / #272). `seeded`/`sent`
+/// still mean "we delivered to a live pane", not "the agent started
+/// working" — the retry is what closes the "words in the box, agent
+/// idle" gap.
+private func sendToManager(
+    sessionID: UUID,
+    text: String,
+    appState: AppState,
+    waitForAgent: Bool
 ) async -> Bool {
     var terminal: SessionTerminal?
-    for _ in 0..<20 {
+    for _ in 0..<TodoRPC.managerTerminalPolls {
         terminal = await MainActor.run { appState.terminals[sessionID]?.first }
         if terminal != nil { break }
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        try? await Task.sleep(nanoseconds: TodoRPC.managerTerminalPollNanos)
     }
     guard let terminal else { return false }
-    try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+    var announced = await MainActor.run {
+        TodoRPC.agentHasAnnounced(
+            hookEventCount: appState.hookState(for: sessionID).hookEvents.count)
+    }
+    let alreadyAnnounced = announced
+    if !announced {
+        let polls = waitForAgent
+            ? TodoRPC.agentAnnouncePolls
+            : TodoRPC.existingAgentAnnouncePolls
+        for _ in 0..<polls {
+            announced = await MainActor.run {
+                TodoRPC.agentHasAnnounced(
+                    hookEventCount: appState.hookState(for: sessionID).hookEvents.count)
+            }
+            if announced { break }
+            try? await Task.sleep(nanoseconds: TodoRPC.agentAnnouncePollNanos)
+        }
+    }
+    try? await Task.sleep(nanoseconds: alreadyAnnounced
+        ? TodoRPC.alreadyUpSettleNanos
+        : TodoRPC.composerSettleNanos)
+
+    var payload = text
+    if !payload.hasSuffix("\n") { payload += "\n" }
     await MainActor.run {
-        TerminalRouter.send(terminal, text: TodoRPC.exploreBrief(for: item))
+        TerminalRouter.send(terminal, text: payload)
+    }
+
+    try? await Task.sleep(nanoseconds: TodoRPC.submitConfirmNanos)
+    let activity = await MainActor.run {
+        appState.hookState(for: sessionID).activityState
+    }
+    if TodoRPC.shouldRetryEnter(activity: activity, agentAnnounced: announced) {
+        await MainActor.run {
+            TerminalRouter.send(terminal, text: "\n")
+        }
     }
     return true
 }
@@ -346,15 +392,13 @@ private func talkTodo(
     guard let sessionID = item.linkedSessionID else {
         throw RPCError.applicationError("Explore this item first (`crow todo explore`)")
     }
-    guard var text = params["text"]?.stringValue, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard let text = params["text"]?.stringValue, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         throw RPCError.invalidParams("text is required")
     }
-    if !text.hasSuffix("\n") { text += "\n" }
-    try await MainActor.run {
-        guard let terminal = appState.terminals[sessionID]?.first else {
-            throw DaemonRPCError.applicationError("The linked Manager has no terminal")
-        }
-        TerminalRouter.send(terminal, text: text)
+    let sent = await sendToManager(
+        sessionID: sessionID, text: text, appState: appState, waitForAgent: false)
+    guard sent else {
+        throw RPCError.applicationError("The linked Manager has no terminal")
     }
     return ["todo": TodoRPC.todoJSON(item), "sent": .bool(true), "session_id": .string(sessionID.uuidString)]
 }

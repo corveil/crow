@@ -1359,7 +1359,7 @@ function reviewCard(r) {
   return card;
 }
 
-// ===== Scratch / pre-ticket ideas (CROW-1231) =====
+// ===== Scratch (CROW-1231 / CROW-1233) =====
 let scratchShowClosed = false;
 
 function renderScratchBoard(root) {
@@ -1377,7 +1377,7 @@ function renderScratchBoard(root) {
   const capture = el('form', 'scratch-capture');
   const input = document.createElement('input');
   input.className = 'scratch-input';
-  input.placeholder = 'Capture an idea…';
+  input.placeholder = 'Capture to Scratch…';
   input.autocomplete = 'off';
   const submit = el('button', 'action-btn action-primary', 'Capture');
   submit.type = 'submit';
@@ -1406,7 +1406,7 @@ function renderScratchBoard(root) {
   const visible = todos.filter((t) => scratchShowClosed || (t.state !== 'done' && t.state !== 'dropped'));
   if (!visible.length) {
     root.appendChild(el('div', 'board-note',
-      todos.length ? 'No open ideas — capture one above, or Show done.' : 'No ideas yet. Capture one above; Explore opens a Manager without filing a ticket.'));
+      todos.length ? 'Nothing open — capture one above, or Show done.' : 'Scratch is empty. Capture one above; Explore opens a Manager without filing a ticket.'));
     return;
   }
   for (const item of visible) root.appendChild(scratchRow(item));

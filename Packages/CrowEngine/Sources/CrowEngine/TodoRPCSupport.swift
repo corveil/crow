@@ -18,7 +18,7 @@ public enum TodoRPC {
         return id
     }
 
-    /// Extract and trim the idea text. Rejects missing or whitespace-only.
+    /// Extract and trim the item text. Rejects missing or whitespace-only.
     public static func decodeText(_ value: JSONValue?) throws -> String {
         guard let text = value?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else {
@@ -134,20 +134,20 @@ public enum TodoRPC {
             .split(whereSeparator: { $0.isNewline || $0.isWhitespace })
             .joined(separator: " ")
         let trimmed = String(collapsed.prefix(80))
-        if trimmed.isEmpty { return "explore-idea" }
+        if trimmed.isEmpty { return "Scratch" }
         if Validation.isValidSessionName(trimmed) { return trimmed }
         let stripped = String(trimmed.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
         let fallback = String(stripped.prefix(Validation.maxSessionNameLength))
-        return fallback.isEmpty ? "explore-idea" : fallback
+        return fallback.isEmpty ? "Scratch" : fallback
     }
 
     /// The prompt pasted into the exploring Manager. Read/explain only — this
-    /// is the pre-ticket sibling of `/crow-workspace --explore`.
+    /// is the Scratch sibling of `/crow-workspace --explore`.
     public static func exploreBrief(for item: TodoItem) -> String {
         var lines = [
-            "This is a pre-ticket idea from Crow Scratch. Explore it. Do not file a ticket, create a worktree, or start a work session unless I ask.",
+            "This is from Crow Scratch. Explore it. Do not file a ticket, create a worktree, or start a work session unless I ask.",
             "",
-            "## Idea",
+            "## Item",
             item.text,
         ]
         if !item.note.isEmpty {
@@ -163,7 +163,7 @@ public enum TodoRPC {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// Body filed with `todo ticket` — the idea plus its note, tagged as
+    /// Body filed with `todo ticket` — the item plus its note, tagged as
     /// originating in Scratch so the trail is visible on the provider too.
     public static func ticketBody(for item: TodoItem) -> String {
         var parts: [String] = []
@@ -173,5 +173,53 @@ public enum TodoRPC {
         }
         parts.append("Filed from Crow Scratch.")
         return parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - Manager prompt delivery (CROW-1233)
+
+    /// Polls waiting for the Manager pane to exist (20 × 250ms).
+    public static let managerTerminalPolls = 20
+    public static let managerTerminalPollNanos: UInt64 = 250_000_000
+
+    /// After the agent announces (SessionStart), Cursor's composer still
+    /// needs a beat before Enter is accepted (#1233 / #272).
+    public static let composerSettleNanos: UInt64 = 1_500_000_000
+    /// Already-running Manager (Talk / re-Explore after SessionStart): skip
+    /// the long composer settle — the TUI is already focused.
+    public static let alreadyUpSettleNanos: UInt64 = 200_000_000
+
+    /// Fresh Manager launch: wait up to 30s (60 × 500ms) for SessionStart.
+    public static let agentAnnouncePolls = 60
+    /// Existing Manager (Talk / re-Explore): shorter wait — the TUI is
+    /// usually already up, but Explore may have just spawned it.
+    public static let existingAgentAnnouncePolls = 16
+    public static let agentAnnouncePollNanos: UInt64 = 500_000_000
+
+    /// After paste+Enter, wait this long for `.working`/`.waiting` before
+    /// retrying a bare Enter. Too short and a slow UserPromptSubmit looks
+    /// like a dropped Enter; a second Enter would re-submit leftover text
+    /// (#631).
+    public static let submitConfirmNanos: UInt64 = 2_000_000_000
+
+    /// Whether hook events have arrived for this Manager — SessionStart
+    /// means the agent TUI is up enough to fire hooks, which is the
+    /// closest "composer ready" signal Managers have (they do not track
+    /// `TerminalReadiness` the way work sessions do).
+    public static func agentHasAnnounced(hookEventCount: Int) -> Bool {
+        hookEventCount > 0
+    }
+
+    /// Retry a bare Enter only when the agent announced itself and then
+    /// stayed idle after the paste — "words in the box, agent idle".
+    /// Skip the retry when hooks never fired (don't double-submit an
+    /// agent that accepted Enter but has no hook pipeline).
+    public static func shouldRetryEnter(
+        activity: AgentActivityState, agentAnnounced: Bool
+    ) -> Bool {
+        guard agentAnnounced else { return false }
+        switch activity {
+        case .working, .waiting: return false
+        case .idle, .done: return true
+        }
     }
 }

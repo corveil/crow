@@ -2,15 +2,15 @@ import ArgumentParser
 import CrowIPC
 import Foundation
 
-/// Parent command for the durable pre-ticket Scratch list: `crow todo <subcommand>`.
+/// Parent command for the durable Scratch list: `crow todo <subcommand>`.
 ///
-/// Capture an idea in Crow, then promote it into a Manager / ticket / work
+/// Capture an item in Crow, then promote it into a Manager / ticket / work
 /// session. Mutations hit the daemon's injected `JSONStore` — the same store
 /// sessions live in — and are exempt from the session retention reaper.
 public struct Todo: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "todo",
-        abstract: "Capture and promote pre-ticket ideas",
+        abstract: "Capture and promote Scratch items",
         subcommands: [
             TodoAdd.self,
             TodoList.self,
@@ -35,10 +35,10 @@ public struct Todo: ParsableCommand {
 public struct TodoAdd: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "add",
-        abstract: "Capture a pre-ticket idea"
+        abstract: "Capture a Scratch item"
     )
 
-    @Argument(help: "Idea text")
+    @Argument(help: "Item text")
     var text: String
     @Option(name: .long, help: "Comma-separated tags")
     var tag: String?
@@ -119,7 +119,7 @@ public struct TodoEdit: ParsableCommand {
     )
 
     @Option(name: .long, help: "Todo UUID") var id: String
-    @Option(name: .long, help: "Replacement idea text") var text: String?
+    @Option(name: .long, help: "Replacement item text") var text: String?
     @Option(name: .long, help: "Replacement note") var note: String?
     @Option(name: .long, help: "Priority: p1, p2, p3, or p4") var priority: String?
     @Option(name: .customLong("add-tag"), parsing: .singleValue, help: "Tag to add (repeatable)")
@@ -324,7 +324,7 @@ public struct TodoTalk: ParsableCommand {
         printJSON(try rpc("todo-talk", params: [
             "todo_id": .string(id),
             "text": .string(text),
-        ]))
+        ], timeoutSeconds: 90))
     }
 }
 

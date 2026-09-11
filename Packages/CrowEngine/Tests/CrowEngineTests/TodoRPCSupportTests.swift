@@ -77,7 +77,7 @@ struct TodoRPCSupportTests {
 
     @Test func managerNameCollapsesWhitespaceAndFallsBack() {
         #expect(TodoRPC.managerName(from: "  native   scratch\nlist ") == "native scratch list")
-        #expect(TodoRPC.managerName(from: "   ") == "explore-idea")
+        #expect(TodoRPC.managerName(from: "   ") == "Scratch")
         #expect(TodoRPC.managerName(from: String(repeating: "x", count: 90)).count == 80)
     }
 
@@ -85,7 +85,9 @@ struct TodoRPCSupportTests {
         let item = TodoItem(text: "try this", tags: ["ios"], priority: "p2")
         let brief = TodoRPC.exploreBrief(for: item)
         #expect(brief.hasSuffix("\n"))
-        #expect(brief.contains("## Idea"))
+        #expect(brief.contains("## Item"))
+        #expect(!brief.contains("## Idea"))
+        #expect(!brief.localizedCaseInsensitiveContains("idea"))
         #expect(brief.contains("try this"))
         #expect(!brief.contains("## Notes"))
         #expect(brief.contains("Tags: ios"))
@@ -99,5 +101,15 @@ struct TodoRPCSupportTests {
         #expect(body.contains("details"))
         #expect(body.contains("Tags: web"))
         #expect(body.contains("Filed from Crow Scratch."))
+    }
+
+    @Test func shouldRetryEnterOnlyWhenAnnouncedAndIdle() {
+        #expect(TodoRPC.shouldRetryEnter(activity: .idle, agentAnnounced: true))
+        #expect(TodoRPC.shouldRetryEnter(activity: .done, agentAnnounced: true))
+        #expect(!TodoRPC.shouldRetryEnter(activity: .working, agentAnnounced: true))
+        #expect(!TodoRPC.shouldRetryEnter(activity: .waiting, agentAnnounced: true))
+        #expect(!TodoRPC.shouldRetryEnter(activity: .idle, agentAnnounced: false))
+        #expect(TodoRPC.agentHasAnnounced(hookEventCount: 1))
+        #expect(!TodoRPC.agentHasAnnounced(hookEventCount: 0))
     }
 }

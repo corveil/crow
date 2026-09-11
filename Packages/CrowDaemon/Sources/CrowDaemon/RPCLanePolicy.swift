@@ -190,7 +190,7 @@ enum RPCLanePolicy {
         // cannot tear. Explore/work/talk type into a Manager (new, primary,
         // or the item's linked explore Manager), so they share the manager
         // lane with `create-manager` / `work-on-issue` / `send` — otherwise
-        // a talk can interleave with seedExploreBrief or work-on-issue and
+        // a talk can interleave with sendToManager or work-on-issue and
         // corrupt the prompt.
         "todo-add": .concurrent,
         "todo-edit": .on("todo_id"),
