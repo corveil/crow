@@ -109,7 +109,9 @@ struct TodoRPCSupportTests {
         #expect(!TodoRPC.shouldRetryEnter(activity: .working, agentAnnounced: true))
         #expect(!TodoRPC.shouldRetryEnter(activity: .waiting, agentAnnounced: true))
         #expect(!TodoRPC.shouldRetryEnter(activity: .idle, agentAnnounced: false))
-        #expect(TodoRPC.agentHasAnnounced(hookEventCount: 1))
-        #expect(!TodoRPC.agentHasAnnounced(hookEventCount: 0))
+        #expect(TodoRPC.agentHasAnnounced(hookEventNames: ["SessionStart"]))
+        #expect(TodoRPC.agentHasAnnounced(hookEventNames: ["UserPromptSubmit", "SessionStart"]))
+        #expect(!TodoRPC.agentHasAnnounced(hookEventNames: []))
+        #expect(!TodoRPC.agentHasAnnounced(hookEventNames: ["UserPromptSubmit"]))
     }
 }

@@ -5,8 +5,8 @@ import CrowPersistence
 import CrowProvider
 import Foundation
 
-/// Scratch / pre-ticket idea list (CROW-1231). Mutations go through the
-/// injected `JSONStore` via `TodoRepository` — never a throwaway store.
+/// Scratch list (CROW-1231). Mutations go through the injected `JSONStore`
+/// via `TodoRepository` — never a throwaway store.
 func makeTodoHandlers(
     appState: AppState,
     store: JSONStore,
@@ -247,20 +247,19 @@ private func sendToManager(
     }
     guard let terminal else { return false }
 
-    var announced = await MainActor.run {
-        TodoRPC.agentHasAnnounced(
-            hookEventCount: appState.hookState(for: sessionID).hookEvents.count)
+    func hookEventNames() async -> [String] {
+        await MainActor.run {
+            appState.hookState(for: sessionID).hookEvents.map(\.eventName)
+        }
     }
+    var announced = TodoRPC.agentHasAnnounced(hookEventNames: await hookEventNames())
     let alreadyAnnounced = announced
     if !announced {
         let polls = waitForAgent
             ? TodoRPC.agentAnnouncePolls
             : TodoRPC.existingAgentAnnouncePolls
         for _ in 0..<polls {
-            announced = await MainActor.run {
-                TodoRPC.agentHasAnnounced(
-                    hookEventCount: appState.hookState(for: sessionID).hookEvents.count)
-            }
+            announced = TodoRPC.agentHasAnnounced(hookEventNames: await hookEventNames())
             if announced { break }
             try? await Task.sleep(nanoseconds: TodoRPC.agentAnnouncePollNanos)
         }

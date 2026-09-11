@@ -201,12 +201,14 @@ public enum TodoRPC {
     /// (#631).
     public static let submitConfirmNanos: UInt64 = 2_000_000_000
 
-    /// Whether hook events have arrived for this Manager — SessionStart
-    /// means the agent TUI is up enough to fire hooks, which is the
-    /// closest "composer ready" signal Managers have (they do not track
-    /// `TerminalReadiness` the way work sessions do).
-    public static func agentHasAnnounced(hookEventCount: Int) -> Bool {
-        hookEventCount > 0
+    /// Whether this Manager's *current* agent TUI has announced itself.
+    /// Keys off `SessionStart` specifically — any other event (or a leftover
+    /// count from a previous pane after `recreate-terminal` / `restartManager`)
+    /// is not "composer ready". Managers do not track `TerminalReadiness`.
+    public static let sessionStartEventName = "SessionStart"
+
+    public static func agentHasAnnounced(hookEventNames: [String]) -> Bool {
+        hookEventNames.contains(sessionStartEventName)
     }
 
     /// Retry a bare Enter only when the agent announced itself and then

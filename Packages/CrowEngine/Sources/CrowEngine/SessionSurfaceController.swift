@@ -490,6 +490,9 @@ final class SessionSurfaceController {
         // degraded window so its (now-duplicate) agent doesn't linger.
         applyRehydrationResult(sessionID: sessionID, original: seed, updated: updated)
         if let oldIndex { TmuxBackend.shared.killWindow(index: oldIndex) }
+        // Replacement window relaunches the agent. Drop the previous TUI's
+        // SessionStart so Explore/Talk wait for the new one (CROW-1233 review).
+        appState.resetHookStateForAgentRelaunch(sessionID: sessionID)
         return true
     }
 
