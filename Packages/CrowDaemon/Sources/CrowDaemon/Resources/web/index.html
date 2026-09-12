@@ -89,10 +89,10 @@
   <script src="/xterm/xterm-addon-webgl.js"></script>
   <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
   <script src="/xterm/xterm-addon-crow-viewport.js"></script>
-  <!-- CROW-1155 / CROW-1160 / CROW-1238: classic scripts in dependency order.
-       app.js is the boot assembler (shared state lives in the earlier files).
-       Settings tab bodies register on CrowSettingsTabs; the settings.js shell
-       is last. -->
+  <!-- CROW-1155 / CROW-1160 / CROW-1238 / CROW-1242: classic scripts in
+       dependency order. app.js is the boot assembler (shared state lives in
+       the earlier files). Board extracts load after boards.js. Settings tab
+       bodies register on CrowSettingsTabs; the settings.js shell is last. -->
   <script src="/rpc.js"></script>
   <script src="/notifications.js"></script>
   <script src="/sidebar.js"></script>
@@ -104,6 +104,10 @@
   <script src="/session.js"></script>
   <script src="/grid.js"></script>
   <script src="/boards.js"></script>
+  <script src="/scorecard-board.js"></script>
+  <script src="/tickets-board.js"></script>
+  <script src="/reviews-board.js"></script>
+  <script src="/scratch-board.js"></script>
   <script src="/terminal.js"></script>
   <script src="/setup.js"></script>
   <script src="/router.js"></script>
