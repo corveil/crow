@@ -364,7 +364,7 @@ final class AutoMergeController {
     /// treated as NOT Crow-authored (acceptance criterion #4).
     nonisolated static func crowAuthored(commitMessages: [String], knownSessionIDs: Set<UUID>) -> Bool {
         for message in commitMessages {
-            for uuid in IssueTracker.extractCrowSessionUUIDs(from: message) {
+            for uuid in PRAttributionRecorder.extractCrowSessionUUIDs(from: message) {
                 if knownSessionIDs.contains(uuid) { return true }
             }
         }
@@ -1006,12 +1006,12 @@ final class AutoMergeController {
         }
     }
 
-
-
-    /// Pure projection of a provider PR record onto the UI-facing `PRStatus`.
-    /// `nonisolated static` (like `shouldAttemptAutoMerge`) because it touches
-    /// no tracker state — which also makes it directly unit-testable.
-
+    /// Why the `crow:merge` label just applied to `sessionID`'s PR won't
+    /// produce a merge, or `nil` when nothing is standing in the way.
+    ///
+    /// The watcher toggle comes first: it's the one cause that applies to every
+    /// PR at once and the one with a one-line fix, so naming it beats reporting
+    /// a per-PR symptom underneath it.
     func autoMergeWarning(sessionID: UUID) -> String? {
         guard owner.autoMergeWatcherEnabledProvider() else {
             return "The label was added, but Crow's auto-merge watcher is off, so nothing will "

@@ -139,7 +139,7 @@ final class PRAttributionRecorder {
     /// attributed PRs in the same repo — a revert PR entering the auto-merge
     /// flow is the cheapest place to observe one.
     func recordPRAttribution(pr: ViewerPR, commits: [CommitInfo], now: Date = Date()) {
-        let parsed = commits.flatMap { IssueTracker.extractCrowSessionUUIDs(from: $0.message) }
+        let parsed = commits.flatMap { Self.extractCrowSessionUUIDs(from: $0.message) }
         let existingAll = store.data.prAttributions ?? [:]
         let attribution = Self.capturedAttribution(
             existing: existingAll[pr.url],
@@ -219,12 +219,40 @@ final class PRAttributionRecorder {
     /// convention. Anything shorter is too collision-prone to stamp rework on.
     nonisolated static let revertSHAMinPrefixLength = 7
 
+    /// Pattern matching a Crow-Session commit trailer line. Anchored to
+    /// line start (multiline) so trailing footers are required, not just
+    /// anywhere in the body. The captured group is the UUID string.
+    /// `nonisolated` because it's consumed from the `nonisolated static`
+    /// extraction helper (which is in turn called by unit tests).
+    nonisolated private static let crowSessionTrailerPattern = #"^Crow-Session:\s*([0-9A-Fa-f-]{36})\s*$"#
+
     /// Pattern matching git's conventional revert body line. Anchored to
     /// line start (multiline) like the Crow-Session trailer pattern; the
     /// captured group is the reverted commit's (possibly abbreviated) SHA.
     /// GitHub's Revert button and `git revert` both emit this line; the
     /// trailing `\b` tolerates GitHub's closing period.
     nonisolated private static let revertLinePattern = #"^This reverts commit ([0-9A-Fa-f]{7,40})\b"#
+
+    /// Extract every Crow-Session UUID from a commit message. Returns an
+    /// empty array when no trailers match. Pure for testability. Compiles
+    /// the regex per call — NSRegularExpression isn't trivially Sendable
+    /// across `nonisolated` boundaries in Swift 6, and the cost is
+    /// negligible (only called on PRs entering the auto-merge flow).
+    nonisolated static func extractCrowSessionUUIDs(from message: String) -> [UUID] {
+        guard let regex = try? NSRegularExpression(
+            pattern: crowSessionTrailerPattern,
+            options: [.anchorsMatchLines]
+        ) else { return [] }
+        let range = NSRange(message.startIndex..., in: message)
+        var result: [UUID] = []
+        regex.enumerateMatches(in: message, range: range) { match, _, _ in
+            guard let m = match,
+                  let uuidRange = Range(m.range(at: 1), in: message),
+                  let uuid = UUID(uuidString: String(message[uuidRange])) else { return }
+            result.append(uuid)
+        }
+        return result
+    }
 
     /// Extract every reverted-commit SHA from a commit message. Returns an
     /// empty array when no revert lines match. Pure for testability;
@@ -477,5 +505,16 @@ final class PRAttributionRecorder {
             data.prAttributions = attributions
         }
         syncPRAttributionMirror()
+    }
+}
+
+// MARK: - IssueTracker compatibility surface (CROW-1251)
+//
+// Preserves the `IssueTracker.extractCrowSessionUUIDs` spelling used by
+// `IssueTrackerAutoMergeTests`. The helper lives here with the rest of the
+// trailer parse; production callers use `PRAttributionRecorder` directly.
+extension IssueTracker {
+    nonisolated static func extractCrowSessionUUIDs(from message: String) -> [UUID] {
+        PRAttributionRecorder.extractCrowSessionUUIDs(from: message)
     }
 }
