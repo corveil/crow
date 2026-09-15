@@ -201,6 +201,69 @@ async function flush() {
   check('empty listing points at Settings → Workspaces',
     (window.__alerts || []).some((m) => /Settings → Workspaces/i.test(m)));
 
+  const editable = {
+    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    text: 'native scratch list',
+    note: 'before a ticket',
+    tags: ['crow'],
+    priority: 'p2',
+    state: 'captured',
+    links: [],
+  };
+  T.boardData.scratch = { todos: [editable] };
+  T.renderBoard();
+  const title = board.querySelector('.scratch-row .card-title');
+  check('title teaches double-click', !!(title && /Double-click/.test(title.title)));
+
+  title.ondblclick({ preventDefault() {}, stopPropagation() {} });
+  const editor = title.querySelector('input.scratch-title-input');
+  check('dblclick opens an input with the current text',
+    !!(editor && editor.value === 'native scratch list'));
+
+  editor.value = 'should not save';
+  await editor.onkeydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
+  check('Escape restores the title and drops the input',
+    title.textContent === 'native scratch list' && !title.querySelector('input'));
+
+  let titleCalls = [];
+  T.rpc = async (method, params) => {
+    titleCalls.push({ method, params });
+    return {};
+  };
+
+  title.ondblclick({ preventDefault() {}, stopPropagation() {} });
+  const blankEditor = title.querySelector('input');
+  blankEditor.value = '   ';
+  await blankEditor.onblur();
+  check('blank blur cancels without RPC',
+    titleCalls.length === 0 && title.textContent === 'native scratch list');
+
+  title.ondblclick({ preventDefault() {}, stopPropagation() {} });
+  const sameEditor = title.querySelector('input');
+  sameEditor.value = 'native scratch list';
+  await sameEditor.onblur();
+  check('unchanged blur skips RPC',
+    titleCalls.length === 0 && title.textContent === 'native scratch list');
+
+  title.ondblclick({ preventDefault() {}, stopPropagation() {} });
+  const saveEditor = title.querySelector('input');
+  saveEditor.value = '  renamed scratch  ';
+  T.rpc = async (method, params) => {
+    titleCalls.push({ method, params });
+    if (method === 'todo-list') {
+      return { todos: [{ ...editable, text: 'renamed scratch' }] };
+    }
+    return { todo: { ...editable, text: 'renamed scratch' } };
+  };
+  titleCalls = [];
+  await saveEditor.onkeydown({ key: 'Enter', preventDefault() {}, stopPropagation() {} });
+  check('Enter calls todo-edit with trimmed text',
+    !!(titleCalls[0] && titleCalls[0].method === 'todo-edit'
+      && titleCalls[0].params && titleCalls[0].params.todo_id === editable.id
+      && titleCalls[0].params.text === 'renamed scratch'));
+  check('Enter refreshes the scratch list', titleCalls.some((c) => c.method === 'todo-list'));
+  check('board shows the new title',
+    board.querySelector('.scratch-row .card-title')?.textContent === 'renamed scratch');
   T.rpc = prevRpc;
 
   if (failed) { console.log('\n' + failed + ' failed'); process.exit(1); }
