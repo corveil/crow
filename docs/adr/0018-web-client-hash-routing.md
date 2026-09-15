@@ -17,10 +17,12 @@ interchangeable here.
 `crowd` serves the web UI from `StaticAssets.mount` as a set of **exact literal paths** — `/`,
 `/index.html`, `/login`, `/app.js`, `/app.css`, the CROW-1155 concern scripts (`/rpc.js`,
 `/notifications.js`, `/sidebar.js`, …) and the CROW-1238 sidebar extracts (`/sidebar-chrome.js`,
-`/pr-glyphs.js`, `/session-row.js`, `/session-menu.js`), the CROW-1242 board extracts
-(`/scorecard-board.js`, `/tickets-board.js`, `/reviews-board.js`, `/scratch-board.js`) after
-`/boards.js`, the CROW-1160 Settings tab scripts (`/settings-general.js`, …) plus the Settings
-shell `/settings.js`, `/settings.css`, `/brand.svg`, `/version.json`, `/terminal.html`,
+`/pr-glyphs.js`, `/session-row.js`, `/session-menu.js`), the CROW-1257 session extracts
+(`/session-modals.js` before `/sidebar.js`; `/session-header.js` / `/session-tabs.js` after
+`/session.js`), the CROW-1242 board extracts (`/scorecard-board.js`, `/tickets-board.js`,
+`/reviews-board.js`, `/scratch-board.js`) after `/boards.js`, the CROW-1160 Settings tab
+scripts (`/settings-general.js`, …) plus the Settings shell `/settings.js`, `/settings.css`,
+`/brand.svg`, `/version.json`, `/terminal.html`,
 `/xterm/:file` — plus `/artifacts/:session/:file`, `/autostart`, and `/auth/*` from their own
 mounters. There is no wildcard, no catch-all, and no `FileMiddleware`. Hummingbird answers
 anything unmatched with a bare 404.
@@ -136,6 +138,8 @@ Moving to History routing later is a contained change — swap `location.hash` f
 - Code: `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/router.js` (router),
   `…/Resources/web/sidebar.js` (selection state; chrome/glyphs/rows/menus in
   `sidebar-chrome.js` / `pr-glyphs.js` / `session-row.js` / `session-menu.js`, CROW-1238),
+  `…/Resources/web/session.js` (session-detail kernel; modals/header/tabs in
+  `session-modals.js` / `session-header.js` / `session-tabs.js`, CROW-1257),
   `…/Resources/web/boards.js` (board kernel; scorecard/tickets/reviews/scratch in
   `scorecard-board.js` / `tickets-board.js` / `reviews-board.js` / `scratch-board.js`, CROW-1242),
   `…/Resources/web/app.js` (boot),

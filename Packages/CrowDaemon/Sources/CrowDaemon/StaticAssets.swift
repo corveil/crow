@@ -15,12 +15,13 @@ import NIOCore
 /// refresh, no rebuild.
 enum StaticAssets {
     /// Classic client scripts in `index.html` load order (CROW-1155 / CROW-1160 /
-    /// CROW-1238 / CROW-1242). Exact literal paths — `crowd` has no catch-all.
-    /// Settings tab bodies load before the Settings shell; `settings.js` is last.
+    /// CROW-1238 / CROW-1242 / CROW-1257). Exact literal paths — `crowd` has no
+    /// catch-all. Settings tab bodies load before the Settings shell;
+    /// `settings.js` is last. `session-modals.js` precedes sidebar callers.
     static let uiJavaScriptFiles = [
-        "rpc.js", "notifications.js", "sidebar.js", "sidebar-chrome.js",
+        "rpc.js", "notifications.js", "session-modals.js", "sidebar.js", "sidebar-chrome.js",
         "pr-glyphs.js", "session-row.js", "session-menu.js", "switcher.js",
-        "session.js", "grid.js", "boards.js", "scorecard-board.js",
+        "session.js", "session-header.js", "session-tabs.js", "grid.js", "boards.js", "scorecard-board.js",
         "tickets-board.js", "reviews-board.js", "scratch-board.js",
         "terminal.js", "tui-record.js", "setup.js",
         "router.js", "app.js",
