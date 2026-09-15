@@ -49,8 +49,12 @@
     g = g || global;
     var vv = g.visualViewport;
     if (!vv) return 0;
-    var layout = g.innerHeight || 0;
-    var inset = layout - vv.height - (vv.offsetTop || 0);
+    // CROW-1263 / CROW-1078 #4: accessory bars + keyboard occlude
+    // `layoutHeight - vv.height`. Subtracting offsetTop under-counted when
+    // Chrome panned so offsetTop + height ≈ innerHeight (the TUI jump).
+    var root = g.document && g.document.documentElement;
+    var layout = (root && root.clientHeight) || g.innerHeight || 0;
+    var inset = layout - vv.height;
     return inset > 0 ? Math.round(inset) : 0;
   }
 

@@ -47,6 +47,14 @@ html, body {
   overflow: hidden;
 }
 
+/* CROW-1263: on a touch surface, refuse browser pan of the layout/visual
+   viewport when the helper textarea is focused (Chrome Autofill + iPadOS bars).
+   Not inherited into overflow:auto descendants. Desktop/Tauri is pointer:fine
+   and stays untouched (CROW-1045). */
+@media (pointer: coarse) {
+  html, body { touch-action: none; }
+}
+
 body {
   height: 100dvh; /* exclude mobile browser chrome so the last row is reachable */
   display: flex;

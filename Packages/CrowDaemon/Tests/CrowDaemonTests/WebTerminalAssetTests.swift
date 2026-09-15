@@ -472,8 +472,12 @@ import Testing
     /// LAYOUT viewport for the keyboard, which puts that platform back on the
     /// ordinary `100dvh` + window-`resize` path the pages already handle; without
     /// it Android overlays the keyboard and depends entirely on the addon.
-    /// `viewport-fit=cover` is what lets the terminal background go full-bleed —
-    /// `terminal.html` was the one page missing it (CROW-988).
+    /// CROW-1263: that same token is the upward pan on iPad Chrome (Autofill +
+    /// iPadOS accessory bars), so the pages keep `resizes-content` as the HTML
+    /// default (Android) and swap to `overlays-content` on Apple touch in an
+    /// inline <head> script. `viewport-fit=cover` is what lets the terminal
+    /// background go full-bleed — `terminal.html` was the one page missing it
+    /// (CROW-988).
     @Test(arguments: ["index.html", "terminal.html"])
     func viewportMetaHandlesTheSoftwareKeyboard(page: String) throws {
         let source = try Self.webAsset(page)
@@ -487,6 +491,15 @@ import Testing
         #expect(
             meta.contains("viewport-fit=cover"),
             "\(page)'s viewport meta must opt into the full-bleed safe-area layout")
+        #expect(
+            source.contains("interactive-widget=overlays-content"),
+            "\(page) must swap to overlays-content on iPhone/iPad (CROW-1263)")
+        #expect(
+            source.contains("virtualKeyboard"),
+            "\(page) must set virtualKeyboard.overlaysContent when the API exists (CROW-1263)")
+        #expect(
+            source.contains("iPad|iPhone|iPod"),
+            "\(page) must detect Apple touch before swapping the widget policy")
     }
 
     /// CROW-1006: both terminal surfaces must reach their context menu by

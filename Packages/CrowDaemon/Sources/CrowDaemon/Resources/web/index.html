@@ -4,10 +4,29 @@
   <meta charset="utf-8">
   <!-- CROW-988: `interactive-widget=resizes-content` makes Chrome/Android shrink
        the LAYOUT viewport for the software keyboard, so `100dvh` below and the
-       existing window-`resize` fit path self-correct there. iOS ignores it and
-       only shrinks the visual viewport, which is what xterm-addon-crow-viewport
-       handles. -->
+       existing window-`resize` fit path self-correct there. CROW-1263: on
+       iPhone/iPad that same token is the upward pan (Chrome Autofill + iPadOS
+       accessory bars). The script below swaps to `overlays-content` on Apple
+       touch so the layout stays put and CrowViewportAddon sizes from
+       visualViewport; Android keeps resizes-content. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <script>
+    (function () {
+      var n = navigator;
+      var ua = n.userAgent || '';
+      var ios = /iPad|iPhone|iPod/.test(ua) ||
+        (n.platform === 'MacIntel' && n.maxTouchPoints > 1);
+      if (!ios) return;
+      var meta = document.querySelector('meta[name="viewport"]');
+      if (meta) {
+        meta.setAttribute('content', (meta.getAttribute('content') || '')
+          .replace('interactive-widget=resizes-content', 'interactive-widget=overlays-content'));
+      }
+      try {
+        if (n.virtualKeyboard) n.virtualKeyboard.overlaysContent = true;
+      } catch (_) { /* Virtual Keyboard API is Chrome-only and optional */ }
+    })();
+  </script>
   <title>Crow</title>
   <link rel="icon" type="image/svg+xml" href="/brand.svg">
   <!-- Web app manifest + install icons (CROW-1073): lets Chrome install Crow as a
