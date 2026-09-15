@@ -60,7 +60,14 @@ function scratchRow(item) {
   const card = el('div', 'board-card scratch-row');
   const body = el('div', 'scratch-row-body');
   const top = el('div', 'card-title-row');
-  top.appendChild(el('div', 'card-title', item.text || '(untitled)'));
+  const title = el('div', 'card-title', item.text || '(untitled)');
+  title.title = 'Double-click to rename';
+  title.ondblclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    startScratchTitleEdit(title, item);
+  };
+  top.appendChild(title);
   body.appendChild(top);
   if (item.note) body.appendChild(el('div', 'card-desc', item.note));
 
@@ -107,6 +114,61 @@ function scratchRow(item) {
   foot.appendChild(actions);
   card.appendChild(foot);
   return card;
+}
+
+// CROW-1260: inline title edit via the existing todo-edit RPC. Escape / blank
+// / unchanged text cancel; the daemon still rejects a blank `text` if one
+// slips through.
+function startScratchTitleEdit(titleEl, item) {
+  if (titleEl.querySelector('input')) return;
+  const original = item.text || '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'scratch-title-input';
+  input.value = original;
+  input.autocomplete = 'off';
+  input.setAttribute('aria-label', 'Edit title');
+  titleEl.textContent = '';
+  titleEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const restore = () => { titleEl.textContent = original || '(untitled)'; };
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const next = (input.value || '').trim();
+    if (!save || !next || next === original) {
+      restore();
+      return;
+    }
+    try {
+      await rpc('todo-edit', { todo_id: item.id, text: next });
+      item.text = next;
+      titleEl.textContent = next;
+      await refreshBoard('scratch');
+    } catch (err) {
+      restore();
+      alertModal('Rename failed: ' + (err.message || err));
+    }
+  };
+
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      return finish(true);
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      return finish(false);
+    }
+  };
+  input.onblur = () => finish(true);
+  input.onclick = (e) => e.stopPropagation();
+  input.ondblclick = (e) => e.stopPropagation();
 }
 
 function scratchAction(label, onClick) {
