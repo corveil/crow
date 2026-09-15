@@ -17,7 +17,20 @@ function loadAddon(windowExtras) {
   const dom = new JSDOM('<!doctype html><html><body><div id="terminal"></div><div id="terminal-wrap"></div></body></html>',
     { runScripts: 'outside-only', url: 'http://localhost/' });
   const { window } = dom;
-  Object.assign(window, windowExtras || {});
+  // jsdom's window.navigator is a getter-only Window property, so
+  // Object.assign(window, { navigator }) throws. Patch fields onto the
+  // existing Navigator instead.
+  const extras = Object.assign({}, windowExtras || {});
+  const navPatch = extras.navigator;
+  delete extras.navigator;
+  Object.assign(window, extras);
+  if (navPatch) {
+    Object.keys(navPatch).forEach((k) => {
+      try {
+        Object.defineProperty(window.navigator, k, { configurable: true, value: navPatch[k] });
+      } catch (_) { /* jsdom navigator is a getter-only Window property */ }
+    });
+  }
   window.HTMLCanvasElement.prototype.getContext = function () { return null; };
   const ctx = dom.getInternalVMContext();
   vm.runInContext(fs.readFileSync(ADDON_JS, 'utf8'), ctx, { filename: 'crow-tui-trace.js' });
@@ -183,6 +196,28 @@ console.log('\nHUD CSS does not change FitAddon geometry:');
   const css = fs.readFileSync(__dirname + '/../Sources/CrowDaemon/Resources/web/app.css', 'utf8');
   check('#tui-hud is position:absolute', /#tui-hud\s*\{[^}]*position:\s*absolute/.test(css));
   check('#tui-hud pointer-events none', /#tui-hud\s*\{[^}]*pointer-events:\s*none/.test(css));
+}
+
+console.log('\nHUD keyboard_inset_px includes accessory height (CROW-1263):');
+{
+  const { window, addon } = loadAddon({ innerWidth: 1024, innerHeight: 800 });
+  Object.defineProperty(window.document.documentElement, 'clientHeight', {
+    value: 800, configurable: true,
+  });
+  window.visualViewport = { height: 412, offsetTop: 388, width: 1024 };
+  const term = {
+    cols: 80, rows: 24, element: window.document.getElementById('terminal'),
+    textarea: null, modes: { mouseTrackingMode: 'none' },
+    buffer: { active: {
+      cursorX: 0, cursorY: 0, viewportY: 0, baseY: 0, type: 'normal',
+      getLine: () => ({ translateToString: () => '' }),
+    } },
+  };
+  const sample = addon.collectTuiSample(term, { events: [] });
+  // 800 - 412 = 388 (keyboard + two ~44px bars). Subtracting offsetTop would
+  // have reported 0 — the CROW-1078 #4 false negative for the HUD.
+  check('inset is layout - vv.height, not chased away by offsetTop',
+    sample.viewport.keyboard_inset_px === 388);
 }
 
 if (fail) {

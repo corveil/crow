@@ -13,6 +13,10 @@ const { JSDOM } = require('jsdom');
 // test independent of a chased visual-viewport scroll (case 12), and repaint the
 // cursor when the inset changes (case 13). keyboardCapable is exported and shared
 // with app.js's WebGL gate (case 14).
+// CROW-1263: iPad Chrome accessory bars + layout pan — preventScroll focus
+// wrapper (15), overlay viewport meta on a fake iPad UA (16), accessory-height
+// occlusion with a chased offsetTop pinned back to 0 (17), rAF-coalesced
+// accessory animation (18).
 const ADDON_JS =
   __dirname + '/../../CrowTerminal/Sources/CrowTerminal/Resources/xterm/xterm-addon-crow-viewport.js';
 
@@ -24,9 +28,23 @@ const HOST_TOP = 120;      // the web app's terminal sits below header + tabbar
 
 // A fresh world per case: the addon holds module-free per-instance state, but
 // each test wants its own listener set, rAF queue and host element.
-function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapable = true } = {}) {
-  const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>',
-    { runScripts: 'outside-only', url: 'http://localhost/' });
+function makeWorld({
+  hasVisualViewport = true,
+  hostTop = HOST_TOP,
+  keyboardCapable = true,
+  userAgent,
+  platform,
+  maxTouchPoints,
+  virtualKeyboard = false,
+} = {}) {
+  const html = '<!doctype html><html><head>'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">'
+    + '</head><body><div id="host"></div></body></html>';
+  const dom = new JSDOM(html, {
+    runScripts: 'outside-only',
+    url: 'http://localhost/',
+    userAgent: userAgent || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) jsdom',
+  });
   const { window } = dom;
 
   // CROW-1045: the addon now gates on a keyboard-capable surface (touch), not
@@ -36,6 +54,21 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   // `matchMedia` that answers `(pointer: coarse)` to model a phone/tablet. The
   // one desktop case flips this off to prove the addon stays wholly inert.
   window.matchMedia = (q) => ({ media: q, matches: keyboardCapable && /coarse/.test(q) });
+
+  if (typeof platform === 'string') {
+    Object.defineProperty(window.navigator, 'platform', { configurable: true, value: platform });
+  }
+  if (typeof userAgent === 'string') {
+    Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: userAgent });
+  }
+  if (typeof maxTouchPoints === 'number') {
+    Object.defineProperty(window.navigator, 'maxTouchPoints', { configurable: true, value: maxTouchPoints });
+  }
+  if (virtualKeyboard) {
+    Object.defineProperty(window.navigator, 'virtualKeyboard', {
+      configurable: true, value: { overlaysContent: false },
+    });
+  }
 
   // rAF we drive by hand. Callbacks registered DURING a flush land in the next
   // one, matching the browser — the addon relies on that to pin the prompt only
@@ -55,6 +88,21 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
     },
   };
   if (hasVisualViewport) window.visualViewport = vv;
+
+  const pageScrolls = [];
+  window.scrollX = 0;
+  window.scrollY = 0;
+  window.scrollTo = (x, y) => {
+    if (x && typeof x === 'object') {
+      y = x.top || 0;
+      x = x.left || 0;
+    }
+    pageScrolls.push([x || 0, y || 0]);
+    vv.offsetTop = 0;
+    vv.offsetLeft = 0;
+    window.scrollX = 0;
+    window.scrollY = 0;
+  };
 
   Object.defineProperty(window.document.documentElement, 'clientHeight',
     { value: LAYOUT_HEIGHT, configurable: true });
@@ -81,6 +129,12 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   const textarea = window.document.createElement('textarea');
   textarea.className = 'xterm-helper-textarea';
   element.appendChild(textarea);
+  const focusCalls = [];
+  const nativeFocus = textarea.focus.bind(textarea);
+  textarea.focus = function (opts) {
+    focusCalls.push(opts);
+    try { return nativeFocus(opts); } catch (_) { /* jsdom focus can throw */ }
+  };
   const scrolls = [];
   const resizes = [];
   const refreshes = [];
@@ -105,6 +159,7 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
 
   return {
     window, vv, host, term, addon, scrolls, resizes, refreshes, listeners, flush, frames, emit,
+    pageScrolls, focusCalls,
     activate: () => addon.activate(term),
     height: () => host.style.height,
     // A keyboard of `px`, iOS-style: visual viewport shrinks, layout does not.
@@ -114,6 +169,9 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
     show: () => { clientHeight = LAYOUT_HEIGHT - hostTop; },
     // iOS raises the keyboard on focus; dispatch it, then settle the frame.
     focus: () => { textarea.dispatchEvent(new window.Event('focus')); flush(); },
+    // Call the (possibly wrapped) focus method — CROW-1263 preventScroll.
+    focusMethod: () => { textarea.focus(); },
+    viewportMeta: () => window.document.querySelector('meta[name="viewport"]'),
     // The on-screen park <style> the addon injects (touch surfaces only).
     homeStyle: () => window.document.getElementById('crow-vv-textarea-home'),
     // The addon's exported namespace (keyboardCapable is shared with app.js).
@@ -236,15 +294,20 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   check('stays quiet once restored', w.resizes.length === 2);
 }
 
-// ---- 7. offsetTop is added, not subtracted ---------------------------------
+// ---- 7. A chased offsetTop is pinned, not followed ----------------------------
+// CROW-988 added offsetTop into visibleBottom so a shifted visual viewport still
+// reached the on-screen band. CROW-1263 pins that shift back to the origin
+// (Chrome Autofill + iPadOS bars) so the TUI does not jump up with it.
 {
-  console.log('shifted visual viewport');
+  console.log('shifted visual viewport is pinned');
   const w = makeWorld();
   w.activate();
   w.vv.height = 400;
-  w.vv.offsetTop = 50; // visible band is [50, 450) inside an 800px layout
+  w.vv.offsetTop = 50; // Chrome/iOS chased the helper
   w.emit();
-  check('host reaches offsetTop + height', w.height() === '330px'); // 450 - 120
+  check('pins offsetTop back to 0', w.vv.offsetTop === 0);
+  check('host sized as if the pan never happened', w.height() === '280px'); // 400 - 120
+  check('asked the page to scroll to origin', w.pageScrolls.length >= 1);
 }
 
 // ---- 8. A host with no layout box is never sized ---------------------------
@@ -323,7 +386,8 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
 // CROW-1078 #4: iOS scrolls the visual viewport (offsetTop grows) to chase the
 // textarea. The OLD occlusion test, layoutHeight - (offsetTop + height), then
 // computes ~0 and wrongly restores. Keyboard height, layoutHeight - height, is
-// independent of the scroll and still fires; sizing still uses offsetTop.
+// independent of the scroll and still fires. CROW-1263 then pins offsetTop back
+// to 0 so the host is NOT sized as if the TUI had been shoved up with the pan.
 {
   console.log('chased visual-viewport scroll still reads as keyboard');
   const w = makeWorld();
@@ -334,8 +398,9 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   // Old math: 800 - (200 + 500) = 100 ≤ 120 → would have restored (no keyboard).
   // New math: 800 - 500 = 300 > 120 → detected.
   check('still detects the keyboard', w.resizes.length === 1);
-  // Sizing uses visibleBottom = offsetTop + height = 700; host top is 120.
-  check('host sized to the visible bottom (offsetTop honored)', w.height() === '580px');
+  // Pin treats the chase as undone, so visibleBottom is height (500), not 700.
+  check('host sized without following the pan', w.height() === '380px'); // 500 - 120
+  check('offsetTop leftover is 0', w.vv.offsetTop === 0);
   check('cursor repainted on apply', w.refreshes.length >= 1);
 }
 
@@ -373,6 +438,108 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   desk.focus();
   check('desktop does not size on focus', desk.height() === '');
   check('desktop does not repaint on focus', desk.refreshes.length === 0);
+  desk.focusMethod();
+  check('desktop does not wrap focus with preventScroll',
+    !desk.focusCalls.some((o) => o && o.preventScroll === true));
+  check('desktop does not stamp the helper as crow-tty',
+    desk.term.textarea.getAttribute('name') !== 'crow-tty');
+}
+
+const IPAD_CHROME_UA = 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/120.0.6099.119 Mobile/15E148 Safari/604.1';
+const ANDROID_CHROME_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36';
+
+// ---- 15. preventScroll focus wrapper + form-unlike helper stamps ------------
+{
+  console.log('preventScroll focus wrapper and helper stamps');
+  const w = makeWorld();
+  w.activate();
+  const ta = w.term.textarea;
+  check('autocomplete off', ta.getAttribute('autocomplete') === 'off');
+  check('autocorrect off', ta.getAttribute('autocorrect') === 'off');
+  check('autocapitalize off', ta.getAttribute('autocapitalize') === 'off');
+  check('spellcheck false', ta.getAttribute('spellcheck') === 'false');
+  check('name is crow-tty, not a form field', ta.getAttribute('name') === 'crow-tty');
+  check('data-lpignore', ta.getAttribute('data-lpignore') === 'true');
+  check('does not request a password/otp/csc accessory',
+    !/new-password|one-time-code|cc-csc/.test(ta.getAttribute('autocomplete') || ''));
+  w.focusMethod();
+  check('focus wrapper passed preventScroll',
+    w.focusCalls.some((o) => o && o.preventScroll === true));
+}
+
+// ---- 16. Overlay viewport meta on a fake iPad UA ----------------------------
+{
+  console.log('overlay viewport meta on iPad Chrome UA');
+  const ipad = makeWorld({ userAgent: IPAD_CHROME_UA, virtualKeyboard: true });
+  check('default HTML is resizes-content (Android path)',
+    /interactive-widget=resizes-content/.test(ipad.viewportMeta().getAttribute('content')));
+  ipad.activate();
+  const content = ipad.viewportMeta().getAttribute('content');
+  check('iPad swaps to overlays-content', /interactive-widget=overlays-content/.test(content));
+  check('iPad no longer asks to resize the layout', !/resizes-content/.test(content));
+  check('virtualKeyboard.overlaysContent',
+    ipad.window.navigator.virtualKeyboard.overlaysContent === true);
+
+  const android = makeWorld({
+    userAgent: ANDROID_CHROME_UA,
+    platform: 'Linux armv8l',
+    virtualKeyboard: true,
+  });
+  android.activate();
+  check('Android keeps resizes-content',
+    /interactive-widget=resizes-content/.test(android.viewportMeta().getAttribute('content')));
+  check('Android does not force overlaysContent',
+    android.window.navigator.virtualKeyboard.overlaysContent === false);
+
+  const ipadOS = makeWorld({
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+    platform: 'MacIntel',
+    maxTouchPoints: 5,
+  });
+  ipadOS.activate();
+  check('iPadOS-as-MacIntel also overlays',
+    /overlays-content/.test(ipadOS.viewportMeta().getAttribute('content')));
+}
+
+// ---- 17. Keyboard + stacked accessory bars, chased offsetTop, pinned --------
+// Chrome Autofill (~44px) + iPadOS bar (~44px) + keyboard. Chrome pans so
+// offsetTop + height ≈ innerHeight — the CROW-1078 #4 false negative if
+// occlusion used visibleBottom, and the TUI jump if sizing followed the pan.
+{
+  console.log('accessory-height occlusion with chased offsetTop');
+  const w = makeWorld();
+  w.activate();
+  w.flush(); // settle the activate schedule
+  const keyboard = 300;
+  const accessory = 44;
+  const ipadBar = 44;
+  const occlusion = keyboard + accessory + ipadBar; // 388
+  w.vv.height = LAYOUT_HEIGHT - occlusion; // 412
+  w.vv.offsetTop = occlusion;              // 388 + 412 = 800, chased flush with layout
+  w.emit('scroll');
+  check('still detects keyboard+bars (occlusion > 120)', w.resizes.length === 1);
+  check('host sized to un-panned visual height', w.height() === '292px'); // 412 - 120
+  check('window.scrollTo pinned origin',
+    w.pageScrolls.length >= 1 && w.pageScrolls.every((p) => p[0] === 0 && p[1] === 0));
+  check('no leftover offsetTop after pin', w.vv.offsetTop === 0);
+}
+
+// ---- 18. Accessory animation is one fit at rest, not a SIGWINCH storm -------
+{
+  console.log('accessory animation coalesces to one fit');
+  const w = makeWorld();
+  w.activate();
+  w.flush();
+  w.keyboard(300);
+  w.vv.offsetTop = 20;
+  for (let i = 0; i < 6; i++) {
+    (w.listeners.scroll || []).forEach((fn) => fn());
+  }
+  check('burst queues at most one rAF', w.frames() === 1);
+  w.flush();
+  check('one refit at rest', w.resizes.length === 1);
+  w.flush();
+  check('no extra SIGWINCH after rest', w.resizes.length === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

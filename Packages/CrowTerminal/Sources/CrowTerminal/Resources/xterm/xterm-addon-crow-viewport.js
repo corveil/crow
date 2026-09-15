@@ -50,6 +50,21 @@
 // behind the same keyboardCapable + visualViewport guards, so desktop and
 // non-touch webviews are wholly unchanged.
 //
+// CROW-1263: iPad Chrome still pans the visual viewport on focus, even with the
+// helper on-screen. Two accessory bars (Chrome Autofill + iPadOS QuickType)
+// stack above the keyboard and Chrome scrolls `visualViewport.offsetTop` so the
+// field sits above both — the whole TUI jumps up, FitAddon SIGWINCHes against a
+// moving viewport, and the agent grid corrupts. A page cannot hide those bars
+// (`autocomplete="off"` is ignored; there is no web API). What we can do: (1)
+// ask iOS Chrome to *overlay* the keyboard (`interactive-widget=overlays-content`
+// + `virtualKeyboard.overlaysContent`, Android keeps `resizes-content`), (2)
+// wrap the helper's `focus({ preventScroll: true })` and pin `offsetTop` back to
+// 0 on focus/scroll, (3) stamp the helper so it looks less like a form, (4) keep
+// occlusion as `layoutHeight - vv.height` so a chased offsetTop cannot read as
+// "no keyboard". Accessory animation is a visualViewport event burst — the
+// existing rAF coalesce is one apply per frame, and an unchanged geometry after
+// the pin is not a SIGWINCH.
+//
 // Loaded via <script src> (not ES modules), so it exposes a namespaced UMD-style
 // global matching the vendored addons
 // (window.FitAddon.FitAddon → window.CrowViewportAddon.CrowViewportAddon).
@@ -95,6 +110,53 @@
     return false;
   }
 
+  // iPhone / iPad, including iPadOS 13+ which reports as Macintosh + touch.
+  // Used to swap `interactive-widget` to overlay (CROW-1263) without touching
+  // Chrome/Android's `resizes-content` path (CROW-988).
+  function isAppleTouchDevice(global) {
+    var nav = global.navigator;
+    if (!nav) {
+      return false;
+    }
+    var ua = nav.userAgent || '';
+    if (/iPad|iPhone|iPod/.test(ua)) {
+      return true;
+    }
+    return nav.platform === 'MacIntel' && typeof nav.maxTouchPoints === 'number'
+      && nav.maxTouchPoints > 1;
+  }
+
+  // iOS: overlay the software keyboard (and accessory bars) instead of
+  // shrinking/panning the layout viewport. Idempotent. A no-op on Android and
+  // desktop — those keep the HTML default `resizes-content`. The same swap also
+  // lives as an inline <head> script so it lands before first paint; this copy
+  // re-applies if a later navigation or xterm attach races it.
+  function applyInteractiveWidgetPolicy(global) {
+    if (!isAppleTouchDevice(global)) {
+      return false;
+    }
+    var doc = global.document;
+    if (doc && typeof doc.querySelector === 'function') {
+      var meta = doc.querySelector('meta[name="viewport"]');
+      if (meta) {
+        var content = meta.getAttribute('content') || '';
+        if (content.indexOf('interactive-widget=resizes-content') !== -1) {
+          meta.setAttribute('content', content.replace(
+            'interactive-widget=resizes-content',
+            'interactive-widget=overlays-content'
+          ));
+        }
+      }
+    }
+    try {
+      var vk = global.navigator && global.navigator.virtualKeyboard;
+      if (vk) {
+        vk.overlaysContent = true;
+      }
+    } catch (_) { /* Virtual Keyboard API is optional */ }
+    return true;
+  }
+
   /// `options.host`    element to size; defaults to the container passed to
   ///                   `term.open()` (i.e. `term.element.parentElement`).
   /// `options.onResize` called after the host is resized — the page's own
@@ -114,6 +176,7 @@
     this._pending = false;      // a frame is already scheduled
     this._textarea = null;      // xterm's focus/IME helper textarea (CROW-1078)
     this._onFocus = null;       // re-sync when the keyboard is raised on focus
+    this._pinning = false;      // re-entry guard: scrollTo can itself fire scroll
   }
 
   // ITerminalAddon.activate — must run after term.open() so term.element exists.
@@ -139,26 +202,36 @@
     this._host = host;
     this._vv = vv;
 
+    // CROW-1263: overlay on iPhone/iPad so Chrome does not resize/pan the layout
+    // viewport out from under the grid. Android keeps the HTML default.
+    applyInteractiveWidgetPolicy(global);
+
     var self = this;
-    this._onChange = function () { self._schedule(); };
+    this._onChange = function () {
+      // Pin synchronously so a chased offsetTop does not survive until the
+      // coalesced frame (that leftover pan is the TUI jump). Then one apply.
+      self._pinViewport();
+      self._schedule();
+    };
     // `scroll` matters as much as `resize`: iOS reports a keyboard that shifts
     // the visual viewport within an unchanged layout viewport as a scroll.
+    // Accessory-bar animation is the same burst (CROW-1263); rAF coalesces it.
     vv.addEventListener('resize', this._onChange);
     vv.addEventListener('scroll', this._onChange);
 
     // CROW-1078: stop iOS scrolling the visual viewport to chase the off-screen
     // helper textarea, and reconcile the cursor the moment the keyboard is
     // raised. `_homeTextarea` re-parks the field on-screen (a no-op once it's on
-    // a real cell — xterm's inline sync wins). The `focus` listener reconciles
-    // right when iOS opens the keyboard, so the first keyboard frame is already
-    // correct instead of waiting for the vv resize/scroll that trails it.
+    // a real cell — xterm's inline sync wins). CROW-1263: wrap focus so iOS
+    // cannot pan on tap, stamp the helper so it looks less like a form, and pin
+    // offsetTop on the focus event itself (the vv scroll trails the keyboard).
     this._homeTextarea();
-    var textarea = term.textarea;
-    if (textarea && typeof textarea.addEventListener === 'function') {
-      this._textarea = textarea;
-      this._onFocus = function () { self._schedule(); };
-      textarea.addEventListener('focus', this._onFocus);
-    }
+    this._onFocus = function () {
+      self._pinViewport();
+      self._prepareTextarea();
+      self._schedule();
+    };
+    this._prepareTextarea();
 
     // Evaluate once up front — a terminal can be attached with the keyboard
     // already open (switching sessions/tabs mid-typing).
@@ -166,7 +239,8 @@
   };
 
   // Coalesce a burst of viewport events into one measurement per frame. iOS
-  // emits a stream of them while the keyboard animates in.
+  // emits a stream of them while the keyboard (and Chrome/iPadOS accessory bars)
+  // animates in — applying per event is the #637 / #661 SIGWINCH storm.
   CrowViewportAddon.prototype._schedule = function () {
     if (this._pending) {
       return;
@@ -187,14 +261,21 @@
       return; // disposed or detached between the event and the frame
     }
 
+    this._prepareTextarea();
+
     var root = global.document && global.document.documentElement;
     var layoutHeight = root ? root.clientHeight : 0;
     // Bottom edge of the visible area in LAYOUT-viewport coordinates — the same
     // space getBoundingClientRect() reports in, which is what makes this work
     // for a terminal that isn't full-page (the web app's is below a header and
     // a tab bar). `offsetTop` is how far the visual viewport has been pushed
-    // down inside the layout viewport, so it must be added, not subtracted.
-    var visibleBottom = vv.offsetTop + vv.height;
+    // down inside the layout viewport, so it must be added, not subtracted —
+    // EXCEPT when we just pinned a Chrome/iOS chase back to the origin
+    // (CROW-1263): offsetTop may not have updated this turn, and adding the
+    // stale pan would size the host as if the TUI had been shoved up.
+    var pinned = this._pinViewport();
+    var offsetTop = pinned ? 0 : (vv.offsetTop || 0);
+    var visibleBottom = offsetTop + vv.height;
 
     // Is a software keyboard up? The shrink of the VISIBLE height against the
     // layout viewport — `layoutHeight - vv.height` — is the keyboard's height,
@@ -202,9 +283,10 @@
     // (`offsetTop`). Testing `layoutHeight - visibleBottom` instead let a scroll
     // that iOS did to chase the off-screen helper textarea read as "no keyboard"
     // (offsetTop + height ≈ layoutHeight → ≈ 0) even with the keyboard open —
-    // CROW-1078 #4. On these `overflow: hidden` pages nothing but the keyboard
-    // shrinks the visible height, so this can't false-positive; `visibleBottom`
-    // (which DOES need offsetTop) still drives the sizing below.
+    // CROW-1078 #4. CROW-1263 pins a chased offsetTop before sizing so a
+    // leftover pan cannot shove the host. On these `overflow: hidden` pages
+    // nothing but the keyboard shrinks the visible height, so this can't
+    // false-positive.
     var keyboardHeight = layoutHeight - vv.height;
 
     if (keyboardHeight <= KEYBOARD_MIN_OCCLUSION) {
@@ -260,6 +342,99 @@
   CrowViewportAddon.prototype._atBottom = function () {
     var b = this._term.buffer && this._term.buffer.active;
     return !b || b.viewportY >= b.baseY;
+  };
+
+  // CROW-1263: Chrome iOS pans visualViewport.offsetTop to keep the helper
+  // above Autofill + iPadOS accessory bars. offsetTop is read-only; pinning it
+  // is `window.scrollTo(0, 0)`. Guarded against re-entry because that scroll
+  // itself fires a `visualViewport` `scroll`. A no-op when already at origin.
+  CrowViewportAddon.prototype._pinViewport = function () {
+    var vv = this._vv;
+    if (!vv) {
+      return false;
+    }
+    if (this._pinning) {
+      return true;
+    }
+    var top = vv.offsetTop || 0;
+    var left = vv.offsetLeft || 0;
+    var y = global.scrollY || global.pageYOffset || 0;
+    var x = global.scrollX || global.pageXOffset || 0;
+    if (!top && !left && !y && !x) {
+      return false;
+    }
+    this._pinning = true;
+    try {
+      if (typeof global.scrollTo === 'function') {
+        global.scrollTo(0, 0);
+      }
+    } catch (_) { /* some webviews reject scrollTo during keyboard animation */ }
+    this._pinning = false;
+    return true;
+  };
+
+  // Best-effort: make the IME helper look less like a login/payment field so
+  // Chrome's Autofill accessory is less likely to appear. Chrome iOS currently
+  // draws that strip on almost every focused text box (no web API hides it);
+  // these attributes are what we can stamp. Do NOT use new-password /
+  // one-time-code / cc-csc — those swap in a *different* accessory. Re-applied
+  // after open() because xterm recreates/syncs the node (CROW-1263).
+  CrowViewportAddon.prototype._stampTextarea = function (ta) {
+    if (!ta || typeof ta.setAttribute !== 'function') {
+      return;
+    }
+    ta.setAttribute('autocomplete', 'off');
+    ta.setAttribute('autocorrect', 'off');
+    ta.setAttribute('autocapitalize', 'off');
+    ta.setAttribute('spellcheck', 'false');
+    ta.setAttribute('name', 'crow-tty');
+    ta.setAttribute('data-lpignore', 'true');
+  };
+
+  // iOS scrolls the visual viewport on textarea.focus() unless preventScroll is
+  // set. Wrap the instance method after open(); xterm's own callers (term.focus,
+  // IME) then inherit it. Idempotent per node.
+  CrowViewportAddon.prototype._wrapFocus = function (ta) {
+    if (!ta || typeof ta.focus !== 'function' || ta.focus._crowPinned) {
+      return;
+    }
+    var orig = ta.focus.bind(ta);
+    var wrapped = function (options) {
+      var opts = { preventScroll: true };
+      if (options && typeof options === 'object') {
+        for (var k in options) {
+          if (Object.prototype.hasOwnProperty.call(options, k)) {
+            opts[k] = options[k];
+          }
+        }
+        opts.preventScroll = true;
+      }
+      return orig(opts);
+    };
+    wrapped._crowPinned = true;
+    ta.focus = wrapped;
+  };
+
+  // Stamp + wrap + listen. xterm can replace the helper node after open(), so
+  // this is safe to re-run; it only rebinds when the element identity changes.
+  CrowViewportAddon.prototype._prepareTextarea = function () {
+    var term = this._term;
+    var ta = term && term.textarea;
+    if (!ta) {
+      return;
+    }
+    this._stampTextarea(ta);
+    this._wrapFocus(ta);
+    if (ta === this._textarea) {
+      return;
+    }
+    if (this._textarea && this._onFocus && typeof this._textarea.removeEventListener === 'function') {
+      this._textarea.removeEventListener('focus', this._onFocus);
+    }
+    this._textarea = ta;
+    if (this._onFocus && typeof ta.addEventListener === 'function') {
+      ta.addEventListener('focus', this._onFocus);
+    }
   };
 
   // Re-home xterm's parked helper textarea from off-screen-left to the on-screen
@@ -347,6 +522,7 @@
     this._onChange = null;
     this._onFocus = null;
     this._textarea = null;
+    this._pinning = false;
     this._vv = null;
     this._host = null;
     this._term = null;
@@ -358,5 +534,7 @@
   global.CrowViewportAddon = {
     CrowViewportAddon: CrowViewportAddon,
     keyboardCapable: function () { return keyboardCapable(global); },
+    isAppleTouchDevice: function () { return isAppleTouchDevice(global); },
+    applyInteractiveWidgetPolicy: function () { return applyInteractiveWidgetPolicy(global); },
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);
