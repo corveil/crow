@@ -94,4 +94,50 @@ actor EventHub {
         }
         return text
     }
+
+    /// Metadata-only TUI recording notification (CROW-1255). No `id`, so old
+    /// clients ignore it. No PTY bytes — the payload is ids + a greppable
+    /// signature; `app.js` filters on `session_id` (HUD) or `recording_id`
+    /// (playback route).
+    static func tuiRecordEventFrame(
+        recordingID: UUID,
+        sessionID: UUID?,
+        t: Int,
+        kind: String,
+        severity: String,
+        signature: String,
+        grid: [String: [Int]]?
+    ) -> String {
+        struct Grid: Encodable {
+            var pty: [Int]?
+            var css: [Int]?
+        }
+        struct Params: Encodable {
+            var recording_id: String
+            var session_id: String?
+            var t: Int
+            var kind: String
+            var severity: String
+            var signature: String
+            var grid: Grid?
+        }
+        struct Frame: Encodable {
+            let jsonrpc = "2.0"
+            let method = "tui-record-event"
+            let params: Params
+        }
+        let gridObj = grid.map { Grid(pty: $0["pty"], css: $0["css"]) }
+        let frame = Frame(params: Params(
+            recording_id: recordingID.uuidString,
+            session_id: sessionID?.uuidString,
+            t: t, kind: kind, severity: severity, signature: signature,
+            grid: gridObj))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(frame),
+              let text = String(data: data, encoding: .utf8) else {
+            return changedFrame
+        }
+        return text
+    }
 }

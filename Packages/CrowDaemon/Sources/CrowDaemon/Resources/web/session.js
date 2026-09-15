@@ -15,6 +15,7 @@ async function refreshArtifacts(id) {
     artifactsBySession[id] = res.images || [];
   } catch (_) { artifactsBySession[id] = []; }
   if (id === selectedId) renderArtifactsStrip();
+  if (typeof refreshTuiRecordings === 'function') refreshTuiRecordings(id);
 }
 
 function renderArtifactsStrip() {

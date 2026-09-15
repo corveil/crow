@@ -55,6 +55,9 @@ function parseRoute(hash) {
     }
     return null;
   }
+  if (seg[0] === 'tui-recordings' && seg[1] && seg.length === 2) {
+    return { view: 'tui-recording', recordingId: seg[1] };
+  }
   if (seg.length === 1 && ROUTE_BOARDS.indexOf(seg[0]) !== -1) {
     return { view: 'board', board: seg[0] };
   }
@@ -69,6 +72,9 @@ function routeToHash(route) {
   if (route.view === 'session' && route.sessionId) {
     return '#/sessions/' + encodeURIComponent(route.sessionId)
       + (route.terminalId ? '/t/' + encodeURIComponent(route.terminalId) : '');
+  }
+  if (route.view === 'tui-recording' && route.recordingId) {
+    return '#/tui-recordings/' + encodeURIComponent(route.recordingId);
   }
   if (route.view === 'board' && route.board) return '#/' + route.board;
   if (route.view === 'settings') return '#/settings/' + (route.tab || 'general');
@@ -140,6 +146,14 @@ async function applyRoute(route) {
     }
   }
   if (route.view === 'board') { selectBoard(route.board); return; }
+  if (route.view === 'tui-recording') {
+    if (window.closeSettings && window.settingsIsOpen && window.settingsIsOpen()) {
+      await window.closeSettings();
+    }
+    if (window.openTuiPlayback) window.openTuiPlayback(route.recordingId);
+    return;
+  }
+  if (window.closeTuiPlayback) window.closeTuiPlayback();
   if (route.view === 'session') {
     // Cold load: hold the route until the first list-sessions decides whether
     // this id exists, so a deep link never flashes "not found" on a slow start.

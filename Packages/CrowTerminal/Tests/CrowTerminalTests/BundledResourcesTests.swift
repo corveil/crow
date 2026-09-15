@@ -113,6 +113,17 @@ struct BundledResourcesTests {
         #expect(body.contains("CrowViewportAddon"))
     }
 
+    @Test func tuiTraceAddonIsBundled() throws {
+        let dir = try #require(BundledResources.xtermDirectoryURL)
+        let url = dir.appendingPathComponent("xterm-addon-crow-tui-trace.js")
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        let body = try String(contentsOf: url, encoding: .utf8)
+        #expect(body.contains("CrowTuiTraceAddon"))
+        #expect(body.contains("KEYBOARD_MIN_OCCLUSION"))
+        #expect(body.contains("classifyFormFactor"))
+        #expect(body.contains("__TAURI__"))
+    }
+
     @Test func unicode11AddonIsBundled() throws {
         // CROW-1157: xterm.js defaults to Unicode 6 cell widths; Claude Code's
         // status-line emoji need Unicode 11 to match tmux/Node wcwidth. The

@@ -49,6 +49,7 @@ func makeCommandRouter(
     // Injectable so a test can observe the invalidation; one per router otherwise.
     corveilOrgCache: CorveilOrgListCache = CorveilOrgListCache(),
     soundLibrary: CustomSoundLibrary = .live,
+    tuiRecorder: TuiRecorder? = nil,
     fallback: CommandRouter? = nil
 ) -> CommandRouter {
     // Serializes review kickoffs (see start-review) — one per router instance.
@@ -100,5 +101,6 @@ func makeCommandRouter(
     ) { existing, _ in existing }
     handlers.merge(makeCorveilMigrationHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeBackfillHandlers(devRoot: devRoot)) { existing, _ in existing }
+    handlers.merge(makeTuiHandlers(appState: appState, tuiRecorder: tuiRecorder)) { existing, _ in existing }
     return CommandRouter(handlers: handlers, fallback: fallback)
 }

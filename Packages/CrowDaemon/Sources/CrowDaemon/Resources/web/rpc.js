@@ -108,6 +108,10 @@ function rpcConnect() {
       // Automation event push (CROW-768): a moment Crow acted on the user's
       // behalf, which no client can derive from polled state.
       if (msg.id == null && msg.method === 'notify') { onServerNotify(msg.params); return; }
+      if (msg.id == null && msg.method === 'tui-record-event') {
+        if (typeof onTuiRecordEvent === 'function') onTuiRecordEvent(msg.params);
+        return;
+      }
       const waiter = rpcState.pending.get(msg.id);
       if (!waiter) return;
       rpcState.pending.delete(msg.id);

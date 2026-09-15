@@ -266,6 +266,17 @@ public enum ParityLedger {
         .write("rebuild-scorecard", cli: "rebuild-scorecard"),
         .read("get-state", cli: "get-state"),
         .read("list-artifacts", cli: "list-artifacts"),
+
+        // TUI form-factor recording (CROW-1255). `export` is CLI-only local
+        // copy from `get.dir` — no RPC, no ledger row (1 MB Unix-socket cap).
+        .write("tui-record-start", cli: "tui record start"),
+        .write("tui-record-stop", cli: "tui record stop"),
+        .write("tui-record-mark", cli: "tui record mark"),
+        .read("tui-record-list", cli: "tui record list"),
+        .read("tui-record-get", cli: "tui record get"),
+        .read("tui-record-log", cli: "tui record log"),
+        .write("tui-record-delete", cli: "tui record delete"),
+        .write("tui-record-hud", cli: "tui record hud"),
         .read(
             "get-session-terminal-preview",
             noCLI: """

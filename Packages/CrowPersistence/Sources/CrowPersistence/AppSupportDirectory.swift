@@ -3,11 +3,11 @@ import Foundation
 
 /// Provides the canonical Application Support directory for Crow, performing
 /// a one-time migration from the legacy "rm-ai-ide" directory if needed.
-enum AppSupportDirectory {
+public enum AppSupportDirectory {
     /// `~/Library/Application Support/crow/`, created on first access.
     /// If the directory doesn't exist but a legacy `rm-ai-ide` directory does,
     /// the legacy directory is copied over automatically.
-    static let url: URL = {
+    public static let url: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let crowDir = appSupport.appendingPathComponent("crow", isDirectory: true)
         // One-time migration from the pre-rename "rm-ai-ide" directory

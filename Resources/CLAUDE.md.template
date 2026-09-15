@@ -134,6 +134,21 @@ crow todo talk --id <uuid> "..."
 
 Durable pre-ticket ideas (CROW-1231). Not reaped by session cleanup. `explore` opens a Manager; `ticket` files from the item body; `work` types `/crow-workspace` off the linked ticket.
 
+### TUI recording Commands
+```
+crow tui record start --session <uuid> [--terminal <uuid>] [--note "..."]
+crow tui record stop --id <recording-id>
+crow tui record mark --id <recording-id> [--note "..."]
+crow tui record list [--session <uuid>]
+crow tui record get --id <recording-id>
+crow tui record log --id <recording-id> [--since t]
+crow tui record delete --id <recording-id>
+crow tui record hud --session <uuid> on|off
+crow tui record export --id <recording-id> --dir PATH
+```
+
+Opt-in TUI capture (CROW-1255). Local-first, never uploaded. `export` is a local copy (no RPC).
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]

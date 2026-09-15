@@ -149,6 +149,17 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow todo ticket`](#crow-todo-ticket) | File a ticket from the item body and attach the URL |
 | [`crow todo work`](#crow-todo-work) | Start a work session from the item's linked ticket |
 | [`crow transition-ticket`](#crow-transition-ticket) | Transition a session's ticket to a pipeline status |
+| [`crow tui`](#crow-tui) | TUI form-factor recording |
+| [`crow tui record`](#crow-tui-record) | Start, stop, and inspect TUI recordings |
+| [`crow tui record delete`](#crow-tui-record-delete) | Delete a recording directory |
+| [`crow tui record export`](#crow-tui-record-export) | Copy a recording to --dir (local filesystem; no RPC) |
+| [`crow tui record get`](#crow-tui-record-get) | Show report.json plus dir/byte_size |
+| [`crow tui record hud`](#crow-tui-record-hud) | Toggle the on-device diagnostics HUD for a session |
+| [`crow tui record list`](#crow-tui-record-list) | List recordings |
+| [`crow tui record log`](#crow-tui-record-log) | Poll observations (CLI watch is this + --since, not a push transport) |
+| [`crow tui record mark`](#crow-tui-record-mark) | Drop a marker and history dump |
+| [`crow tui record start`](#crow-tui-record-start) | Start a recording (tmux sampler until a surface binds) |
+| [`crow tui record stop`](#crow-tui-record-stop) | Stop and seal a recording |
 | [`crow ui`](#crow-ui) | View or change UI display preferences |
 | [`crow ui get`](#crow-ui-get) | Show the current UI display preferences |
 | [`crow ui set`](#crow-ui-set) | Change UI display preferences |
@@ -2317,6 +2328,171 @@ crow transition-ticket --session <session> --to <to>
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
 | `--to` | `<to>` | yes | Target status: inProgress, inReview, or done |
+
+---
+
+## `crow tui`
+
+TUI form-factor recording.
+
+```
+crow tui <record>
+```
+
+Subcommands: [`record`](#crow-tui-record).
+
+---
+
+## `crow tui record`
+
+Start, stop, and inspect TUI recordings.
+
+```
+crow tui record <start|stop|mark|list|get|log|delete|hud|export>
+```
+
+Recordings live under Application Support/crow/tui-recordings/. They capture PTY bytes and keystrokes — opt-in, local-first, never uploaded. Watch is a poll of `log --since`, not a second tmux attach.
+
+Subcommands: [`start`](#crow-tui-record-start), [`stop`](#crow-tui-record-stop), [`mark`](#crow-tui-record-mark), [`list`](#crow-tui-record-list), [`get`](#crow-tui-record-get), [`log`](#crow-tui-record-log), [`delete`](#crow-tui-record-delete), [`hud`](#crow-tui-record-hud), [`export`](#crow-tui-record-export).
+
+---
+
+## `crow tui record delete`
+
+Delete a recording directory.
+
+```
+crow tui record delete --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Recording UUID |
+
+---
+
+## `crow tui record export`
+
+Copy a recording to --dir (local filesystem; no RPC).
+
+```
+crow tui record export --id <id> --dir <dir> [--fixture]
+```
+
+Reads ~/Library/Application Support/crow/tui-recordings/<id>/ (or the Linux equivalent) on this host. --fixture writes geometry + detector inputs only — never the raw PTY byte stream.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Recording UUID |
+| `--dir` | `<dir>` | yes | Destination directory |
+| `--fixture` | — | no | Geometry + detector inputs only; no raw PTY bytes |
+
+---
+
+## `crow tui record get`
+
+Show report.json plus dir/byte_size.
+
+```
+crow tui record get --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Recording UUID |
+
+---
+
+## `crow tui record hud`
+
+Toggle the on-device diagnostics HUD for a session.
+
+```
+crow tui record hud --session <session> <mode>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| _(positional)_ | `<mode>` | yes | on or off |
+
+---
+
+## `crow tui record list`
+
+List recordings.
+
+```
+crow tui record list [--session <session>] [--status <status>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | no | Filter by session UUID |
+| `--status` | `<status>` | no | Filter by status (unbound\|recording\|sealed\|abandoned) |
+
+---
+
+## `crow tui record log`
+
+Poll observations (CLI watch is this + --since, not a push transport).
+
+```
+crow tui record log --id <id> [--kind <kind>] [--since <since>]
+```
+
+Returns at most 256 KiB or 200 rows, plus next_since. Loop with --since to tail a live recording. There is no tui-record-watch RPC.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Recording UUID |
+| `--kind` | `<kind>` | no | Only this observation kind |
+| `--since` | `<since>` | no | Only observations with t > this daemon timestamp |
+
+---
+
+## `crow tui record mark`
+
+Drop a marker and history dump.
+
+```
+crow tui record mark --id <id> [--note <note>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Recording UUID |
+| `--note` | `<note>` | no | Marker note |
+
+---
+
+## `crow tui record start`
+
+Start a recording (tmux sampler until a surface binds).
+
+```
+crow tui record start --session <session> [--terminal <terminal>] [--note <note>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--terminal` | `<terminal>` | no | Terminal UUID (required unless the session has exactly one) |
+| `--note` | `<note>` | no | Operator note |
+
+---
+
+## `crow tui record stop`
+
+Stop and seal a recording.
+
+```
+crow tui record stop --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Recording UUID |
 
 ---
 
