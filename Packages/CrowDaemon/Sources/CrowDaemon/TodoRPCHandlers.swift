@@ -11,7 +11,9 @@ func makeTodoHandlers(
     appState: AppState,
     store: JSONStore,
     sessionService: SessionService?,
-    devRoot: String
+    devRoot: String,
+    createTask: (@Sendable (_ repo: String, _ title: String, _ body: String) async throws -> (url: String, number: Int))? = nil,
+    listWorkspaceRepos: (@Sendable (WorkspaceInfo) async -> WorkspaceRepoListing)? = nil
 ) -> [String: CommandRouter.Handler] {
     let repo = TodoRepository(store: store)
     let handlers: [String: CommandRouter.Handler] = [
@@ -117,7 +119,13 @@ func makeTodoHandlers(
         },
         "todo-ticket": { params in
             try await mapRPCError {
-                try await fileTicket(params: params, repo: repo, devRoot: devRoot)
+                try await fileTicket(
+                    params: params, repo: repo, devRoot: devRoot, createTask: createTask)
+            }
+        },
+        "list-workspace-repos": { _ in
+            try await mapRPCError {
+                try await listTicketRepos(devRoot: devRoot, listWorkspaceRepos: listWorkspaceRepos)
             }
         },
         "todo-work": { params in
@@ -335,57 +343,46 @@ private func sendToManager(
 private func fileTicket(
     params: [String: JSONValue],
     repo: TodoRepository,
-    devRoot: String
+    devRoot: String,
+    createTask: (@Sendable (_ repo: String, _ title: String, _ body: String) async throws -> (url: String, number: Int))?
 ) async throws -> [String: JSONValue] {
     var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
     if let existing = item.linkedTicketURL {
         throw RPCError.applicationError(
             "This item already has a ticket (\(existing)). Use `crow todo work` to start a session.")
     }
-    guard let workspaceRef = params["workspace"]?.stringValue?
-        .trimmingCharacters(in: .whitespacesAndNewlines),
-          !workspaceRef.isEmpty else {
-        throw RPCError.invalidParams("workspace is required")
-    }
     let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-    let index = try WorkspaceRPC.resolveIndex(workspaceRef, in: config)
-    let workspace = config.workspaces[index]
+    let target = try TodoRPC.resolveTicketTarget(
+        workspaceRef: params["workspace"]?.stringValue,
+        repo: params["repo"]?.stringValue,
+        config: config)
+    let workspace = target.workspace
+    let repoSlug = target.repo
     let provider = Provider(rawValue: workspace.derivedTaskProvider) ?? .github
-    let requestedRepo = params["repo"]?.stringValue?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    let repoSlug: String
-    if let requestedRepo, !requestedRepo.isEmpty {
-        repoSlug = requestedRepo
-    } else if provider == .jira, let key = workspace.jiraProjectKey, !key.isEmpty {
-        repoSlug = key
-    } else {
-        let concrete = (workspace.alwaysInclude + workspace.autoReviewRepos)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.contains("*") }
-        guard concrete.count == 1, let only = concrete.first else {
-            throw RPCError.invalidParams(
-                "repo is required (workspace '\(workspace.name)' does not have exactly one always-include repo)")
-        }
-        repoSlug = only
-    }
 
-    let backend = ProviderManager().taskBackend(
-        for: provider,
-        host: workspace.host,
-        jira: JiraConfig(
-            site: workspace.jiraSite,
-            projectKey: workspace.jiraProjectKey,
-            jql: workspace.jiraJQL,
-            statusMap: workspace.jiraStatusMap)
-    )
-    // Crow tags stay in the body. Passing them as GitHub/GitLab labels would
-    // fail the create when the label does not already exist on the repo.
-    let info = try await backend.createTask(
-        repo: repoSlug,
-        title: item.text,
-        body: TodoRPC.ticketBody(for: item),
-        labels: []
-    )
+    let info: (url: String, number: Int)
+    if let createTask {
+        info = try await createTask(repoSlug, item.text, TodoRPC.ticketBody(for: item))
+    } else {
+        let backend = ProviderManager().taskBackend(
+            for: provider,
+            host: workspace.host,
+            jira: JiraConfig(
+                site: workspace.jiraSite,
+                projectKey: workspace.jiraProjectKey,
+                jql: workspace.jiraJQL,
+                statusMap: workspace.jiraStatusMap)
+        )
+        // Crow tags stay in the body. Passing them as GitHub/GitLab labels would
+        // fail the create when the label does not already exist on the repo.
+        let created = try await backend.createTask(
+            repo: repoSlug,
+            title: item.text,
+            body: TodoRPC.ticketBody(for: item),
+            labels: []
+        )
+        info = (created.url, created.number)
+    }
     item.links.append(TodoLink(
         type: .ticket,
         url: info.url,
@@ -397,6 +394,55 @@ private func fileTicket(
         "todo": TodoRPC.todoJSON(item),
         "ticket_url": .string(info.url),
         "ticket_number": .int(info.number),
+    ]
+}
+
+/// Expand every workspace's `alwaysInclude` ∪ `autoReviewRepos` (including
+/// `owner/*` globs) into concrete slugs, then stamp each with the workspace
+/// ``AppConfig/workspace(forRepoSlug:)`` would pick. Scratch Ticket's dropdown
+/// is this list; filing still re-resolves so a stale picker row cannot guess.
+private func listTicketRepos(
+    devRoot: String,
+    listWorkspaceRepos: (@Sendable (WorkspaceInfo) async -> WorkspaceRepoListing)?
+) async throws -> [String: JSONValue] {
+    let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+    let expand: @Sendable (WorkspaceInfo) async -> WorkspaceRepoListing
+    if let listWorkspaceRepos {
+        expand = listWorkspaceRepos
+    } else {
+        let manager = ProviderManager()
+        expand = { workspace in
+            let provider = Provider(rawValue: workspace.derivedTaskProvider) ?? .github
+            return await manager.reposForSpecs(
+                workspace.alwaysInclude + workspace.autoReviewRepos,
+                provider: provider,
+                host: workspace.host)
+        }
+    }
+
+    var slugs = Set<String>()
+    for workspace in config.workspaces {
+        let listing = await expand(workspace)
+        slugs.formUnion(listing.repos)
+        if let key = workspace.jiraProjectKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+            slugs.insert(key)
+        }
+    }
+
+    var rows: [JSONValue] = []
+    for slug in slugs.sorted() {
+        guard let target = try? TodoRPC.resolveTicketTarget(
+            workspaceRef: nil, repo: slug, config: config)
+        else { continue }
+        rows.append(.object([
+            "slug": .string(slug),
+            "workspace": .string(target.workspace.name),
+        ]))
+    }
+    return [
+        "repos": .array(rows),
+        "count": .int(rows.count),
     ]
 }
 

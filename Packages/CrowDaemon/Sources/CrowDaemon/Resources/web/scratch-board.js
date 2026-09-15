@@ -162,23 +162,36 @@ function scratchTicketURL(item) {
 }
 
 async function scratchTicket(btn, item) {
-  let workspace;
+  let listed;
   try {
-    const listed = await rpc('workspace-list');
-    const workspaces = (listed && listed.workspaces) || [];
-    if (workspaces.length === 1) workspace = workspaces[0].name;
-    else if (workspaces.length > 1) {
-      workspace = window.prompt('Workspace to file this ticket in:');
-    } else {
-      alertModal('Add a workspace in Settings before filing a ticket.');
-      return;
-    }
+    listed = await rpc('list-workspace-repos');
   } catch (err) {
-    alertModal('Could not list workspaces: ' + (err.message || err));
+    alertModal('Could not list repos: ' + (err.message || err));
     return;
   }
-  if (!workspace) return;
-  spawnAction(btn, 'todo-ticket', { todo_id: item.id, workspace: workspace }, 'Ticket').then(() => refreshBoard('scratch'));
+  const repos = (listed && listed.repos) || [];
+  if (!repos.length) {
+    alertModal('No repos to file in. Add an always-include repo in Settings → Workspaces.');
+    return;
+  }
+  let picked = repos[0];
+  if (repos.length > 1) {
+    const slug = await selectPrompt(
+      'File ticket in',
+      repos.map((r) => ({ value: r.slug, label: r.slug })),
+      { okLabel: 'File' });
+    if (!slug) return;
+    picked = repos.find((r) => r.slug === slug);
+    if (!picked) {
+      alertModal('No workspace matches repo \'' + slug + '\'.');
+      return;
+    }
+  }
+  spawnAction(btn, 'todo-ticket', {
+    todo_id: item.id,
+    repo: picked.slug,
+    workspace: picked.workspace,
+  }, 'Ticket').then(() => refreshBoard('scratch'));
 }
 
 async function scratchSpawn(btn, method, params, label) {

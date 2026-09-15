@@ -733,7 +733,7 @@ crow todo explore --id <todo-uuid> --agent cursor
 
 ### `crow todo ticket`
 
-File a ticket from the item body via the workspace's task provider, attach the URL, and move state to `ticketed`. `--repo` is required unless the workspace has exactly one always-include repo (or a Jira project key).
+File a ticket from the item body via the workspace's task provider, attach the URL, and move state to `ticketed`. `--repo` is required unless the workspace has exactly one always-include repo (or a Jira project key). A glob-only membership (e.g. `corveil/*`) does not count as a single repo — pass `--repo owner/repo`, which is resolved with the same workspace-membership rule as reviews (`exact slug` beats glob). An unmatched slug is refused.
 
 ```bash
 crow todo ticket --id <todo-uuid> --workspace Corveil --repo corveil/crow

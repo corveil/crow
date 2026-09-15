@@ -134,6 +134,7 @@ const deliver = (msg) => cur().deliver(msg);
   check('batch-work-on-issues 60s', T.rpcTimeoutFor('batch-work-on-issues') === 60000);
   check('todo-explore 90s', T.rpcTimeoutFor('todo-explore') === 90000);
   check('todo-talk 90s', T.rpcTimeoutFor('todo-talk') === 90000);
+  check('list-workspace-repos 60s', T.rpcTimeoutFor('list-workspace-repos') === 60000);
 
   console.log('\nTimeout rejects tagged and RETAINS the pending entry:');
   await reset();

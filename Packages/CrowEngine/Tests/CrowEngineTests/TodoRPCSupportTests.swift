@@ -174,4 +174,68 @@ struct TodoRPCSupportTests {
         #expect(ManagerSessionController.exploreSeedLaunchCommand(
             session: session, baseCommand: "claude", prompt: "   ") == nil)
     }
+
+    // MARK: - Ticket target (CROW-1259)
+
+    @Test func ticketTargetInfersSoleConcreteAlwaysInclude() throws {
+        let config = AppConfig(workspaces: [
+            WorkspaceInfo(name: "Acme", alwaysInclude: ["acme/widget"]),
+        ])
+        let target = try TodoRPC.resolveTicketTarget(
+            workspaceRef: "Acme", repo: nil, config: config)
+        #expect(target.workspace.name == "Acme")
+        #expect(target.repo == "acme/widget")
+    }
+
+    @Test func ticketTargetGlobOnlyRequiresRepo() {
+        let config = AppConfig(workspaces: [
+            WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
+        ])
+        do {
+            _ = try TodoRPC.resolveTicketTarget(
+                workspaceRef: "corveil", repo: nil, config: config)
+            Issue.record("expected repo-required error")
+        } catch let RPCError.invalidParams(msg) {
+            #expect(msg.contains("repo is required"))
+            #expect(msg.contains("corveil"))
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+    }
+
+    @Test func ticketTargetGlobOnlySucceedsWhenRepoIsSupplied() throws {
+        let config = AppConfig(workspaces: [
+            WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
+        ])
+        let target = try TodoRPC.resolveTicketTarget(
+            workspaceRef: "corveil", repo: "corveil/crow", config: config)
+        #expect(target.workspace.name == "corveil")
+        #expect(target.repo == "corveil/crow")
+    }
+
+    @Test func ticketTargetUnmatchedSlugRefusesEvenWithWorkspace() {
+        let config = AppConfig(workspaces: [
+            WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
+        ])
+        do {
+            _ = try TodoRPC.resolveTicketTarget(
+                workspaceRef: "corveil", repo: "stranger/repo", config: config)
+            Issue.record("expected unmatched-slug error")
+        } catch let RPCError.invalidParams(msg) {
+            #expect(msg.contains("no workspace matches repo 'stranger/repo'"))
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+    }
+
+    @Test func ticketTargetRepoIsAuthoritativeOverNamedWorkspace() throws {
+        let config = AppConfig(workspaces: [
+            WorkspaceInfo(name: "First", alwaysInclude: ["acme/*"]),
+            WorkspaceInfo(name: "Widget", alwaysInclude: ["acme/widget"]),
+        ])
+        // Exact slug beats glob, even if the caller named the glob workspace.
+        let target = try TodoRPC.resolveTicketTarget(
+            workspaceRef: "First", repo: "acme/widget", config: config)
+        #expect(target.workspace.name == "Widget")
+    }
 }
