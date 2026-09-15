@@ -1416,6 +1416,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   font-size: 13px;
 }
 .text-prompt-input:focus { outline: none; border-color: var(--gold); }
+select.text-prompt-input { cursor: pointer; }
 .text-prompt-actions {
   display: flex;
   justify-content: flex-end;

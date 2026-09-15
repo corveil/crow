@@ -228,6 +228,69 @@ public enum TodoRPC {
         }
     }
 
+    /// Workspace + repo slug `todo-ticket` files against (CROW-1259).
+    public struct TicketTarget: Equatable, Sendable {
+        public let workspace: WorkspaceInfo
+        public let repo: String
+        public init(workspace: WorkspaceInfo, repo: String) {
+            self.workspace = workspace
+            self.repo = repo
+        }
+    }
+
+    /// Resolve where to file a Scratch ticket.
+    ///
+    /// When `repo` is set, membership is ``AppConfig/workspace(forRepoSlug:)``
+    /// (exact slug beats glob; first config-order match among equals). A Jira
+    /// project key is accepted as the slug when no git workspace claims it.
+    /// Unmatched slugs refuse — they are not guessed from `--workspace`.
+    ///
+    /// When `repo` is omitted, `workspace` is required and the repo is inferred
+    /// from a Jira project key or a single concrete (non-glob) always-include ∪
+    /// auto-review entry — the CLI path for a one-repo workspace.
+    public static func resolveTicketTarget(
+        workspaceRef: String?,
+        repo: String?,
+        config: AppConfig
+    ) throws -> TicketTarget {
+        let repoSlug = repo?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nonemptyRepo = (repoSlug?.isEmpty == false) ? repoSlug : nil
+
+        if let nonemptyRepo {
+            if let matched = config.workspace(forRepoSlug: nonemptyRepo) {
+                return TicketTarget(workspace: matched, repo: nonemptyRepo)
+            }
+            if let matched = config.workspaces.first(where: {
+                ($0.jiraProjectKey ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(nonemptyRepo) == .orderedSame
+            }) {
+                return TicketTarget(workspace: matched, repo: nonemptyRepo)
+            }
+            throw RPCError.invalidParams("no workspace matches repo '\(nonemptyRepo)'")
+        }
+
+        let workspaceRaw = workspaceRef?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let workspaceRaw, !workspaceRaw.isEmpty else {
+            throw RPCError.invalidParams("workspace is required")
+        }
+        let index = try WorkspaceRPC.resolveIndex(workspaceRaw, in: config)
+        let workspace = config.workspaces[index]
+        if workspace.derivedTaskProvider == "jira",
+           let key = workspace.jiraProjectKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !key.isEmpty {
+            return TicketTarget(workspace: workspace, repo: key)
+        }
+        let concrete = (workspace.alwaysInclude + workspace.autoReviewRepos)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.contains("*") }
+        guard concrete.count == 1, let only = concrete.first else {
+            throw RPCError.invalidParams(
+                "repo is required (workspace '\(workspace.name)' does not have exactly one always-include repo)")
+        }
+        return TicketTarget(workspace: workspace, repo: only)
+    }
+
     /// Body filed with `todo ticket` — the item plus its note, tagged as
     /// originating in Scratch so the trail is visible on the provider too.
     public static func ticketBody(for item: TodoItem) -> String {
