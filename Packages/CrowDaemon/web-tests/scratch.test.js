@@ -264,6 +264,42 @@ async function flush() {
   check('Enter refreshes the scratch list', titleCalls.some((c) => c.method === 'todo-list'));
   check('board shows the new title',
     board.querySelector('.scratch-row .card-title')?.textContent === 'renamed scratch');
+
+  const raceItem = {
+    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    text: 'native scratch list',
+    note: 'before a ticket',
+    tags: ['crow'],
+    priority: 'p2',
+    state: 'captured',
+    links: [],
+  };
+  T.boardData.scratch = { todos: [raceItem] };
+  T.renderBoard();
+  const raceTitle = board.querySelector('.scratch-row .card-title');
+  raceTitle.ondblclick({ preventDefault() {}, stopPropagation() {} });
+  const raceEditor = raceTitle.querySelector('input');
+  raceEditor.value = 'during refresh';
+  let listResolve;
+  T.rpc = async (method) => {
+    if (method === 'todo-edit') return { todo: { ...raceItem, text: 'during refresh' } };
+    if (method === 'todo-list') return new Promise((resolve) => { listResolve = resolve; });
+    return {};
+  };
+  const saveP = raceEditor.onkeydown({ key: 'Enter', preventDefault() {}, stopPropagation() {} });
+  for (let i = 0; i < 20 && raceTitle.textContent !== 'during refresh'; i++) {
+    await Promise.resolve();
+  }
+  check('optimistic title after todo-edit', raceTitle.textContent === 'during refresh');
+  raceTitle.ondblclick({ preventDefault() {}, stopPropagation() {} });
+  const reedit = raceTitle.querySelector('input.scratch-title-input');
+  check('re-edit during refresh seeds the saved text',
+    !!(reedit && reedit.value === 'during refresh'));
+  await reedit.onkeydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
+  check('Escape during refresh keeps the saved title',
+    raceTitle.textContent === 'during refresh');
+  listResolve({ todos: [{ ...raceItem, text: 'during refresh' }] });
+  await saveP;
   T.rpc = prevRpc;
 
   if (failed) { console.log('\n' + failed + ' failed'); process.exit(1); }

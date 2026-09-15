@@ -145,6 +145,7 @@ function startScratchTitleEdit(titleEl, item) {
     }
     try {
       await rpc('todo-edit', { todo_id: item.id, text: next });
+      item.text = next;
       titleEl.textContent = next;
       await refreshBoard('scratch');
     } catch (err) {
