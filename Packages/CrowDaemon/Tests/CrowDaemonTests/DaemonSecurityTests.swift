@@ -1476,4 +1476,22 @@ import CrowPersistence
         #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
             == "gateway and web-password management is local-only")
     }
+
+    @Test func tuiRecordLifecycleIsAllowedRemotely() throws {
+        // CROW-1255: start/stop/mark/hud are the phone/iPad operator's verbs.
+        // `localOnlyDenial`'s default would swallow a later change of heart.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        for method in ["tui-record-start", "tui-record-stop", "tui-record-mark", "tui-record-hud"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "session_id": .string(UUID().uuidString),
+                "recording_id": .string(UUID().uuidString),
+                "on": .bool(true),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil,
+                    "\(method) must stay reachable from the iPad")
+        }
+    }
 }

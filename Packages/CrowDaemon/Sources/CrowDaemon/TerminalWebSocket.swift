@@ -16,7 +16,14 @@ import NIOCore
 /// the chosen window without disturbing any other client — including the
 /// running desktop app, which shares the same cockpit (CROW-581).
 enum TerminalWebSocket {
-    static func mount(on router: Router<CrowWSContext>, cockpit: TerminalCockpit, boundHost: String, sessions: SessionStore, devRoot: String) {
+    static func mount(
+        on router: Router<CrowWSContext>,
+        cockpit: TerminalCockpit,
+        boundHost: String,
+        sessions: SessionStore,
+        devRoot: String,
+        tuiRecorder: TuiRecorder? = nil
+    ) {
         router.ws("/terminal") { request, context in
             // Reject cross-site upgrades AND unauthenticated non-local access — a
             // plain attach yields an interactive shell, so an unguarded upgrade is
@@ -62,9 +69,17 @@ enum TerminalWebSocket {
                 return
             }
 
-            // Pump PTY output → binary WebSocket frames.
+            // Connection-local tee (CROW-1255). A tiny slot so the inbound
+            // task and outputTask can share the pointer without a process-wide
+            // map. The hot path is still `if let tee { tee.yield }` — the lock
+            // is one word, not a registry lookup.
+            let slot = TuiTeeSlot()
+
+            // Pump PTY output → binary WebSocket frames. Tee at dequeue so
+            // CROW-606 replay (`continuation.yield(replay)`) is captured too.
             let outputTask = Task {
                 for await chunk in stream {
+                    if let tee = slot.tee { tee.yieldOutput(chunk) }
                     try await outbound.write(.binary(ByteBuffer(bytes: chunk)))
                 }
             }
@@ -79,11 +94,42 @@ enum TerminalWebSocket {
                 for try await message in inbound.messages(maxSize: CrowDaemon.maxWebSocketFrameSize) {
                     switch message {
                     case .binary(let buffer):
-                        pty.write(Data(buffer.readableBytesView))
+                        let bytes = Data(buffer.readableBytesView)
+                        if let tee = slot.tee { tee.yieldInput(bytes) }
+                        pty.write(bytes)
                     case .text(let text):
                         guard let data = text.data(using: .utf8),
                               let control = try? JSONDecoder().decode(TerminalControl.self, from: data) else { continue }
                         switch control.type {
+                        case "tui-bind":
+                            if let recorder = tuiRecorder,
+                               let raw = control.recording_id,
+                               let id = UUID(uuidString: raw) {
+                                let result = recorder.bind(group: group, recordingID: id)
+                                if result.ok {
+                                    slot.tee = result.tee
+                                    slot.recordingID = id
+                                } else {
+                                    slot.tee = nil
+                                    slot.recordingID = nil
+                                }
+                            }
+                        case "tui-sample":
+                            if slot.tee != nil, let recorder = tuiRecorder,
+                               let id = slot.recordingID, let sample = control.sample {
+                                recorder.ingestSample(sample, recordingID: id)
+                            }
+                        case "tui-mark":
+                            if slot.tee != nil, let recorder = tuiRecorder,
+                               let id = slot.recordingID {
+                                // Immediate client sample on Mark (ticket: "Immediate on Mark"),
+                                // then the history dump. Ingest is queued before mark's sync
+                                // wait, so the sample lands first on the serial ingest queue.
+                                if let sample = control.sample {
+                                    recorder.ingestSample(sample, recordingID: id)
+                                }
+                                try? recorder.mark(recordingID: id, note: control.note)
+                            }
                         case "resize":
                             // Floor at 1×1 so a zero/negative request can't drive a
                             // degenerate tmux resize (CROW-581 review).
@@ -99,6 +145,9 @@ enum TerminalWebSocket {
                                current.cols == cols, current.rows == rows {
                                 break
                             }
+                            // Log the request *before* TIOCSWINSZ so the
+                            // recording shows the SIGWINCH that followed.
+                            if let tee = slot.tee { tee.yieldResize(cols: cols, rows: rows, src: "client") }
                             pty.resize(
                                 rows: UInt16(clamping: rows),
                                 cols: UInt16(clamping: cols))
@@ -106,6 +155,7 @@ enum TerminalWebSocket {
                             // Switch this browser's grouped view to the window; other
                             // clients (incl. the desktop app) keep their own view.
                             if let window = control.window {
+                                if let tee = slot.tee { tee.yieldSelectWindow(window) }
                                 cockpit.selectWindow(group: group, index: window)
                                 // Re-arm the pane's mouse-tracking mode (CROW-1043).
                                 // In-place agent switches clear the xterm buffer without
@@ -165,7 +215,27 @@ enum TerminalWebSocket {
                 // it here would silently downgrade a 1009 to a normal close.
                 throw error
             }
+            if let id = slot.recordingID, let recorder = tuiRecorder {
+                recorder.unbind(group: group, recordingID: id, reason: "disconnect")
+            }
+            slot.tee = nil
+            slot.recordingID = nil
         }
+    }
+}
+
+private final class TuiTeeSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _tee: TuiBoundedTee?
+    private var _recordingID: UUID?
+
+    var tee: TuiBoundedTee? {
+        get { lock.lock(); defer { lock.unlock() }; return _tee }
+        set { lock.lock(); _tee = newValue; lock.unlock() }
+    }
+    var recordingID: UUID? {
+        get { lock.lock(); defer { lock.unlock() }; return _recordingID }
+        set { lock.lock(); _recordingID = newValue; lock.unlock() }
     }
 }
 
@@ -182,4 +252,7 @@ private struct TerminalControl: Decodable {
     /// so a tab-refocus can reclaim `window-size latest` without a same-size
     /// SIGWINCH (CROW-1162). Omitted/`false` always resizes (ordinary fit).
     let if_needed: Bool?
+    let recording_id: String?
+    let sample: TuiClientSample?
+    let note: String?
 }

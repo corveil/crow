@@ -124,7 +124,7 @@ console.log('A still long-press opens the terminal menu:');
   check('a 500ms timer is armed on touchstart', fireLongPressTimers() === 1);
   check('the menu opened', !!menu());
   check('Paste / Select all / Clear / Reload offered',
-    labels().join('|') === 'Paste|Select all|Clear|Reload terminal');
+    labels().join('|') === 'Paste|Select all|Clear|Reload terminal|Start recording|Diagnostics HUD');
   check('positioned at the touch point', menu().style.left === '100px' && menu().style.top === '200px');
 }
 

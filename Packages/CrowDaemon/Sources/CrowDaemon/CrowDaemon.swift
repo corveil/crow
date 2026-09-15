@@ -200,6 +200,20 @@ public enum CrowDaemon {
             log("WARNING: tmux not found; /terminal + terminal RPC disabled (set CROW_TMUX to override)")
         }
 
+        let tuiHooks: TuiTmuxHooks = {
+            guard let cockpit else { return .noop }
+            return TuiTmuxHooks(
+                displayMessage: { target, format in
+                    try cockpit.controller.displayMessage(target: target, format: format)
+                },
+                capturePane: { target, linesBack in
+                    try cockpit.controller.capturePane(target: target, linesBack: linesBack, escapes: false)
+                }
+            )
+        }()
+        let tuiRecorder = TuiRecorder(tmux: tuiHooks, eventHub: eventHub)
+        tuiRecorder.boot()
+
         // Telemetry (#772). The OTLP receiver uses Network.framework and is
         // macOS-only; on Linux crowd runs without per-session analytics.
         // Built BEFORE SessionService because the service captures
@@ -513,6 +527,7 @@ public enum CrowDaemon {
             rebuildScorecard: rebuildScorecard, versionUpdateService: versionUpdateService,
             corveilAutoUpdateService: corveilAutoUpdateService,
             soundLibrary: soundLibrary,
+            tuiRecorder: tuiRecorder,
             fallback: engineFallback)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. By
@@ -546,7 +561,7 @@ public enum CrowDaemon {
         // WebSocket router: JSON-RPC at /rpc, terminal byte-stream at /terminal.
         let wsRouter = Router(context: CrowWSContext.self)
         RPCWebSocketHandler.mount(on: wsRouter, commandRouter: commandRouter, eventHub: eventHub, boundHost: options.host, sessions: sessions, devRoot: options.devRoot)
-        if let cockpit { TerminalWebSocket.mount(on: wsRouter, cockpit: cockpit, boundHost: options.host, sessions: sessions, devRoot: options.devRoot) }
+        if let cockpit { TerminalWebSocket.mount(on: wsRouter, cockpit: cockpit, boundHost: options.host, sessions: sessions, devRoot: options.devRoot, tuiRecorder: tuiRecorder) }
 
         // HTTP router: web UI, xterm assets, health.
         let httpRouter = Router(context: CrowHTTPContext.self)
@@ -623,6 +638,7 @@ public enum CrowDaemon {
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).
         Artifacts.mount(on: httpRouter, boundHost: options.host)
+        TuiRecordingRoutes.mount(on: httpRouter, boundHost: options.host, recorder: tuiRecorder)
         CustomSoundRoutes.mount(
             on: httpRouter, boundHost: options.host, library: soundLibrary)
         if let webDir = options.webDir {

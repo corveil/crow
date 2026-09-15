@@ -550,6 +550,7 @@ function enableTouchScroll(node) {
     // disagree about who owns the surface.
     if (appOwnsScroll()) sendScrollToPTY(delta);
     else term.scrollLines(delta);
+    if (typeof tuiNoteTouchmove === 'function') tuiNoteTouchmove(true, delta);
   }, { passive: false });
   node.addEventListener('touchend', () => { lastY = null; accum = 0; }, { passive: true });
   node.addEventListener('touchcancel', () => { lastY = null; accum = 0; }, { passive: true });
@@ -795,6 +796,7 @@ function showTerminalMenu(e) {
   items.push({ label: 'Select all', action: () => term.selectAll() });
   items.push({ label: 'Clear', action: () => term.clear() });
   items.push({ label: 'Reload terminal', action: reloadTerminal });
+  if (typeof appendTuiMenuItems === 'function') appendTuiMenuItems(items);
   const menu = el('div', 'ctx-menu');
   for (const it of items) {
     const item = el('div', 'ctx-item', it.label);
@@ -858,6 +860,7 @@ function connectTerminalWs() {
     lastTermCols = 0;
     lastTermRows = 0;
     applyTermFit();
+    if (typeof tuiBindOnOpen === 'function') tuiBindOnOpen();
     if (activeTerminal) {
       selectWindow(activeTerminal.window);
       // Keep the attach bookkeeping truthful after any (re)connect — initial

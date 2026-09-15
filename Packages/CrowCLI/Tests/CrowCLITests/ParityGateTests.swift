@@ -299,6 +299,10 @@ struct ParityGateTests {
         // read of config, no mutation — but `detect-` isn't `get-`/`list-` shaped,
         // so the heuristic presumes a write (CROW-1126).
         "corveil-detect-gateways",
+        // `tui-record-log` polls observations (`--since`) — a read, no mutation —
+        // but `-log` isn't `get-`/`list-` shaped, so the heuristic presumes a
+        // write (CROW-1255). CLI watch is this poll; there is no watch RPC.
+        "tui-record-log",
     ]
 
     /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`

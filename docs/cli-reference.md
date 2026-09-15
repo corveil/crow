@@ -756,6 +756,79 @@ crow todo talk --id <todo-uuid> "keep going — skip the ticket"
 ```
 ---
 
+## TUI recording Commands
+
+Opt-in, local-first capture of a TUI across tmux, the PTY, and the bound client surface (CROW-1255 / ADR 0027). Recordings live under Application Support `crow/tui-recordings/`, contain screen contents **and keystrokes**, and are never uploaded. Watch is `log --since` (or the web playback route), never a second `tmux attach`.
+
+`export` is a local filesystem copy — it does **not** go over RPC (Unix-socket frames cap at 1 MB; a recording may be 64 MiB).
+
+### `crow tui record start`
+
+```bash
+crow tui record start --session <uuid>
+crow tui record start --session <uuid> --terminal <uuid> --note "cursor jumped on iPhone"
+```
+
+`--terminal` is required unless the session has exactly one terminal. A second start on the same in-flight `(session, terminal)` returns the same `recording_id` with `reused: true`.
+
+### `crow tui record stop`
+
+```bash
+crow tui record stop --id <recording-uuid>
+```
+
+### `crow tui record mark`
+
+```bash
+crow tui record mark --id <recording-uuid> --note "caret jumped"
+```
+
+### `crow tui record list`
+
+```bash
+crow tui record list
+crow tui record list --session <uuid>
+```
+
+### `crow tui record get`
+
+```bash
+crow tui record get --id <recording-uuid>
+```
+
+### `crow tui record log`
+
+```bash
+crow tui record log --id <recording-uuid>
+crow tui record log --id <recording-uuid> --since 1200
+```
+
+At most 256 KiB / 200 rows, plus `next_since`. Loop with `--since` to tail; there is no `tui-record-watch` RPC.
+
+### `crow tui record delete`
+
+```bash
+crow tui record delete --id <recording-uuid>
+```
+
+### `crow tui record hud`
+
+```bash
+crow tui record hud --session <uuid> on
+crow tui record hud --session <uuid> off
+```
+
+### `crow tui record export`
+
+```bash
+crow tui record export --id <recording-uuid> --dir /tmp/tui-out
+crow tui record export --id <recording-uuid> --dir /tmp/tui-out --fixture
+```
+
+`--fixture` writes geometry + detector inputs only — never the raw PTY byte stream.
+
+---
+
 ## Agent Commands
 
 Which coding harness Crow launches — `AppConfig.defaultAgentKind` plus the per-role overrides in `AppConfig.agentsByKind`, the same fields the web Settings → General "Agent" pickers edit. Resolution is `agentsByKind[<role>]` falling back to `defaultAgentKind`.

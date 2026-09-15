@@ -205,6 +205,13 @@ enum RPCLanePolicy {
         "todo-work": .fixed(.manager),
         "todo-talk": .fixed(.manager),
 
+        // MARK: TUI form-factor recording (CROW-1255)
+        "tui-record-start": .on("session_id"),
+        "tui-record-hud": .on("session_id"),
+        "tui-record-stop": .on("recording_id"),
+        "tui-record-mark": .on("recording_id"),
+        "tui-record-delete": .on("recording_id"),
+
         // MARK: Hooks
         // Never reaches `/rpc` — `RPCWebSocketHandler.localOnlyDenial` denies it
         // — but declared so the ledger gate stays complete rather than carrying

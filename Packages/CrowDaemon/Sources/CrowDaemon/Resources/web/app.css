@@ -438,6 +438,68 @@ body {
 .degraded-recreate { color: var(--gold); cursor: pointer; font-weight: 600; }
 .degraded-recreate:hover { color: var(--text-primary); text-decoration: underline; }
 #terminal-wrap { flex: 1; min-height: 0; background: #1e1e1e; position: relative; overscroll-behavior: contain; }
+
+/* CROW-1255: HUD is position:absolute over a full-size grid so toggling it
+   cannot change #terminal clientHeight (that would SIGWINCH — #637). */
+#tui-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 15;
+}
+#tui-hud-readout {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  font: 11px/1.3 ui-monospace, Menlo, monospace;
+  color: #ddc482;
+  background: rgba(18, 20, 22, 0.72);
+  padding: 3px 6px;
+  border-radius: 4px;
+  max-width: 70%;
+  pointer-events: none;
+}
+#tui-hud-chip {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+#tui-hud-chip button {
+  font: 11px/1.2 ui-sans-serif, system-ui, sans-serif;
+  color: #e8e6e3;
+  background: #2a2f34;
+  border: 1px solid rgba(221, 196, 130, 0.35);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+#terminal-wrap.tui-recording .tab-recording-dot,
+.tab-recording-dot { color: #e05252; }
+#detail-recordings { display: none; }
+#detail-recordings.has-recordings { display: block; padding: 4px 12px; font-size: 12px; }
+.recordings-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.recording-chip { color: var(--gold); text-decoration: none; }
+#tui-playback {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  background: #1e1e1e;
+}
+#app.tui-playback-active #tui-playback { display: flex; }
+#app.tui-playback-active #terminal-wrap,
+#app.tui-playback-active #tabbar,
+#app.tui-playback-active #detail-artifacts,
+#app.tui-playback-active #detail-recordings,
+#app.tui-playback-active #board { display: none; }
+#tui-playback-term { flex: 1; min-height: 0; }
+#tui-playback-obs { max-height: 30%; overflow: auto; font: 12px ui-monospace, Menlo, monospace; padding: 8px; color: #ddc482; }
+.tui-playback-head { padding: 8px 12px; font-size: 12px; color: #c45c5c; }
+.tui-obs.red { color: #e05252; }
+.tui-obs.yellow { color: #ddc482; }
 /* #777: `touch-action: none` hands the one-finger gesture to enableTouchScroll
    instead of iOS Safari's overscroll — without it Safari rubber-bands the fixed
    xterm canvas and the swipe never reaches the buffer. Costs pinch-zoom over the

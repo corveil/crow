@@ -424,6 +424,20 @@ import Testing
             "\(page) must load the visual-viewport addon (CROW-988)")
     }
 
+    @Test(arguments: ["index.html", "terminal.html"])
+    func terminalPagesShipTheTuiTraceAddon(page: String) throws {
+        let source = try Self.webAsset(page)
+        #expect(
+            source.contains("xterm-addon-crow-tui-trace.js"),
+            "\(page) must load the TUI sampler addon (CROW-1255)")
+    }
+
+    @Test func indexPageShipsTuiRecordControls() throws {
+        let source = try Self.webAsset("index.html")
+        #expect(source.contains("/tui-record.js"))
+        #expect(source.contains("id=\"detail-recordings\""))
+    }
+
     /// CROW-1157: xterm.js's default Unicode 6 tables give emoji 1 cell, while
     /// tmux and Claude Code (Node string-width) give them 2. The hardware
     /// cursor then sits several columns past the status line (`ctx: 0%`) while

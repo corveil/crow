@@ -194,6 +194,8 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     eq('scorecard', T.parseRoute('#/scorecard'), { view: 'board', board: 'scorecard' });
     eq('grid', T.parseRoute('#/grid'), { view: 'board', board: 'grid' });
     eq('settings tab', T.parseRoute('#/settings/jobs'), { view: 'settings', tab: 'jobs' });
+    eq('tui recording', T.parseRoute('#/tui-recordings/rec-1'),
+      { view: 'tui-recording', recordingId: 'rec-1' });
     eq('bare settings falls back to general', T.parseRoute('#/settings'),
       { view: 'settings', tab: 'general' });
     eq('unknown settings tab degrades, does not 404', T.parseRoute('#/settings/nope'),
@@ -221,6 +223,7 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     eq('session + terminal', round('#/sessions/abc/t/xyz'), '#/sessions/abc/t/xyz');
     eq('board', round('#/reviews'), '#/reviews');
     eq('settings', round('#/settings/jobs'), '#/settings/jobs');
+    eq('tui recording', round('#/tui-recordings/rec-1'), '#/tui-recordings/rec-1');
     eq('id needing escapes survives', round('#/sessions/a%2Fb'), '#/sessions/a%2Fb');
     eq('null route is home', T.routeToHash(null), '#/');
   }
@@ -241,6 +244,19 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     T.navigate({ view: 'board', board: 'reviews' }, { replace: true });
     eq('replace still updates the hash', T.window.location.hash, '#/reviews');
     check('replace pushed no entry', T.window.history.length === after);
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nTUI playback route never attaches a live terminal:');
+  {
+    const T = load();
+    vm.runInContext(`
+      connectTerminalWs = function () { throw new Error('connectTerminalWs'); };
+      sendResize = function () { throw new Error('resize'); };
+      window.openTuiPlayback = function (id) { globalThis.__played = id; };
+    `, T.ctx);
+    await T.applyRoute({ view: 'tui-recording', recordingId: 'rec-9' });
+    eq('openTuiPlayback saw the id', T.ctx.__played, 'rec-9');
   }
 
   // -------------------------------------------------------------------------

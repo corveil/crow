@@ -220,6 +220,25 @@ crow todo talk --id <uuid> "..."                      → crow send to the item'
 - `work` needs a linked ticket (`todo ticket` or `todo link --type ticket`).
 - Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
 
+### TUI recording Commands
+
+Opt-in capture of a TUI on the broken surface (desktop / browser / iPad / phone). Local-first, never uploaded. Watch is `log --since` or `#/tui-recordings/:id`, never a second tmux attach.
+
+```
+crow tui record start --session <uuid> [--terminal <uuid>] [--note "..."]
+crow tui record stop --id <recording-id>
+crow tui record mark --id <recording-id> [--note "..."]
+crow tui record list [--session <uuid>]
+crow tui record get --id <recording-id>
+crow tui record log --id <recording-id> [--since t]
+crow tui record delete --id <recording-id>
+crow tui record hud --session <uuid> on|off
+crow tui record export --id <recording-id> --dir PATH   # local copy; NO RPC
+```
+
+- Start/stop/mark/hud are reachable from the iPad (not local-only).
+- `export` copies from Application Support and does **not** call `rpc()`. `--fixture` is geometry + detector inputs only.
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]

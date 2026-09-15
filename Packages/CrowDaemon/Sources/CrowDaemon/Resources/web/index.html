@@ -32,6 +32,7 @@
     <main id="detail">
       <header id="detail-header"></header>
       <div id="detail-artifacts"></div>
+      <div id="detail-recordings"></div>
       <div id="tabbar"></div>
       <div id="terminal-wrap"><div id="terminal"></div><!--
         Skeleton loading overlay (#677): shimmer bars over the terminal area
@@ -89,6 +90,7 @@
   <script src="/xterm/xterm-addon-webgl.js"></script>
   <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
   <script src="/xterm/xterm-addon-crow-viewport.js"></script>
+  <script src="/xterm/xterm-addon-crow-tui-trace.js"></script>
   <!-- CROW-1155 / CROW-1160 / CROW-1238 / CROW-1242: classic scripts in
        dependency order. app.js is the boot assembler (shared state lives in
        the earlier files). Board extracts load after boards.js. Settings tab
@@ -109,6 +111,7 @@
   <script src="/reviews-board.js"></script>
   <script src="/scratch-board.js"></script>
   <script src="/terminal.js"></script>
+  <script src="/tui-record.js"></script>
   <script src="/setup.js"></script>
   <script src="/router.js"></script>
   <script src="/app.js"></script>

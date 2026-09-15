@@ -216,6 +216,16 @@ Escape returns to `#/grid` from app chrome — never while the xterm textarea
 has focus, while a lightbox is open, in place of closing a context menu, or
 when the session switcher is bound to an Escape prefix (`esc+tab`).
 Snapshot painting is skipped — jsdom has no xterm.js, matching a failed asset fetch.
+
+## `tui-trace.test.js` — TUI form-factor sampler (CROW-1255)
+
+Drives the real `xterm-addon-crow-tui-trace.js` classifier and HUD wiring.
+Coverage: Tauri is desktop even with `visualViewport` (CROW-1045), phone/tablet
+are touch/coarse not "has visualViewport", sampler fields (`arrived_at_top`,
+`visible_hash`), rAF-coalesced visualViewport, HUD-on without bind sending
+zero `tui-sample`/`resize` frames, `not_active` clearing `sessionStorage`, and
+playback never `text()`-slurping the streamed GET.
+
 ## Run
 
 Tests must not evaluate a single concern file in isolation: `load-client.js`
