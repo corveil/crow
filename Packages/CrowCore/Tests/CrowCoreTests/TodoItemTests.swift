@@ -23,6 +23,7 @@ struct TodoItemTests {
         #expect(decoded.note.isEmpty)
         #expect(decoded.tags.isEmpty)
         #expect(decoded.links.isEmpty)
+        #expect(decoded.ticketRequestedAt == nil)
     }
 
     @Test func normalizePriorityAcceptsP1ThroughP4() throws {

@@ -179,4 +179,18 @@ import CrowEngine
         ])
         #expect(linked.result?["todo"]?.objectValue?["state"]?.stringValue == "ticketed")
     }
+
+    @Test @MainActor func ticketWhileDispatchPendingIsIdempotentWithoutTmux() async throws {
+        let (router, store) = harness()
+        let added = await call(router, "todo-add", ["text": .string("file me")])
+        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
+        let uuid = try #require(UUID(uuidString: id))
+        var item = try #require(store.data.todos?.first { $0.id == uuid })
+        item.ticketRequestedAt = Date()
+        TodoRepository(store: store).save(item)
+        let resp = await call(router, "todo-ticket", ["todo_id": .string(id)])
+        #expect(resp.error == nil)
+        #expect(resp.result?["ok"]?.boolValue == true)
+        #expect(resp.result?["already_dispatched"]?.boolValue == true)
+    }
 }

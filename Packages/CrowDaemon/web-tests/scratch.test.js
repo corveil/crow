@@ -149,10 +149,15 @@ async function flush() {
   T.boardData.scratch = { todos: [item] };
   T.renderBoard();
 
+  const requestedAt = new Date().toISOString();
   T.rpc = async (method, params) => {
     calls.push({ method, params });
-    if (method === 'todo-ticket') return { ok: true, todo: item };
-    if (method === 'todo-list') return { todos: [item] };
+    if (method === 'todo-ticket') {
+      return { ok: true, todo: { ...item, ticket_requested_at: requestedAt } };
+    }
+    if (method === 'todo-list') {
+      return { todos: [{ ...item, ticket_requested_at: requestedAt }] };
+    }
     return {};
   };
   promptCalls.length = 0;
@@ -170,6 +175,10 @@ async function flush() {
     ticketCall && ticketParams.todo_id === item.id
     && ticketParams.repo == null && ticketParams.workspace == null
     && Object.keys(ticketParams).length === 1);
+  check('Ticket stays disabled after refresh while filing',
+    ticketBtn() && ticketBtn().disabled);
+  check('Ticket title says filing',
+    /Filing/.test(ticketBtn()?.title || ''));
 
   const editable = {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',

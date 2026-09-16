@@ -3,6 +3,10 @@
 
 // ===== Scratch (CROW-1231 / CROW-1233) =====
 let scratchShowClosed = false;
+// Survives refreshBoard so Ticket cannot re-fire while the Manager is still
+// attaching the issue. Cleared once a ticket URL lands. 15m matches the daemon TTL.
+const scratchTicketDispatched = new Set();
+const TICKET_DISPATCH_TTL_MS = 15 * 60 * 1000;
 
 function renderScratchBoard(root) {
   const head = el('div', 'board-head');
@@ -90,9 +94,11 @@ function scratchRow(item) {
   const exploring = item.state === 'exploring' || item.state === 'ticketed' || item.state === 'working';
   actions.appendChild(scratchAction('Explore', (btn) => scratchSpawn(btn, 'todo-explore', { todo_id: item.id }, 'Explore')));
   const ticketURL = scratchTicketURL(item);
+  const filing = scratchTicketFiling(item);
   const ticket = el('button', 'action-btn', 'Ticket');
-  ticket.disabled = !!ticketURL;
+  ticket.disabled = !!ticketURL || filing;
   if (ticketURL) ticket.title = 'Already filed';
+  else if (filing) ticket.title = 'Filing — waiting for the Manager to attach the issue';
   ticket.onclick = (e) => {
     e.stopPropagation();
     scratchSpawn(ticket, 'todo-ticket', { todo_id: item.id }, 'Ticket');
@@ -226,7 +232,23 @@ function scratchTicketURL(item) {
   return null;
 }
 
+function scratchTicketFiling(item) {
+  if (scratchTicketURL(item)) {
+    scratchTicketDispatched.delete(item.id);
+    return false;
+  }
+  if (scratchTicketDispatched.has(item.id)) return true;
+  const raw = item.ticket_requested_at;
+  if (!raw) return false;
+  const at = Date.parse(raw);
+  if (Number.isNaN(at)) return true;
+  return (Date.now() - at) < TICKET_DISPATCH_TTL_MS;
+}
+
 async function scratchSpawn(btn, method, params, label) {
-  await spawnAction(btn, method, params, label);
+  const ok = await spawnAction(btn, method, params, label);
+  if (ok && method === 'todo-ticket' && params && params.todo_id) {
+    scratchTicketDispatched.add(params.todo_id);
+  }
   await refreshBoard('scratch');
 }

@@ -347,10 +347,17 @@ private func fileTicket(
     appState: AppState,
     sessionService: SessionService?
 ) async throws -> [String: JSONValue] {
-    let item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
+    var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
     if let existing = item.linkedTicketURL {
         throw RPCError.applicationError(
             "This item already has a ticket (\(existing)). Use `crow todo work` to start a session.")
+    }
+    if TodoRPC.isTicketDispatchPending(item) {
+        return [
+            "todo": TodoRPC.todoJSON(item),
+            "ok": .bool(true),
+            "already_dispatched": .bool(true),
+        ]
     }
     guard sessionService != nil else {
         throw RPCError.applicationError("Filing a ticket requires tmux on the daemon host")
@@ -366,6 +373,9 @@ private func fileTicket(
             text: TodoRPC.ticketBrief(
                 for: item, repoHint: repoHint, workspaceHint: workspaceHint))
     }
+    item.ticketRequestedAt = Date()
+    item.updatedAt = Date()
+    repo.save(item)
     return ["todo": TodoRPC.todoJSON(item), "ok": .bool(true)]
 }
 

@@ -127,6 +127,16 @@ public enum TodoRPC {
         return .object(object)
     }
 
+    /// How long a dispatched Ticket stays in-flight before another Manager
+    /// send is allowed. Within this window a second `todo-ticket` is a no-op
+    /// so refresh / double-click cannot open duplicate issues.
+    public static let ticketDispatchTTL: TimeInterval = 15 * 60
+
+    public static func isTicketDispatchPending(_ item: TodoItem, now: Date = Date()) -> Bool {
+        guard item.linkedTicketURL == nil, let at = item.ticketRequestedAt else { return false }
+        return now.timeIntervalSince(at) < ticketDispatchTTL
+    }
+
     /// Session name for the Manager spawned by `todo explore`. Truncated so
     /// it stays a valid Crow session name.
     public static func managerName(from text: String) -> String {

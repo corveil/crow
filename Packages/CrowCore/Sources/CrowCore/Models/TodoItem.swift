@@ -63,6 +63,9 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
     public var priority: String?
     public var state: TodoState
     public var links: [TodoLink]
+    /// When Scratch Ticket last typed a create-ticket brief into the Manager.
+    /// In-flight guard until a ticket URL lands, or the dispatch TTL elapses.
+    public var ticketRequestedAt: Date?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -74,6 +77,7 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         priority: String? = nil,
         state: TodoState = .captured,
         links: [TodoLink] = [],
+        ticketRequestedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -84,6 +88,7 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         self.priority = priority
         self.state = state
         self.links = links
+        self.ticketRequestedAt = ticketRequestedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -97,12 +102,13 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         priority = try container.decodeIfPresent(String.self, forKey: .priority)
         state = try container.decodeIfPresent(TodoState.self, forKey: .state) ?? .captured
         links = try container.decodeIfPresent([TodoLink].self, forKey: .links) ?? []
+        ticketRequestedAt = try container.decodeIfPresent(Date.self, forKey: .ticketRequestedAt)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, note, tags, priority, state, links, createdAt, updatedAt
+        case id, text, note, tags, priority, state, links, ticketRequestedAt, createdAt, updatedAt
     }
 
     /// Recognized priority tokens. Stored lowercase (`p1`…`p4`).
