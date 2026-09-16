@@ -228,67 +228,56 @@ public enum TodoRPC {
         }
     }
 
-    /// Workspace + repo slug `todo-ticket` files against (CROW-1259).
-    public struct TicketTarget: Equatable, Sendable {
-        public let workspace: WorkspaceInfo
-        public let repo: String
-        public init(workspace: WorkspaceInfo, repo: String) {
-            self.workspace = workspace
-            self.repo = repo
-        }
-    }
-
-    /// Resolve where to file a Scratch ticket.
+    /// Prompt typed into the primary Manager for Scratch **Ticket**.
     ///
-    /// When `repo` is set, membership is ``AppConfig/workspace(forRepoSlug:)``
-    /// (exact slug beats glob; first config-order match among equals). A Jira
-    /// project key is accepted as the slug when no git workspace claims it.
-    /// Unmatched slugs refuse — they are not guessed from `--workspace`.
+    /// A wrapping brief, not `/crow-create-ticket "title"` plus leftover
+    /// lines: that skill treats remaining `$ARGUMENTS` as the issue body,
+    /// so link-back / "don't ask" instructions would leak onto the ticket.
+    /// Repo choice is the Manager's — `/crow-create-ticket` already scores
+    /// workspace membership by keyword (same approach as `/crow-workspace`).
+    /// Crow does not pick a slug. Optional `repoHint` / `workspaceHint` are
+    /// preferences when the caller named one, not a second membership rule.
     ///
-    /// When `repo` is omitted, `workspace` is required and the repo is inferred
-    /// from a Jira project key or a single concrete (non-glob) always-include ∪
-    /// auto-review entry — the CLI path for a one-repo workspace.
-    public static func resolveTicketTarget(
-        workspaceRef: String?,
-        repo: String?,
-        config: AppConfig
-    ) throws -> TicketTarget {
-        let repoSlug = repo?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nonemptyRepo = (repoSlug?.isEmpty == false) ? repoSlug : nil
-
-        if let nonemptyRepo {
-            if let matched = config.workspace(forRepoSlug: nonemptyRepo) {
-                return TicketTarget(workspace: matched, repo: nonemptyRepo)
-            }
-            if let matched = config.workspaces.first(where: {
-                ($0.jiraProjectKey ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .caseInsensitiveCompare(nonemptyRepo) == .orderedSame
-            }) {
-                return TicketTarget(workspace: matched, repo: nonemptyRepo)
-            }
-            throw RPCError.invalidParams("no workspace matches repo '\(nonemptyRepo)'")
+    /// After `gh`/`glab`/`jira` create, the agent attaches the URL with
+    /// `crow todo link` so Work can enable. Trailing newline submits.
+    public static func ticketBrief(
+        for item: TodoItem,
+        repoHint: String? = nil,
+        workspaceHint: String? = nil
+    ) -> String {
+        let title = item.text.replacingOccurrences(of: "\n", with: " ")
+        var lines = [
+            "File a ticket for this Crow Scratch item using /crow-create-ticket.",
+            "",
+            "Title: \(title)",
+        ]
+        if !item.note.isEmpty {
+            lines.append("Body:")
+            lines.append(item.note)
         }
-
-        let workspaceRaw = workspaceRef?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let workspaceRaw, !workspaceRaw.isEmpty else {
-            throw RPCError.invalidParams("workspace is required")
+        if !item.tags.isEmpty {
+            lines.append("Tags: " + item.tags.joined(separator: ", "))
         }
-        let index = try WorkspaceRPC.resolveIndex(workspaceRaw, in: config)
-        let workspace = config.workspaces[index]
-        if workspace.derivedTaskProvider == "jira",
-           let key = workspace.jiraProjectKey?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !key.isEmpty {
-            return TicketTarget(workspace: workspace, repo: key)
+        let repo = repoHint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspace = workspaceHint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var hints: [String] = []
+        if let repo, !repo.isEmpty { hints.append("repo \(repo)") }
+        if let workspace, !workspace.isEmpty { hints.append("workspace \(workspace)") }
+        if !hints.isEmpty {
+            lines.append(
+                "Prefer " + hints.joined(separator: ", ")
+                    + " if it fits; otherwise pick by keyword score.")
         }
-        let concrete = (workspace.alwaysInclude + workspace.autoReviewRepos)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.contains("*") }
-        guard concrete.count == 1, let only = concrete.first else {
-            throw RPCError.invalidParams(
-                "repo is required (workspace '\(workspace.name)' does not have exactly one always-include repo)")
-        }
-        return TicketTarget(workspace: workspace, repo: only)
+        lines.append(contentsOf: [
+            "",
+            "This is Crow Scratch item \(item.id.uuidString). After the issue exists, attach it:",
+            "crow todo link --id \(item.id.uuidString) --type ticket --url <issue-url>",
+            "Pick the repo the way /crow-create-ticket already does (keyword score against workspace membership). Do not ask me to type a workspace or repo name.",
+            "The Title/Body/Tags above are the issue; do not copy these instructions into the ticket body.",
+            "Then stop. Do not start a work session.",
+            "",
+        ])
+        return lines.joined(separator: "\n")
     }
 
     /// Body filed with `todo ticket` — the item plus its note, tagged as

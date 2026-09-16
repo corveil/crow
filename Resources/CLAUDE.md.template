@@ -127,12 +127,12 @@ crow todo drop --id <uuid>
 crow todo delete --id <uuid>
 crow todo link --id <uuid> --type session|ticket|pr|custom [--url ...] [--session <uuid>] [--label "..."]
 crow todo explore --id <uuid> [--agent claude-code]
-crow todo ticket --id <uuid> --workspace W [--repo owner/repo]
+crow todo ticket --id <uuid> [--workspace W] [--repo owner/repo]
 crow todo work --id <uuid>
 crow todo talk --id <uuid> "..."
 ```
 
-Durable pre-ticket ideas (CROW-1231). Not reaped by session cleanup. `explore` opens a Manager; `ticket` files from the item body; `work` types `/crow-workspace` off the linked ticket.
+Durable pre-ticket ideas (CROW-1231). Not reaped by session cleanup. `explore` opens a Manager; `ticket` types `/crow-create-ticket` into the primary Manager (the agent picks the repo); `work` types `/crow-workspace` off the linked ticket.
 
 ### TUI recording Commands
 ```

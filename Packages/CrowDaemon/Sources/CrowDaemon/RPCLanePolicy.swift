@@ -187,7 +187,7 @@ enum RPCLanePolicy {
         // MARK: Scratch / pre-ticket ideas (CROW-1231)
         // New items have nothing to order against (same reasoning as
         // `new-session`). Mutations key on the item so two edits of one
-        // cannot tear. Explore/work/talk type into a Manager (new, primary,
+        // cannot tear. Explore/ticket/work/talk type into a Manager (new, primary,
         // or the item's linked explore Manager), so they share the manager
         // lane with `create-manager` / `work-on-issue` / `send` — otherwise
         // a talk can interleave with sendToManager or work-on-issue and
@@ -201,7 +201,7 @@ enum RPCLanePolicy {
         "todo-drop": .on("todo_id"),
         "todo-link": .on("todo_id"),
         "todo-explore": .fixed(.manager),
-        "todo-ticket": .on("todo_id"),
+        "todo-ticket": .fixed(.manager),
         "todo-work": .fixed(.manager),
         "todo-talk": .fixed(.manager),
 

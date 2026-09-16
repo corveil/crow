@@ -80,49 +80,6 @@ function dismissModalDialog(token) {
   return true;
 }
 
-// In-page <select> prompt. Same chrome as textPrompt so Scratch Ticket can
-// offer a repo dropdown instead of window.prompt (CROW-1259). `options` are
-// `{ value, label }` rows; resolves to the chosen `value`, or null on cancel.
-function selectPrompt(title, options, { okLabel = 'OK' } = {}) {
-  return new Promise((resolve) => {
-    let done = false;
-    const backdrop = el('div', 'text-prompt-backdrop');
-    const card = el('div', 'text-prompt-card');
-    const heading = el('div', 'text-prompt-title', title);
-    const select = el('select', 'text-prompt-input');
-    for (const opt of options) {
-      const o = document.createElement('option');
-      o.value = opt.value;
-      o.textContent = opt.label;
-      select.appendChild(o);
-    }
-    const actions = el('div', 'text-prompt-actions');
-    const cancel = el('button', 'text-prompt-btn', 'Cancel');
-    const ok = el('button', 'text-prompt-btn primary', okLabel);
-    actions.append(cancel, ok);
-    card.append(heading, select, actions);
-    backdrop.appendChild(card);
-
-    function finish(value) {
-      if (done) return;
-      done = true;
-      document.removeEventListener('keydown', onKey, true);
-      backdrop.remove();
-      resolve(value);
-    }
-    function onKey(e) {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); }
-      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(select.value); }
-    }
-    cancel.onclick = () => finish(null);
-    ok.onclick = () => finish(select.value);
-    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) finish(null); });
-    document.addEventListener('keydown', onKey, true);
-    document.body.appendChild(backdrop);
-    select.focus();
-  });
-}
-
 function textPrompt(title, current, { placeholder = '', okLabel = 'Save' } = {}) {
   return new Promise((resolve) => {
     let done = false;

@@ -257,13 +257,14 @@ public struct TodoExplore: ParsableCommand {
 public struct TodoTicket: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "ticket",
-        abstract: "File a ticket from the item body and attach the URL"
+        abstract: "Ask the Manager to file a ticket from the item (agent picks the repo)"
     )
 
     @Option(name: .long, help: "Todo UUID") var id: String
-    @Option(name: .long, help: "Workspace name or UUID") var workspace: String
-    @Option(name: .long, help: "owner/repo slug (or Jira project key); defaults to the workspace's sole always-include repo")
+    @Option(name: .long, help: "Optional repo hint for the Manager (owner/repo); omitted, the agent picks")
     var repo: String?
+    @Option(name: .long, help: "Optional workspace hint for the Manager; omitted, the agent picks")
+    var workspace: String?
 
     public init() {}
 
@@ -273,10 +274,8 @@ public struct TodoTicket: ParsableCommand {
     }
 
     public func run() throws {
-        var params: [String: JSONValue] = [
-            "todo_id": .string(id),
-            "workspace": .string(workspace),
-        ]
+        var params: [String: JSONValue] = ["todo_id": .string(id)]
+        if let workspace { params["workspace"] = .string(workspace) }
         if let repo { params["repo"] = .string(repo) }
         printJSON(try rpc("todo-ticket", params: params, timeoutSeconds: 60))
     }

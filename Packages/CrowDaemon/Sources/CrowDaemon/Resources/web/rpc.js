@@ -40,8 +40,6 @@ const RPC_TIMEOUTS_MS = {
   'quick-action': 60000,
   'list-tickets': 60000,
   'list-reviews': 60000,
-  // Expand alwaysInclude ∪ autoReviewRepos (gh/glab repo list per owner/* glob).
-  'list-workspace-repos': 60000,
   'todo-explore': 90000,
   'todo-talk': 90000,
   'todo-ticket': 60000,

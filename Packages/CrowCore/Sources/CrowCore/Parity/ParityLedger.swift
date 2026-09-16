@@ -308,14 +308,6 @@ public enum ParityLedger {
         // CROW-809. Un-gated on `/rpc`: the payloads carry no credential, since
         // the per-workspace gateway is excluded from them rather than gated.
         .read("workspace-list", cli: "workspace list"),
-        .read(
-            "list-workspace-repos",
-            noCLI: """
-                Expands each workspace's alwaysInclude ∪ autoReviewRepos (including \
-                owner/* globs) into concrete slugs for the Scratch Ticket dropdown \
-                (CROW-1259). `crow todo ticket` already takes --workspace and \
-                optional --repo, so the listing itself has no CLI twin.
-                """),
         .read("workspace-get", cli: "workspace get"),
         .write("workspace-add", cli: "workspace add"),
         .write("workspace-edit", cli: "workspace edit"),

@@ -175,67 +175,36 @@ struct TodoRPCSupportTests {
             session: session, baseCommand: "claude", prompt: "   ") == nil)
     }
 
-    // MARK: - Ticket target (CROW-1259)
+    // MARK: - Ticket brief (CROW-1259)
 
-    @Test func ticketTargetInfersSoleConcreteAlwaysInclude() throws {
-        let config = AppConfig(workspaces: [
-            WorkspaceInfo(name: "Acme", alwaysInclude: ["acme/widget"]),
-        ])
-        let target = try TodoRPC.resolveTicketTarget(
-            workspaceRef: "Acme", repo: nil, config: config)
-        #expect(target.workspace.name == "Acme")
-        #expect(target.repo == "acme/widget")
+    @Test func ticketBriefAsksManagerToPickRepoAndLinkBack() {
+        let id = UUID()
+        let item = TodoItem(id: id, text: "scratch ticket", note: "details", tags: ["crow"])
+        let brief = TodoRPC.ticketBrief(for: item)
+        #expect(brief.hasSuffix("\n"))
+        #expect(brief.contains("using /crow-create-ticket"))
+        #expect(brief.contains("Title: scratch ticket"))
+        #expect(brief.contains("Body:"))
+        #expect(brief.contains("details"))
+        #expect(brief.contains("Tags: crow"))
+        #expect(brief.contains("crow todo link --id \(id.uuidString) --type ticket --url"))
+        #expect(brief.contains("Do not ask me to type a workspace or repo name"))
+        #expect(brief.contains("do not copy these instructions into the ticket body"))
+        #expect(brief.contains("Do not start a work session"))
+        #expect(!brief.contains("Prefer "))
     }
 
-    @Test func ticketTargetGlobOnlyRequiresRepo() {
-        let config = AppConfig(workspaces: [
-            WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
-        ])
-        do {
-            _ = try TodoRPC.resolveTicketTarget(
-                workspaceRef: "corveil", repo: nil, config: config)
-            Issue.record("expected repo-required error")
-        } catch let RPCError.invalidParams(msg) {
-            #expect(msg.contains("repo is required"))
-            #expect(msg.contains("corveil"))
-        } catch {
-            Issue.record("unexpected error \(error)")
-        }
+    @Test func ticketBriefKeepsQuotesInTitleLine() {
+        let item = TodoItem(text: #"fix "dropdown""#)
+        let brief = TodoRPC.ticketBrief(for: item)
+        #expect(brief.contains("Title: fix \"dropdown\""))
     }
 
-    @Test func ticketTargetGlobOnlySucceedsWhenRepoIsSupplied() throws {
-        let config = AppConfig(workspaces: [
-            WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
-        ])
-        let target = try TodoRPC.resolveTicketTarget(
-            workspaceRef: "corveil", repo: "corveil/crow", config: config)
-        #expect(target.workspace.name == "corveil")
-        #expect(target.repo == "corveil/crow")
-    }
-
-    @Test func ticketTargetUnmatchedSlugRefusesEvenWithWorkspace() {
-        let config = AppConfig(workspaces: [
-            WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
-        ])
-        do {
-            _ = try TodoRPC.resolveTicketTarget(
-                workspaceRef: "corveil", repo: "stranger/repo", config: config)
-            Issue.record("expected unmatched-slug error")
-        } catch let RPCError.invalidParams(msg) {
-            #expect(msg.contains("no workspace matches repo 'stranger/repo'"))
-        } catch {
-            Issue.record("unexpected error \(error)")
-        }
-    }
-
-    @Test func ticketTargetRepoIsAuthoritativeOverNamedWorkspace() throws {
-        let config = AppConfig(workspaces: [
-            WorkspaceInfo(name: "First", alwaysInclude: ["acme/*"]),
-            WorkspaceInfo(name: "Widget", alwaysInclude: ["acme/widget"]),
-        ])
-        // Exact slug beats glob, even if the caller named the glob workspace.
-        let target = try TodoRPC.resolveTicketTarget(
-            workspaceRef: "First", repo: "acme/widget", config: config)
-        #expect(target.workspace.name == "Widget")
+    @Test func ticketBriefIncludesOptionalHints() {
+        let item = TodoItem(text: "x")
+        let brief = TodoRPC.ticketBrief(
+            for: item, repoHint: "corveil/crow", workspaceHint: "corveil")
+        #expect(brief.contains("Prefer repo corveil/crow, workspace corveil"))
+        #expect(brief.contains("otherwise pick by keyword score"))
     }
 }
