@@ -127,6 +127,21 @@ public protocol CodeBackend: Sendable {
     /// title, head/base branch names, head commit SHA, number. Issues one
     /// `gh pr view` / `glab mr view` call.
     func fetchPRMetadata(prURL: String) async throws -> PRMetadata
+
+    /// Resolve `slug` ("owner/repo") to the host's *canonical* slug, following
+    /// any org/repo rename the host redirects. Returns the canonical
+    /// "owner/repo", `nil` when the repo can't be resolved (no such repo, or a
+    /// backend that can't follow renames), and throws only on a transient
+    /// backend failure the caller should retry.
+    ///
+    /// GitHub uses the REST `/repos/{owner}/{repo}` endpoint, which 301-follows
+    /// renames and returns the canonical `full_name`. The GraphQL
+    /// `repository(owner:name:)` used by `prStates` / `findRecentPRsForBranches`
+    /// does NOT follow renames — which is exactly why a `.pr` link registered on
+    /// a stale alias owner leaves every PR-status chip blank (CROW-1268). The
+    /// default implementation returns `nil` (backends that can't canonicalize
+    /// opt out, and the caller leaves the link untouched).
+    func resolveCanonicalRepoSlug(_ slug: String) async throws -> String?
 }
 
 public extension CodeBackend {
@@ -168,6 +183,13 @@ public extension CodeBackend {
     func requestReviewers(prURL: String, logins: [String]) async throws {
         throw ProviderError.unimplemented("requestReviewers not supported by \(provider)")
     }
+
+    /// Default: no canonical-slug resolution. GitHub overrides this via its
+    /// REST redirect-following endpoint; others (GitLab today, Corveil stub)
+    /// inherit the `nil` so a caller normalizing an aliased `.pr` link
+    /// (CROW-1268) leaves non-GitHub links untouched rather than forcing every
+    /// conformer to implement it.
+    func resolveCanonicalRepoSlug(_ slug: String) async throws -> String? { nil }
 }
 
 /// Optional capabilities a `CodeBackend` may declare.

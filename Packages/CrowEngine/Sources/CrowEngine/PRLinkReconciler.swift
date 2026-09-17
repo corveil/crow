@@ -26,6 +26,15 @@ public final class PRLinkReconciler {
 
     init(owner: IssueTracker) { self.owner = owner }
 
+    /// Canonical-slug resolutions for `canonicalizeAliasedPRLinks`, keyed by the
+    /// lowercased alias slug ("radiusmethod/corveil" → "corveil/corveil"). A
+    /// canonical or definitively-missing repo caches to itself, so each distinct
+    /// repo triggers at most one redirect lookup for the daemon's lifetime — the
+    /// redirect resolution is per-repo, never per-poll (CROW-1268). Transient
+    /// failures are not cached, so they retry on a later poll.
+    /// Internal (not private) so `@testable` tests can seed it.
+    var canonicalRepoSlugCache: [String: String] = [:]
+
     // MARK: - Session PR Link Detection (piggyback)
 
     /// Build an index of viewer PRs keyed by `(repoSlug, branch)` and `url`, then
@@ -268,6 +277,104 @@ public final class PRLinkReconciler {
 
         let decided = Self.decideReconcileLinks(matches: matches)
         applyReconciledPRLinks(Self.dedupeContestedPRs(decided, identityBySession: identityBySession))
+    }
+
+    // MARK: - Aliased PR Link Canonicalization (CROW-1268)
+
+    /// Self-heal `.pr` links registered on a stale GitHub owner alias.
+    ///
+    /// A GitHub org/repo rename leaves the old `owner/repo` as a 301 redirect;
+    /// a coder (or a clone whose `origin` remote still uses the old org name)
+    /// can register a `.pr` link on that alias owner. Every downstream matcher
+    /// keys on the stored link URL — the exact-URL `byURL[prLink.url]` join in
+    /// `applyPRStatuses` and the three auto-* controllers, and the `PRRef` built
+    /// from the link URL in `BoardPoller.fetchStalePRStates` — and GitHub's
+    /// GraphQL `repository(owner:name:)` does NOT follow renames, so an aliased
+    /// owner leaves every PR-status chip (CI / review / auto-merge /
+    /// mergeability) blank even for a healthy, approved PR.
+    ///
+    /// This rewrites such a link's stored URL to the canonical `owner/repo`,
+    /// after which all of the above match with no per-matcher change. Robustness
+    /// belongs here, not only at `add-link` time, so the poller doesn't depend on
+    /// every coder registering the canonical URL.
+    ///
+    /// Cost: gated on `knownPRURLs` — a healthy canonical link is already in the
+    /// poll payload, so it is never a candidate and never triggers a lookup —
+    /// and `canonicalRepoSlugCache` bounds resolution to at most once per repo
+    /// for the daemon's lifetime. The rewrite is persisted, so the chips
+    /// populate on the *next* poll's status pass (a one-poll, self-healing lag
+    /// for a rare correction).
+    ///
+    /// - Parameter knownPRURLs: canonical PR URLs seen in this poll's payload
+    ///   (viewer PRs ∪ stale follow-up), used only as the payload-miss gate.
+    func canonicalizeAliasedPRLinks(knownPRURLs: Set<String>) async {
+        guard let backend = providerManager.codeBackend(for: .github) else { return }
+
+        struct Candidate { let sessionID: UUID; let linkID: UUID; let url: String; let slug: String }
+        var candidates: [Candidate] = []
+        for session in appState.sessions where !session.isManager {
+            for link in appState.links(for: session.id) where link.linkType == .pr {
+                // A canonical link is already in the payload — skip it, so the
+                // steady-state path never resolves a redirect.
+                guard !knownPRURLs.contains(link.url) else { continue }
+                guard let parsed = Self.parseGitHubPRURL(link.url) else { continue }
+                candidates.append(Candidate(
+                    sessionID: session.id, linkID: link.id, url: link.url, slug: parsed.slug))
+            }
+        }
+        guard !candidates.isEmpty else { return }
+
+        // Resolve each distinct, not-yet-cached slug once, off MainActor.
+        let slugsToResolve = Set(candidates.map { $0.slug })
+            .filter { canonicalRepoSlugCache[$0.lowercased()] == nil }
+        for slug in slugsToResolve {
+            do {
+                let canonical = try await Task.detached {
+                    try await backend.resolveCanonicalRepoSlug(slug)
+                }.value
+                // Cache the canonical, or the slug itself when unresolvable, so a
+                // definitive miss stops re-querying. A thrown (transient) error is
+                // NOT cached — a later poll retries.
+                canonicalRepoSlugCache[slug.lowercased()] = canonical ?? slug
+            } catch {
+                owner.handleGitHubBackendError(error, operation: "resolveCanonicalRepoSlug(\(slug))")
+            }
+        }
+
+        // Build rewrites, then persist in a single store write (see
+        // `applySessionPRLinks` / #304 for why the write is batched).
+        var rewriteByLinkID: [UUID: String] = [:]
+        for c in candidates {
+            guard let newURL = Self.canonicalizedPRURL(
+                c.url, resolveSlug: { canonicalRepoSlugCache[$0] }
+            ), newURL != c.url else { continue }
+            // Don't create a duplicate PR row if both the alias and canonical
+            // URLs were registered on the same session.
+            if appState.links(for: c.sessionID).contains(where: { $0.url == newURL }) { continue }
+            rewriteByLinkID[c.linkID] = newURL
+        }
+        guard !rewriteByLinkID.isEmpty else { return }
+
+        for c in candidates {
+            guard let newURL = rewriteByLinkID[c.linkID],
+                  var links = appState.links[c.sessionID],
+                  let i = links.firstIndex(where: { $0.id == c.linkID }) else { continue }
+            let old = links[i].url
+            links[i].url = newURL
+            appState.links[c.sessionID] = links
+            CrowLog.automation(
+                "pr-link canonicalize: session=\(c.sessionID.uuidString) "
+                + "rewrote aliased PR link \(old) → \(newURL)")
+        }
+        // Route through the shared, injected `store` — never a throwaway
+        // `JSONStore()` (#728). Mirrors `edit-link`'s in-place URL rewrite.
+        store.mutate { data in
+            for i in data.links.indices {
+                if let newURL = rewriteByLinkID[data.links[i].id] {
+                    data.links[i].url = newURL
+                }
+            }
+        }
     }
 
     /// Walk appState and build the set of sessions needing a reconcile pass.
@@ -704,6 +811,48 @@ public final class PRLinkReconciler {
     /// parses git *remote* URLs (no `/pull/...` suffix).
     nonisolated static func repoSlug(fromPRURL url: String) -> String {
         repoSlug(fromWebURL: url, stoppingAt: ["pull", "merge_requests", "-"])
+    }
+
+    /// Parse a **github.com** PR web URL into its `owner/repo` slug, PR number,
+    /// and any trailing path/query/fragment. Returns nil for a non-github.com
+    /// host or a URL that isn't `.../owner/repo/pull/<number>` — enterprise and
+    /// GitLab hosts are out of scope for redirect canonicalization (CROW-1268),
+    /// whose REST redirect-follow is github.com-specific. Pure; unit-tested.
+    nonisolated static func parseGitHubPRURL(_ url: String) -> (slug: String, number: Int, tail: String)? {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let range = trimmed.range(
+            of: #"^https?://github\.com/"#, options: [.regularExpression, .caseInsensitive]
+        ) else { return nil }
+        let path = String(trimmed[range.upperBound...])
+        let segs = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard segs.count >= 4, segs[2].lowercased() == "pull" else { return nil }
+        let owner = segs[0], repo = segs[1]
+        guard !owner.isEmpty, !repo.isEmpty else { return nil }
+        // segs[3] is "<number>" possibly with a trailing "?query"/"#fragment".
+        let digits = segs[3].prefix { $0.isNumber }
+        guard let number = Int(digits), number > 0 else { return nil }
+        var tail = String(segs[3].dropFirst(digits.count))
+        let rest = segs.dropFirst(4)
+        if !rest.isEmpty { tail += "/" + rest.joined(separator: "/") }
+        return (slug: "\(owner)/\(repo)", number: number, tail: tail)
+    }
+
+    /// Rewrite a github.com PR URL to its canonical `owner/repo`, or nil when no
+    /// rewrite is warranted — the URL isn't a github.com PR URL, its slug can't
+    /// be resolved, or it is already canonical (case-insensitively). `resolveSlug`
+    /// maps a **lowercased** "owner/repo" to its canonical "owner/repo" (the
+    /// redirect resolution, supplied by the caller so this stays pure and
+    /// network-free for tests). The PR number and any trailing path are
+    /// preserved (CROW-1268).
+    nonisolated static func canonicalizedPRURL(
+        _ url: String, resolveSlug: (String) -> String?
+    ) -> String? {
+        guard let parsed = parseGitHubPRURL(url) else { return nil }
+        guard let canonical = resolveSlug(parsed.slug.lowercased()),
+              !canonical.isEmpty,
+              canonical.split(separator: "/").count == 2,
+              canonical.caseInsensitiveCompare(parsed.slug) != .orderedSame else { return nil }
+        return "https://github.com/\(canonical)/pull/\(parsed.number)\(parsed.tail)"
     }
 
     /// Same as `repoSlug(fromPRURL:)` but also stops at `issues`, so a GitHub

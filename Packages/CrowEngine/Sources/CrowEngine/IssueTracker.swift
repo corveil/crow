@@ -426,6 +426,18 @@ public final class IssueTracker {
             await captureReworkSignals()
         }
 
+        // Canonicalize `.pr` links registered on a stale GitHub owner alias so
+        // the exact-URL status join (and the stale-PR `PRRef`) can correlate
+        // them (CROW-1268). Gated on the payload it just applied, so healthy
+        // canonical links cost nothing; the per-repo redirect cache bounds
+        // lookups to at most once per repo. Runs before the missing-link
+        // reconcile (they touch disjoint sets: canonicalize fixes links that
+        // exist but are aliased; reconcile attaches links that are missing).
+        if let ghResult = fetch.ghResult {
+            let knownPRURLs = Set((ghResult.viewerPRs + fetch.staleFetch.prs).map { $0.url })
+            await reconciler.canonicalizeAliasedPRLinks(knownPRURLs: knownPRURLs)
+        }
+
         // Reconcile any session still missing a .pr link by querying the
         // provider directly on (repoSlug, headBranch). Covers PRs that aren't
         // in the viewer's open-PR payload (other author, merged/closed, etc).

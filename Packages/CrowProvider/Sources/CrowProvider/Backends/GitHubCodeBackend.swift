@@ -70,6 +70,33 @@ public struct GitHubCodeBackend: CodeBackend {
         }
     }
 
+    // MARK: - resolveCanonicalRepoSlug
+
+    /// Resolve `slug` ("owner/repo") to GitHub's canonical `full_name` via the
+    /// REST `/repos/{owner}/{repo}` endpoint, which 301-follows org/repo renames
+    /// (unlike the GraphQL `repository(owner:name:)` this backend uses elsewhere,
+    /// which returns null for a renamed owner — the root of CROW-1268). Returns
+    /// the canonical "owner/repo", or `nil` when the repo doesn't exist under
+    /// that slug (a definitive 404 the caller can cache rather than retry). Any
+    /// other `gh` failure is rethrown so the caller treats it as transient.
+    public func resolveCanonicalRepoSlug(_ slug: String) async throws -> String? {
+        let trimmed = slug.trimmingCharacters(in: .whitespaces)
+        guard trimmed.split(separator: "/").count == 2 else { return nil }
+        do {
+            let output = try await shellRunner.run(
+                "gh", "api", "repos/\(trimmed)", "--jq", ".full_name"
+            )
+            let full = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            return full.isEmpty ? nil : full
+        } catch ShellRunnerError.nonZeroExit(_, let stderr)
+            where stderr.localizedCaseInsensitiveContains("not found")
+                || stderr.localizedCaseInsensitiveContains("404") {
+            // Definitive: no repo at that slug. `nil` (not a throw) so the caller
+            // caches the miss and stops re-querying it every poll.
+            return nil
+        }
+    }
+
     // MARK: - listMonitoredPRs
 
     public func listMonitoredPRs() async throws -> MonitoredPRListing {
