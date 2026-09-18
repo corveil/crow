@@ -3,6 +3,13 @@ import CrowCore
 
 /// `CodeBackend` implementation for GitLab. Wraps the `glab` CLI.
 ///
+/// Facade (CROW-1273): protocol methods, `capabilities`, `shellRunner`,
+/// `host` / `GITLAB_HOST`, and the `glab` argv wrappers. REST JSON parsers
+/// live in `GitLabCodeBackend+Parsing.swift` as `extension GitLabCodeBackend`
+/// so `@testable` tests keep `GitLabCodeBackend.mapPipelineStatus` /
+/// `parseStaleMRResponse` / `normalizeState` and so `BoardPoller` /
+/// `IssueTracker` aliases keep forwarding to the same public statics.
+///
 /// Capabilities: none in v1. The merge-label flow, auto-merge enable, and
 /// update-branch are all GitHub-only today; once GitLab gets equivalent CI
 /// gating, declare the matching capability and implement the method.
@@ -33,15 +40,7 @@ public struct GitLabCodeBackend: CodeBackend {
             env: env(),
             cwd: NSHomeDirectory()
         )
-        guard let data = output.data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              let first = arr.first,
-              let iid = first["iid"] as? Int else {
-            return nil
-        }
-        let webURL = (first["web_url"] as? String) ?? ""
-        let state = (first["state"] as? String) ?? ""
-        return LinkedPR(number: iid, url: webURL, state: state)
+        return Self.parseLinkedPR(output)
     }
 
     public func ensureMergeLabel(repo: String) async throws {
@@ -104,37 +103,6 @@ public struct GitLabCodeBackend: CodeBackend {
         return out
     }
 
-    /// Parse a single `projects/{slug}/merge_requests/{iid}` REST response
-    /// into a `PRRecord`. State is normalized to GitHub's
-    /// `OPEN|MERGED|CLOSED` vocabulary so downstream code stays
-    /// provider-agnostic. Returns nil if the JSON shape doesn't match.
-    public static func parseStaleMRResponse(
-        _ output: String,
-        fallbackURL: String,
-        fallbackSlug: String
-    ) -> PRRecord? {
-        guard let data = output.data(using: .utf8),
-              let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let number = item["iid"] as? Int else { return nil }
-        let url = (item["web_url"] as? String) ?? fallbackURL
-        let rawState = (item["state"] as? String) ?? ""
-        let state = normalizeState(rawState)
-        let headRefName = (item["source_branch"] as? String) ?? ""
-        let baseRefName = (item["target_branch"] as? String) ?? ""
-        let headRefOid = (item["sha"] as? String) ?? ""
-        let isDraft = (item["draft"] as? Bool) ?? (item["work_in_progress"] as? Bool) ?? false
-        return PRRecord(
-            number: number,
-            url: url,
-            state: state,
-            isDraft: isDraft,
-            headRefName: headRefName,
-            headRefOid: headRefOid,
-            baseRefName: baseRefName,
-            repoNameWithOwner: fallbackSlug
-        )
-    }
-
     /// Best-effort linked-MR status for an issue, for the board's inline PR
     /// state + CI badges (#751). Finds the first open related MR (falling back
     /// to the most recent), then reads its head-pipeline CI rollup. Returns nil
@@ -150,48 +118,20 @@ public struct GitLabCodeBackend: CodeBackend {
             env: env(),
             cwd: NSHomeDirectory()
         )
-        guard let data = output.data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return nil
-        }
-        // Prefer an open MR (the one whose health matters); else the first listed.
-        let opened = arr.first { ($0["state"] as? String) == "opened" }
-        guard let mr = opened ?? arr.first,
-              let iid = mr["iid"] as? Int,
-              let webURL = mr["web_url"] as? String else {
-            return nil
-        }
-        let state = Self.normalizeState((mr["state"] as? String) ?? "")
-        let isDraft = (mr["draft"] as? Bool) ?? (mr["work_in_progress"] as? Bool) ?? false
+        guard let related = Self.parseRelatedMRStatus(output) else { return nil }
 
         // CI rollup: the list payload omits pipelines, so read the single-MR
         // endpoint's head_pipeline. Best-effort — a missing/empty pipeline just
         // leaves checksState blank.
-        var checksState = ""
-        let mrEndpoint = "projects/\(encodedSlug)/merge_requests/\(iid)"
-        if let mrOut = try? await shellRunner.run(args: ["glab", "api", mrEndpoint], env: env(), cwd: NSHomeDirectory()),
-           let mrData = mrOut.data(using: .utf8),
-           let mrObj = try? JSONSerialization.jsonObject(with: mrData) as? [String: Any] {
-            let pipeline = (mrObj["head_pipeline"] as? [String: Any]) ?? (mrObj["pipeline"] as? [String: Any])
-            if let status = pipeline?["status"] as? String {
-                checksState = Self.mapPipelineStatus(status)
-            }
+        let mrEndpoint = "projects/\(encodedSlug)/merge_requests/\(related.number)"
+        guard let mrOut = try? await shellRunner.run(
+            args: ["glab", "api", mrEndpoint],
+            env: env(),
+            cwd: NSHomeDirectory()
+        ) else {
+            return related
         }
-        return PRRecord(number: iid, url: webURL, state: state, isDraft: isDraft, checksState: checksState)
-    }
-
-    /// Normalize a GitLab pipeline status to the provider-agnostic checks
-    /// vocabulary shared with GitHub (`SUCCESS`/`FAILURE`/`PENDING`/`ERROR`).
-    /// `skipped`/unknown map to `""` (no checks shown).
-    static func mapPipelineStatus(_ raw: String) -> String {
-        switch raw {
-        case "success": return "SUCCESS"
-        case "failed": return "FAILURE"
-        case "running", "pending", "created", "preparing", "waiting_for_resource",
-             "scheduled", "manual": return "PENDING"
-        case "canceled": return "ERROR"
-        default: return ""
-        }
+        return Self.applyingPipeline(to: related, output: mrOut)
     }
 
     public func fetchCrowAuthoredCommits(prURL: String, repoSlug: String, prNumber: Int) async throws -> [CommitInfo] {
@@ -202,15 +142,7 @@ public struct GitLabCodeBackend: CodeBackend {
             env: env(),
             cwd: NSHomeDirectory()
         )
-        guard let data = output.data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return []
-        }
-        return arr.compactMap { item -> CommitInfo? in
-            guard let message = item["message"] as? String else { return nil }
-            let sha = (item["id"] as? String) ?? ""
-            return CommitInfo(sha: sha, message: message)
-        }
+        return Self.parseCommits(output)
     }
 
     public func findRecentPRsForBranches(_ candidates: [BranchCandidate]) async throws -> [BranchPRMatch] {
@@ -229,24 +161,7 @@ public struct GitLabCodeBackend: CodeBackend {
             } catch {
                 continue
             }
-            guard let data = output.data(using: .utf8),
-                  let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                continue
-            }
-            for item in items {
-                guard let number = item["iid"] as? Int,
-                      let url = item["web_url"] as? String else { continue }
-                let rawState = (item["state"] as? String) ?? ""
-                let normalized = Self.normalizeState(rawState)
-                let updatedAt = IssueDate.parse(item["updated_at"] as? String)
-                matches.append(BranchPRMatch(
-                    candidate: candidate,
-                    number: number,
-                    url: url,
-                    state: normalized,
-                    updatedAt: updatedAt
-                ))
-            }
+            matches.append(contentsOf: Self.parseRecentPRs(output, candidate: candidate))
         }
         return matches
     }
@@ -272,18 +187,10 @@ public struct GitLabCodeBackend: CodeBackend {
             env: env(),
             cwd: NSHomeDirectory()
         )
-        guard let data = output.data(using: .utf8),
-              let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let meta = Self.parsePRMetadata(output, fallbackNumber: parsed.number) else {
             throw ProviderError.commandFailed("fetchPRMetadata: failed to parse glab MR response")
         }
-        return PRMetadata(
-            title: (item["title"] as? String) ?? "",
-            number: (item["iid"] as? Int) ?? parsed.number,
-            headRefName: (item["source_branch"] as? String) ?? "",
-            headRefOid: (item["sha"] as? String) ?? "",
-            baseRefName: (item["target_branch"] as? String) ?? "",
-            author: ((item["author"] as? [String: Any])?["username"] as? String) ?? ""
-        )
+        return meta
     }
 
     // MARK: - Helpers
@@ -291,50 +198,5 @@ public struct GitLabCodeBackend: CodeBackend {
     private func env() -> [String: String] {
         guard let host else { return [:] }
         return ["GITLAB_HOST": host]
-    }
-
-    public static func normalizeState(_ raw: String) -> String {
-        switch raw {
-        case "opened": return "OPEN"
-        case "merged": return "MERGED"
-        case "closed": return "CLOSED"
-        default: return raw.uppercased()
-        }
-    }
-
-    static func parseReviewMRs(_ output: String, host: String) -> [ReviewRequest] {
-        guard let data = output.data(using: .utf8),
-              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return []
-        }
-        return items.compactMap { item -> ReviewRequest? in
-            guard let number = item["iid"] as? Int,
-                  let title = item["title"] as? String,
-                  let url = item["web_url"] as? String else { return nil }
-            let refs = item["references"] as? [String: Any]
-            let fullRef = (refs?["full"] as? String) ?? ""
-            let author = ((item["author"] as? [String: Any])?["username"] as? String) ?? ""
-            let headBranch = (item["source_branch"] as? String) ?? ""
-            let baseBranch = (item["target_branch"] as? String) ?? ""
-            let draft = (item["draft"] as? Bool) ?? (item["work_in_progress"] as? Bool) ?? false
-            let labels = (item["labels"] as? [String] ?? []).map { LabelInfo(name: $0) }
-            let updatedAt = IssueDate.parse(item["updated_at"] as? String)
-            let headRefOid = item["sha"] as? String
-            return ReviewRequest(
-                id: "gitlab:\(host):\(fullRef)",
-                prNumber: number,
-                title: title,
-                url: url,
-                repo: fullRef,
-                author: author,
-                headBranch: headBranch,
-                baseBranch: baseBranch,
-                isDraft: draft,
-                requestedAt: updatedAt,
-                labels: labels,
-                provider: .gitlab,
-                headRefOid: headRefOid
-            )
-        }
     }
 }
