@@ -77,13 +77,14 @@ private let todoUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     #expect(cmd.agent == "cursor")
 }
 
-@Test func todoTicketRequiresWorkspace() {
-    #expect(throws: (any Error).self) {
-        _ = try TodoTicket.parse(["--id", todoUUID])
-    }
+@Test func todoTicketParsesIdAlone() throws {
+    let cmd = try TodoTicket.parse(["--id", todoUUID])
+    #expect(cmd.id == todoUUID)
+    #expect(cmd.workspace == nil)
+    #expect(cmd.repo == nil)
 }
 
-@Test func todoTicketParsesWorkspaceAndRepo() throws {
+@Test func todoTicketParsesOptionalWorkspaceAndRepo() throws {
     let cmd = try TodoTicket.parse([
         "--id", todoUUID, "--workspace", "Corveil", "--repo", "corveil/crow",
     ])

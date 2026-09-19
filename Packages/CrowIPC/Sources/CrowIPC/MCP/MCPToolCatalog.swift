@@ -472,7 +472,7 @@ public enum MCPToolCatalog {
 
     static let todoFields = [
         "id", "text", "note", "tags", "priority", "state", "links",
-        "created_at", "updated_at",
+        "ticket_requested_at", "created_at", "updated_at",
     ]
 
     // MARK: - Helpers

@@ -3,6 +3,10 @@
 
 // ===== Scratch (CROW-1231 / CROW-1233) =====
 let scratchShowClosed = false;
+// Survives refreshBoard so Ticket cannot re-fire while the Manager is still
+// attaching the issue. Cleared once a ticket URL lands. 15m matches the daemon TTL.
+const scratchTicketDispatched = new Set();
+const TICKET_DISPATCH_TTL_MS = 15 * 60 * 1000;
 
 function renderScratchBoard(root) {
   const head = el('div', 'board-head');
@@ -90,10 +94,15 @@ function scratchRow(item) {
   const exploring = item.state === 'exploring' || item.state === 'ticketed' || item.state === 'working';
   actions.appendChild(scratchAction('Explore', (btn) => scratchSpawn(btn, 'todo-explore', { todo_id: item.id }, 'Explore')));
   const ticketURL = scratchTicketURL(item);
+  const filing = scratchTicketFiling(item);
   const ticket = el('button', 'action-btn', 'Ticket');
-  ticket.disabled = !!ticketURL;
+  ticket.disabled = !!ticketURL || filing;
   if (ticketURL) ticket.title = 'Already filed';
-  ticket.onclick = (e) => { e.stopPropagation(); scratchTicket(ticket, item); };
+  else if (filing) ticket.title = 'Filing — waiting for the Manager to attach the issue';
+  ticket.onclick = (e) => {
+    e.stopPropagation();
+    scratchSpawn(ticket, 'todo-ticket', { todo_id: item.id }, 'Ticket');
+  };
   actions.appendChild(ticket);
   const work = el('button', 'action-btn', 'Work');
   work.disabled = !ticketURL;
@@ -223,40 +232,23 @@ function scratchTicketURL(item) {
   return null;
 }
 
-async function scratchTicket(btn, item) {
-  let listed;
-  try {
-    listed = await rpc('list-workspace-repos');
-  } catch (err) {
-    alertModal('Could not list repos: ' + (err.message || err));
-    return;
+function scratchTicketFiling(item) {
+  if (scratchTicketURL(item)) {
+    scratchTicketDispatched.delete(item.id);
+    return false;
   }
-  const repos = (listed && listed.repos) || [];
-  if (!repos.length) {
-    alertModal('No repos to file in. Add an always-include repo in Settings → Workspaces.');
-    return;
-  }
-  let picked = repos[0];
-  if (repos.length > 1) {
-    const slug = await selectPrompt(
-      'File ticket in',
-      repos.map((r) => ({ value: r.slug, label: r.slug })),
-      { okLabel: 'File' });
-    if (!slug) return;
-    picked = repos.find((r) => r.slug === slug);
-    if (!picked) {
-      alertModal('No workspace matches repo \'' + slug + '\'.');
-      return;
-    }
-  }
-  spawnAction(btn, 'todo-ticket', {
-    todo_id: item.id,
-    repo: picked.slug,
-    workspace: picked.workspace,
-  }, 'Ticket').then(() => refreshBoard('scratch'));
+  if (scratchTicketDispatched.has(item.id)) return true;
+  const raw = item.ticket_requested_at;
+  if (!raw) return false;
+  const at = Date.parse(raw);
+  if (Number.isNaN(at)) return true;
+  return (Date.now() - at) < TICKET_DISPATCH_TTL_MS;
 }
 
 async function scratchSpawn(btn, method, params, label) {
-  await spawnAction(btn, method, params, label);
+  const ok = await spawnAction(btn, method, params, label);
+  if (ok && method === 'todo-ticket' && params && params.todo_id) {
+    scratchTicketDispatched.add(params.todo_id);
+  }
   await refreshBoard('scratch');
 }

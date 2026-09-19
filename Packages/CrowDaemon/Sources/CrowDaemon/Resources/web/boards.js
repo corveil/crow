@@ -158,10 +158,12 @@ async function spawnAction(btn, method, params, label) {
   try {
     await rpc(method, params);
     btn.textContent = 'Started ✓';
+    return true;
   } catch (e) {
     buttons.forEach((b) => { b.disabled = false; });
     btn.textContent = orig;
     alertModal(label + ' failed: ' + (e.message || e));
+    return false;
   }
 }
 
