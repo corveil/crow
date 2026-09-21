@@ -274,4 +274,48 @@ struct HookEventSessionResolutionTests {
         #expect(response.result?["received"]?.boolValue == true)
         #expect(store.data.hookStates?[deadSession.uuidString] == nil)
     }
+
+    @Test("SessionStart persists the harness conversation id")
+    func sessionStartPersistsHarnessConversationID() async throws {
+        let tmp = tempDir()
+        let appState = AppState()
+        let store = JSONStore(directory: tmp)
+        let session = Session(name: "Manager 2", kind: .manager)
+        appState.sessions.append(session)
+        store.mutate { $0.sessions.append(session) }
+
+        let router = makeRouter(appState, store, devRoot: tmp.path)
+        let claudeID = "dfb5e99e-3195-4342-89fd-4025f1b7f09e"
+        let response = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "hook-event", params: [
+                "session_id": .string(session.id.uuidString),
+                "event_name": .string("SessionStart"),
+                "payload": .object([
+                    "cwd": .string(tmp.path),
+                    "session_id": .string(claudeID),
+                ]),
+            ]))
+        #expect(response.error == nil)
+        #expect(appState.sessions.first { $0.id == session.id }?.harnessConversationID == claudeID)
+        #expect(store.data.sessions.first { $0.id == session.id }?.harnessConversationID == claudeID)
+    }
+
+    @Test("payload session_id equal to Crow UUID is not persisted as a harness id")
+    func crowSessionUUIDIsNotAHarnessID() async throws {
+        let tmp = tempDir()
+        let appState = AppState()
+        let store = JSONStore(directory: tmp)
+        let session = Session(name: "Manager 2", kind: .manager)
+        appState.sessions.append(session)
+        store.mutate { $0.sessions.append(session) }
+
+        let router = makeRouter(appState, store, devRoot: tmp.path)
+        _ = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "hook-event", params: [
+                "session_id": .string(session.id.uuidString),
+                "event_name": .string("SessionStart"),
+                "payload": .object(["session_id": .string(session.id.uuidString)]),
+            ]))
+        #expect(appState.sessions.first { $0.id == session.id }?.harnessConversationID == nil)
+    }
 }

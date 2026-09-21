@@ -83,3 +83,21 @@ import Testing
     // clone's must never resolve to it.
     #expect(appState.sessionID(forWorktreePath: "/wt/alpha-1-slug") == nil)
 }
+
+@MainActor
+@Test func sessionIDsIncludeManagerTerminalCwd() {
+    // Extra Managers have no SessionWorktree row (CROW-1281). Hook cwd
+    // resolution must still find them via the agent terminal's cwd.
+    let appState = AppState()
+    let extra = Session(name: "Manager 2", kind: .manager)
+    appState.sessions.append(extra)
+    appState.terminals[extra.id] = [
+        SessionTerminal(
+            sessionID: extra.id, name: extra.name,
+            cwd: "/devroot/.crow/managers/\(extra.id.uuidString)",
+            command: "claude --resume 'abc'")
+    ]
+    #expect(appState.sessionIDs(
+        forWorktreePath: "/devroot/.crow/managers/\(extra.id.uuidString)") == [extra.id])
+    #expect(appState.sessionIDs(forWorktreePath: "/devroot").isEmpty)
+}

@@ -561,15 +561,30 @@ public final class AppState {
     /// its own view of the same data — routing and repair disagreeing about who
     /// owns a directory is the failure this avoids.
     ///
+    /// Manager sessions have no `SessionWorktree` row. Extra Managers isolate
+    /// their project identity under `{devRoot}/.crow/managers/<uuid>` (CROW-1281),
+    /// so hook cwd-resolution must also match the agent terminal's cwd — otherwise
+    /// a Codex-style global hook with no baked `--session` would drop every extra
+    /// Manager event.
+    ///
     /// Ordered by session id so the result is stable across processes.
     public func sessionIDs(forWorktreePath path: String) -> [UUID] {
         let wanted = (path as NSString).standardizingPath
-        return worktrees
-            .filter { _, wts in
-                wts.contains { ($0.worktreePath as NSString).standardizingPath == wanted }
+        var ids = Set(
+            worktrees
+                .filter { _, wts in
+                    wts.contains { ($0.worktreePath as NSString).standardizingPath == wanted }
+                }
+                .keys
+        )
+        for session in sessions where session.isManager {
+            if let cwd = terminals[session.id]?.first(where: { $0.command != nil })?.cwd
+                ?? terminals[session.id]?.first?.cwd,
+               (cwd as NSString).standardizingPath == wanted {
+                ids.insert(session.id)
             }
-            .keys
-            .sorted { $0.uuidString < $1.uuidString }
+        }
+        return ids.sorted { $0.uuidString < $1.uuidString }
     }
 
     public func links(for sessionID: UUID) -> [SessionLink] {

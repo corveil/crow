@@ -217,6 +217,41 @@ import Testing
     let decoded = try JSONDecoder().decode(Session.self, from: data)
     #expect(decoded.kind == .manager)
     #expect(decoded.isManager)
+    #expect(decoded.harnessConversationID == nil)
+}
+
+@Test func sessionHarnessConversationIDRoundTrip() throws {
+    var session = Session(name: "Manager 2", kind: .manager)
+    let recorded = session.recordHarnessConversationID("claude-ses-1")
+    #expect(recorded)
+    #expect(session.harnessConversationID == "claude-ses-1")
+    // Crow's own UUID is the hook --session, not a harness id.
+    let rejected = session.recordHarnessConversationID(session.id.uuidString)
+    #expect(!rejected)
+    #expect(session.harnessConversationID == "claude-ses-1")
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(Session.self, from: data)
+    #expect(decoded.harnessConversationID == "claude-ses-1")
+}
+
+@Test func sessionHarnessConversationIDDefaultsNilOnLegacyJSON() throws {
+    let id = UUID()
+    let date = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let json: [String: Any] = [
+        "id": id.uuidString,
+        "name": "legacy-manager",
+        "status": "active",
+        "kind": "manager",
+        "createdAt": formatter.string(from: date),
+        "updatedAt": formatter.string(from: date),
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let session = try decoder.decode(Session.self, from: data)
+    #expect(session.harnessConversationID == nil)
 }
 
 @Test func sessionWorkKindIsNotManager() {

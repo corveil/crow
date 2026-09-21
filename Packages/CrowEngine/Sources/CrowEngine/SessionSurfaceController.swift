@@ -167,17 +167,14 @@ final class SessionSurfaceController {
                 // a Cursor/Codex Manager (whose command never contained
                 // "claude") still gets refreshed across restarts.
                 //
-                // Reconcile `session.agentKind` to the currently-configured
-                // Manager agent BEFORE the command rebuild. `ensureManagerSession`
-                // also performs this reconciliation, but it runs after
-                // `hydrateState` — on the reboot / dead-tmux path
-                // `rebuildAllSurfaces` registers a fresh window and pastes
-                // the just-rebuilt command, so if hydrate keyed off the
-                // stale persisted kind the change would only take effect on
-                // the second respawn (CROW-433 review).
+                // Reconcile the PRIMARY Manager's `agentKind` to Settings before
+                // the command rebuild. Extra Managers keep a one-shot "+" picker
+                // override (CROW-433 / #582) — flipping them here would pair a
+                // persisted Cursor chatId with a Claude `--resume` (CROW-1281).
                 let configuredKind = appState.agentKind(for: .manager)
                 var reconciled = session
-                if reconciled.agentKind != configuredKind {
+                if reconciled.id == AppState.managerSessionID,
+                   reconciled.agentKind != configuredKind {
                     reconciled.agentKind = configuredKind
                     if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
                         appState.sessions[idx].agentKind = configuredKind
@@ -188,24 +185,52 @@ final class SessionSurfaceController {
                         }
                     }
                 }
-                let rebuiltCommand = owner.managerCommand(for: reconciled)
+                // Extra Managers that still share `{devRoot}` as cwd get an
+                // isolated identity directory so they no longer share one
+                // Claude project slug or one `settings.local.json` (CROW-1281).
+                // Must run before hook writes and the command rebuild.
+                let devRoot = ConfigStore.loadDevRoot()
+                if reconciled.id != AppState.managerSessionID, let root = devRoot {
+                    for i in terminals.indices {
+                        let isolated = ManagerIdentity.resolvedCwd(
+                            requested: terminals[i].cwd,
+                            sessionID: reconciled.id,
+                            isPrimary: false,
+                            devRoot: root)
+                        guard isolated != terminals[i].cwd else { continue }
+                        ManagerIdentity.prepareDirectory(at: isolated, orchestrationRoot: root)
+                        terminals[i].cwd = isolated
+                        store.mutate { data in
+                            if let ti = data.terminals.firstIndex(where: { $0.id == terminals[i].id }) {
+                                data.terminals[ti].cwd = isolated
+                            }
+                        }
+                    }
+                }
+                let managerCwd = terminals.first?.cwd
+                let rebuiltCommand = owner.managerCommand(for: reconciled, cwd: managerCwd)
                 // CROW-539: (re)write the Manager's hook config on every launch.
                 // The Manager terminal is adopted here, not recreated, so
                 // createManagerTerminal's hook write doesn't run — without this a
                 // Manager whose terminal predates the hooks never emits events and
                 // its card never lights up. Write to the terminal's own cwd so an
                 // additional Manager running outside the dev root is covered too.
-                // Before writeManagerGatewayEnv() so its 0o600 re-apply is last.
-                if let managerCwd = terminals.first?.cwd {
+                // Gateway env follows the same cwd (CROW-1281 extra-Manager
+                // isolation); 0o600 re-apply stays last.
+                if let managerCwd {
                     owner.writeManagerHookConfig(for: reconciled, dirPath: managerCwd)
-                    // CROW-600: pre-trust the Manager's cwd so a devRoot the
-                    // user hasn't opened Claude Code in before doesn't block
-                    // on the trust dialog. No-ops when already trusted.
+                    owner.writeManagerGatewayEnv(
+                        managerKind: reconciled.agentKind, dirPath: managerCwd)
+                    // CROW-600: pre-trust the Manager's cwd so a fresh identity
+                    // dir (or a new devRoot) doesn't block on the trust dialog.
                     if reconciled.agentKind == .claudeCode {
                         ClaudeTrustSeeder.seedTrust(projectPath: managerCwd)
+                        if let extra = ManagerIdentity.additionalDirectory(
+                            for: reconciled, cwd: managerCwd, devRoot: devRoot) {
+                            ClaudeTrustSeeder.seedTrust(projectPath: extra)
+                        }
                     }
                 }
-                owner.writeManagerGatewayEnv(managerKind: reconciled.agentKind)
                 // Remote-control bookkeeping reflects what the agent actually
                 // emitted — `supportsRemoteControl` is per-agent capability,
                 // but per-launch the Cursor Manager intentionally omits `--rc`
@@ -386,11 +411,11 @@ final class SessionSurfaceController {
     ///     terminal's window and relaunch its session's agent via
     ///     `rebuildAllSurfaces(forceRegister: true)` — the same
     ///     recreate-and-relaunch machinery the mid-run crash auto-recovery uses
-    ///     (#588). The relaunch routes through `launchAgent →
-    ///     agent.autoLaunchCommand` keyed on the session's `agentKind`, so every
-    ///     supported agent resumes per its own rules (Claude via `--continue`,
-    ///     Cursor/Codex/OpenCode via their equivalents; branches an agent marks
-    ///     unsupported simply stay unlaunched).
+    ///     (#588). Work / job / review relaunch through `launchAgent →
+    ///     agent.autoLaunchCommand` (cwd-scoped `--continue` / `resume --last`).
+    ///     Manager terminals relaunch their stored `managerCommand`, which
+    ///     hydrate rebuilds with resume-by-id when a harness conversation id
+    ///     is persisted (CROW-1281) — never cwd-scoped `--continue`.
     ///
     /// Correct against the warm-restart regression the ticket warns about:
     /// `forceRegister: true` is gated on the server actually being gone, so a
@@ -489,6 +514,14 @@ final class SessionSurfaceController {
 
         var seed = terminal
         seed.tmuxBinding = nil
+        // Extra Manager recreate: rebuild the launch line so a conversation id
+        // captured since last hydrate actually reaches `--resume` (CROW-1281).
+        // Primary Manager already rebuilds via `restartManager` →
+        // `createManagerTerminal`.
+        if let session = appState.sessions.first(where: { $0.id == sessionID }),
+           session.isManager, seed.command != nil {
+            seed.command = owner.managerCommand(for: session, cwd: seed.cwd)
+        }
         // Re-arm managed work terminals so the fresh shell's `.shellReady` drives
         // the agent relaunch via `claude --continue` (never the stored initial
         // command) — same seeding as `rebuildAllSurfaces(forceRegister:true)`.

@@ -345,6 +345,24 @@ func makeEngineHookHandlers(
                     ?? capturedAppState.defaultAgentKind
                 let signalSource = AgentRegistry.shared.agent(for: resolvedKind)?.stateSignalSource
 
+                // CROW-1281: persist the harness-native conversation id so a
+                // cold-start Manager relaunch can resume-by-id. Latest id wins
+                // (`/clear` starts a new Claude session). Never overwrite with
+                // Crow's own UUID (that's the `--session` baked into the hook).
+                if sessionIsLive,
+                   let hid = HarnessConversationID.extract(
+                        fields: payload.compactMapValues { $0.stringValue },
+                        crowSessionID: sessionID),
+                   let idx = capturedAppState.sessions.firstIndex(where: { $0.id == sessionID }),
+                   capturedAppState.sessions[idx].harnessConversationID != hid {
+                    capturedAppState.sessions[idx].harnessConversationID = hid
+                    capturedStore.mutate { data in
+                        if let i = data.sessions.firstIndex(where: { $0.id == sessionID }) {
+                            data.sessions[i].harnessConversationID = hid
+                        }
+                    }
+                }
+
                 // CROW-1107: capture Antigravity's conversation→worktree map.
                 // `agy`'s transcript records no cwd, so it can't be attributed
                 // by the shared `cwdFilter` path (CROW-1097). What Crow *does*

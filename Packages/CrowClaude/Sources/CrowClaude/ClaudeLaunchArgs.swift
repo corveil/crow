@@ -59,6 +59,13 @@ public enum ClaudeLaunchArgs {
         return s
     }
 
+    /// Resume-by-id suffix (CROW-1281). Leading space, or `""` when no id.
+    /// Quoted so a hostile/malformed captured id cannot word-split the launch.
+    public static func resumeSuffix(_ conversationID: String?) -> String {
+        guard let id = HarnessConversationID.sanitize(conversationID) else { return "" }
+        return " --resume \(shellQuote(id))"
+    }
+
     /// Shell prefix that applies (or clears) the AI-gateway env vars on the
     /// `claude` launch line (CROW-402). Placed immediately before the `claude`
     /// binary path so it overrides any value exported by the user's `~/.zshrc`

@@ -155,33 +155,48 @@ final class ManagerSessionController {
     /// fresh-terminal creation and the hydrate rebuild so the per-session
     /// `--name` label (and equivalent flags on other agents) has a single
     /// source. `internal` for unit testing (CROW-433).
-    func managerCommand(for session: Session) -> String {
+    ///
+    /// `cwd` is the Manager terminal's working directory. Extra Claude Managers
+    /// whose cwd is an isolated identity dir get `--add-dir {devRoot}` so tools
+    /// still see the real tree (CROW-1281). Nil cwd skips that suffix — tests
+    /// of the Remote Control `--name` label do not need it.
+    func managerCommand(for session: Session, cwd: String? = nil) -> String {
         let agentKind = session.agentKind
         let resolved = AgentRegistry.shared.agent(for: agentKind)
             ?? AgentRegistry.shared.defaultAgent
+        var cmd: String
         if let agent = resolved {
-            return agent.managerLaunchCommand(
+            cmd = agent.managerLaunchCommand(
                 sessionName: session.name,
                 remoteControlEnabled: appState.remoteControlEnabled,
                 autoPermissionMode: appState.managerAutoPermissionMode,
-                telemetryPort: telemetryPort
+                telemetryPort: telemetryPort,
+                conversationID: session.harnessConversationID
             )
+        } else {
+            // No agent registered (only happens in tests that skip
+            // AgentRegistry setup). Fall back to the legacy Claude command so
+            // pre-CROW-433 tests keep producing the same output.
+            let claudePath = SessionService.findClaudeBinary() ?? "claude"
+            let suffix = ClaudeLaunchArgs.resumeSuffix(session.harnessConversationID)
+                + ClaudeLaunchArgs.argsSuffix(
+                    remoteControl: appState.remoteControlEnabled,
+                    sessionName: session.name,
+                    autoPermissionMode: appState.managerAutoPermissionMode
+                )
+            // CROW-402: prefix the command with the Manager's own gateway
+            // (AppConfig.managerGateway) so the initial launch overrides any global
+            // ~/.zshrc export. The matching settings.local.json `env` block (for
+            // manual re-runs) is written by the terminal-creation / hydrate paths,
+            // which own the devRoot write site — keeping this builder pure.
+            cmd = ClaudeLaunchArgs.gatewayEnvPrefix(managerGatewayResolved()) + claudePath + suffix
         }
-        // No agent registered (only happens in tests that skip
-        // AgentRegistry setup). Fall back to the legacy Claude command so
-        // pre-CROW-433 tests keep producing the same output.
-        let claudePath = SessionService.findClaudeBinary() ?? "claude"
-        let suffix = ClaudeLaunchArgs.argsSuffix(
-            remoteControl: appState.remoteControlEnabled,
-            sessionName: session.name,
-            autoPermissionMode: appState.managerAutoPermissionMode
-        )
-        // CROW-402: prefix the command with the Manager's own gateway
-        // (AppConfig.managerGateway) so the initial launch overrides any global
-        // ~/.zshrc export. The matching settings.local.json `env` block (for
-        // manual re-runs) is written by the terminal-creation / hydrate paths,
-        // which own the devRoot write site — keeping this builder pure.
-        return ClaudeLaunchArgs.gatewayEnvPrefix(managerGatewayResolved()) + claudePath + suffix
+        if let cwd,
+           let extra = ManagerIdentity.additionalDirectory(
+                for: session, cwd: cwd, devRoot: ConfigStore.loadDevRoot()) {
+            cmd += " --add-dir \(ClaudeLaunchArgs.shellQuote(extra))"
+        }
+        return cmd
     }
 
     /// Write the Manager's gateway `env` block to `{devRoot}/.claude/settings.local.json`
@@ -195,11 +210,18 @@ final class ManagerSessionController {
     /// Mirrors the `createManagerTerminal` write site.
     func writeManagerGatewayEnv(managerKind: AgentKind) {
         guard let devRoot = ConfigStore.loadDevRoot() else { return }
+        writeManagerGatewayEnv(managerKind: managerKind, dirPath: devRoot)
+    }
+
+    /// Write (or clear) the Manager gateway env block at `dirPath`. Extra
+    /// Managers isolate their cwd (CROW-1281); the env must follow the terminal,
+    /// not always the shared `{devRoot}`.
+    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String) {
         if managerKind == .claudeCode {
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: devRoot, resolved: managerGatewayResolved())
+                dirPath: dirPath, resolved: managerGatewayResolved())
         } else if SessionService.readsClaudeCompatSettings(managerKind) {
-            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: nil)
+            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: dirPath, resolved: nil)
         }
     }
 
@@ -569,7 +591,7 @@ final class ManagerSessionController {
     private func createManagerTerminal(
         session: Session, cwd: String, initialPrompt: String? = nil
     ) -> SessionTerminal {
-        let command = managerCommand(for: session)
+        let command = managerCommand(for: session, cwd: cwd)
         // CROW-539: install hook config so `crow hook-event` fires for the
         // Manager, driving the same activity indicators worker cards get. The
         // Manager has no worktree and runs at the dev root, so hooks carry the
@@ -692,9 +714,15 @@ final class ManagerSessionController {
     ) -> UUID {
         let agentKind = resolvedManagerAgentKind(override)
         let session = Session(name: name, status: .active, kind: .manager, agentKind: agentKind)
+        let devRoot = ConfigStore.loadDevRoot()
+        let isolated = ManagerIdentity.resolvedCwd(
+            requested: cwd, sessionID: session.id, isPrimary: false, devRoot: devRoot)
+        if isolated != cwd, let root = devRoot {
+            ManagerIdentity.prepareDirectory(at: isolated, orchestrationRoot: root)
+        }
         appState.sessions.append(session)
         store.mutate { $0.sessions.append(session) }
-        createManagerTerminal(session: session, cwd: cwd, initialPrompt: initialPrompt)
+        createManagerTerminal(session: session, cwd: isolated, initialPrompt: initialPrompt)
         return session.id
     }
 
@@ -772,8 +800,14 @@ extension SessionService {
     func armManagerExitMonitor() { manager.armManagerExitMonitor() }
 
     func managerCommand(for session: Session) -> String { manager.managerCommand(for: session) }
+    func managerCommand(for session: Session, cwd: String?) -> String {
+        manager.managerCommand(for: session, cwd: cwd)
+    }
     func managerCommand(sessionName: String) -> String { manager.managerCommand(sessionName: sessionName) }
     func writeManagerGatewayEnv(managerKind: AgentKind) { manager.writeManagerGatewayEnv(managerKind: managerKind) }
+    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String) {
+        manager.writeManagerGatewayEnv(managerKind: managerKind, dirPath: dirPath)
+    }
     func writeManagerHookConfig(for session: Session, dirPath: String) {
         manager.writeManagerHookConfig(for: session, dirPath: dirPath)
     }

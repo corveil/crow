@@ -185,13 +185,17 @@ public struct AntigravityAgent: CodingAgent {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String? = nil
     ) -> String {
-        // Antigravity's Manager is an orchestration TUI in the devRoot — no
-        // auto-prompt, no resume. No `--rc`/`--name` equivalent, so remote
-        // control doesn't apply. Terminal backend appends the submitting Enter,
-        // so return the command without a trailing newline (cross-agent
-        // convention).
+        // Antigravity's Manager is an orchestration TUI — no auto-prompt.
+        // `-c` is machine-global most-recent (no per-run id, CROW-1281), so
+        // `conversationID` is ignored: isolated extra-Manager cwd still
+        // separates hook files, but relaunch cannot target a specific brain
+        // conversation. No `--rc`/`--name` equivalent. Terminal backend
+        // appends the submitting Enter, so return the command without a
+        // trailing newline (cross-agent convention).
+        _ = conversationID
         let agentPath = AntigravityLaunchArgs.shellQuote(launchBinary() ?? "agy")
         return agentPath + AntigravityLaunchArgs.autoPermissionSuffix(autoPermissionMode)
     }

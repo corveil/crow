@@ -184,11 +184,13 @@ final class AgentHandoffController {
         // attribution / hooks all see the target kind, and a failed build
         // leaves the prior agent untouched.
         session.agentKind = targetKind
+        session.harnessConversationID = nil
         session.updatedAt = Date()
         appState.sessions[sessionIdx] = session
         store.mutate { data in
             if let i = data.sessions.firstIndex(where: { $0.id == sessionID }) {
                 data.sessions[i].agentKind = targetKind
+                data.sessions[i].harnessConversationID = nil
                 data.sessions[i].updatedAt = session.updatedAt
             }
         }

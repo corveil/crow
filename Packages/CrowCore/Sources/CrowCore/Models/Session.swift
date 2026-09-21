@@ -97,6 +97,14 @@ public struct Session: Identifiable, Codable, Sendable {
     // `false`; legacy sessions decode as not-explore.
     public var isExplore: Bool
 
+    // Harness-native conversation id (Claude session UUID, Cursor chatId,
+    // Codex thread id, …) captured from hook payloads when the agent starts
+    // (CROW-1281). Cold-start Manager relaunch uses resume-by-id rather than
+    // `--continue` / `resume --last`. Nil for sessions that have never emitted
+    // a hook, legacy rows predating this field, and after agent handoff (the
+    // prior agent's id is meaningless to the incoming harness).
+    public var harnessConversationID: String?
+
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
@@ -184,6 +192,17 @@ public struct Session: Identifiable, Codable, Sendable {
         agentSessionEndedAt = date
     }
 
+    /// Persist a harness-native conversation id from a hook payload. Latest
+    /// non-empty id wins so a `/clear` (new Claude session) is what reboot
+    /// resumes. Returns whether the stored value changed.
+    @discardableResult
+    public mutating func recordHarnessConversationID(_ raw: String) -> Bool {
+        guard let sanitized = HarnessConversationID.sanitize(raw, rejecting: id) else { return false }
+        if harnessConversationID == sanitized { return false }
+        harnessConversationID = sanitized
+        return true
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -207,7 +226,8 @@ public struct Session: Identifiable, Codable, Sendable {
         orgGoal: String? = nil,
         ticketPriority: TicketPriority? = nil,
         reviewAuthor: String? = nil,
-        isExplore: Bool = false
+        isExplore: Bool = false,
+        harnessConversationID: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -232,6 +252,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.ticketPriority = ticketPriority
         self.reviewAuthor = reviewAuthor
         self.isExplore = isExplore
+        self.harnessConversationID = harnessConversationID
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -275,6 +296,7 @@ public struct Session: Identifiable, Codable, Sendable {
         ticketPriority = try container.decodeIfPresent(TicketPriority.self, forKey: .ticketPriority)
         reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
         isExplore = try container.decodeIfPresent(Bool.self, forKey: .isExplore) ?? false
+        harnessConversationID = try container.decodeIfPresent(String.self, forKey: .harnessConversationID)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.
