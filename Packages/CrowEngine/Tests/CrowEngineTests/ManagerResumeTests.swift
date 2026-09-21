@@ -160,4 +160,29 @@ struct ManagerResumeCommandTests {
         // Primary still routes recreate to restartManager.
         #expect(SessionService.shouldRestartPrimaryManagerOnRecreate(sessionID: session.id) == false)
     }
+
+    @Test func reconcilePrimaryManagerClearsHarnessIdOnAgentKindChange() {
+        var primary = Session(
+            id: AppState.managerSessionID, name: "Manager",
+            kind: .manager, agentKind: .cursor, harnessConversationID: "chat-22")
+        #expect(SessionService.reconcilePrimaryManagerAgentKind(
+            &primary, configuredKind: .claudeCode))
+        #expect(primary.agentKind == .claudeCode)
+        #expect(primary.harnessConversationID == nil)
+
+        var same = Session(
+            id: AppState.managerSessionID, name: "Manager",
+            kind: .manager, agentKind: .claudeCode, harnessConversationID: "claude-ses")
+        #expect(!SessionService.reconcilePrimaryManagerAgentKind(
+            &same, configuredKind: .claudeCode))
+        #expect(same.harnessConversationID == "claude-ses")
+
+        var extra = Session(
+            name: "Manager 2", kind: .manager, agentKind: .cursor,
+            harnessConversationID: "chat-extra")
+        #expect(!SessionService.reconcilePrimaryManagerAgentKind(
+            &extra, configuredKind: .claudeCode))
+        #expect(extra.agentKind == .cursor)
+        #expect(extra.harnessConversationID == "chat-extra")
+    }
 }

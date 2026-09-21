@@ -203,6 +203,18 @@ public struct Session: Identifiable, Codable, Sendable {
         return true
     }
 
+    /// Change this session's coding agent. The prior harness conversation id
+    /// belongs to the outgoing CLI and must not be passed to the incoming one
+    /// (`claude --resume <cursor-chatId>` — CROW-1281, ADR 0011). Returns
+    /// whether anything changed.
+    @discardableResult
+    public mutating func applyAgentKind(_ kind: AgentKind) -> Bool {
+        guard agentKind != kind else { return false }
+        agentKind = kind
+        harnessConversationID = nil
+        return true
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,

@@ -171,17 +171,20 @@ final class SessionSurfaceController {
                 // the command rebuild. Extra Managers keep a one-shot "+" picker
                 // override (CROW-433 / #582) — flipping them here would pair a
                 // persisted Cursor chatId with a Claude `--resume` (CROW-1281).
+                // When the primary kind *does* change, drop the prior harness
+                // id the same way `handoffAgent` does (CROW-1281 review).
                 let configuredKind = appState.agentKind(for: .manager)
                 var reconciled = session
-                if reconciled.id == AppState.managerSessionID,
-                   reconciled.agentKind != configuredKind {
-                    reconciled.agentKind = configuredKind
+                if SessionService.reconcilePrimaryManagerAgentKind(
+                    &reconciled, configuredKind: configuredKind) {
                     if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
-                        appState.sessions[idx].agentKind = configuredKind
+                        appState.sessions[idx].agentKind = reconciled.agentKind
+                        appState.sessions[idx].harnessConversationID = reconciled.harnessConversationID
                     }
                     store.mutate { data in
                         if let i = data.sessions.firstIndex(where: { $0.id == session.id }) {
-                            data.sessions[i].agentKind = configuredKind
+                            data.sessions[i].agentKind = reconciled.agentKind
+                            data.sessions[i].harnessConversationID = reconciled.harnessConversationID
                         }
                     }
                 }

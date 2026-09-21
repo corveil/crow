@@ -52,12 +52,16 @@ final class ManagerSessionController {
                     _ = SessionService.migrateLegacyManagerKind(&data.sessions)
                 }
             }
-            // Pick up agent-setting changes for next respawn.
-            if appState.sessions[existingIdx].agentKind != configuredKind {
-                appState.sessions[existingIdx].agentKind = configuredKind
+            // Pick up agent-setting changes for next respawn. Drop the prior
+            // harness conversation id so cold start cannot pass a Cursor
+            // chatId to `claude --resume` (CROW-1281 review).
+            if SessionService.reconcilePrimaryManagerAgentKind(
+                &appState.sessions[existingIdx], configuredKind: configuredKind) {
+                let updated = appState.sessions[existingIdx]
                 store.mutate { data in
                     if let i = data.sessions.firstIndex(where: { $0.id == managerID }) {
-                        data.sessions[i].agentKind = configuredKind
+                        data.sessions[i].agentKind = updated.agentKind
+                        data.sessions[i].harnessConversationID = updated.harnessConversationID
                     }
                 }
             }
@@ -834,6 +838,18 @@ extension SessionService {
     }
     func resolvedManagerAgentKind(_ explicit: AgentKind?) -> AgentKind {
         manager.resolvedManagerAgentKind(explicit)
+    }
+
+    /// Primary Manager Settings reconcile (CROW-433 / CROW-1281): extra Managers
+    /// keep a one-shot picker override; the primary adopts `configuredKind`. When
+    /// that kind actually changes, drop `harnessConversationID` so cold start
+    /// cannot pass the previous harness's id to the new CLI.
+    @discardableResult
+    nonisolated static func reconcilePrimaryManagerAgentKind(
+        _ session: inout Session, configuredKind: AgentKind
+    ) -> Bool {
+        guard session.id == AppState.managerSessionID else { return false }
+        return session.applyAgentKind(configuredKind)
     }
 
     /// Decide which workspace claims a session (see `ManagerSessionController.gatewayMatch`).

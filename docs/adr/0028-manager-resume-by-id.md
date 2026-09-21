@@ -25,6 +25,7 @@ Work session `--continue` / `resume --last` in unique worktrees is unchanged.
 - Managers that have emitted at least one hook survive reboot with the same transcript.
 - Extra Managers no longer clobber each other's `{devRoot}` hook `--session` routing.
 - A Manager that has never hooked (or a legacy row with no stored id) starts a fresh TUI on first cold start after upgrade; the next SessionStart captures the id.
+- Switching the primary Manager's configured agent (Settings reconcile, same as `handoffAgent`) clears `harnessConversationID` so the new CLI is not handed the previous harness's id.
 - Agents with no resume-by-id surface (Antigravity `-c` is machine-global; Muse `--session-id` needs-eval) still gain isolated cwd / hook files. Grok uses isolated-cwd `-c` after an id is captured.
 
 ## Alternatives considered

@@ -234,6 +234,18 @@ import Testing
     #expect(decoded.harnessConversationID == "claude-ses-1")
 }
 
+@Test func applyAgentKindClearsHarnessConversationID() {
+    var session = Session(name: "Manager", kind: .manager, agentKind: .claudeCode)
+    _ = session.recordHarnessConversationID("claude-ses-1")
+    let unchanged = session.applyAgentKind(.claudeCode)
+    #expect(!unchanged)
+    #expect(session.harnessConversationID == "claude-ses-1")
+    let swapped = session.applyAgentKind(.cursor)
+    #expect(swapped)
+    #expect(session.agentKind == .cursor)
+    #expect(session.harnessConversationID == nil)
+}
+
 @Test func sessionHarnessConversationIDDefaultsNilOnLegacyJSON() throws {
     let id = UUID()
     let date = Date()
