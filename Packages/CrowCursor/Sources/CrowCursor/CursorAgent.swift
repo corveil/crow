@@ -254,14 +254,16 @@ public struct CursorAgent: CodingAgent {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String? = nil
     ) -> String {
-        // Cursor's Manager is an orchestration TUI in the devRoot — no
-        // auto-prompt, no `--continue`. Cursor has no `--rc`/`--name`
-        // equivalent, so remote control doesn't apply (CROW-433). Not
-        // `agent persist` either (CROW-1175 — same `$TMUX` no-op as the
+        // Cursor's Manager is an orchestration TUI — no auto-prompt. Resume
+        // by captured `chatId` when Crow has one (CROW-1281); never `--continue`
+        // (cwd-scoped last-chat, which shuffles extra Managers). Cursor has no
+        // `--rc`/`--name` equivalent, so remote control doesn't apply (CROW-433).
+        // Not `agent persist` either (CROW-1175 — same `$TMUX` no-op as the
         // worker launch). It carries the
-        // `--trust` workspace-trust seed (the devRoot may be fresh to Cursor's
+        // `--trust` workspace-trust seed (the cwd may be fresh to Cursor's
         // trust ledger — parity with Claude seeding the Manager cwd, CROW-890),
         // plus the auto-permission flags so `crow`/`gh`/`git` orchestration runs
         // without per-call approval when the Manager toggle is on (parity with
@@ -271,8 +273,10 @@ public struct CursorAgent: CodingAgent {
         // appends the submitting Enter, so we return the command without a
         // trailing newline to match the cross-agent convention.
         let agentPath = CursorLaunchArgs.shellQuote(resolvedLaunchBinary)
-        return agentPath + CursorLaunchArgs.launchSuffix(
-            seedTrust: true, autoPermissionMode: autoPermissionMode)
+        return agentPath
+            + CursorLaunchArgs.resumeSuffix(conversationID)
+            + CursorLaunchArgs.launchSuffix(
+                seedTrust: true, autoPermissionMode: autoPermissionMode)
     }
 
     /// Cursor CLI exposes `/rename` for naming sessions (CROW-629).

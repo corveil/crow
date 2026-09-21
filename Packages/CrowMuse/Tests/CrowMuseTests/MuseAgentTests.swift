@@ -136,6 +136,18 @@ struct MuseAgentTests {
         #expect(!cmd.contains("--yolo"))
         #expect(!cmd.contains("--rc"))
         #expect(!cmd.contains("\n"))
+        #expect(!cmd.contains(" resume"))
+    }
+
+    @Test func managerLaunchCommandResumesWhenConversationCaptured() {
+        // Muse resume is workspace-scoped; extra Managers isolate cwd so this
+        // is last-in-folder safe once an id has been captured (CROW-1281).
+        let cmd = agent.managerLaunchCommand(
+            sessionName: "Manager 2", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil,
+            conversationID: "muse-ses")
+        #expect(cmd.contains(" resume"))
+        #expect(!cmd.contains("--continue"))
     }
 
     @Test func launcherHandoffCommandUsesPassedBinaryQuoted() async throws {

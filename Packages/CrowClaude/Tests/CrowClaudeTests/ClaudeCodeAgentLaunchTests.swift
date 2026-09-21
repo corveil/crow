@@ -4,11 +4,13 @@ import CrowCore
 @testable import CrowClaude
 
 /// Locks in the resume-vs-initial-prompt decision in
-/// `ClaudeCodeAgent.autoLaunchCommand` (#588): work/manager sessions always
-/// resume with `--continue`; review/job sessions read their pre-written
-/// prompt file exactly once (`reviewPromptDispatched == false`) and resume
-/// with `--continue` on every relaunch after that — including the rebuild
-/// after a tmux server crash.
+/// `ClaudeCodeAgent.autoLaunchCommand` (#588): work sessions always resume
+/// with `--continue`; review/job sessions read their pre-written prompt file
+/// exactly once (`reviewPromptDispatched == false`) and resume with
+/// `--continue` on every relaunch after that — including the rebuild after a
+/// tmux server crash. Manager `.autoLaunchCommand` is a dead production path
+/// (Managers use `managerLaunchCommand`) and must still resume-by-id, never
+/// `--continue` (CROW-1281).
 @Suite("ClaudeCodeAgent.autoLaunchCommand resume semantics")
 struct ClaudeCodeAgentLaunchTests {
 
@@ -30,14 +32,31 @@ struct ClaudeCodeAgentLaunchTests {
         )
     }
 
-    @Test func workAndManagerAlwaysResume() throws {
-        for kind in [SessionKind.work, .manager] {
-            for dispatched in [false, true] {
-                let cmd = try #require(command(kind: kind, dispatched: dispatched))
-                #expect(cmd.hasSuffix(" --continue\n"))
-                #expect(!cmd.contains("$(<"))
-            }
+    @Test func workAlwaysResumesWithContinue() throws {
+        for dispatched in [false, true] {
+            let cmd = try #require(command(kind: .work, dispatched: dispatched))
+            #expect(cmd.hasSuffix(" --continue\n"))
+            #expect(!cmd.contains("$(<"))
+            #expect(!cmd.contains("--resume"))
         }
+    }
+
+    @Test func managerAutoLaunchResumesByIdNeverContinue() throws {
+        let fresh = try #require(command(kind: .manager, dispatched: false))
+        #expect(!fresh.contains("--continue"))
+        #expect(!fresh.contains("--resume"))
+
+        var session = Session(name: "s", kind: .manager)
+        session.harnessConversationID = "ses-mgr"
+        let resumed = try #require(agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        ))
+        #expect(resumed.contains("--resume 'ses-mgr'"))
+        #expect(!resumed.contains("--continue"))
     }
 
     @Test func reviewAndJobReadPromptFileOnFirstLaunchOnly() throws {
@@ -131,5 +150,39 @@ struct ClaudeCodeAgentLaunchTests {
             telemetryPort: nil
         )
         #expect(!manager.contains("--permission-prompts"))
+    }
+
+    @Test func managerLaunchCommandResumesByIdNeverContinue() {
+        // CROW-1281: Manager reboot must resume-by-id, not `--continue`.
+        // `--continue` is cwd-scoped; extra Managers sharing {devRoot} shuffle.
+        let fresh = agent.managerLaunchCommand(
+            sessionName: "Manager 2",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        )
+        #expect(!fresh.contains("--continue"))
+        #expect(!fresh.contains("--resume"))
+
+        let id = "dfb5e99e-3195-4342-89fd-4025f1b7f09e"
+        let resumed = agent.managerLaunchCommand(
+            sessionName: "Manager 2",
+            remoteControlEnabled: true,
+            autoPermissionMode: true,
+            telemetryPort: nil,
+            conversationID: id
+        )
+        #expect(resumed.contains("--resume '\(id)'"))
+        #expect(!resumed.contains("--continue"))
+        #expect(resumed.contains("--name 'Manager 2'"))
+        #expect(resumed.contains("--permission-mode auto"))
+        let blank = agent.managerLaunchCommand(
+            sessionName: "Manager",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil,
+            conversationID: "  "
+        )
+        #expect(!blank.contains("--resume"))
     }
 }

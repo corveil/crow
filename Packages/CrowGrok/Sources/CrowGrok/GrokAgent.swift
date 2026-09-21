@@ -203,17 +203,24 @@ public struct GrokAgent: CodingAgent {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String? = nil
     ) -> String {
-        // Grok's Manager is a plain TUI in the devRoot — no auto-prompt, no
-        // remote-control / auto-permission knob (parity with Codex/OpenCode).
-        // The terminal backend appends the submitting Enter, so we return the
-        // bare command without a trailing newline. Shell-quoted (like
+        // Grok's Manager is a plain TUI — no auto-prompt, no remote-control /
+        // auto-permission knob (parity with Codex/OpenCode). Shell-quoted (like
         // `CursorAgent.managerLaunchCommand`, the other colliding-token adapter):
         // `grok` collides with `superagent-ai/grok-cli`, so `defaults.binaries.grok`
         // is the *expected* config here, and an override path with a space would
         // otherwise word-split when the terminal backend runs it (#861 review r8).
-        return GrokLaunchArgs.shellQuote(launchBinary() ?? "grok")
+        //
+        // Grok has no resume-by-id flag (`-c` is last-in-cwd). Extra Managers
+        // isolate their cwd (CROW-1281), so `-c` after a captured conversation
+        // is cwd-safe; a missing id is a first launch — bare TUI.
+        let bin = GrokLaunchArgs.shellQuote(launchBinary() ?? "grok")
+        if HarnessConversationID.sanitize(conversationID) != nil {
+            return "\(bin) -c"
+        }
+        return bin
     }
 
     /// Grok's TUI exposes `/rename` (alias `/title`) for the current session

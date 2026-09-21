@@ -75,7 +75,8 @@ struct AgentDiscoveryTests {
         func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) async throws -> String { "" }
         func managerLaunchCommand(
             sessionName: String, remoteControlEnabled: Bool,
-            autoPermissionMode: Bool, telemetryPort: UInt16?
+            autoPermissionMode: Bool, telemetryPort: UInt16?,
+            conversationID: String?
         ) -> String { "stub" }
     }
 

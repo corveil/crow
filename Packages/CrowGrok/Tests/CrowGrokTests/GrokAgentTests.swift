@@ -212,6 +212,19 @@ struct GrokAgentTests {
         #expect(!cmd.contains("\n"))
     }
 
+    @Test func managerLaunchCommandContinuesWhenConversationCaptured() {
+        // Grok has no resume-by-id; isolated cwd makes `-c` last-in-folder safe.
+        let cmd = agent.managerLaunchCommand(
+            sessionName: "Manager 2",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil,
+            conversationID: "grok-ses"
+        )
+        #expect(cmd.contains(" -c"))
+        #expect(!cmd.contains("--continue"))
+    }
+
     /// The handoff path (`GrokAgent.launchCommand` → `GrokLauncher.launchCommand`)
     /// must launch the *passed* binary — the caller threads the override-aware
     /// `findBinary()` result — not a bare PATH walk. Otherwise a

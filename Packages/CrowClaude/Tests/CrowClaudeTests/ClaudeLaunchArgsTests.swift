@@ -32,6 +32,13 @@ import CrowCore
     #expect(ClaudeLaunchArgs.shellQuote("has'quote") == "'has'\\''quote'")
 }
 
+@Test func claudeLaunchArgsResumeSuffix() {
+    #expect(ClaudeLaunchArgs.resumeSuffix(nil) == "")
+    #expect(ClaudeLaunchArgs.resumeSuffix("  ") == "")
+    #expect(ClaudeLaunchArgs.resumeSuffix("abc-123") == " --resume 'abc-123'")
+    #expect(ClaudeLaunchArgs.resumeSuffix("has'quote") == " --resume 'has'\\''quote'")
+}
+
 @Test func claudeLaunchArgsAutoPermissionModeOnly() {
     #expect(ClaudeLaunchArgs.argsSuffix(remoteControl: false, sessionName: nil, autoPermissionMode: true)
         == " --permission-mode auto")

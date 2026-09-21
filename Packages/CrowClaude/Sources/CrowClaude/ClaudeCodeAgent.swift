@@ -118,6 +118,12 @@ public struct ClaudeCodeAgent: CodingAgent {
                 prefix: claudePath + rcArgs,
                 promptPath: promptPath)
         }
+        // Production Managers launch via `managerLaunchCommand`, not this path
+        // (`isManaged: false`). Keep the branch honest anyway: resume-by-id,
+        // never cwd-scoped `--continue` (CROW-1281).
+        if session.kind == .manager {
+            return "\(envPrefix)\(claudePath)\(ClaudeLaunchArgs.resumeSuffix(session.harnessConversationID))\(rcArgs)\n"
+        }
         return "\(envPrefix)\(claudePath)\(rcArgs) --continue\n"
     }
 
@@ -153,14 +159,21 @@ public struct ClaudeCodeAgent: CodingAgent {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String? = nil
     ) -> String {
         let claudePath = launchBinary() ?? "claude"
-        return claudePath + ClaudeLaunchArgs.argsSuffix(
-            remoteControl: remoteControlEnabled,
-            sessionName: sessionName,
-            autoPermissionMode: autoPermissionMode
-        )
+        // Resume-by-id when Crow has captured this Manager's Claude session
+        // UUID (CROW-1281). Never `--continue`: extra Managers sharing a cwd
+        // would all grab the same "last in this folder." A missing id is a
+        // first launch (or a session that hasn't hooked yet) — fresh TUI.
+        return claudePath
+            + ClaudeLaunchArgs.resumeSuffix(conversationID)
+            + ClaudeLaunchArgs.argsSuffix(
+                remoteControl: remoteControlEnabled,
+                sessionName: sessionName,
+                autoPermissionMode: autoPermissionMode
+            )
     }
 
     /// Claude Code's `/rename` keeps the claude.ai Remote Control panel label

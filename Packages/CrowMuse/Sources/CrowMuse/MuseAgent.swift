@@ -189,17 +189,26 @@ public struct MuseAgent: CodingAgent {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String? = nil
     ) -> String {
-        // Muse's Manager is a plain TUI in the devRoot. Trust so project
-        // hooks load; honor auto-perm with the bounded flag. No `--rc`.
-        // Terminal backend appends Enter, so no trailing newline. Quoted
-        // so a spaced `defaults.binaries.muse` pin can't word-split.
-        MuseLaunchArgs.managerCommand(
+        // Muse's Manager is a plain TUI. Trust so project hooks load; honor
+        // auto-perm with the bounded flag. No `--rc`. Terminal backend
+        // appends Enter, so no trailing newline. Quoted so a spaced
+        // `defaults.binaries.muse` pin can't word-split.
+        //
+        // `muse resume` is workspace-scoped (docs: `--session-id` unused). Extra
+        // Managers isolate their cwd (CROW-1281), so resume after a captured
+        // conversation is cwd-safe; a missing id is a first launch — bare TUI.
+        let cmd = MuseLaunchArgs.managerCommand(
             binary: launchBinary() ?? "muse",
             autoPermissionMode: autoPermissionMode,
             trustWorkspace: true
         )
+        if HarnessConversationID.sanitize(conversationID) != nil {
+            return cmd + " resume"
+        }
+        return cmd
     }
 
     // `sessionRenameSlashCommand` is intentionally NOT overridden: Muse's

@@ -1,4 +1,5 @@
 import Foundation
+import CrowCore
 
 /// Helpers for building the argument string appended to an `agent` (Cursor CLI)
 /// invocation. Centralized so `CursorAgent`, the launcher, and tests share one
@@ -136,5 +137,13 @@ public enum CursorLaunchArgs {
     /// old posture without re-deriving the flag plumbing.
     public static func launchSuffix(seedTrust: Bool, autoPermissionMode: Bool) -> String {
         (seedTrust ? trustSuffix : "") + autoPermissionSuffix(autoPermissionMode)
+    }
+
+    /// Resume-by-id suffix (CROW-1281). `agent --resume <chatId>` targets a
+    /// specific conversation; `--continue` is last-in-cwd and shuffles when
+    /// extra Managers share a folder. Leading space, or `""` when no id.
+    public static func resumeSuffix(_ conversationID: String?) -> String {
+        guard let id = HarnessConversationID.sanitize(conversationID) else { return "" }
+        return " --resume \(shellQuote(id))"
     }
 }

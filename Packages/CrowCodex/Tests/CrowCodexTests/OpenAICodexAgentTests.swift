@@ -85,6 +85,21 @@ struct OpenAICodexAgentTests {
                     autoPermissionMode: false, telemetryPort: nil))
     }
 
+    @Test func managerLaunchCommandResumesByThreadIdNeverLast() {
+        let fresh = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil)
+        #expect(fresh == "codex" || fresh.hasSuffix("codex"))
+        #expect(!fresh.contains("resume"))
+
+        let resumed = agent.managerLaunchCommand(
+            sessionName: "Manager 2", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil,
+            conversationID: "thread-abc")
+        #expect(resumed.contains("resume 'thread-abc'"))
+        #expect(!resumed.contains("--last"))
+    }
+
     @Test func autoLaunchCommandReviewSessionFirstLaunchFeedsPrompt() {
         // #830 review: Codex inlines `.crow-review-prompt.md` (the `/crow-review-pr`
         // skill) exactly like Cursor/OpenCode so the review posts a real GitHub

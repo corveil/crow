@@ -215,19 +215,30 @@ public struct OpenAICodexAgent: CodingAgent {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String? = nil
     ) -> String {
-        // Codex's Manager is a plain TUI in the devRoot — no auto-prompt,
-        // no `--rc` flag, no auto-permission knob (CROW-433). Terminal
-        // backend appends the submitting Enter, so we return the bare
-        // command without a trailing newline.
+        // Codex's Manager is a plain TUI — no auto-prompt, no `--rc` flag, no
+        // auto-permission knob (CROW-433). Terminal backend appends the
+        // submitting Enter, so we return the command without a trailing
+        // newline.
+        //
+        // Resume-by-id when Crow has captured this Manager's thread
+        // (CROW-1281). Never `resume --last`: that is cwd-scoped and extra
+        // Managers sharing `{devRoot}` would shuffle. A missing id is a first
+        // launch — bare TUI.
         //
         // Emitting no `--rc` also keeps the Manager off the RC badge: the
         // Manager's bookkeeping gates on `" --rc"` appearing in the built
         // command rather than on `supportsRemoteControl`
         // (`SessionService.ensureManagerSession`), so the CROW-1001 flip
         // leaves this path exactly as it was — same as Cursor's Manager.
-        return launchBinary() ?? "codex"
+        let codexPath = launchBinary() ?? "codex"
+        if let id = HarnessConversationID.sanitize(conversationID) {
+            let quoted = "'" + id.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            return "\(codexPath) resume \(quoted)"
+        }
+        return codexPath
     }
 
     /// Codex TUI exposes `/rename` for the current thread (CROW-629).

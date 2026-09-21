@@ -51,7 +51,8 @@ struct AgentHandoffPromptTests {
             sessionName: String,
             remoteControlEnabled: Bool,
             autoPermissionMode: Bool,
-            telemetryPort: UInt16?
+            telemetryPort: UInt16?,
+            conversationID: String?
         ) -> String { launchCommandToken }
     }
 

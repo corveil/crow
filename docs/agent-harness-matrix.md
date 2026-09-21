@@ -227,10 +227,15 @@ managed-terminal command needs hook/env prep.
 
 - **Claude:** work sessions relaunch with `--continue`; review/job sessions read
   their prompt file on first launch, then fall through to `--continue` on
-  restart (`ClaudeCodeAgent.autoLaunchCommand`, CROW-224 / CROW-317).
+  restart (`ClaudeCodeAgent.autoLaunchCommand`, CROW-224 / CROW-317). **Manager
+  cold-start** uses resume-by-id (`claude --resume <id>`) from the persisted
+  harness conversation id, never cwd-scoped `--continue` — extra Managers share
+  no unique worktree (CROW-1281, [ADR 0028](adr/0028-manager-resume-by-id.md)).
 - **Cursor:** review/job sessions read their prompt file on first launch, then
   resume with `--continue` on restart (`CursorAgent.autoLaunchCommand`, #829);
-  `.work` launches bare (deliberate — the user types into the TUI). Cursor CLI
+  `.work` launches bare (deliberate — the user types into the TUI). **Manager
+  cold-start** uses `--resume <chatId>` when Crow has captured one (CROW-1281).
+  Cursor CLI
   **2026.08.26** added `agent persist` (keep running after disconnect;
   `/detach`, `agent persist attach`, `list`/`stop`, `--resume`). That is **not**
   a missing `--continue` and is **not wired** (CROW-1175). Persist is Cursor's
@@ -243,7 +248,8 @@ managed-terminal command needs hook/env prep.
   resume with `codex resume --last` on restart; `.work` also relaunches with
   `codex resume --last` rather than dropping into a bare TUI
   (`OpenAICodexAgent.autoLaunchCommand`, #830 — the earlier MVP no-resume pin is
-  retired).
+  retired). **Manager cold-start** uses `codex resume <id>` when Crow has
+  captured the thread, never cwd-scoped `resume --last` (CROW-1281).
 - **OpenCode:** review/job sessions run headless `opencode run "$prompt"` on
   first launch, then chain `; opencode --continue` to reopen the same session in
   the TUI on restart (`resumeTUICommand` / `firstLaunchChainedCommand`,

@@ -163,15 +163,22 @@ public struct OpenCodeAgent: CodingAgent {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String? = nil
     ) -> String {
-        // OpenCode's Manager is a plain orchestration TUI in the devRoot — no
-        // auto-prompt, no `--continue`. OpenCode has no `--rc`/`--name`
-        // equivalent, so the remote-control / auto-permission knobs don't
-        // apply (parity with `CursorAgent`). Terminal backend appends the
-        // submitting Enter, so we return the bare command without a trailing
-        // newline to match the cross-agent convention.
-        return launchBinary() ?? "opencode"
+        // OpenCode's Manager is a plain orchestration TUI — no auto-prompt.
+        // Resume-by-id (`--session`) when Crow has captured this Manager's
+        // OpenCode session (CROW-1281); never `--continue` (last-session,
+        // which shuffles extra Managers sharing a cwd). OpenCode has no
+        // `--rc`/`--name` equivalent, so the remote-control / auto-permission
+        // knobs don't apply (parity with `CursorAgent`). Terminal backend
+        // appends the submitting Enter, so we return the command without a
+        // trailing newline to match the cross-agent convention.
+        let binary = launchBinary() ?? "opencode"
+        if let id = HarnessConversationID.sanitize(conversationID) {
+            return "\(binary) --session \(OpenCodeLaunchArgs.shellQuote(id))"
+        }
+        return binary
     }
 
     /// OpenCode TUI exposes `/rename` for the current session (CROW-629).

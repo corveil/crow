@@ -182,13 +182,15 @@ final class AgentHandoffController {
 
         // Persist the new agent only after launch prep succeeds so register /
         // attribution / hooks all see the target kind, and a failed build
-        // leaves the prior agent untouched.
-        session.agentKind = targetKind
+        // leaves the prior agent untouched. `applyAgentKind` also drops the
+        // prior harness conversation id (CROW-1281).
+        _ = session.applyAgentKind(targetKind)
         session.updatedAt = Date()
         appState.sessions[sessionIdx] = session
         store.mutate { data in
             if let i = data.sessions.firstIndex(where: { $0.id == sessionID }) {
-                data.sessions[i].agentKind = targetKind
+                data.sessions[i].agentKind = session.agentKind
+                data.sessions[i].harnessConversationID = session.harnessConversationID
                 data.sessions[i].updatedAt = session.updatedAt
             }
         }

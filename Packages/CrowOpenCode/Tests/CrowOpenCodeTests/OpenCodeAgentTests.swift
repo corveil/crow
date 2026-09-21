@@ -173,4 +173,16 @@ struct OpenCodeAgentTests {
         #expect(!cmd.contains("--name"))
         #expect(!cmd.hasSuffix("\n"))
     }
+
+    @Test func managerLaunchCommandResumesBySessionIdNeverContinue() {
+        let resumed = agent.managerLaunchCommand(
+            sessionName: "Manager 2",
+            remoteControlEnabled: true,
+            autoPermissionMode: true,
+            telemetryPort: 4318,
+            conversationID: "ses_abc"
+        )
+        #expect(resumed.contains("--session 'ses_abc'"))
+        #expect(!resumed.contains("--continue"))
+    }
 }

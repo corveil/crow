@@ -334,6 +334,23 @@ struct CursorAgentTests {
         #expect(auto.hasSuffix("\n") == false)
     }
 
+    @Test func managerLaunchCommandResumesByChatIdNeverContinue() {
+        let fresh = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil)
+        #expect(!fresh.contains("--continue"))
+        #expect(!fresh.contains("--resume"))
+
+        let resumed = agent.managerLaunchCommand(
+            sessionName: "Manager 2", remoteControlEnabled: false,
+            autoPermissionMode: true, telemetryPort: nil,
+            conversationID: "chat-xyz")
+        #expect(resumed.contains("--resume 'chat-xyz'"))
+        #expect(!resumed.contains("--continue"))
+        #expect(resumed.contains("--force --approve-mcps"))
+        #expect(resumed.contains("--trust"))
+    }
+
     /// CROW-1175: `agent persist` is Cursor's own tmux wrapper (TTY-detach,
     /// no-ops when `$TMUX` is set, machine-global list/stop). Crow already
     /// launches inside tmux, so persist would never persist and would leave

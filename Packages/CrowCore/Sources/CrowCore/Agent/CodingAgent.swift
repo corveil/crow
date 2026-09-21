@@ -289,9 +289,18 @@ public protocol CodingAgent: Sendable {
     ) async throws -> String
 
     /// Build the shell command that the Manager tab uses to launch this
-    /// agent in the devRoot. Unlike `autoLaunchCommand`, this is the
+    /// agent in the Manager's cwd. Unlike `autoLaunchCommand`, this is the
     /// terminal's pre-populated `command` string — it runs before the
-    /// shell prompt is ready, with no auto-prompt or `--continue` flag.
+    /// shell prompt is ready, with no auto-prompt.
+    ///
+    /// `conversationID` is the harness-native transcript id Crow persisted
+    /// from hook payloads (CROW-1281). When non-nil the command must resume
+    /// **that** conversation (`claude --resume <id>`, `cursor-agent --resume
+    /// <chatId>`, `codex resume <id>`), never cwd-scoped `--continue` /
+    /// `resume --last` — extra Managers share no unique worktree, so "last in
+    /// this folder" shuffles. When nil, launch a fresh TUI (first start, or
+    /// a session that has not yet emitted a hook). Agents with no resume-by-id
+    /// surface ignore the id.
     ///
     /// `sessionName` labels the agent's session in claude.ai's Remote
     /// Control panel (and analogous systems if other agents support it).
@@ -307,7 +316,8 @@ public protocol CodingAgent: Sendable {
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String?
     ) -> String
 
     /// Slash-command text to paste into a running agent TUI so its session
@@ -489,11 +499,13 @@ public extension CodingAgent {
     /// name with no extra flags. The tmux terminal backend owns
     /// the submitting Enter — return the raw command without a trailing
     /// newline so the convention is uniform across agents (CROW-433 review).
+    /// `conversationID` is ignored here; agents that can resume-by-id override.
     func managerLaunchCommand(
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
-        telemetryPort: UInt16?
+        telemetryPort: UInt16?,
+        conversationID: String?
     ) -> String {
         return launchCommandToken
     }
