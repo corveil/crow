@@ -102,6 +102,47 @@ struct AgentHandoffPromptTests {
     }
 }
 
+@Suite("AgentHandoff Manager prompt (CROW-1283)")
+struct AgentHandoffManagerPromptTests {
+    @Test func managerBriefNamesPriorAgentAndOrchestration() {
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .claudeCode,
+            to: .cursor,
+            note: "Handing off — continue the review sweep",
+            devRoot: "/Users/dev/root"
+        )
+        // Manager-specific brief, NOT the worktree git brief.
+        #expect(prompt.contains("# Manager Agent Handoff"))
+        #expect(prompt.contains("Claude Code") || prompt.contains("claude-code"))
+        #expect(prompt.contains("orchestration"))
+        #expect(prompt.contains("crow"))
+        #expect(prompt.contains("/Users/dev/root"))
+        #expect(prompt.contains("## Handoff note"))
+        #expect(prompt.contains("continue the review sweep"))
+        // The worktree brief's git orientation must not leak into a Manager
+        // handoff — a Manager has no worktree to inspect.
+        #expect(!prompt.contains("git status"))
+        #expect(!prompt.contains("# Workspace Context"))
+    }
+
+    @Test func managerBriefOmitsNoteAndDevRootWhenAbsent() {
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .cursor, to: .claudeCode, note: "   ", devRoot: nil)
+        #expect(prompt.contains("# Manager Agent Handoff"))
+        #expect(!prompt.contains("## Handoff note"))
+        #expect(!prompt.contains("Dev root:"))
+    }
+
+    /// The primary Manager (fixed id) is the only Manager refused handoff; any
+    /// other Manager id is an extra Manager that hands off (CROW-1283).
+    @Test func onlyPrimaryManagerIdIsFixed() {
+        #expect(AppState.managerSessionID == UUID(uuidString: "00000000-0000-0000-0000-000000000000"))
+        let extra = Session(name: "Manager 2", kind: .manager, agentKind: .claudeCode)
+        #expect(extra.id != AppState.managerSessionID)
+        #expect(extra.isManager)
+    }
+}
+
 @Suite("AgentHandoffError")
 struct AgentHandoffErrorTests {
     @Test func descriptionsAreUseful() {

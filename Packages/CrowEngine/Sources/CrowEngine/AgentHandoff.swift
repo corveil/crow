@@ -86,4 +86,45 @@ public enum AgentHandoff {
         )
         return header.joined(separator: "\n") + body
     }
+
+    /// Compose the resume brief for an **extra Manager** handed off mid-flight
+    /// (CROW-1283). A Manager orchestrates from the dev root and has no worktree,
+    /// branch, or ticket to inspect, so the worktree git brief (`git status` /
+    /// `git log` / `git diff`) that ``buildPrompt(from:to:session:worktrees:note:)``
+    /// produces does not describe its work. This is a short orientation instead:
+    /// who the prior agent was, the optional handoff note, and "continue
+    /// orchestration from the dev root". Seeded as argv on first launch (like the
+    /// Explore brief), never pasted into the composer.
+    public static func buildManagerPrompt(
+        from priorKind: AgentKind,
+        to targetKind: AgentKind,
+        note: String?,
+        devRoot: String?
+    ) -> String {
+        var lines: [String] = [
+            "# Manager Agent Handoff",
+            "",
+            "You are taking over this Crow **Manager** session from **\(priorKind.displayName)**.",
+            "The previous agent ran out of credits (or the user switched agents).",
+            "Conversation history does not transfer across agents, but this Manager's",
+            "identity, name, links, and orchestration context are unchanged.",
+            "",
+            "Continue orchestration from the dev root. Drive and inspect work sessions",
+            "with the `crow` CLI as before — do not re-scaffold or recreate anything.",
+        ]
+
+        if let devRoot = devRoot?.trimmingCharacters(in: .whitespacesAndNewlines), !devRoot.isEmpty {
+            lines.append("")
+            lines.append("Dev root: `\(devRoot)`")
+        }
+
+        if let note = note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            lines.append("")
+            lines.append("## Handoff note")
+            lines.append("")
+            lines.append(note)
+        }
+
+        return lines.joined(separator: "\n") + "\n"
+    }
 }

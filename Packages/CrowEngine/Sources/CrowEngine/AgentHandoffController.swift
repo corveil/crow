@@ -46,7 +46,13 @@ final class AgentHandoffController {
             throw AgentHandoffError.sessionNotFound
         }
         var session = appState.sessions[sessionIdx]
-        guard !session.isManager else {
+        // The **primary** Manager (the fixed `managerSessionID`) stays on
+        // Settings + `restartManager`: `reconcilePrimaryManagerAgentKind` is the
+        // only path that reconciles it, and it lives at `{devRoot}` on purpose.
+        // Extra Managers (any other id, `kind == .manager`) run in their own
+        // identity directory (#1282 / ADR 0028) and DO hand off — routed to the
+        // Manager launch path below rather than the worktree path (CROW-1283).
+        guard session.id != AppState.managerSessionID else {
             throw AgentHandoffError.managerNotSupported
         }
         let priorKind = session.agentKind
@@ -77,6 +83,16 @@ final class AgentHandoffController {
         // there is no bespoke Antigravity handoff arm.
         guard !SessionService.shouldRefuseReviewHandoff(targetKind: targetKind, sessionKind: session.kind) else {
             throw AgentHandoffError.reviewNotSupported(targetKind.rawValue)
+        }
+        // Extra Managers launch their agent in the identity directory the
+        // session already has, seeded with a resume brief instead of the
+        // worktree git brief — no worktree is required or created (CROW-1283).
+        // The Manager launch primitives (identity-dir hook + gateway config,
+        // trust seed, `--add-dir` command, argv-seeded brief) live on the
+        // Manager controller, so delegate the whole arm there.
+        if session.isManager {
+            return try await owner.manager.handoffExtraManager(
+                sessionID: sessionID, to: targetKind, priorKind: priorKind, note: note)
         }
         guard let worktree = appState.primaryWorktree(for: sessionID) else {
             throw AgentHandoffError.noWorktree
