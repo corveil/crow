@@ -6,6 +6,20 @@ import CrowPersistence
 import CrowTerminal
 import Foundation
 
+/// Open Scratch items keyed by the Manager session they link. A done item is
+/// dropped so the header control disappears after "Mark Scratch Done". When
+/// several open items point at one session, the newest `updatedAt` wins; ties
+/// keep the earlier item.
+private func linkedOpenScratchBySession(_ items: [TodoItem]) -> [UUID: TodoItem] {
+    var best: [UUID: TodoItem] = [:]
+    for item in items where item.state != .done {
+        guard let sessionID = item.linkedSessionID else { continue }
+        if let current = best[sessionID], current.updatedAt >= item.updatedAt { continue }
+        best[sessionID] = item
+    }
+    return best
+}
+
 /// Session CRUD, terminal/agent ops, host GUI launch, and session-local
 /// reads (`list-agents`, `list-artifacts`, `get-session-terminal-preview`,
 /// `list-session-terminal-snapshots`).
@@ -66,7 +80,12 @@ func makeSessionHandlers(
         // is not here — it comes from `list-sessions-live`.
         "list-sessions": { _ in
             let items: [JSONValue] = await MainActor.run {
-                appState.sessions.map { session in
+                // One pass per poll. Newest open item wins when more than one
+                // Scratch points at the same Manager (Explore itself is 1:1;
+                // a later `todo link` is the one just attached).
+                let openScratchBySession = linkedOpenScratchBySession(
+                    TodoRepository(store: store).all())
+                return appState.sessions.map { session in
                     // Board issue linked to this session (exact ticket URL, plus
                     // the Jira-key fallback). Also backs `labels` below.
                     let issue = appState.assignedIssue(for: session)
@@ -137,6 +156,17 @@ func makeSessionHandlers(
                                 "color": label.color.map { .string($0) } ?? .null,
                             ])
                         })
+                    }
+                    // Scratch item Explore linked to this Manager (CROW-1288). The
+                    // detail header offers "Mark Scratch Done" from it. Omitted once
+                    // the item is done, and omitted for non-managers — `todo work`
+                    // links a work session, which is a different surface.
+                    if session.kind == .manager, let scratch = openScratchBySession[session.id] {
+                        object["linked_scratch"] = .object([
+                            "id": .string(scratch.id.uuidString),
+                            "text": .string(scratch.text),
+                            "state": .string(scratch.state.rawValue),
+                        ])
                     }
                     // Hook-driven activity (persisted) → sidebar dot parity.
                     let hook = appState.hookState(for: session.id)

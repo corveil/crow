@@ -126,6 +126,21 @@ function renderHeader(s) {
         : 'No terminal attached');
   reload.onclick = () => reloadTerminalAction();
   actions.appendChild(reload);
+  // Explore opens a Manager and links the Scratch item to it (CROW-1288).
+  // Managers otherwise have no status actions (`kind !== 'manager'` below),
+  // so this is the control that finishes the item from the session itself.
+  // Work sessions linked by `todo work` are out of scope — they already have
+  // their own completion buttons.
+  const scratch = s.kind === 'manager' ? s.linked_scratch : null;
+  if (scratch && scratch.id && scratch.state !== 'done') {
+    const text = (scratch.text || '').trim();
+    const mark = actionBtn('Mark Scratch Done', 'check', null,
+      (ev) => markScratchDoneAction(ev.currentTarget, s));
+    mark.title = text
+      ? ('Mark this Scratch item done: ' + text)
+      : 'Mark the linked Scratch item done';
+    actions.appendChild(mark);
+  }
   if (pr && pr.has_pr && !pr.is_merged) {
     // Quick-actions dispatch a prompt into the session's managed Claude Code
     // terminal — disable them when there is none (native `canDispatchQuickAction`;
@@ -256,6 +271,31 @@ function qaButton(label, action, id, variant, iconName, opts) {
   if (opts && opts.disabled) btn.disabled = true;
   if (opts && opts.title) btn.title = opts.title;
   return btn;
+}
+
+// Finish the Scratch item this Manager was opened from (CROW-1288).
+// `todo-done` is idempotent. The header drops the button as soon as the call
+// lands; `refreshSessions` confirms it from `linked_scratch`, and the Scratch
+// board refresh updates the sidebar count. A failed call restores the button.
+async function markScratchDoneAction(btn, session) {
+  const scratch = session && session.linked_scratch;
+  if (!btn || btn.disabled || !scratch || !scratch.id) return;
+  btn.disabled = true;
+  const saved = btn.innerHTML;
+  btn.innerHTML = '';
+  btn.appendChild(el('span', 'action-spinner'));
+  try {
+    await rpc('todo-done', { todo_id: scratch.id });
+  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = saved;
+    alertModal('Mark Scratch Done failed: ' + (e.message || e));
+    return;
+  }
+  session.linked_scratch = null;
+  if (selectedId === session.id) renderHeader(session);
+  refreshBoard('scratch');
+  refreshSessions();
 }
 
 // A detail-header action button with a leading icon + click handler.

@@ -244,11 +244,25 @@ function groupSessions(list) {
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
+// Last-started list-sessions wins. A poll that began before `todo-done`
+// can return later with the old Scratch link and would put "Mark Scratch
+// Done" back on a Manager that just finished the item (CROW-1288).
+let sessionsRefreshGen = 0;
 async function refreshSessions() {
+  const gen = ++sessionsRefreshGen;
   try {
     const res = await rpc('list-sessions');
+    if (gen !== sessionsRefreshGen) return;
     const next = res.sessions || [];
     const changed = JSON.stringify(sessions) !== JSON.stringify(next);
+    // The open session's Scratch link lives on this payload (CROW-1288).
+    // Re-render the header when it appears or disappears so "Mark Scratch
+    // Done" tracks Explore / todo-done without waiting on the live poll,
+    // and without rebuilding the header on every unrelated session tick
+    // (that would drop an in-flight In Review spinner).
+    const previousScratch = selectedId
+      ? (((sessions.find((s) => s.id === selectedId) || {}).linked_scratch) || null)
+      : null;
     sessions = next;
     sessionsLoaded = true;
     if (changed) persistSidebarCache();
@@ -272,6 +286,13 @@ async function refreshSessions() {
     }
     renderSidebar();
     if (changed && selectedBoard === 'grid') renderBoard();
+    if (selectedId) {
+      const open = sessions.find((x) => x.id === selectedId);
+      const nextScratch = (open && open.linked_scratch) || null;
+      if (open && JSON.stringify(previousScratch) !== JSON.stringify(nextScratch)) {
+        renderHeader(open);
+      }
+    }
   } catch (_) { /* transient — next poll retries */ }
 }
 
