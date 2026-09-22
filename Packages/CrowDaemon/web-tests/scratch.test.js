@@ -103,6 +103,26 @@ const ticketedWork = [...board.querySelectorAll('button')].find((b) => b.textCon
 check('Ticket disabled once a ticket exists', ticketedTicket && ticketedTicket.disabled);
 check('Work enabled once a ticket exists', ticketedWork && !ticketedWork.disabled);
 
+const filingItem = {
+  ...item,
+  id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  ticket_requested_at: new Date().toISOString(),
+};
+T.boardData.scratch = { todos: [filingItem] };
+T.renderBoard();
+const filingTicket = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Ticket');
+check('Ticket disabled while ticket_requested_at is fresh', filingTicket && filingTicket.disabled);
+check('fresh dispatch title says filing', /Filing/.test(filingTicket && filingTicket.title || ''));
+
+const staleItem = {
+  ...filingItem,
+  ticket_requested_at: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+};
+T.boardData.scratch = { todos: [staleItem] };
+T.renderBoard();
+const staleTicket = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Ticket');
+check('Ticket enabled again after the dispatch window', staleTicket && !staleTicket.disabled);
+
 T.boardData.scratch = { todos: [item] };
 T.renderBoard();
 
@@ -149,10 +169,15 @@ async function flush() {
   T.boardData.scratch = { todos: [item] };
   T.renderBoard();
 
+  const requestedAt = new Date().toISOString();
   T.rpc = async (method, params) => {
     calls.push({ method, params });
-    if (method === 'todo-ticket') return { session_id: 'sess', seeded: true };
-    if (method === 'todo-list') return { todos: [item] };
+    if (method === 'todo-ticket') {
+      return { ok: true, session_id: 'sess', seeded: true, todo: { ...item, ticket_requested_at: requestedAt } };
+    }
+    if (method === 'todo-list') {
+      return { todos: [{ ...item, ticket_requested_at: requestedAt }] };
+    }
     return {};
   };
   promptCalls.length = 0;
@@ -172,6 +197,10 @@ async function flush() {
       && !('repo' in ticketCall.params)
       && !('workspace' in ticketCall.params)));
   check('Ticket refreshes the scratch list', calls.some((c) => c.method === 'todo-list'));
+  check('Ticket stays disabled after refresh while filing',
+    ticketBtn() && ticketBtn().disabled);
+  check('Ticket title says filing after refresh',
+    /Filing/.test(ticketBtn()?.title || ''));
 
   const editable = {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',

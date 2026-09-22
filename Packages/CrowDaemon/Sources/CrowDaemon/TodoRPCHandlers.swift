@@ -180,6 +180,16 @@ private func openScratchManager(
         throw RPCError.applicationError(
             "This item already has a ticket (\(existing)). Use `crow todo work` to start a session.")
     }
+    // Before the URL exists, a second Ticket within the dispatch TTL must not
+    // open another Manager. Checked before the tmux requirement so a repeat
+    // click is a no-op even when this process cannot launch one.
+    if rejectIfTicketed, TodoRPC.isTicketDispatchPending(item) {
+        return [
+            "todo": TodoRPC.todoJSON(item),
+            "ok": .bool(true),
+            "already_dispatched": .bool(true),
+        ]
+    }
     guard let sessionService else {
         throw RPCError.applicationError(
             "Opening a Manager for a Scratch item requires tmux on the daemon host")
@@ -187,6 +197,13 @@ private func openScratchManager(
     let requestedAgentKind = params["agent_kind"]?.stringValue
         .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
     let brief = briefFor(item)
+    // Stamp before the slow Manager launch so a second RPC during startup
+    // sees the in-flight window. Explore does not stamp.
+    if rejectIfTicketed {
+        item.ticketRequestedAt = Date()
+        item.updatedAt = Date()
+        repo.save(item)
+    }
 
     if let existing = item.linkedSessionID {
         let alive = await MainActor.run {
