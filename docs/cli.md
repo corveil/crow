@@ -146,7 +146,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow todo park`](#crow-todo-park) | Park a Scratch item for later |
 | [`crow todo reopen`](#crow-todo-reopen) | Reopen a done, parked, or dropped item |
 | [`crow todo talk`](#crow-todo-talk) | Send text to the item's linked Manager |
-| [`crow todo ticket`](#crow-todo-ticket) | File a ticket from the item body and attach the URL |
+| [`crow todo ticket`](#crow-todo-ticket) | Open a Manager and seed the item as a file-ticket brief |
 | [`crow todo work`](#crow-todo-work) | Start a work session from the item's linked ticket |
 | [`crow transition-ticket`](#crow-transition-ticket) | Transition a session's ticket to a pipeline status |
 | [`crow tui`](#crow-tui) | TUI form-factor recording |
@@ -2288,17 +2288,16 @@ crow todo talk --id <id> <text>
 
 ## `crow todo ticket`
 
-File a ticket from the item body and attach the URL.
+Open a Manager and seed the item as a file-ticket brief.
 
 ```
-crow todo ticket --id <id> --workspace <workspace> [--repo <repo>]
+crow todo ticket --id <id> [--agent <agent>]
 ```
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--id` | `<id>` | yes | Todo UUID |
-| `--workspace` | `<workspace>` | yes | Workspace name or UUID |
-| `--repo` | `<repo>` | no | owner/repo slug (or Jira project key); defaults to the workspace's sole always-include repo |
+| `--agent` | `<agent>` | no | Coding agent kind; default Manager agent when omitted |
 
 ---
 

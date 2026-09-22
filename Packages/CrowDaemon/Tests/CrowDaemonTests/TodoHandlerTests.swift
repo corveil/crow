@@ -121,12 +121,47 @@ import CrowEngine
             "type": .string("ticket"),
             "url": .string("https://github.com/corveil/crow/issues/1"),
         ])
-        let resp = await call(router, "todo-ticket", [
-            "todo_id": .string(id),
-            "workspace": .string("Corveil"),
-        ])
+        let resp = await call(router, "todo-ticket", ["todo_id": .string(id)])
         #expect(resp.error != nil)
         #expect(resp.error?.message.contains("already has a ticket") == true)
+    }
+
+    @Test @MainActor func ticketWithoutTmuxErrors() async {
+        let (router, _) = harness()
+        let added = await call(router, "todo-add", ["text": .string("file me")])
+        let id = added.result?["todo"]?.objectValue?["id"]?.stringValue ?? ""
+        let resp = await call(router, "todo-ticket", ["todo_id": .string(id)])
+        #expect(resp.error != nil)
+        #expect(resp.error?.message.contains("tmux") == true)
+    }
+
+    @Test @MainActor func linkingATicketMovesExploringToTicketed() async throws {
+        let (router, _) = harness()
+        let added = await call(router, "todo-add", ["text": .string("file me")])
+        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
+        let linked = await call(router, "todo-link", [
+            "todo_id": .string(id),
+            "type": .string("ticket"),
+            "url": .string("https://github.com/corveil/crow/issues/1289"),
+            "label": .string("Issue #1289"),
+        ])
+        #expect(linked.result?["todo"]?.objectValue?["state"]?.stringValue == "ticketed")
+    }
+
+    @Test @MainActor func linkingATicketDoesNotRegressWorking() async throws {
+        let (router, _) = harness()
+        let added = await call(router, "todo-add", ["text": .string("already working")])
+        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
+        _ = await call(router, "todo-edit", [
+            "todo_id": .string(id),
+            "state": .string("working"),
+        ])
+        let linked = await call(router, "todo-link", [
+            "todo_id": .string(id),
+            "type": .string("ticket"),
+            "url": .string("https://github.com/corveil/crow/issues/42"),
+        ])
+        #expect(linked.result?["todo"]?.objectValue?["state"]?.stringValue == "working")
     }
 
     @Test @MainActor func talkWithoutExploreErrors() async {
@@ -160,124 +195,4 @@ import CrowEngine
         #expect(filtered.result?["todos"]?.arrayValue?.first?.objectValue?["text"]?.stringValue == "later")
     }
 
-    // MARK: - Ticket filing (CROW-1259)
-
-    @MainActor
-    private func ticketHarness(
-        config: AppConfig,
-        createTask: (@Sendable (String, String, String) async throws -> (url: String, number: Int))? = nil,
-        listWorkspaceRepos: (@Sendable (WorkspaceInfo) async -> WorkspaceRepoListing)? = nil
-    ) throws -> (CommandRouter, String) {
-        let devRoot = tempDevRoot()
-        try ConfigStore.saveConfig(config, devRoot: devRoot)
-        let store = JSONStore.temporary()
-        let handlers = makeTodoHandlers(
-            appState: AppState(), store: store, sessionService: nil, devRoot: devRoot,
-            createTask: createTask, listWorkspaceRepos: listWorkspaceRepos)
-        return (CommandRouter(handlers: handlers), devRoot)
-    }
-
-    @Test @MainActor func ticketGlobOnlySucceedsWhenRepoIsSupplied() async throws {
-        let (router, devRoot) = try ticketHarness(
-            config: AppConfig(workspaces: [
-                WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
-            ]),
-            createTask: { repo, _, _ in
-                #expect(repo == "corveil/crow")
-                return (url: "https://github.com/corveil/crow/issues/1259", number: 1259)
-            })
-        defer { try? FileManager.default.removeItem(atPath: devRoot) }
-
-        let added = await call(router, "todo-add", ["text": .string("scratch ticket dropdown")])
-        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
-        let resp = await call(router, "todo-ticket", [
-            "todo_id": .string(id),
-            "workspace": .string("corveil"),
-            "repo": .string("corveil/crow"),
-        ])
-        #expect(resp.error == nil)
-        #expect(resp.result?["ticket_url"]?.stringValue
-            == "https://github.com/corveil/crow/issues/1259")
-        #expect(resp.result?["todo"]?.objectValue?["state"]?.stringValue == "ticketed")
-    }
-
-    @Test @MainActor func ticketGlobOnlyWithoutRepoStillRequiresIt() async throws {
-        let (router, devRoot) = try ticketHarness(
-            config: AppConfig(workspaces: [
-                WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
-            ]),
-            createTask: { _, _, _ in
-                Issue.record("must not file when repo is missing")
-                return (url: "https://example.invalid/1", number: 1)
-            })
-        defer { try? FileManager.default.removeItem(atPath: devRoot) }
-
-        let added = await call(router, "todo-add", ["text": .string("needs a repo")])
-        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
-        let resp = await call(router, "todo-ticket", [
-            "todo_id": .string(id),
-            "workspace": .string("corveil"),
-        ])
-        #expect(resp.error != nil)
-        #expect(resp.error?.message.contains("repo is required") == true)
-    }
-
-    @Test @MainActor func ticketUnmatchedRepoRefuses() async throws {
-        let (router, devRoot) = try ticketHarness(
-            config: AppConfig(workspaces: [
-                WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
-            ]))
-        defer { try? FileManager.default.removeItem(atPath: devRoot) }
-
-        let added = await call(router, "todo-add", ["text": .string("stranger")])
-        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
-        let resp = await call(router, "todo-ticket", [
-            "todo_id": .string(id),
-            "workspace": .string("corveil"),
-            "repo": .string("stranger/repo"),
-        ])
-        #expect(resp.error != nil)
-        #expect(resp.error?.message.contains("no workspace matches repo") == true)
-    }
-
-    @Test @MainActor func listWorkspaceReposExpandsGlobsAndStampsWorkspace() async throws {
-        let (router, devRoot) = try ticketHarness(
-            config: AppConfig(workspaces: [
-                WorkspaceInfo(name: "corveil", alwaysInclude: ["corveil/*"]),
-                WorkspaceInfo(name: "Acme", alwaysInclude: ["acme/widget"]),
-            ]),
-            listWorkspaceRepos: { workspace in
-                if workspace.name == "corveil" {
-                    return WorkspaceRepoListing(
-                        repos: ["corveil/crow", "corveil/corveil"], invalidSpecs: [])
-                }
-                return WorkspaceRepoListing(repos: workspace.alwaysInclude, invalidSpecs: [])
-            })
-        defer { try? FileManager.default.removeItem(atPath: devRoot) }
-
-        let resp = await call(router, "list-workspace-repos")
-        let repos = resp.result?["repos"]?.arrayValue ?? []
-        let slugs = repos.compactMap { $0.objectValue?["slug"]?.stringValue }
-        #expect(slugs.contains("corveil/crow"))
-        #expect(slugs.contains("acme/widget"))
-        let crow = repos.first { $0.objectValue?["slug"]?.stringValue == "corveil/crow" }
-        #expect(crow?.objectValue?["workspace"]?.stringValue == "corveil")
-        #expect(resp.result?["count"]?.intValue == slugs.count)
-    }
-
-    @Test @MainActor func listWorkspaceReposDropsSlugsThatMatchNoWorkspace() async throws {
-        let (router, devRoot) = try ticketHarness(
-            config: AppConfig(workspaces: [
-                WorkspaceInfo(name: "Acme", alwaysInclude: ["acme/widget"]),
-            ]),
-            listWorkspaceRepos: { _ in
-                WorkspaceRepoListing(repos: ["acme/widget", "stranger/repo"], invalidSpecs: [])
-            })
-        defer { try? FileManager.default.removeItem(atPath: devRoot) }
-
-        let resp = await call(router, "list-workspace-repos")
-        let slugs = (resp.result?["repos"]?.arrayValue ?? [])
-            .compactMap { $0.objectValue?["slug"]?.stringValue }
-        #expect(slugs == ["acme/widget"])
-    }
 }

@@ -65,3 +65,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0026 | [Native pre-ticket idea list (Scratch)](./0026-native-pre-ticket-idea-list.md) | Accepted | 2026-09-10 |
 | 0027 | [TUI form-factor recording](./0027-tui-form-factor-recording.md) | Accepted | 2026-09-14 |
 | 0028 | [Manager cold-start resume is by harness conversation id](./0028-manager-resume-by-id.md) | Accepted | 2026-09-21 |
+| 0029 | [Scratch Ticket opens a Manager](./0029-scratch-ticket-opens-a-manager.md) | Accepted | 2026-09-22 |

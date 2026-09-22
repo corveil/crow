@@ -257,28 +257,26 @@ public struct TodoExplore: ParsableCommand {
 public struct TodoTicket: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "ticket",
-        abstract: "File a ticket from the item body and attach the URL"
+        abstract: "Open a Manager and seed the item as a file-ticket brief"
     )
 
     @Option(name: .long, help: "Todo UUID") var id: String
-    @Option(name: .long, help: "Workspace name or UUID") var workspace: String
-    @Option(name: .long, help: "owner/repo slug (or Jira project key); defaults to the workspace's sole always-include repo")
-    var repo: String?
+    @Option(name: .long, help: "Coding agent kind; default Manager agent when omitted")
+    var agent: String?
 
     public init() {}
 
     public func validate() throws {
         try validateUUID(id, label: "todo UUID")
-        if let repo, repo.contains("/") { try validateRepoSlug(repo) }
+        if let agent, agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ValidationError("--agent must not be blank (e.g. claude-code, cursor, codex).")
+        }
     }
 
     public func run() throws {
-        var params: [String: JSONValue] = [
-            "todo_id": .string(id),
-            "workspace": .string(workspace),
-        ]
-        if let repo { params["repo"] = .string(repo) }
-        printJSON(try rpc("todo-ticket", params: params, timeoutSeconds: 60))
+        var params: [String: JSONValue] = ["todo_id": .string(id)]
+        if let agent { params["agent_kind"] = .string(agent) }
+        printJSON(try rpc("todo-ticket", params: params, timeoutSeconds: 90))
     }
 }
 
