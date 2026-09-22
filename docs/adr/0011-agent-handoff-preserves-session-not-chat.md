@@ -17,7 +17,7 @@ Crow treats agent handoff as **session metadata + managed-terminal replace**:
 3. Recreate one managed terminal and seed it with a **handoff prompt** built from the target agent's `generatePrompt` plus a short resume brief (prior agent, optional note, `git status` orientation).
 4. Launch via `launchCommand` + the deferred `#408` paste path — **not** `autoLaunchCommand` / `--continue`, which resume the *previous* agent's local conversation.
 
-Exposed as RPC/CLI `handoff-agent` and a web UI “Switch agent…” control. Manager sessions are out of scope (Settings + restart).
+Exposed as RPC/CLI `handoff-agent` and a web UI “Switch agent…” control. The **primary** Manager stays out of scope (Settings + restart — it reconciles via `reconcilePrimaryManagerAgentKind`). **Extra** Managers hand off too as of [CROW-1283](https://github.com/corveil/crow/issues/1283): they launch the incoming agent in the session's identity directory (`.crow/managers/<uuid>/`, [ADR 0028](./0028-manager-resume-by-id.md)) with a Manager resume brief (`buildManagerPrompt`) instead of the `git status` worktree brief — no worktree is required or created.
 
 ## Consequences
 
@@ -35,5 +35,5 @@ Exposed as RPC/CLI `handoff-agent` and a web UI “Switch agent…” control. M
 ## References
 
 - Issue: https://github.com/corveil/crow/issues/627
-- Code: `Packages/CrowEngine/Sources/CrowEngine/AgentHandoff.swift`, `SessionService.handoffAgent`
-- Related ADRs: [0003](./0003-worktree-per-task-model.md), [0007](./0007-crowd-sole-authority-clients-only.md)
+- Code: `Packages/CrowEngine/Sources/CrowEngine/AgentHandoff.swift`, `SessionService.handoffAgent`; extra-Manager arm `ManagerSessionController.handoffExtraManager` (CROW-1283)
+- Related ADRs: [0003](./0003-worktree-per-task-model.md), [0007](./0007-crowd-sole-authority-clients-only.md), [0028](./0028-manager-resume-by-id.md)

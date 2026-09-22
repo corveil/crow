@@ -259,6 +259,20 @@ console.log('\ncontext menu Pin to grid:');
   check('pinned session offers Unpin from grid', items2.some((it) => it.label === 'Unpin from grid'));
 }
 
+console.log('\ncontext menu Switch agent — extra vs primary Manager (CROW-1283):');
+{
+  const T = load();
+  const hasSwitch = (its) => its.some((it) => it.label === 'Switch agent…');
+  const primary = T.sessionMenuItems(
+    sess('m1', { kind: 'manager', is_primary_manager: true }));
+  check('primary Manager has no Switch agent…', !hasSwitch(primary));
+  check('primary Manager still offers Rename', primary.some((it) => it.label === 'Rename'));
+  const extra = T.sessionMenuItems(
+    sess('m2', { kind: 'manager', is_primary_manager: false }));
+  check('extra Manager offers Switch agent…', hasSwitch(extra));
+  check('extra Manager still offers Delete', extra.some((it) => it.label === 'Delete'));
+}
+
 console.log('\nroute:');
 {
   const T = load();

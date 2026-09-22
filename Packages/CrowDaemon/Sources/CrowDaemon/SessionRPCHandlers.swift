@@ -75,6 +75,11 @@ func makeSessionHandlers(
                         "name": .string(session.name),
                         "status": .string(session.status.rawValue),
                         "kind": .string(session.kind.rawValue),
+                        // The primary Manager (fixed `managerSessionID`) cannot be
+                        // handed off — it reconciles via Settings + restart. Extra
+                        // Managers can (CROW-1283); the web menu gates its "Switch
+                        // agent…" item on this flag. Additive; older clients ignore it.
+                        "is_primary_manager": .bool(session.id == AppState.managerSessionID),
                         "agent_kind": .string(session.agentKind.rawValue),
                         "agent_display_name": .string(CrowAttribution.agentDisplayName(for: session.agentKind)),
                         "locked": .bool(session.locked),

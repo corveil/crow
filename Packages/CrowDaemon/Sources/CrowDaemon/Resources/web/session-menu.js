@@ -151,8 +151,13 @@ function sessionMenuItems(s) {
   const hasPR = (s.links || []).some((l) => l.type === 'pr');
   if (s.kind === 'manager') {
     // Maintenance actions (restart manager / reload tmux) live in Settings → About;
-    // the manager row menu stays minimal: just rename and delete.
+    // the manager row menu stays minimal: rename and delete.
     items.push({ label: 'Rename', action: () => renameSession(s.id, s.name) });
+    // Extra Managers can switch coding agents mid-flight (CROW-1283); the
+    // primary Manager stays on Settings + restart, so it never gets this item.
+    if (!s.is_primary_manager) {
+      items.push({ label: 'Switch agent…', action: () => openHandoffAgentMenu(s, null) });
+    }
     items.push({ sep: true });
     items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
     return items;
