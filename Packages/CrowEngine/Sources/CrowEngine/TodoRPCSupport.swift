@@ -127,6 +127,16 @@ public enum TodoRPC {
         return .object(object)
     }
 
+    /// How long a dispatched Ticket stays in-flight before another filing
+    /// Manager may open. Within this window a second `todo-ticket` is a no-op
+    /// so refresh or a double-click cannot file the item twice.
+    public static let ticketDispatchTTL: TimeInterval = 15 * 60
+
+    public static func isTicketDispatchPending(_ item: TodoItem, now: Date = Date()) -> Bool {
+        guard item.linkedTicketURL == nil, let at = item.ticketRequestedAt else { return false }
+        return now.timeIntervalSince(at) < ticketDispatchTTL
+    }
+
     /// Session name for the Manager spawned by `todo explore`. Truncated so
     /// it stays a valid Crow session name.
     public static func managerName(from text: String) -> String {
@@ -240,7 +250,7 @@ public enum TodoRPC {
             "File it with the provider CLI (`gh issue create`, `glab issue create`, or the workspace's Jira command). Do not create a worktree or start a work session.",
             "After the ticket exists, attach it to this Scratch item and stop. Replace the placeholders with the issue you just filed:",
             "crow todo link --id \(item.id.uuidString) --type ticket --url <ticket-url> --label \"Issue #<n>\"",
-            "Do not run `crow todo ticket` — that opens another Manager.",
+            "Do not run `crow todo ticket` — a second call within 15 minutes does nothing, and after that it opens another Manager.",
             "",
             "## Scratch item",
             item.text,

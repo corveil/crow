@@ -159,6 +159,27 @@ struct TodoRPCSupportTests {
         #expect(!brief.contains("## Notes"))
     }
 
+    @Test func ticketDispatchPendingWithinTTLAndClearsOnceLinked() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var item = TodoItem(text: "x", ticketRequestedAt: now)
+        #expect(TodoRPC.isTicketDispatchPending(item, now: now))
+        #expect(TodoRPC.isTicketDispatchPending(
+            item, now: now.addingTimeInterval(TodoRPC.ticketDispatchTTL - 1)))
+        #expect(!TodoRPC.isTicketDispatchPending(
+            item, now: now.addingTimeInterval(TodoRPC.ticketDispatchTTL)))
+        #expect(!TodoRPC.isTicketDispatchPending(TodoItem(text: "fresh"), now: now))
+        item.links = [TodoLink(
+            type: .ticket, url: "https://github.com/corveil/crow/issues/1", label: "#1")]
+        #expect(!TodoRPC.isTicketDispatchPending(item, now: now))
+    }
+
+    @Test func todoJSONIncludesTicketRequestedAt() throws {
+        let at = Date(timeIntervalSince1970: 1_750_000_000)
+        let item = TodoItem(text: "x", ticketRequestedAt: at)
+        let object = try #require(TodoRPC.todoJSON(item).objectValue)
+        #expect(object["ticket_requested_at"] == .string(ISO8601DateFormatter().string(from: at)))
+    }
+
     @Test func ticketLinkAdvancesPreTicketStatesOnly() {
         #expect(TodoRPC.stateAfterTicketLink(.captured) == .ticketed)
         #expect(TodoRPC.stateAfterTicketLink(.exploring) == .ticketed)

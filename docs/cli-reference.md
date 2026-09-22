@@ -733,7 +733,7 @@ crow todo explore --id <todo-uuid> --agent cursor
 
 ### `crow todo ticket`
 
-Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore`. The agent chooses the repo, files the provider issue, and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`.
+Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore`. The agent chooses the repo, files the provider issue, and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`. A second call within 15 minutes, before that URL exists, returns `already_dispatched` and does not open another Manager.
 
 ```bash
 crow todo ticket --id <todo-uuid>

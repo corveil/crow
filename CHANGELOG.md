@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CROW-1292 — **Scratch Ticket ignores a second file while the first is in flight.** `todo ticket` still opens a Manager ([ADR 0029](docs/adr/0029-scratch-ticket-opens-a-manager.md)). It stamps `ticketRequestedAt` before that launch, and another call within 15 minutes returns `already_dispatched` without opening a second Manager, until `todo link --type ticket` attaches the issue. The Scratch Ticket button stays disabled for that window across refresh.
+
 - CROW-1289 — **Scratch Ticket opens a Manager instead of filing a provider issue.** The Scratch **Ticket** button and `crow todo ticket` now do what **Explore** does: open (or reuse) a Manager and seed a file-ticket brief. The agent picks the repo, writes the issue, and attaches it with `crow todo link --type ticket`, which moves the item to `ticketed` unless it is already `working` or `done`. The repo dropdown is gone. `--workspace` / `--repo` are no longer accepted. Decision: [ADR 0029](docs/adr/0029-scratch-ticket-opens-a-manager.md).
 
 - CROW-1257 — Split `session.js` (~804 lines) into a session-detail kernel plus focused classic scripts (`session-modals.js`, `session-header.js`, `session-tabs.js`). Artifacts/lightbox, CROW-1163 grid-Escape, and rename/goal/delete stay on the kernel; in-page dialogs load before `sidebar.js` (callers). Session *state* (`selectedId`, `terminals`, `activeTerminal`, `sessionCameFromGrid`) stays on `sidebar.js` / router / terminal. `index.html` load order matches `StaticAssets.uiJavaScriptFiles`. No ES modules, bundler, hash-route, or session-behavior change — same pattern as CROW-1155 / CROW-1160 / CROW-1238 / CROW-1242.

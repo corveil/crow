@@ -135,6 +135,33 @@ import CrowEngine
         #expect(resp.error?.message.contains("tmux") == true)
     }
 
+    @Test @MainActor func ticketWhileDispatchPendingIsIdempotentWithoutTmux() async throws {
+        let (router, store) = harness()
+        let added = await call(router, "todo-add", ["text": .string("file me")])
+        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
+        let uuid = try #require(UUID(uuidString: id))
+        var item = try #require(store.data.todos?.first { $0.id == uuid })
+        item.ticketRequestedAt = Date()
+        TodoRepository(store: store).save(item)
+        let resp = await call(router, "todo-ticket", ["todo_id": .string(id)])
+        #expect(resp.error == nil)
+        #expect(resp.result?["ok"]?.boolValue == true)
+        #expect(resp.result?["already_dispatched"]?.boolValue == true)
+    }
+
+    @Test @MainActor func exploreWhileTicketPendingStillRequiresTmux() async throws {
+        let (router, store) = harness()
+        let added = await call(router, "todo-add", ["text": .string("explore me")])
+        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
+        let uuid = try #require(UUID(uuidString: id))
+        var item = try #require(store.data.todos?.first { $0.id == uuid })
+        item.ticketRequestedAt = Date()
+        TodoRepository(store: store).save(item)
+        let resp = await call(router, "todo-explore", ["todo_id": .string(id)])
+        #expect(resp.result?["already_dispatched"] == nil)
+        #expect(resp.error?.message.contains("tmux") == true)
+    }
+
     @Test @MainActor func linkingATicketMovesExploringToTicketed() async throws {
         let (router, _) = harness()
         let added = await call(router, "todo-add", ["text": .string("file me")])

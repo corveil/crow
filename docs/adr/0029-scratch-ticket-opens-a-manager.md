@@ -16,7 +16,7 @@ This revises decision 2 of [ADR 0026](./0026-native-pre-ticket-idea-list.md). Th
 
 `todo ticket` opens a Manager the same way `todo explore` does, and seeds a file-ticket brief. Crow does not choose a repo and does not call `TaskBackend.createTask`. The Scratch board has no repo dropdown, and the web-only `list-workspace-repos` RPC that fed it is removed.
 
-The agent files the provider issue, then attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless the item is already `working` or `done`. An item that already has a ticket URL is refused, so Ticket cannot open a second filing session. Calling `todo ticket` again from inside the filing Manager is the wrong loop — the brief says so.
+The agent files the provider issue, then attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless the item is already `working` or `done`. An item that already has a ticket URL is refused, so Ticket cannot open a second filing session. Until that URL exists, a second `todo ticket` within 15 minutes is a no-op (`ticketRequestedAt`). The Scratch Ticket button stays disabled for the same window, including across refresh. Calling `todo ticket` again from inside the filing Manager is the wrong loop — the brief says so.
 
 ## Consequences
 
