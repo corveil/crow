@@ -12,7 +12,6 @@ const epilogue = `
   renderBoard(){ return renderBoard(); },
   sidebarLeftStack(){ return sidebarLeftStack(); },
   scratchOpenCount(){ return scratchOpenCount(); },
-  scratchTicket(btn, item){ return scratchTicket(btn, item); },
 };
 `;
 const appjs = loadClientSource() + epilogue;
@@ -152,54 +151,27 @@ async function flush() {
 
   T.rpc = async (method, params) => {
     calls.push({ method, params });
-    if (method === 'list-workspace-repos') {
-      return { repos: [
-        { slug: 'corveil/crow', workspace: 'corveil' },
-        { slug: 'acme/widget', workspace: 'Acme' },
-      ], count: 2 };
-    }
-    if (method === 'todo-ticket') return { ticket_url: 'https://github.com/corveil/crow/issues/1' };
+    if (method === 'todo-ticket') return { session_id: 'sess', seeded: true };
     if (method === 'todo-list') return { todos: [item] };
     return {};
   };
   promptCalls.length = 0;
   window.__alerts = [];
-  const filing = T.scratchTicket(ticketBtn(), item);
+  ticketBtn().click();
   await flush();
   check('Ticket does not call window.prompt', promptCalls.length === 0);
-  check('Ticket lists repos, not workspaces',
-    calls.some((c) => c.method === 'list-workspace-repos')
+  check('Ticket does not open a repo dropdown',
+    !window.document.querySelector('.text-prompt-backdrop select'));
+  check('Ticket does not list repos',
+    !calls.some((c) => c.method === 'list-workspace-repos')
     && !calls.some((c) => c.method === 'workspace-list'));
-  const sel = window.document.querySelector('.text-prompt-backdrop select');
-  check('Ticket shows a repo dropdown', !!sel);
-  const optionValues = sel ? [...sel.options].map((o) => o.value) : [];
-  check('dropdown options are owner/repo slugs',
-    optionValues.includes('corveil/crow') && optionValues.includes('acme/widget'));
-  check('dropdown is not a workspace name prompt',
-    !optionValues.includes('Corveil') && !optionValues.includes('corveil'));
-  if (sel) sel.value = 'corveil/crow';
-  const fileBtn = window.document.querySelector('.text-prompt-btn.primary');
-  check('File confirms the dropdown', !!(fileBtn && fileBtn.textContent === 'File'));
-  if (fileBtn) fileBtn.click();
-  await filing;
-  await flush();
   const ticketCall = calls.find((c) => c.method === 'todo-ticket');
-  check('todo-ticket receives repo and inferred workspace',
-    ticketCall && ticketCall.params.repo === 'corveil/crow'
-    && ticketCall.params.workspace === 'corveil'
-    && ticketCall.params.todo_id === item.id);
-
-  T.rpc = async (method) => {
-    calls.push({ method });
-    if (method === 'list-workspace-repos') return { repos: [], count: 0 };
-    return {};
-  };
-  window.__alerts = [];
-  promptCalls.length = 0;
-  await T.scratchTicket(ticketBtn(), item);
-  check('empty listing does not prompt for workspace', promptCalls.length === 0);
-  check('empty listing points at Settings → Workspaces',
-    (window.__alerts || []).some((m) => /Settings → Workspaces/i.test(m)));
+  check('todo-ticket receives only the item id',
+    !!(ticketCall && ticketCall.params
+      && ticketCall.params.todo_id === item.id
+      && !('repo' in ticketCall.params)
+      && !('workspace' in ticketCall.params)));
+  check('Ticket refreshes the scratch list', calls.some((c) => c.method === 'todo-list'));
 
   const editable = {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',

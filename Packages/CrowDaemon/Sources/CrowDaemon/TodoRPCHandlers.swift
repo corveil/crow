@@ -2,7 +2,6 @@ import CrowCore
 import CrowEngine
 import CrowIPC
 import CrowPersistence
-import CrowProvider
 import Foundation
 
 /// Scratch list (CROW-1231). Mutations go through the injected `JSONStore`
@@ -11,9 +10,7 @@ func makeTodoHandlers(
     appState: AppState,
     store: JSONStore,
     sessionService: SessionService?,
-    devRoot: String,
-    createTask: (@Sendable (_ repo: String, _ title: String, _ body: String) async throws -> (url: String, number: Int))? = nil,
-    listWorkspaceRepos: (@Sendable (WorkspaceInfo) async -> WorkspaceRepoListing)? = nil
+    devRoot: String
 ) -> [String: CommandRouter.Handler] {
     let repo = TodoRepository(store: store)
     let handlers: [String: CommandRouter.Handler] = [
@@ -105,6 +102,11 @@ func makeTodoHandlers(
                         label: (label?.isEmpty == false) ? label! : type.rawValue)
                 }
                 item.links.append(link)
+                if type == .ticket {
+                    // The filing Manager attaches the issue it just created.
+                    // Don't walk a working or done item backwards.
+                    item.state = TodoRPC.stateAfterTicketLink(item.state)
+                }
                 item.updatedAt = Date()
                 repo.save(item)
                 return ["todo": TodoRPC.todoJSON(item)]
@@ -112,20 +114,20 @@ func makeTodoHandlers(
         },
         "todo-explore": { params in
             try await mapRPCError {
-                try await exploreTodo(
+                try await openScratchManager(
                     params: params, repo: repo, appState: appState,
-                    sessionService: sessionService, devRoot: devRoot)
+                    sessionService: sessionService, devRoot: devRoot,
+                    briefFor: TodoRPC.exploreBrief(for:),
+                    rejectIfTicketed: false)
             }
         },
         "todo-ticket": { params in
             try await mapRPCError {
-                try await fileTicket(
-                    params: params, repo: repo, devRoot: devRoot, createTask: createTask)
-            }
-        },
-        "list-workspace-repos": { _ in
-            try await mapRPCError {
-                try await listTicketRepos(devRoot: devRoot, listWorkspaceRepos: listWorkspaceRepos)
+                try await openScratchManager(
+                    params: params, repo: repo, appState: appState,
+                    sessionService: sessionService, devRoot: devRoot,
+                    briefFor: TodoRPC.ticketBrief(for:),
+                    rejectIfTicketed: true)
             }
         },
         "todo-work": { params in
@@ -161,19 +163,30 @@ private func setTodoState(
     return ["todo": TodoRPC.todoJSON(item)]
 }
 
-private func exploreTodo(
+/// Explore and Ticket share one Manager open. The brief is the only
+/// difference: Explore is read-only; Ticket tells the agent to file a
+/// provider issue and attach it with `todo link` (CROW-1289).
+private func openScratchManager(
     params: [String: JSONValue],
     repo: TodoRepository,
     appState: AppState,
     sessionService: SessionService?,
-    devRoot: String
+    devRoot: String,
+    briefFor: (TodoItem) -> String,
+    rejectIfTicketed: Bool
 ) async throws -> [String: JSONValue] {
-    guard let sessionService else {
-        throw RPCError.applicationError("Exploring a todo requires tmux on the daemon host")
-    }
     var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
+    if rejectIfTicketed, let existing = item.linkedTicketURL {
+        throw RPCError.applicationError(
+            "This item already has a ticket (\(existing)). Use `crow todo work` to start a session.")
+    }
+    guard let sessionService else {
+        throw RPCError.applicationError(
+            "Opening a Manager for a Scratch item requires tmux on the daemon host")
+    }
     let requestedAgentKind = params["agent_kind"]?.stringValue
         .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
+    let brief = briefFor(item)
 
     if let existing = item.linkedSessionID {
         let alive = await MainActor.run {
@@ -181,7 +194,7 @@ private func exploreTodo(
         }
         if alive {
             let seeded = await sendToManager(
-                sessionID: existing, text: TodoRPC.exploreBrief(for: item),
+                sessionID: existing, text: brief,
                 appState: appState, waitForAgent: false)
             if item.state != .exploring {
                 item.state = .exploring
@@ -201,7 +214,6 @@ private func exploreTodo(
         }
     }
 
-    let brief = TodoRPC.exploreBrief(for: item)
     let (sessionID, name) = await MainActor.run { () -> (UUID, String) in
         // Name the session after the item at create time. A follow-up
         // `renameSession` would paste `/rename` into the pane before the
@@ -340,112 +352,6 @@ private func sendToManager(
     return true
 }
 
-private func fileTicket(
-    params: [String: JSONValue],
-    repo: TodoRepository,
-    devRoot: String,
-    createTask: (@Sendable (_ repo: String, _ title: String, _ body: String) async throws -> (url: String, number: Int))?
-) async throws -> [String: JSONValue] {
-    var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
-    if let existing = item.linkedTicketURL {
-        throw RPCError.applicationError(
-            "This item already has a ticket (\(existing)). Use `crow todo work` to start a session.")
-    }
-    let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-    let target = try TodoRPC.resolveTicketTarget(
-        workspaceRef: params["workspace"]?.stringValue,
-        repo: params["repo"]?.stringValue,
-        config: config)
-    let workspace = target.workspace
-    let repoSlug = target.repo
-    let provider = Provider(rawValue: workspace.derivedTaskProvider) ?? .github
-
-    let info: (url: String, number: Int)
-    if let createTask {
-        info = try await createTask(repoSlug, item.text, TodoRPC.ticketBody(for: item))
-    } else {
-        let backend = ProviderManager().taskBackend(
-            for: provider,
-            host: workspace.host,
-            jira: JiraConfig(
-                site: workspace.jiraSite,
-                projectKey: workspace.jiraProjectKey,
-                jql: workspace.jiraJQL,
-                statusMap: workspace.jiraStatusMap)
-        )
-        // Crow tags stay in the body. Passing them as GitHub/GitLab labels would
-        // fail the create when the label does not already exist on the repo.
-        let created = try await backend.createTask(
-            repo: repoSlug,
-            title: item.text,
-            body: TodoRPC.ticketBody(for: item),
-            labels: []
-        )
-        info = (created.url, created.number)
-    }
-    item.links.append(TodoLink(
-        type: .ticket,
-        url: info.url,
-        label: "#\(info.number)"))
-    item.state = .ticketed
-    item.updatedAt = Date()
-    repo.save(item)
-    return [
-        "todo": TodoRPC.todoJSON(item),
-        "ticket_url": .string(info.url),
-        "ticket_number": .int(info.number),
-    ]
-}
-
-/// Expand every workspace's `alwaysInclude` ∪ `autoReviewRepos` (including
-/// `owner/*` globs) into concrete slugs, then stamp each with the workspace
-/// ``AppConfig/workspace(forRepoSlug:)`` would pick. Scratch Ticket's dropdown
-/// is this list; filing still re-resolves so a stale picker row cannot guess.
-private func listTicketRepos(
-    devRoot: String,
-    listWorkspaceRepos: (@Sendable (WorkspaceInfo) async -> WorkspaceRepoListing)?
-) async throws -> [String: JSONValue] {
-    let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-    let expand: @Sendable (WorkspaceInfo) async -> WorkspaceRepoListing
-    if let listWorkspaceRepos {
-        expand = listWorkspaceRepos
-    } else {
-        let manager = ProviderManager()
-        expand = { workspace in
-            let provider = Provider(rawValue: workspace.derivedTaskProvider) ?? .github
-            return await manager.reposForSpecs(
-                workspace.alwaysInclude + workspace.autoReviewRepos,
-                provider: provider,
-                host: workspace.host)
-        }
-    }
-
-    var slugs = Set<String>()
-    for workspace in config.workspaces {
-        let listing = await expand(workspace)
-        slugs.formUnion(listing.repos)
-        if let key = workspace.jiraProjectKey?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
-            slugs.insert(key)
-        }
-    }
-
-    var rows: [JSONValue] = []
-    for slug in slugs.sorted() {
-        guard let target = try? TodoRPC.resolveTicketTarget(
-            workspaceRef: nil, repo: slug, config: config)
-        else { continue }
-        rows.append(.object([
-            "slug": .string(slug),
-            "workspace": .string(target.workspace.name),
-        ]))
-    }
-    return [
-        "repos": .array(rows),
-        "count": .int(rows.count),
-    ]
-}
-
 private func workTodo(
     params: [String: JSONValue],
     repo: TodoRepository,
@@ -454,7 +360,8 @@ private func workTodo(
 ) async throws -> [String: JSONValue] {
     var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
     guard let url = item.linkedTicketURL else {
-        throw RPCError.applicationError("File a ticket first (`crow todo ticket`)")
+        throw RPCError.applicationError(
+            "Link a ticket first (`crow todo link --type ticket`)")
     }
     guard sessionService != nil else {
         throw RPCError.applicationError("Working a todo requires tmux on the daemon host")

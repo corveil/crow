@@ -48,7 +48,7 @@ function renderScratchBoard(root) {
   const visible = todos.filter((t) => scratchShowClosed || (t.state !== 'done' && t.state !== 'dropped'));
   if (!visible.length) {
     root.appendChild(el('div', 'board-note',
-      todos.length ? 'Nothing open — capture one above, or Show done.' : 'Scratch is empty. Capture one above; Explore opens a Manager without filing a ticket.'));
+      todos.length ? 'Nothing open — capture one above, or Show done.' : 'Scratch is empty. Capture one above. Explore opens a Manager to look; Ticket opens one to file.'));
     return;
   }
   const list = el('div', 'scratch-list');
@@ -92,8 +92,11 @@ function scratchRow(item) {
   const ticketURL = scratchTicketURL(item);
   const ticket = el('button', 'action-btn', 'Ticket');
   ticket.disabled = !!ticketURL;
-  if (ticketURL) ticket.title = 'Already filed';
-  ticket.onclick = (e) => { e.stopPropagation(); scratchTicket(ticket, item); };
+  ticket.title = ticketURL ? 'Already filed' : 'Open a Manager to file this ticket';
+  ticket.onclick = (e) => {
+    e.stopPropagation();
+    scratchSpawn(ticket, 'todo-ticket', { todo_id: item.id }, 'Ticket');
+  };
   actions.appendChild(ticket);
   const work = el('button', 'action-btn', 'Work');
   work.disabled = !ticketURL;
@@ -221,39 +224,6 @@ function scratchTicketURL(item) {
     if (links[i].type === 'ticket' && links[i].url) return links[i].url;
   }
   return null;
-}
-
-async function scratchTicket(btn, item) {
-  let listed;
-  try {
-    listed = await rpc('list-workspace-repos');
-  } catch (err) {
-    alertModal('Could not list repos: ' + (err.message || err));
-    return;
-  }
-  const repos = (listed && listed.repos) || [];
-  if (!repos.length) {
-    alertModal('No repos to file in. Add an always-include repo in Settings → Workspaces.');
-    return;
-  }
-  let picked = repos[0];
-  if (repos.length > 1) {
-    const slug = await selectPrompt(
-      'File ticket in',
-      repos.map((r) => ({ value: r.slug, label: r.slug })),
-      { okLabel: 'File' });
-    if (!slug) return;
-    picked = repos.find((r) => r.slug === slug);
-    if (!picked) {
-      alertModal('No workspace matches repo \'' + slug + '\'.');
-      return;
-    }
-  }
-  spawnAction(btn, 'todo-ticket', {
-    todo_id: item.id,
-    repo: picked.slug,
-    workspace: picked.workspace,
-  }, 'Ticket').then(() => refreshBoard('scratch'));
 }
 
 async function scratchSpawn(btn, method, params, label) {

@@ -77,18 +77,21 @@ private let todoUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     #expect(cmd.agent == "cursor")
 }
 
-@Test func todoTicketRequiresWorkspace() {
-    #expect(throws: (any Error).self) {
-        _ = try TodoTicket.parse(["--id", todoUUID])
-    }
+@Test func todoTicketParsesIdWithoutARepo() throws {
+    let cmd = try TodoTicket.parse(["--id", todoUUID])
+    #expect(cmd.id == todoUUID)
+    #expect(cmd.agent == nil)
 }
 
-@Test func todoTicketParsesWorkspaceAndRepo() throws {
-    let cmd = try TodoTicket.parse([
-        "--id", todoUUID, "--workspace", "Corveil", "--repo", "corveil/crow",
-    ])
-    #expect(cmd.workspace == "Corveil")
-    #expect(cmd.repo == "corveil/crow")
+@Test func todoTicketParsesAgent() throws {
+    let cmd = try TodoTicket.parse(["--id", todoUUID, "--agent", "cursor"])
+    #expect(cmd.agent == "cursor")
+}
+
+@Test func todoTicketRejectsWorkspaceFlag() {
+    #expect(throws: (any Error).self) {
+        _ = try TodoTicket.parse(["--id", todoUUID, "--workspace", "Corveil"])
+    }
 }
 
 @Test func todoTalkParsesPositionalText() throws {

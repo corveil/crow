@@ -733,10 +733,11 @@ crow todo explore --id <todo-uuid> --agent cursor
 
 ### `crow todo ticket`
 
-File a ticket from the item body via the workspace's task provider, attach the URL, and move state to `ticketed`. `--repo` is required unless the workspace has exactly one always-include repo (or a Jira project key). A glob-only membership (e.g. `corveil/*`) does not count as a single repo — pass `--repo owner/repo`, which is resolved with the same workspace-membership rule as reviews (`exact slug` beats glob). An unmatched slug is refused.
+Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore`. The agent chooses the repo, files the provider issue, and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`.
 
 ```bash
-crow todo ticket --id <todo-uuid> --workspace Corveil --repo corveil/crow
+crow todo ticket --id <todo-uuid>
+crow todo ticket --id <todo-uuid> --agent cursor
 ```
 
 ### `crow todo work`

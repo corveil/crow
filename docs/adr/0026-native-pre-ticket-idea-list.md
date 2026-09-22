@@ -15,7 +15,7 @@ The list has to be self-contained (no external todo host), durable (explicitly n
 Crow persists a `todos[]` collection on `StoreData` (same `store.json` as sessions) and exposes it as `crow todo`, a Scratch sidebar board, and a `todos:read` MCP scope.
 
 1. **Lifecycle.** `captured → exploring → ticketed → working → done`, with `parked` / `dropped` as no-ticket exits. `links[]` is the provenance trail (Manager session, filed ticket, PR).
-2. **Promotions reuse existing verbs.** `todo explore` is `create-manager` + `crow send` of an explore brief (pre-ticket sibling of `/crow-workspace --explore`). `todo ticket` files via `TaskBackend.createTask`. `todo work` types `/crow-workspace` into the primary Manager. `todo talk` is sugar over `crow send` to the linked Manager.
+2. **Promotions reuse existing verbs.** `todo explore` is `create-manager` + `crow send` of an explore brief (pre-ticket sibling of `/crow-workspace --explore`). `todo ticket` used to file via `TaskBackend.createTask`; [ADR 0029](./0029-scratch-ticket-opens-a-manager.md) (CROW-1289) revises that — Ticket opens a Manager the same way Explore does, and the agent files the issue. `todo work` types `/crow-workspace` into the primary Manager. `todo talk` is sugar over `crow send` to the linked Manager.
 3. **Non-reaped.** Session cleanup only deletes completed/archived *sessions*. `todos` is never cascaded on session delete and is never visited by the reaper.
 4. **MCP.** `todo-list` / `todo-get` are ledgered `mcp: .read(scope: .todosRead)`. There is no `todos:write`.
 

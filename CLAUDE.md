@@ -209,15 +209,14 @@ crow todo drop --id <uuid>
 crow todo delete --id <uuid>
 crow todo link --id <uuid> --type session|ticket|pr|custom [--url ...] [--session <uuid>] [--label "..."]
 crow todo explore --id <uuid> [--agent claude-code]   → create-manager, seed an explore brief, state → exploring
-crow todo ticket --id <uuid> --workspace W [--repo owner/repo]  → file a ticket, attach the URL, state → ticketed
+crow todo ticket --id <uuid> [--agent claude-code]    → create-manager, seed a file-ticket brief, state → exploring
 crow todo work --id <uuid>                            → /crow-workspace off the linked ticket, state → working
 crow todo talk --id <uuid> "..."                      → crow send to the item's linked Manager
 ```
 
 - Items persist until acted on — unlike completed sessions, they are exempt from the 24h cleanup reaper.
-- `explore` automates the create-manager + send dance; if the Manager is still starting, `seeded` is false and `todo talk` can finish the brief.
-- `ticket` needs a workspace; `--repo` is required unless that workspace has exactly one always-include repo (or a Jira project key).
-- `work` needs a linked ticket (`todo ticket` or `todo link --type ticket`).
+- `explore` and `ticket` both open a Manager and seed a brief. If the Manager is still starting, `seeded` is false and `todo talk` can finish it. `ticket` tells the agent to file the provider issue and attach it with `todo link --type ticket` (state → ticketed). There is no repo picker. Do not call `todo ticket` again from that Manager — it opens another one.
+- `work` needs a linked ticket (`todo link --type ticket`).
 - Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
 
 ### TUI recording Commands
