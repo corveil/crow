@@ -11,14 +11,28 @@ import CrowProvider
 /// merge bookkeeping. Reaches `appState`, `providerManager`, the shared
 /// `JSONStore`, the board poll's stale-PR fetch, PR attribution, and the
 /// auto-merge callbacks/toggle through an unowned back-reference. The shared
-/// `codeBackend` / `prHasCrowAuthoredCommit` helpers live here now and are
-/// re-exposed on the tracker for the rebase / re-review watchers.
+/// `codeBackend` / `prHasCrowAuthoredCommit` helpers belong to this type and
+/// are re-exposed on the tracker for the rebase / re-review watchers.
+///
+/// Split across sibling files by CROW-1286 so a policy or label change reviews
+/// apart from the irreversible merge paths. This file keeps the watcher —
+/// in-memory state plus the poll (`applyAutoMerge`) and targeted
+/// (`evaluateAutoMerge` / `reevaluateAutoMergeAfterLabel`) decisions and their
+/// verdicts. The eligibility policy lives in `AutoMergePolicy`, the enable /
+/// direct-merge / update-branch attempt paths in `AutoMergeController+Attempts`,
+/// the `crow:merge` label memo in `AutoMergeController+Label`, and the
+/// `IssueTracker` facade in `AutoMergeController+IssueTracker`.
 @MainActor
 final class AutoMergeController {
-    private unowned let owner: IssueTracker
-    private var appState: AppState { owner.appState }
-    private var providerManager: ProviderManager { owner.providerManager }
-    private var store: JSONStore { owner.store }
+    // Internal (not private) so the sibling extension files
+    // (`AutoMergeController+Attempts`, `+Label`, `AutoMergePolicy`) can reach
+    // the owner back-reference and the shared `appState` / `providerManager` /
+    // `store` accessors. A `private` here is only file-scoped, and an extension
+    // in another file cannot see it (CROW-1286).
+    unowned let owner: IssueTracker
+    var appState: AppState { owner.appState }
+    var providerManager: ProviderManager { owner.providerManager }
+    var store: JSONStore { owner.store }
 
     /// Local alias mirroring `IssueTracker.ViewerPR` (both are `PRRecord`).
     typealias ViewerPR = PRRecord
@@ -62,8 +76,9 @@ final class AutoMergeController {
     /// disallows auto-merge, no Crow-Session trailer) so the failure isn't
     /// re-logged every poll — but then the per-poll summary would report a bare
     /// `in-flight` forever instead of the real reason. Recording it here keeps
-    /// the summary honest (review #787).
-    private var autoMergePermanentSkips: [String: String] = [:]
+    /// the summary honest (review #787). Internal (not private) so the attempt
+    /// paths in `AutoMergeController+Attempts` can latch the reason.
+    var autoMergePermanentSkips: [String: String] = [:]
 
     /// `"<pr url>\n<reason>"` pairs we've already pushed an `autoMergeBlocked`
     /// notification for. The permanent skips latch themselves — the marker
@@ -94,16 +109,6 @@ final class AutoMergeController {
     /// `autoUpdateBranchAttempted`. In-memory only.
     var autoUpdateBranchFailureCounts: [String: Int] = [:]
 
-    /// Max consecutive failed `gh pr update-branch` calls per head state before
-    /// the watcher gives up until the head commit changes.
-    nonisolated static let maxAutoUpdateBranchFailureRetries = 3
-
-    /// Whether a failed `updateBranch` should be retried on the next poll.
-    /// Pure so the policy is unit-testable, matching `shouldRetryFailedRebase`.
-    nonisolated static func shouldRetryFailedUpdateBranch(failureCount: Int) -> Bool {
-        failureCount < maxAutoUpdateBranchFailureRetries
-    }
-
     /// Repos whose `crow:merge` label we have already created — or confirmed
     /// present — this process lifetime. Keyed `"<provider>\n<owner/repo>"`,
     /// provider-qualified because an `owner/repo` slug is not unique across
@@ -122,268 +127,19 @@ final class AutoMergeController {
     /// the "reported success for work it never did" failure CROW-816 removed.
     /// Never invalidated: a label deleted out from under a running daemon is
     /// re-created after the next restart, and in between `addMergeLabel` still
-    /// *throws* on the real `gh pr edit --add-label` failure.
-    private var ensuredMergeLabelRepos: Set<String> = []
+    /// *throws* on the real `gh pr edit --add-label` failure. Internal (not
+    /// private) so the label memo in `AutoMergeController+Label` owns it.
+    var ensuredMergeLabelRepos: Set<String> = []
 
     /// In-flight `ensureMergeLabel` calls, same key as
     /// ``ensuredMergeLabelRepos``. Without this, the first poll that dispatches
     /// N PRs in one repo fires N concurrent identical shell-outs before any of
     /// them can populate the memo — which would only take effect from the
-    /// *second* poll onward.
-    private var ensureMergeLabelTasks: [String: Task<Void, Error>] = [:]
+    /// *second* poll onward. Internal (not private) so the label memo in
+    /// `AutoMergeController+Label` owns it.
+    var ensureMergeLabelTasks: [String: Task<Void, Error>] = [:]
 
-    // MARK: - Watcher
-    nonisolated static func shouldAttemptAutoMerge(pr: ViewerPR, session: Session) -> Bool {
-        autoMergeSkipReason(pr: pr, session: session) == nil
-    }
-
-    /// Why `pr` is not an auto-merge candidate, or `nil` when it is one.
-    ///
-    /// The reason exists so a skip leaves a trace: `shouldAttemptAutoMerge`
-    /// used to collapse six distinct guards into a bare `false`, which is why
-    /// "why wasn't this PR merged?" was unanswerable after the fact (CROW-782).
-    /// `applyAutoMerge` logs the reason per PR each poll; the boolean helper
-    /// above is derived from this one so the two can never disagree.
-    ///
-    /// Raw values are the strings that land in the automation log — keep them
-    /// stable enough to grep for. The first six are the pure eligibility
-    /// guards `autoMergeSkipReason` evaluates; the rest are runtime outcomes
-    /// that used to live as bare string literals scattered across
-    /// `applyAutoMerge` and `attemptEnableAutoMerge`. Folding them into one
-    /// type is what lets a reason carry a human sentence and a permanence flag
-    /// to the UI instead of dying in the log file (#888).
-    enum AutoMergeSkipReason: String, Sendable {
-        case alreadyEnabled = "already-enabled"
-        case notOpen = "not-open"
-        case draft = "draft"
-        case noMergeLabel = "no-crow-merge-label"
-        case conflicting = "conflicting"
-        case changesRequested = "changes-requested"
-        case inFlight = "in-flight"
-        case notInViewerPRs = "not-in-viewer-prs"
-        case updateBranchAlreadyAttempted = "update-branch-already-attempted-for-head"
-        case noCrowSessionTrailer = "no-crow-session-trailer"
-        case backendLacksAutoMerge = "backend-lacks-auto-merge-capability"
-        case repoDisallowsAutoMerge = "repo-disallows-auto-merge"
-        /// The repo forbids the host's auto-merge queue, so `--auto` can never
-        /// succeed — but the PR isn't green enough for the direct-merge
-        /// fallback *yet*. Transient by design: labels are usually applied
-        /// while CI is still running, and latching here would freeze the PR
-        /// before it could ever qualify. New with #888.
-        case repoDisallowsAutoMergePending = "repo-disallows-auto-merge-not-yet-mergeable"
-        /// The PR asks for auto-merge but the watcher itself is switched off, so
-        /// nothing will ever look at it. New with #888: `applyAutoMerge`'s first
-        /// guard returns before any per-PR bookkeeping, so this state was
-        /// previously invisible except as one hourly global log line.
-        case watcherOff = "watcher-off"
-        /// The repo forbids the host's auto-merge queue and Crow's direct-merge
-        /// fallback also failed. New with #888.
-        case directMergeFailed = "direct-merge-failed"
-
-        /// Whether retrying could change the outcome. Drives whether the UI
-        /// warns loudly and whether a notification fires at all.
-        var isPermanent: Bool {
-            switch self {
-            case .noCrowSessionTrailer, .backendLacksAutoMerge,
-                 .repoDisallowsAutoMerge, .directMergeFailed:
-                true
-            case .alreadyEnabled, .notOpen, .draft, .noMergeLabel, .conflicting,
-                 .changesRequested, .inFlight, .notInViewerPRs,
-                 .updateBranchAlreadyAttempted, .watcherOff, .repoDisallowsAutoMergePending:
-                false
-            }
-        }
-
-        /// The verdict to publish for the UI, or `nil` to stay quiet.
-        ///
-        /// Deliberately silent for everything the PR pill *already* renders —
-        /// a conflicting PR draws the conflict chip, a CHANGES_REQUESTED one
-        /// draws a red review chip, an unlabeled one simply has no 🏷. Adding
-        /// a second chip saying the same thing would be the exact "two surfaces
-        /// disagreeing" failure CROW-773 consolidated the vocabulary to avoid.
-        /// What's published is only what nothing else on screen can tell you.
-        func state(repo: String) -> AutoMergeState? {
-            switch self {
-            case .notOpen, .draft, .noMergeLabel, .conflicting, .changesRequested:
-                return nil
-            case .alreadyEnabled:
-                return AutoMergeState(
-                    phase: .enabled, reason: rawValue,
-                    message: "Auto-merge is enabled. GitHub will merge this PR once required "
-                        + "reviews and checks pass.",
-                    permanent: false)
-            case .watcherOff:
-                return AutoMergeState(
-                    phase: .off, reason: rawValue,
-                    message: "This PR is labeled crow:merge, but the auto-merge watcher is off, "
-                        + "so nothing will merge it. Turn it on in Settings → Automation.",
-                    permanent: false)
-            case .inFlight:
-                return AutoMergeState(
-                    phase: .stalled, reason: rawValue,
-                    message: "Crow is working on this PR's auto-merge right now.",
-                    permanent: false)
-            case .notInViewerPRs:
-                return AutoMergeState(
-                    phase: .stalled, reason: rawValue,
-                    message: "This PR didn't appear in the last provider fetch, so Crow can't "
-                        + "evaluate it. Usually a scope or rate-limit problem, not the PR itself.",
-                    permanent: false)
-            case .updateBranchAlreadyAttempted:
-                return AutoMergeState(
-                    phase: .stalled, reason: rawValue,
-                    message: "Crow already tried to update this branch from its base at the "
-                        + "current commit. It will re-evaluate once the branch moves.",
-                    permanent: false)
-            case .noCrowSessionTrailer:
-                return AutoMergeState(
-                    phase: .blocked, reason: rawValue,
-                    message: "No commit on this PR carries a Crow-Session trailer matching a "
-                        + "known session, so Crow won't merge it.",
-                    permanent: true)
-            case .backendLacksAutoMerge:
-                return AutoMergeState(
-                    phase: .blocked, reason: rawValue,
-                    message: "This session's provider backend can't enable auto-merge.",
-                    permanent: true)
-            case .repoDisallowsAutoMergePending:
-                return AutoMergeState(
-                    phase: .stalled, reason: rawValue,
-                    message: "\(repo.isEmpty ? "This repository" : repo) has GitHub's "
-                        + "\"Allow auto-merge\" setting turned off, so Crow will merge this PR "
-                        + "itself once checks pass and it's approved.",
-                    permanent: false)
-            case .repoDisallowsAutoMerge:
-                return AutoMergeState(
-                    phase: .blocked, reason: rawValue,
-                    message: "\(repo.isEmpty ? "This repository" : repo) has GitHub's "
-                        + "\"Allow auto-merge\" setting turned off, and the PR isn't in a state "
-                        + "Crow can safely merge directly. Enable it in the repo's "
-                        + "Settings → General, or merge by hand.",
-                    permanent: true)
-            case .directMergeFailed:
-                return AutoMergeState(
-                    phase: .blocked, reason: rawValue,
-                    message: "\(repo.isEmpty ? "This repository" : repo) forbids GitHub "
-                        + "auto-merge and Crow's direct merge failed. Check the PR on GitHub — "
-                        + "Crow will not retry.",
-                    permanent: true)
-            }
-        }
-    }
-
-    nonisolated static func autoMergeSkipReason(pr: ViewerPR, session: Session) -> AutoMergeSkipReason? {
-        guard session.autoMergeEnabledAt == nil else { return .alreadyEnabled }
-        guard pr.state == "OPEN" else { return .notOpen }
-        guard !pr.isDraft else { return .draft }
-        guard pr.labels.contains(where: { $0.name.caseInsensitiveCompare(autoMergeLabel) == .orderedSame }) else { return .noMergeLabel }
-        guard pr.mergeable != "CONFLICTING" else { return .conflicting }
-        guard pr.reviewDecision != "CHANGES_REQUESTED" else { return .changesRequested }
-        return nil
-    }
-
-    /// Whether `pr` carries the `crow:merge` label. Split out of
-    /// `autoMergeSkipReason` so the watcher-off path can tell "the user asked
-    /// for auto-merge and nothing is listening" apart from "this PR was never
-    /// labeled", without re-running the whole guard chain (#888).
-    nonisolated static func hasAutoMergeLabel(pr: ViewerPR) -> Bool {
-        pr.labels.contains { $0.name.caseInsensitiveCompare(autoMergeLabel) == .orderedSame }
-    }
-
-    /// True when `gh pr merge --auto` failed for a permanent repo/policy
-    /// reason that will not clear on retry — specifically when the repo has
-    /// GitHub "Allow auto-merge" disabled. Keyed on the policy phrase only:
-    /// `gh` embeds the GraphQL mutation name `enablePullRequestAutoMerge` in
-    /// *every* error from that mutation (including transient ones like
-    /// "Pull request is in clean status"), so matching the bare field name
-    /// would freeze retryable cases for the process lifetime (CROW-621).
-    nonisolated static func isPermanentAutoMergeFailure(_ error: Error) -> Bool {
-        let message: String
-        if case ShellRunnerError.nonZeroExit(_, let output) = error {
-            message = output
-        } else {
-            message = error.localizedDescription
-        }
-        return message.localizedCaseInsensitiveContains("Auto merge is not allowed for this repository")
-    }
-
-    /// The green-state gates a PR must clear before Crow will merge it *itself*.
-    ///
-    /// `shouldAttemptAutoMerge` is a much weaker bar on purpose: that path hands
-    /// GitHub a queued request and lets GitHub enforce required checks and
-    /// reviews before anything lands. A direct merge has no such backstop — it
-    /// merges now — so every gate GitHub would have applied has to be re-checked
-    /// here (#888).
-    ///
-    /// `mergeStateStatus == "CLEAN"` is GitHub's own "the merge button is
-    /// green", which already excludes `BLOCKED`, `UNSTABLE`, `BEHIND`,
-    /// `HAS_HOOKS` and `DIRTY`. The other three gates are deliberate belt and
-    /// braces: this predicate is the only thing standing between a labeled PR
-    /// and an irreversible merge, so it re-states rather than infers.
-    ///
-    /// Known narrowing: a repo with no required reviewers reports
-    /// `reviewDecision == ""`, so the fallback stays out of its way entirely.
-    /// Refusing to merge something a human never approved is the right side to
-    /// err on.
-    nonisolated static func directMergeGatesPass(pr: ViewerPR, session: Session) -> Bool {
-        guard shouldAttemptAutoMerge(pr: pr, session: session) else { return false }
-        guard pr.mergeStateStatus == "CLEAN" else { return false }
-        guard pr.mergeable == "MERGEABLE" else { return false }
-        guard pr.checksState == "SUCCESS" else { return false }
-        guard pr.reviewDecision == "APPROVED" else { return false }
-        return true
-    }
-
-    /// Whether Crow should merge `pr` directly instead of enabling auto-merge,
-    /// because the repo has GitHub's "Allow auto-merge" setting off.
-    ///
-    /// Gated on an *explicit* `false`: `repoAutoMergeAllowed` is `nil` whenever
-    /// the field wasn't fetched (GitLab, a partial SAML recovery, a cached
-    /// record from before #888), and treating unknown as "forbidden" would turn
-    /// every such PR into a direct merge — precisely the blast radius this
-    /// feature must not have.
-    nonisolated static func shouldDirectMerge(pr: ViewerPR, session: Session) -> Bool {
-        guard pr.repoAutoMergeAllowed == false else { return false }
-        return directMergeGatesPass(pr: pr, session: session)
-    }
-
-    /// Decide whether a merge candidate should have its branch updated from
-    /// base *before* merging. True only when the PR is otherwise mergeable
-    /// (`shouldAttemptAutoMerge`) but GitHub reports it `BEHIND` its base —
-    /// the "out-of-date with the base branch" state that makes `gh pr merge`
-    /// fail with HTTP 422. Real conflicts never qualify: `CONFLICTING` is
-    /// already gated by `shouldAttemptAutoMerge`, and `DIRTY` is not `BEHIND`.
-    nonisolated static func shouldUpdateBranchBeforeMerge(pr: ViewerPR, session: Session) -> Bool {
-        guard shouldAttemptAutoMerge(pr: pr, session: session) else { return false }
-        return pr.mergeStateStatus == "BEHIND"
-    }
-
-    /// Return true when at least one of the supplied commit messages
-    /// carries a `Crow-Session: <uuid>` trailer whose UUID matches a
-    /// session in `knownSessionIDs`. Trailer-with-unknown-session is
-    /// treated as NOT Crow-authored (acceptance criterion #4).
-    nonisolated static func crowAuthored(commitMessages: [String], knownSessionIDs: Set<UUID>) -> Bool {
-        for message in commitMessages {
-            for uuid in PRAttributionRecorder.extractCrowSessionUUIDs(from: message) {
-                if knownSessionIDs.contains(uuid) { return true }
-            }
-        }
-        return false
-    }
-
-
-    /// What one session's auto-merge evaluation did. Returned by
-    /// ``evaluateAutoMerge(session:byURL:)`` so the per-poll caller can keep its
-    /// aggregate summary line without the loop body reaching into the caller's
-    /// counters — the single-session caller has no counters at all.
-    struct AutoMergeOutcome {
-        enum Dispatch: String { case none, enable, updateBranch, directMerge }
-        var dispatch: Dispatch = .none
-        /// Pre-formatted `<key>:<reason>` token for the per-poll summary line.
-        /// `nil` when the session was never a candidate (no `.pr` link) — that
-        /// is not a skip, it's a session the watcher doesn't speak about.
-        var skip: String?
-    }
+    // MARK: - Poll & targeted evaluation
 
     /// Per-refresh entry point. Picks candidate (session, PR) pairs and
     /// kicks off the async enable flow once each. Publishes a per-session
@@ -661,7 +417,9 @@ final class AutoMergeController {
     /// `nil` from `state(repo:)` means "something else on screen already says
     /// this" — a conflicting PR draws the conflict chip, an unlabeled one has
     /// no 🏷 — so we clear rather than add a redundant second signal.
-    private func publishAutoMergeVerdict(
+    /// Internal (not private) so the attempt paths in
+    /// `AutoMergeController+Attempts` publish through the same code.
+    func publishAutoMergeVerdict(
         _ reason: AutoMergeSkipReason, session: Session, pr: ViewerPR?
     ) {
         let repo = pr?.repoNameWithOwner ?? ""
@@ -684,8 +442,9 @@ final class AutoMergeController {
 
     /// Drop a PR's notification latches so a block that gets fixed and then
     /// recurs is announced again rather than swallowed for the process
-    /// lifetime.
-    private func clearAutoMergeBlockNotifications(prURL: String?) {
+    /// lifetime. Internal (not private) so `recordAutoMergeSuccess` in
+    /// `AutoMergeController+Attempts` can clear them after a merge.
+    func clearAutoMergeBlockNotifications(prURL: String?) {
         guard let prURL else { return }
         autoMergeBlockNotified = autoMergeBlockNotified.filter { !$0.hasPrefix("\(prURL)\n") }
     }
@@ -700,310 +459,6 @@ final class AutoMergeController {
         CrowLog.automation(
             "auto-merge: skipped entirely — owner.autoMergeWatcherEnabledProvider() is false "
             + "(config `autoMergeWatcherEnabled` off, or the provider was never wired)")
-    }
-
-    /// Resolve the `CodeBackend` for a session's PR/merge actions, following the
-    /// `codeProvider ?? provider ?? .github` convention (ADR 0005) so a
-    /// Jira/Corveil-tasked GitHub-code session routes to GitHub rather than its
-    /// task provider (CROW-532). `nil` only for a task-only resolution with no
-    /// code surface — callers must bow out.
-    func codeBackend(for session: Session) -> CodeBackend? {
-        providerManager.codeBackend(for: session.codeProvider ?? session.provider ?? .github)
-    }
-
-    /// Verify Crow authorship, lazily ensure the label exists, then enable
-    /// auto-merge with squash + delete branch. Idempotent: success persists
-    /// `Session.autoMergeEnabledAt`. Transient failure clears the in-flight
-    /// marker so the next poll retries; permanent/expected failure (repo
-    /// disallows auto-merge) leaves it set and logs once (CROW-621).
-    private func attemptEnableAutoMerge(session: Session, pr: ViewerPR) async {
-        guard let backend = codeBackend(for: session) else {
-            autoMergeInFlight.remove(pr.url)
-            return
-        }
-        guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
-            // Leaves `autoMergeInFlight` set (one log line, not one per poll);
-            // record why so the summary doesn't just say "in-flight" forever.
-            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.noCrowSessionTrailer.rawValue
-            CrowLog.automation("auto-merge: #\(pr.number) ignored — no Crow-Session trailer matching a known session")
-            publishAutoMergeVerdict(.noCrowSessionTrailer, session: session, pr: pr)
-            return
-        }
-
-        await ensureMergeLabel(repo: pr.repoNameWithOwner, backend: backend)
-
-        guard backend.capabilities.contains(.autoMerge) else {
-            // Capability gate: don't even try if the backend can't enable
-            // auto-merge. A backend's capability set is static, so this is
-            // permanent — keep the in-flight marker (with its reason) rather
-            // than clearing it and re-running the authorship commit fetch, and
-            // re-logging, on every 60s poll (review #787).
-            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.backendLacksAutoMerge.rawValue
-            CrowLog.automation("auto-merge: #\(pr.number) skipped — backend lacks the autoMerge capability")
-            publishAutoMergeVerdict(.backendLacksAutoMerge, session: session, pr: pr)
-            return
-        }
-        do {
-            try await backend.enableAutoMerge(prURL: pr.url)
-            recordAutoMergeSuccess(session: session, pr: pr, phase: .enabled, detail: "squash")
-        } catch {
-            if Self.isPermanentAutoMergeFailure(error) {
-                // The repo forbids auto-merge and GraphQL didn't tell us in
-                // time (an older cached record, or a fetch that omitted
-                // `autoMergeAllowed`). We've now *proven* it, so the
-                // direct-merge fallback's repo precondition is satisfied —
-                // check only the green-state gates (#888).
-                if Self.directMergeGatesPass(pr: pr, session: session) {
-                    CrowLog.automation(
-                        "auto-merge: #\(pr.number) repo disallows auto-merge — falling back to a direct squash merge")
-                    await performDirectMerge(session: session, pr: pr, backend: backend)
-                    return
-                }
-                // Leave `autoMergeInFlight` set so subsequent polls skip this
-                // PR instead of re-logging a permanent repo policy failure.
-                autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.repoDisallowsAutoMerge.rawValue
-                CrowLog.automation(
-                    "auto-merge: #\(pr.number) permanently skipped (auto-merge not allowed on repo): "
-                    + error.localizedDescription)
-                publishAutoMergeVerdict(.repoDisallowsAutoMerge, session: session, pr: pr)
-            } else {
-                autoMergeInFlight.remove(pr.url)
-                autoMergePermanentSkips[pr.url] = nil
-                CrowLog.automation(
-                    "auto-merge: #\(pr.number) enableAutoMerge failed (will retry next poll): "
-                    + error.localizedDescription)
-            }
-        }
-    }
-
-    /// Merge the PR outright, because its repo has GitHub's "Allow auto-merge"
-    /// setting off and `enableAutoMerge` could therefore never succeed (#888).
-    ///
-    /// Eligibility was decided by `shouldDirectMerge` before dispatch; this
-    /// re-verifies Crow authorship, exactly like the auto-merge path, so a PR
-    /// nobody's Crow session wrote is never merged by Crow.
-    private func attemptDirectMerge(session: Session, pr: ViewerPR) async {
-        guard let backend = codeBackend(for: session) else {
-            autoMergeInFlight.remove(pr.url)
-            return
-        }
-        guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
-            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.noCrowSessionTrailer.rawValue
-            CrowLog.automation(
-                "auto-merge: #\(pr.number) direct merge skipped — no Crow-Session trailer matching a known session")
-            publishAutoMergeVerdict(.noCrowSessionTrailer, session: session, pr: pr)
-            return
-        }
-        CrowLog.automation(
-            "auto-merge: #\(pr.number) \(pr.repoNameWithOwner) disallows auto-merge — "
-            + "falling back to a direct squash merge")
-        await performDirectMerge(session: session, pr: pr, backend: backend)
-    }
-
-    /// The direct merge itself. Split from `attemptDirectMerge` so the
-    /// `enableAutoMerge` catch path — which has just *proven* the repo forbids
-    /// auto-merge, and has already checked authorship — can reuse it without
-    /// re-fetching the PR's commits.
-    ///
-    /// **Every** failure is latched as permanent, deliberately — including a
-    /// transient one. This conflates "the host refused the merge" with "we
-    /// couldn't reach the host" (review #899), and the two are not the same
-    /// thing: a rate-limit or network blip parks the PR until a daemon restart.
-    /// It is still the right default *here* specifically because this path has
-    /// no host-side backstop. `enableAutoMerge` can retry freely — GitHub holds
-    /// the queued request and re-checks eligibility itself, so a wasted attempt
-    /// costs nothing. A direct merge acts immediately on a snapshot, so an
-    /// automatic retry loop is the one failure mode that could merge on stale
-    /// state. Distinguishing the two would mean pattern-matching `gh` stderr,
-    /// which is the brittleness `repoAutoMergeAllowed` was added to escape.
-    /// Stop and let a human look. If the false-permanent rate proves annoying
-    /// in practice, the fix is bounded retries keyed on `headRefOid` (as
-    /// `autoUpdateBranchAttempted` does), not a looser catch.
-    private func performDirectMerge(session: Session, pr: ViewerPR, backend: CodeBackend) async {
-        guard backend.capabilities.contains(.directMerge) else {
-            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.backendLacksAutoMerge.rawValue
-            CrowLog.automation("auto-merge: #\(pr.number) skipped — backend lacks the directMerge capability")
-            publishAutoMergeVerdict(.backendLacksAutoMerge, session: session, pr: pr)
-            return
-        }
-        do {
-            try await backend.mergeNow(prURL: pr.url)
-            recordAutoMergeSuccess(
-                session: session, pr: pr, phase: .merged, detail: "squash, direct — repo disallows auto-merge")
-        } catch {
-            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.directMergeFailed.rawValue
-            CrowLog.automation(
-                "auto-merge: #\(pr.number) direct merge failed (will NOT retry): "
-                + error.localizedDescription)
-            publishAutoMergeVerdict(.directMergeFailed, session: session, pr: pr)
-        }
-    }
-
-    /// Persist the one-shot merge guard and publish the success verdict, shared
-    /// by the auto-merge and direct-merge paths so they can't drift on which
-    /// state they write.
-    private func recordAutoMergeSuccess(
-        session: Session, pr: ViewerPR, phase: AutoMergeState.Phase, detail: String
-    ) {
-        let now = Date()
-        if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
-            appState.sessions[idx].autoMergeEnabledAt = now
-            appState.sessions[idx].updatedAt = now
-        }
-        // Shared `store`, not a throwaway `JSONStore()`: this writes
-        // `data.sessions` from a snapshot, so a stale fresh instance here
-        // is the most direct session-clobber vector (#728).
-        store.mutate { data in
-            if let idx = data.sessions.firstIndex(where: { $0.id == session.id }) {
-                data.sessions[idx].autoMergeEnabledAt = now
-                data.sessions[idx].updatedAt = now
-            }
-        }
-        let verb = phase == .merged ? "MERGED" : "ENABLED"
-        CrowLog.automation(
-            "auto-merge: \(verb) on \(pr.url) (session \(session.id.uuidString), \(detail))")
-        appState.autoMergeState[session.id] = AutoMergeState(
-            phase: phase,
-            reason: phase == .merged ? "direct-merge" : AutoMergeSkipReason.alreadyEnabled.rawValue,
-            message: phase == .merged
-                ? "Crow merged this PR directly (squash), because the repository has GitHub's "
-                    + "\"Allow auto-merge\" setting turned off."
-                : "Auto-merge is enabled. GitHub will merge this PR once required reviews and "
-                    + "checks pass.",
-            permanent: false)
-        clearAutoMergeBlockNotifications(prURL: pr.url)
-        owner.onAutoMergeEnabled?(session.id, pr.url, pr.number)
-    }
-
-    /// Bring a `BEHIND` PR up to date by merging the latest base into its
-    /// branch (`gh pr update-branch`, i.e. the GitHub "Update branch" button),
-    /// then bow out — the merge itself happens on a later poll once GitHub has
-    /// recomputed mergeability and checks have re-run. Deliberately does NOT
-    /// persist `Session.autoMergeEnabledAt`: an update must not burn the
-    /// one-shot merge guard. The same Crow-authorship check as the merge path
-    /// applies.
-    ///
-    /// Every return path clears `autoMergeInFlight` (#944). Two of them used to
-    /// sit *above* the `defer`, so a PR with no code backend or no Crow trailer
-    /// was latched for the lifetime of the process — and because nothing
-    /// recorded a reason, `evaluateAutoMerge`'s in-flight guard reported the
-    /// bare `.inFlight` verdict, i.e. the UI claimed Crow was working on the PR
-    /// right then. Forever. Suppression is `autoUpdateBranchAttempted`'s job,
-    /// not the in-flight marker's: it returns before any dispatch, so clearing
-    /// here costs no extra backend calls.
-    /// Internal (not private) so `@testable` tests can drive the two early
-    /// returns directly and assert they don't latch.
-    func attemptUpdateBranch(session: Session, pr: ViewerPR, headKey: String) async {
-        defer { autoMergeInFlight.remove(pr.url) }
-
-        guard let backend = codeBackend(for: session) else {
-            // Was a bare `return` — invisible in the log as well as latched.
-            CrowLog.automation("auto-merge: #\(pr.number) update-branch skipped:no-code-backend")
-            return
-        }
-        guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
-            // Authorship can't change without a new commit, and a new commit
-            // means a new head key — so record the reason rather than letting
-            // the per-head guard report the vaguer
-            // `update-branch-already-attempted`.
-            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.noCrowSessionTrailer.rawValue
-            publishAutoMergeVerdict(.noCrowSessionTrailer, session: session, pr: pr)
-            CrowLog.automation(
-                "auto-merge: #\(pr.number) update-branch skipped — no Crow-Session trailer matching a known session")
-            return
-        }
-        guard backend.capabilities.contains(.updateBranch) else {
-            // Capability sets are static, so this is permanent for the backend.
-            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.backendLacksAutoMerge.rawValue
-            publishAutoMergeVerdict(.backendLacksAutoMerge, session: session, pr: pr)
-            CrowLog.automation("auto-merge: #\(pr.number) update-branch skipped — backend lacks the updateBranch capability")
-            return
-        }
-        do {
-            try await backend.updateBranch(prURL: pr.url)
-            autoUpdateBranchFailureCounts[headKey] = nil
-            CrowLog.automation(
-                "auto-merge: #\(pr.number) branch updated from base (session \(session.id.uuidString), was BEHIND)")
-        } catch {
-            // A *failed* update leaves `headRefOid` unchanged, so the per-head
-            // guard's "retry once the branch moves" is a deadlock: the branch
-            // is precisely what didn't move. Retry a bounded number of times
-            // instead, mirroring `attemptRebase`'s `.failed` branch.
-            let failures = (autoUpdateBranchFailureCounts[headKey] ?? 0) + 1
-            autoUpdateBranchFailureCounts[headKey] = failures
-            let willRetry = Self.shouldRetryFailedUpdateBranch(failureCount: failures)
-            if willRetry { autoUpdateBranchAttempted.remove(headKey) }
-            CrowLog.automation(
-                "auto-merge: #\(pr.number) updateBranch failed (attempt \(failures)/"
-                + "\(Self.maxAutoUpdateBranchFailureRetries), "
-                + "\(willRetry ? "will retry" : "giving up until head changes")): "
-                + "\(error.localizedDescription.prefix(200))")
-        }
-    }
-
-    /// Fetch the PR's commits and return true iff at least one carries a
-    /// `Crow-Session: <uuid>` trailer matching a known session.
-    func prHasCrowAuthoredCommit(pr: ViewerPR, backend: CodeBackend) async -> Bool {
-        let commits: [CommitInfo]
-        do {
-            commits = try await backend.fetchCrowAuthoredCommits(
-                prURL: pr.url,
-                repoSlug: pr.repoNameWithOwner,
-                prNumber: pr.number
-            )
-        } catch {
-            CrowLog.info("[Crow] fetchCrowAuthoredCommits failed for \(pr.url): \(error.localizedDescription)")
-            return false
-        }
-        owner.attribution.recordPRAttribution(pr: pr, commits: commits)
-        let knownIDs = Set(appState.sessions.map(\.id))
-        return Self.crowAuthored(commitMessages: commits.map(\.message), knownSessionIDs: knownIDs)
-    }
-
-    /// Memo key for ``ensuredMergeLabelRepos`` / ``ensureMergeLabelTasks``.
-    private static func mergeLabelMemoKey(provider: Provider, repo: String) -> String {
-        "\(provider.rawValue)\n\(repo)"
-    }
-
-    /// Ensure the `crow:merge` label exists in `repo`, at most once per
-    /// (provider, repo) per process (#931).
-    ///
-    /// **Throws exactly what the backend throws.** The memo is a latency
-    /// optimization, not a policy change: `addMergeLabel` calls this directly
-    /// and must keep reporting a real label-creation failure (CROW-816), so the
-    /// throwing form is the primitive and the watcher's best-effort behaviour
-    /// is a `do`/`catch` on top of it — not the other way round.
-    func ensureMergeLabelOnce(repo: String, backend: CodeBackend) async throws {
-        guard !repo.isEmpty else { return }
-        guard backend.capabilities.contains(.autoMergeLabel) else { return }
-        let key = Self.mergeLabelMemoKey(provider: backend.provider, repo: repo)
-        if ensuredMergeLabelRepos.contains(key) { return }
-        if let inFlight = ensureMergeLabelTasks[key] {
-            // Join the existing call rather than issuing a duplicate. Awaiting
-            // `.value` rethrows its error, so a joiner sees the same outcome an
-            // originator would; the originator owns the map cleanup.
-            try await inFlight.value
-            return
-        }
-        let task = Task { @MainActor in try await backend.ensureMergeLabel(repo: repo) }
-        ensureMergeLabelTasks[key] = task
-        defer { ensureMergeLabelTasks[key] = nil }
-        try await task.value
-        // Reached only on success — see `ensuredMergeLabelRepos`.
-        ensuredMergeLabelRepos.insert(key)
-    }
-
-    /// Best-effort: ensure the `crow:merge` label exists in the repo so
-    /// repo owners don't need to pre-create it. The backend swallows the
-    /// "already exists" failure; this swallows the rest, because the auto-merge
-    /// watcher's next step (`enableAutoMerge`) reports its own failures and a
-    /// missing label is not on its own a reason to abandon the attempt.
-    private func ensureMergeLabel(repo: String, backend: CodeBackend) async {
-        do {
-            try await ensureMergeLabelOnce(repo: repo, backend: backend)
-        } catch {
-            // Best-effort — swallow.
-        }
     }
 
     /// Why the `crow:merge` label just applied to `sessionID`'s PR won't
@@ -1022,77 +477,5 @@ final class AutoMergeController {
             return nil
         }
         return "The label was added, but auto-merge won't run: \(state.message)"
-    }
-}
-
-// MARK: - IssueTracker compatibility surface (CROW-1094)
-//
-// Preserves the `IssueTracker.<symbol>` / `tracker.<member>` spelling used by
-// the tests, by addMergeLabel, and by the rebase / re-review watchers
-// (owner.codeBackend / owner.prHasCrowAuthoredCommit). All logic and state live
-// on `AutoMergeController`.
-extension IssueTracker {
-    typealias AutoMergeSkipReason = AutoMergeController.AutoMergeSkipReason
-    typealias AutoMergeOutcome = AutoMergeController.AutoMergeOutcome
-
-    nonisolated static func shouldAttemptAutoMerge(pr: ViewerPR, session: Session) -> Bool {
-        AutoMergeController.shouldAttemptAutoMerge(pr: pr, session: session)
-    }
-    nonisolated static func autoMergeSkipReason(pr: ViewerPR, session: Session) -> AutoMergeSkipReason? {
-        AutoMergeController.autoMergeSkipReason(pr: pr, session: session)
-    }
-    nonisolated static func hasAutoMergeLabel(pr: ViewerPR) -> Bool {
-        AutoMergeController.hasAutoMergeLabel(pr: pr)
-    }
-    nonisolated static func isPermanentAutoMergeFailure(_ error: Error) -> Bool {
-        AutoMergeController.isPermanentAutoMergeFailure(error)
-    }
-    nonisolated static func directMergeGatesPass(pr: ViewerPR, session: Session) -> Bool {
-        AutoMergeController.directMergeGatesPass(pr: pr, session: session)
-    }
-    nonisolated static func shouldDirectMerge(pr: ViewerPR, session: Session) -> Bool {
-        AutoMergeController.shouldDirectMerge(pr: pr, session: session)
-    }
-    nonisolated static func shouldUpdateBranchBeforeMerge(pr: ViewerPR, session: Session) -> Bool {
-        AutoMergeController.shouldUpdateBranchBeforeMerge(pr: pr, session: session)
-    }
-    nonisolated static func crowAuthored(commitMessages: [String], knownSessionIDs: Set<UUID>) -> Bool {
-        AutoMergeController.crowAuthored(commitMessages: commitMessages, knownSessionIDs: knownSessionIDs)
-    }
-    nonisolated static func shouldRetryFailedUpdateBranch(failureCount: Int) -> Bool {
-        AutoMergeController.shouldRetryFailedUpdateBranch(failureCount: failureCount)
-    }
-    nonisolated static var maxAutoUpdateBranchFailureRetries: Int {
-        AutoMergeController.maxAutoUpdateBranchFailureRetries
-    }
-
-    // Shared merge helpers (also used by the rebase / re-review watchers).
-    func codeBackend(for session: Session) -> CodeBackend? { autoMerge.codeBackend(for: session) }
-    func prHasCrowAuthoredCommit(pr: ViewerPR, backend: CodeBackend) async -> Bool {
-        await autoMerge.prHasCrowAuthoredCommit(pr: pr, backend: backend)
-    }
-
-    // Instance entry points exercised directly by tests / addMergeLabel.
-    func evaluateAutoMerge(session: Session, byURL: [String: ViewerPR]) -> AutoMergeOutcome {
-        autoMerge.evaluateAutoMerge(session: session, byURL: byURL)
-    }
-    func publishWatcherOffVerdict(session: Session, byURL: [String: ViewerPR]) {
-        autoMerge.publishWatcherOffVerdict(session: session, byURL: byURL)
-    }
-    func attemptUpdateBranch(session: Session, pr: ViewerPR, headKey: String) async {
-        await autoMerge.attemptUpdateBranch(session: session, pr: pr, headKey: headKey)
-    }
-    func autoMergeWarning(sessionID: UUID) -> String? { autoMerge.autoMergeWarning(sessionID: sessionID) }
-
-    nonisolated static var autoMergeLabel: String { AutoMergeController.autoMergeLabel }
-
-    var autoMergeInFlight: Set<String> {
-        get { autoMerge.autoMergeInFlight } set { autoMerge.autoMergeInFlight = newValue }
-    }
-    var autoUpdateBranchAttempted: Set<String> {
-        get { autoMerge.autoUpdateBranchAttempted } set { autoMerge.autoUpdateBranchAttempted = newValue }
-    }
-    var autoUpdateBranchFailureCounts: [String: Int] {
-        get { autoMerge.autoUpdateBranchFailureCounts } set { autoMerge.autoUpdateBranchFailureCounts = newValue }
     }
 }
