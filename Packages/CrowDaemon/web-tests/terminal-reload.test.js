@@ -146,13 +146,20 @@ for (const kind of ['work', 'review', 'job', 'manager']) {
 
 console.log('\nmanager sessions get an action cluster at all (the #680 gap):');
 {
-  // Every other header button sits inside `if (s.kind !== 'manager')`, so before
+  // Work-session buttons sit inside `if (s.kind !== 'manager')`, so before
   // CROW-979 a Manager with no links rendered no header row whatsoever — which is
-  // exactly the surface with no tabs to hang a control off either.
+  // exactly the surface with no tabs to hang a control off either. CROW-1293
+  // adds Delete immediately left of Reload; the cluster is still that pair.
   mount('manager');
   const cluster = window.document.querySelector('#detail-header .actions-cluster');
+  const labels = cluster
+    ? [...cluster.querySelectorAll(':scope > .action-btn')].map((b) => {
+        const spans = [...b.querySelectorAll('span')];
+        return (spans.length ? spans[spans.length - 1].textContent : b.textContent).trim();
+      })
+    : [];
   check('cluster exists for a manager', !!cluster);
-  check('and holds only Reload', !!cluster && cluster.children.length === 1);
+  check('holds Delete then Reload', labels.join('|') === 'Delete|Reload');
 }
 
 console.log('\nrefreshTerminals only repaints the header when the button is stale:');

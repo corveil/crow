@@ -94,8 +94,9 @@ Drives `attachWindow` against a fake xterm + a live `/terminal` socket. Coverage
 Drives `renderHeader` and `reloadTerminalAction` against a fake xterm + a fake
 `/terminal` socket whose `onopen` fires on demand. Coverage: the button renders
 for work / review / job **and manager** sessions (managers previously got no
-action cluster at all, since every other button sits inside the
-`kind !== 'manager'` guard, and they have no tabs to hang a control off either);
+action cluster at all, since the work-session buttons sit inside the
+`kind !== 'manager'` guard, and they have no tabs to hang a control off either).
+A plain Manager cluster is Delete, then Reload (CROW-1293). The button is
 disabled with nothing attached and enabled once `activeTerminal` binds; a click
 resetting the xterm buffer, detaching the old socket's handlers *before* closing
 it, and opening a fresh one; the `↻`-swapped-for-`.action-spinner` in-flight

@@ -5,6 +5,9 @@ const { loadClientSource } = require('./load-client');
 // CROW-1288: a Manager opened from Scratch shows "Mark Scratch Done" in the
 // session header. The payload is `linked_scratch` on list-sessions; the click
 // calls `todo-done` and the button leaves once that lands.
+// CROW-1293: that same header also shows a red Delete immediately left of
+// Reload (and immediately right of Mark Scratch Done when that button is up).
+// The click is the row-menu path: confirm, then `delete-session`.
 const epilogue = `
 ;globalThis.__t = {
   renderHeader(s){ return renderHeader(s); },
@@ -52,10 +55,26 @@ const MANAGER = 'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA';
 const SCRATCH = 'BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB';
 
 function buttons() {
-  return [...window.document.querySelectorAll('#detail-header .actions-cluster .action-btn')];
+  return [...window.document.querySelectorAll('#detail-header .actions-cluster > .action-btn')];
+}
+function labelOf(b) {
+  const spans = [...b.querySelectorAll('span')];
+  return (spans.length ? spans[spans.length - 1].textContent : b.textContent || '').trim();
+}
+function labels() {
+  return buttons().map(labelOf);
 }
 function markBtn() {
-  return buttons().find((b) => (b.textContent || '').includes('Mark Scratch Done')) || null;
+  return buttons().find((b) => labelOf(b) === 'Mark Scratch Done') || null;
+}
+function deleteBtn() {
+  return buttons().find((b) => labelOf(b) === 'Delete') || null;
+}
+function dialog() {
+  return window.document.querySelector('.modal-dialog-backdrop');
+}
+function dialogButtons() {
+  return [...window.document.querySelectorAll('.modal-dialog-backdrop .text-prompt-btn')];
 }
 function headerSession(extra) {
   return Object.assign({
@@ -71,13 +90,15 @@ console.log('Mark Scratch Done is only on a Manager with an open linked Scratch:
   T.sessions = [];
   T.selectedId = null;
   T.renderHeader(headerSession());
-  check('plain manager has no button', !markBtn());
-  check('plain manager still has Reload', buttons().some((b) => (b.textContent || '').includes('Reload')));
+  check('plain manager has no Mark Scratch Done', !markBtn());
+  check('plain manager is Delete then Reload', labels().join('|') === 'Delete|Reload');
+  check('plain manager Delete is red', !!deleteBtn() && deleteBtn().classList.contains('action-danger'));
 
   T.renderHeader(headerSession({
     linked_scratch: { id: SCRATCH, text: 'look at the top bar', state: 'done' },
   }));
   check('done scratch hides the button', !markBtn());
+  check('done scratch is still Delete then Reload', labels().join('|') === 'Delete|Reload');
 
   T.renderHeader(headerSession({
     kind: 'work',
@@ -91,6 +112,20 @@ console.log('Mark Scratch Done is only on a Manager with an open linked Scratch:
   const btn = markBtn();
   check('exploring manager shows the button', !!btn);
   check('tooltip names the item', !!btn && btn.title.includes('look at the top bar'));
+  check('order is Mark Scratch Done, Delete, Reload',
+    labels().join('|') === 'Mark Scratch Done|Delete|Reload');
+}
+
+console.log('\nwork and review headers keep their own Delete after Reload:');
+for (const kind of ['work', 'review']) {
+  T.sessions = [];
+  T.selectedId = null;
+  T.renderHeader(headerSession({ kind, status: 'active', name: kind + ' sess' }));
+  check(kind + ' starts with Reload', labels()[0] === 'Reload');
+  check(kind + ' ends with Delete', labels()[labels().length - 1] === 'Delete');
+  check(kind + ' Delete stays danger', !!deleteBtn() && deleteBtn().classList.contains('action-danger'));
+  check(kind + ' has no Mark Scratch Done', !markBtn());
+  check(kind + ' Delete is not left of Reload', labels().indexOf('Delete') > labels().indexOf('Reload'));
 }
 
 function flush() {
@@ -142,6 +177,72 @@ function flush() {
     const again = markBtn();
     check('button came back', !!again && again.disabled === false);
     check('failure is explained', (window.document.body.textContent || '').includes('Mark Scratch Done failed'));
+    const ok = dialogButtons().find((b) => b.textContent === 'OK');
+    if (ok) ok.click();
+  }
+
+  console.log('\nDelete confirms, then delete-session:');
+  {
+    const session = headerSession({ name: 'extra manager' });
+    T.sessions = [session];
+    T.selectedId = MANAGER;
+    const calls = [];
+    T.rpc = (method, params) => {
+      calls.push({ method, params });
+      return Promise.resolve({});
+    };
+    T.renderHeader(session);
+    deleteBtn().click();
+    const d = dialog();
+    check('confirm names the session', !!d && (d.textContent || '').includes('Delete session "extra manager"?'));
+    const ok = dialogButtons().find((b) => b.textContent === 'Delete');
+    check('confirm Delete is the danger button', !!ok && ok.classList.contains('danger'));
+    ok.click();
+    for (let i = 0; i < 8; i++) await flush();
+    const sent = calls.find((c) => c.method === 'delete-session');
+    check('delete-session was sent', !!sent && sent.params && sent.params.session_id === MANAGER);
+    check('session left the list', !T.sessions.some((s) => s.id === MANAGER));
+    check('dialog closed', !dialog());
+  }
+
+  console.log('\nCancel leaves the session:');
+  {
+    const session = headerSession({ name: 'extra manager' });
+    T.sessions = [session];
+    T.selectedId = MANAGER;
+    const calls = [];
+    T.rpc = (method) => { calls.push(method); return Promise.resolve({}); };
+    T.renderHeader(session);
+    deleteBtn().click();
+    dialogButtons().find((b) => b.textContent === 'Cancel').click();
+    for (let i = 0; i < 4; i++) await flush();
+    check('no delete-session on cancel', !calls.includes('delete-session'));
+    check('session remains after cancel', T.sessions.some((s) => s.id === MANAGER));
+    check('confirm closed', !dialog());
+  }
+
+  console.log('\nprimary Manager rejection is surfaced:');
+  {
+    const primary = '00000000-0000-0000-0000-000000000000';
+    const session = headerSession({
+      id: primary,
+      name: 'Manager',
+      is_primary_manager: true,
+    });
+    T.sessions = [session];
+    T.selectedId = primary;
+    T.rpc = (method) => {
+      if (method === 'delete-session') return Promise.reject(new Error('Cannot delete manager session'));
+      return Promise.resolve({});
+    };
+    T.renderHeader(session);
+    check('primary still offers Delete', labels().join('|') === 'Delete|Reload');
+    deleteBtn().click();
+    dialogButtons().find((b) => b.textContent === 'Delete').click();
+    for (let i = 0; i < 8; i++) await flush();
+    check('failure names the daemon message',
+      (window.document.body.textContent || '').includes('Delete failed: Cannot delete manager session'));
+    check('primary session remains', T.sessions.some((s) => s.id === primary));
   }
 
   if (failed) {

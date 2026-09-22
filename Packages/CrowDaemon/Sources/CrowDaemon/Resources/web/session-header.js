@@ -102,16 +102,17 @@ function renderHeader(s) {
                                          liveFor(s.id).auto_rebase_state));
   }
 
-  // Right-aligned action cluster: terminal reload, PR quick-actions, then status
-  // transitions + delete.
+  // Right-aligned action cluster. Managers lead with Mark Scratch Done (when a
+  // linked item is still open) and Delete, then Reload. Everyone else leads with
+  // Reload, then PR quick-actions and status transitions.
   const actions = el('div', 'actions-cluster');
   // Terminal reload (CROW-979). `reloadTerminal()` was reachable only from the
   // terminal's right-click menu, which a touch device has no way to open — so on a
   // phone the cheap recovery for a corrupted surface didn't exist and the only way
   // out was leaving the session and coming back. Deliberately OUTSIDE the
   // `kind !== 'manager'` guard below: that guard is why a Manager session shows no
-  // buttons at all, and the Manager window is the common CROW-804 stuck-surface
-  // case (it has no tabs to hang a control off either, #680).
+  // work-session buttons, and the Manager window is the common CROW-804
+  // stuck-surface case (it has no tabs to hang a control off either, #680).
   const reloadBusy = terminalReloadPending;
   const reload = el('button', 'action-btn action-btn-reload', '');
   // Swap the ↻ glyph for the shared spinner ring rather than spinning the button,
@@ -125,22 +126,26 @@ function renderHeader(s) {
         ? 'Reload the terminal — reset the view and reconnect'
         : 'No terminal attached');
   reload.onclick = () => reloadTerminalAction();
-  actions.appendChild(reload);
   // Explore opens a Manager and links the Scratch item to it (CROW-1288).
-  // Managers otherwise have no status actions (`kind !== 'manager'` below),
-  // so this is the control that finishes the item from the session itself.
-  // Work sessions linked by `todo work` are out of scope — they already have
-  // their own completion buttons.
-  const scratch = s.kind === 'manager' ? s.linked_scratch : null;
-  if (scratch && scratch.id && scratch.state !== 'done') {
-    const text = (scratch.text || '').trim();
-    const mark = actionBtn('Mark Scratch Done', 'check', null,
-      (ev) => markScratchDoneAction(ev.currentTarget, s));
-    mark.title = text
-      ? ('Mark this Scratch item done: ' + text)
-      : 'Mark the linked Scratch item done';
-    actions.appendChild(mark);
+  // Mark Scratch Done, then Delete, then Reload (CROW-1293). Delete is the
+  // same confirm + `deleteSession` path as the row menu — the primary Manager
+  // is still offered it, and the daemon's "Cannot delete manager session"
+  // comes back through that path. Work sessions linked by `todo work` stay
+  // out of this branch; they already have their own completion buttons.
+  if (s.kind === 'manager') {
+    const scratch = s.linked_scratch;
+    if (scratch && scratch.id && scratch.state !== 'done') {
+      const text = (scratch.text || '').trim();
+      const mark = actionBtn('Mark Scratch Done', 'check', null,
+        (ev) => markScratchDoneAction(ev.currentTarget, s));
+      mark.title = text
+        ? ('Mark this Scratch item done: ' + text)
+        : 'Mark the linked Scratch item done';
+      actions.appendChild(mark);
+    }
+    actions.appendChild(actionBtn('Delete', 'trash', 'danger', () => deleteSession(s.id, s.name)));
   }
+  actions.appendChild(reload);
   if (pr && pr.has_pr && !pr.is_merged) {
     // Quick-actions dispatch a prompt into the session's managed Claude Code
     // terminal — disable them when there is none (native `canDispatchQuickAction`;
