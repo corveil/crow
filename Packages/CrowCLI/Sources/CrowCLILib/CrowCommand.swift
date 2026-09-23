@@ -63,6 +63,7 @@ public struct CrowCommand: ParsableCommand {
             ListTerminals.self,
             CloseTerminal.self,
             RecreateTerminal.self,
+            RelaunchAgent.self,
             RenameTerminal.self,
             Send.self,
             LaunchAgent.self,

@@ -3,9 +3,13 @@
 // Extracted from session.js (CROW-1257).
 
 async function refreshTerminals() {
+  // `listed` distinguishes "this session has no terminals" from "the list
+  // call failed". Only the first one may detach the previous window.
+  let listed = false;
   try {
     const res = await rpc('list-terminals', { session_id: selectedId });
     terminals = res.terminals || [];
+    listed = true;
   } catch (_) {
     terminals = [];
   }
@@ -49,11 +53,118 @@ async function refreshTerminals() {
   // awaiting this, so without a nudge the button would sit disabled until the next
   // 4s refreshLive tick.
   syncTerminalReloadEnabled();
+  // A failed list is not "this session has no terminal". Dropping the attached
+  // window on a blip would blank a live session; the next successful refresh
+  // still corrects it.
+  if (!listed) return;
   // Session/tab switches funnel through here too (selectSession → refreshTerminals),
   // changing which window this shared socket shows. attachWindow is a no-op when
   // the window didn't change, so a same-session background refresh stays put.
   // Agent surfaces switch in place (CROW-1035); shells still take the #673 reload.
-  if (activeTerminal) attachWindow(activeTerminal.window);
+  // An empty list must detach: otherwise attachedWindow stays on the previous
+  // session and that pane keeps painting (CROW-1295).
+  if (activeTerminal) {
+    hideNoTerminalPane();
+    attachWindow(activeTerminal.window);
+  } else {
+    showNoTerminalPane();
+  }
+}
+
+// CROW-1295: the selected session has no terminal. Cover the shared xterm so
+// the previous session's grid cannot stay on screen, and offer a relaunch that
+// opens a managed terminal (resume / --continue) rather than a bare shell.
+// Busy and error are scoped to the session that clicked: a switch mid-request
+// must not leave the next session on "Relaunching…" or wearing the last error.
+let relaunchAgentBusy = false;
+let relaunchAgentSession = null;
+let noTerminalError = null;
+let noTerminalErrorSession = null;
+
+function showNoTerminalPane() {
+  terminalDetached = true;
+  attachedWindow = null;
+  clearTermBuffer();
+  hideTerminalSkeleton();
+  const wrap = document.getElementById('terminal-wrap');
+  if (!wrap) return;
+  wrap.classList.add('no-terminal');
+  let pane = document.getElementById('terminal-empty');
+  if (!pane) {
+    pane = el('div', 'terminal-empty');
+    pane.id = 'terminal-empty';
+    pane.setAttribute('role', 'status');
+    const msg = el('div', 'terminal-empty-msg', 'No terminal');
+    const sub = el('div', 'terminal-empty-sub', '');
+    const btn = el('button', 'terminal-empty-relaunch', 'Relaunch agent');
+    btn.type = 'button';
+    btn.onclick = () => { relaunchSessionAgent(); };
+    pane.appendChild(msg);
+    pane.appendChild(sub);
+    pane.appendChild(btn);
+    wrap.appendChild(pane);
+  }
+  const sel = sessions.find((x) => x.id === selectedId);
+  const manager = !!(sel && sel.kind === 'manager');
+  const sub = pane.querySelector('.terminal-empty-sub');
+  const btn = pane.querySelector('.terminal-empty-relaunch');
+  const errorHere = noTerminalErrorSession === selectedId ? noTerminalError : null;
+  const busyHere = relaunchAgentBusy && relaunchAgentSession === selectedId;
+  if (sub) {
+    sub.textContent = errorHere
+      || (manager
+        ? 'This Manager has no terminal attached.'
+        : "This session's agent window is gone. Relaunch to resume it.");
+  }
+  if (btn) {
+    btn.hidden = manager;
+    btn.disabled = busyHere;
+    btn.textContent = busyHere ? 'Relaunching…' : 'Relaunch agent';
+  }
+}
+
+function hideNoTerminalPane() {
+  terminalDetached = false;
+  noTerminalError = null;
+  noTerminalErrorSession = null;
+  relaunchAgentBusy = false;
+  relaunchAgentSession = null;
+  const wrap = document.getElementById('terminal-wrap');
+  if (wrap) wrap.classList.remove('no-terminal');
+}
+
+async function relaunchSessionAgent() {
+  if (!selectedId || relaunchAgentBusy || !terminalDetached) return;
+  const sessionId = selectedId;
+  const sel = sessions.find((x) => x.id === sessionId);
+  if (sel && sel.kind === 'manager') return;
+  relaunchAgentBusy = true;
+  relaunchAgentSession = sessionId;
+  noTerminalError = null;
+  noTerminalErrorSession = null;
+  showNoTerminalPane();
+  try {
+    await rpc('relaunch-agent', { session_id: sessionId });
+    if (selectedId !== sessionId) return;
+    await refreshTerminals();
+    if (selectedId !== sessionId) return;
+    if (!activeTerminal) {
+      noTerminalError = 'The agent terminal did not open.';
+      noTerminalErrorSession = sessionId;
+    }
+  } catch (e) {
+    if (selectedId !== sessionId) return;
+    noTerminalError = (e && e.message) || 'Could not relaunch the agent.';
+    noTerminalErrorSession = sessionId;
+  } finally {
+    if (relaunchAgentSession === sessionId) {
+      relaunchAgentBusy = false;
+      relaunchAgentSession = null;
+    }
+    // Only repaint the session that clicked. A switch mid-request has already
+    // drawn the next session; rewriting the overlay here would cover it.
+    if (selectedId === sessionId && !activeTerminal) showNoTerminalPane();
+  }
 }
 
 function renderTabs() {

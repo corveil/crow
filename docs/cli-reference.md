@@ -1268,6 +1268,14 @@ Rebuild a terminal whose tmux window has degraded scrollback (CROW-804). Kills t
 crow recreate-terminal --session <uuid> --terminal <uuid>
 ```
 
+### `crow relaunch-agent`
+
+Open a managed terminal for a session that no longer has one — its tmux window was pruned, so selecting it left the previous session's pane on screen (CROW-1295). Resumes the agent the way a recovered terminal does (`--continue` / `resume`), rather than re-pasting the original first-launch command. Refuses a Manager session and a session that already has a managed terminal.
+
+```bash
+crow relaunch-agent --session <uuid>
+```
+
 | Flag         | Required | Description   |
 | ------------ | -------- | ------------- |
 | `--session`  | yes      | Session UUID  |

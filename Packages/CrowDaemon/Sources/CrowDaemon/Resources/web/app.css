@@ -590,6 +590,44 @@ body {
 }
 #terminal-wrap.reconnecting #terminal-skeleton .skel { opacity: 0.35; }
 #terminal-wrap.reconnecting #terminal-reconnect-note { display: flex; }
+/* CROW-1295: a selected session with no terminal. Covers the shared xterm
+   (the previous session's grid would otherwise stay attached) and offers a
+   relaunch. Above the skeleton (z-index 3) so a stale shimmer can't sit on it. */
+#terminal-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #1e1e1e;
+  padding: 24px;
+  text-align: center;
+}
+#terminal-wrap.no-terminal #terminal-empty { display: flex; }
+.terminal-empty-msg { color: var(--text-primary); font-size: 14px; }
+.terminal-empty-sub {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 360px;
+}
+.terminal-empty-relaunch {
+  margin-top: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 8px 16px;
+}
+.terminal-empty-relaunch:hover { border-color: var(--gold); color: var(--gold); }
+.terminal-empty-relaunch:disabled { opacity: 0.6; cursor: default; }
 #detail-empty {
   position: absolute;
   inset: 0;

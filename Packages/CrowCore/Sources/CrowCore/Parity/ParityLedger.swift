@@ -217,6 +217,7 @@ public enum ParityLedger {
         .read("list-terminals", cli: "list-terminals"),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),
+        .write("relaunch-agent", cli: "relaunch-agent"),
         .write("rename-terminal", cli: "rename-terminal"),
         .write("send", cli: "send"),
 

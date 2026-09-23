@@ -260,6 +260,59 @@ public final class SessionService {
 
     // MARK: - Terminal Tab Management
 
+    /// Open a managed agent terminal for a session whose tmux window was pruned
+    /// away (CROW-1295) and arm the recovered-terminal launch path, so
+    /// `.shellReady` runs `launchAgent` → `autoLaunchCommand` (resume /
+    /// `--continue`) instead of re-pasting the original first-launch command.
+    ///
+    /// Refuses a Manager (`restart-manager` owns that window), a session that
+    /// already has a managed terminal, and a session that is not ready to
+    /// launch. A failed tmux register leaves no window-less row behind — that
+    /// row is what made the pane stay on the previous session.
+    @discardableResult
+    public func relaunchSessionAgent(sessionID: UUID, devRoot: String) throws -> UUID {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }) else {
+            throw RPCError.invalidParams("session not found")
+        }
+        guard !session.isManager else {
+            throw RPCError.invalidParams("manager sessions relaunch via restart-manager")
+        }
+        if appState.terminals(for: sessionID).contains(where: \.isManaged) {
+            throw RPCError.invalidParams("session already has a managed terminal")
+        }
+        guard appState.isReadyToLaunchAgent(session),
+              let worktree = appState.primaryWorktree(for: sessionID),
+              !worktree.worktreePath.isEmpty else {
+            throw RPCError.invalidParams("session has no worktree to launch in")
+        }
+        guard Validation.isPathWithinRoot(worktree.worktreePath, root: devRoot) else {
+            throw RPCError.invalidParams("Terminal cwd must be within the configured devRoot")
+        }
+
+        let raw = SessionTerminal(
+            sessionID: sessionID,
+            name: session.agentKind.displayName,
+            cwd: worktree.worktreePath,
+            command: nil,
+            isManaged: true
+        )
+        // Seed before register. The sentinel's `.shellReady` can only fire on a
+        // later main-actor turn, but it must find readiness + auto-launch
+        // membership or `launchAgent` no-ops (the same order `new-terminal` uses).
+        appState.terminalReadiness[raw.id] = .uninitialized
+        appState.autoLaunchTerminals.insert(raw.id)
+        let prepared = prepareTerminal(raw, trackReadiness: true)
+        guard prepared.tmuxBinding != nil else {
+            appState.terminalReadiness.removeValue(forKey: raw.id)
+            appState.autoLaunchTerminals.remove(raw.id)
+            throw RPCError.applicationError("could not open a terminal window")
+        }
+        appState.terminals[sessionID, default: []].append(prepared)
+        appState.activeTerminalID[sessionID] = prepared.id
+        store.mutate { data in data.terminals.append(prepared) }
+        return prepared.id
+    }
+
     /// Add a new plain-shell (unmanaged) terminal tab to a session.
     public func addTerminal(sessionID: UUID) {
         let cwd = appState.primaryWorktree(for: sessionID)?.worktreePath

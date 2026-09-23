@@ -74,6 +74,7 @@ enum RPCLanePolicy {
         "new-terminal": .on("session_id"),
         "close-terminal": .on("session_id"),
         "recreate-terminal": .on("session_id"),
+        "relaunch-agent": .on("session_id"),
         "rename-terminal": .on("session_id"),
         "send": .on("session_id"),
         // These two carry only a `terminal_id`.
