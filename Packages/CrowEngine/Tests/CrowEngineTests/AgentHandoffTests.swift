@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowPersistence
 @testable import CrowEngine
 
 @Suite("AgentHandoff prompt")
@@ -140,6 +141,63 @@ struct AgentHandoffManagerPromptTests {
         let extra = Session(name: "Manager 2", kind: .manager, agentKind: .claudeCode)
         #expect(extra.id != AppState.managerSessionID)
         #expect(extra.isManager)
+    }
+}
+
+@Suite("Extra Manager handoff panes (CROW-1297)")
+struct ExtraManagerHandoffPaneTests {
+    /// The regression: `createManagerTerminal` builds the agent row with a
+    /// launch command and the default `isManaged: false`. Filtering teardown
+    /// on `isManaged` kept that pane and appended a second window.
+    @Test func replacesUnmanagedAgentPaneAndKeepsCommandlessShell() {
+        let session = Session(name: "Manager 2", kind: .manager, agentKind: .cursor)
+        let agent = SessionTerminal(
+            sessionID: session.id, name: session.name, cwd: "/dev/root",
+            command: "cursor-agent")
+        let shell = SessionTerminal(
+            sessionID: session.id, name: "Shell", cwd: "/dev/root")
+        #expect(!agent.isManaged)
+        #expect(agent.isAgentSurface(session: session))
+        #expect(shell.command == nil)
+        #expect(!shell.isAgentSurface(session: session))
+
+        let (replace, keep) = ManagerSessionController.extraManagerHandoffSplit(
+            terminals: [agent, shell], session: session)
+        #expect(replace.map(\.id) == [agent.id])
+        #expect(keep.map(\.id) == [shell.id])
+    }
+
+    /// `isAgentSurface` also matches a managed row. A command-less Shell does
+    /// not, even when it sits beside one.
+    @Test func managedRowIsReplacedAndCommandlessShellIsKept() {
+        let session = Session(name: "Manager 2", kind: .manager, agentKind: .grok)
+        let managed = SessionTerminal(
+            sessionID: session.id, name: "Agent", cwd: "/identity",
+            command: nil, isManaged: true)
+        let shell = SessionTerminal(
+            sessionID: session.id, name: "Shell", cwd: "/identity")
+        let (replace, keep) = ManagerSessionController.extraManagerHandoffSplit(
+            terminals: [shell, managed], session: session)
+        #expect(replace.map(\.id) == [managed.id])
+        #expect(keep.map(\.id) == [shell.id])
+    }
+
+    /// The primary Manager stays on Settings + `restartManager`. The refusal
+    /// is the id check, before any agent binary lookup.
+    @MainActor
+    @Test func primaryManagerHandoffIsRefused() async {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-handoff-primary-\(UUID().uuidString)")
+        let appState = AppState()
+        let service = SessionService(
+            store: JSONStore(directory: tmp), appState: appState, hostBridge: NoopHostBridge())
+        let primary = Session(
+            id: AppState.managerSessionID, name: "Manager",
+            kind: .manager, agentKind: .cursor)
+        appState.sessions.append(primary)
+        await #expect(throws: AgentHandoffError.managerNotSupported) {
+            try await service.handoffAgent(sessionID: primary.id, to: .grok)
+        }
     }
 }
 

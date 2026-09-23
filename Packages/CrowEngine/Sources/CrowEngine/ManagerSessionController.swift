@@ -661,11 +661,12 @@ final class ManagerSessionController {
         var terminal = owner.prepareTerminal(toRegister, trackReadiness: deferSeed)
         terminal.command = command
 
-        // `preserving` carries unmanaged Shell tabs to keep across an agent
-        // handoff (CROW-1283); it is empty on the ensure/create path, so that
-        // behavior is unchanged. Persist by terminal id (not "any terminal for
-        // this session") so the new managed terminal is appended even when
-        // preserved unmanaged rows for the same session are already on disk.
+        // `preserving` carries command-less Shell tabs to keep across an
+        // extra-Manager handoff (CROW-1283 / CROW-1297); it is empty on the
+        // ensure/create path, so that behavior is unchanged. Persist by
+        // terminal id (not "any terminal for this session") so the new agent
+        // terminal is appended even when preserved Shell rows for the same
+        // session are already on disk. The new row stays `isManaged: false`.
         appState.terminals[session.id] = existing + [terminal]
 
         store.mutate { data in
@@ -736,6 +737,32 @@ final class ManagerSessionController {
         return session.id
     }
 
+    /// Which terminals an extra-Manager handoff replaces (CROW-1297).
+    ///
+    /// Work-session handoff destroys `isManaged` rows and keeps Shell tabs.
+    /// A Manager agent pane is deliberately not managed: `isManaged` means
+    /// "relaunch as a shell, then paste `claude --continue`" (#31), and
+    /// `createManagerTerminal` leaves the flag false so hydrate keeps
+    /// launching the agent as the window's shell command. The pane to
+    /// replace is the one ``SessionTerminal/isAgentSurface(session:)``
+    /// already names — a Manager terminal whose `command` is set.
+    /// Command-less Shell tabs are not agent surfaces and survive.
+    nonisolated static func extraManagerHandoffSplit(
+        terminals: [SessionTerminal], session: Session
+    ) -> (replace: [SessionTerminal], keep: [SessionTerminal]) {
+        var replace: [SessionTerminal] = []
+        var keep: [SessionTerminal] = []
+        replace.reserveCapacity(terminals.count)
+        for terminal in terminals {
+            if terminal.isAgentSurface(session: session) {
+                replace.append(terminal)
+            } else {
+                keep.append(terminal)
+            }
+        }
+        return (replace, keep)
+    }
+
     /// Hand an **extra** Manager (CROW-1283) off to a different coding agent
     /// mid-flight. The primary Manager is refused upstream in
     /// `AgentHandoffController.handoffAgent` (it reconciles via Settings +
@@ -760,15 +787,17 @@ final class ManagerSessionController {
         }
         var session = appState.sessions[idx]
 
-        // The identity directory the session already has — the current managed
-        // terminal's cwd is the source of truth. Fall back to the computed
-        // identity dir (or the dev root) so a Manager whose terminal was reaped
-        // still resolves one. `resolvedCwd` relocates a devRoot-based extra
-        // Manager into its isolated identity dir; an already-isolated cwd is
-        // returned unchanged.
+        // The identity directory the session already has — the agent pane's
+        // cwd is the source of truth. A Manager agent pane is `isManaged:
+        // false` on purpose (ADR 0013), so keying this on `isManaged` always
+        // missed it and fell through to the dev root. Fall back to the dev
+        // root so a Manager whose terminal was reaped still resolves one.
+        // `resolvedCwd` relocates a devRoot-based extra Manager into its
+        // isolated identity dir; an already-isolated cwd is returned unchanged.
         let devRoot = ConfigStore.loadDevRoot()
-        let existingManaged = appState.terminals(for: sessionID).first(where: { $0.isManaged })
-        guard let requestedCwd = existingManaged?.cwd ?? devRoot else {
+        let existing = appState.terminals(for: sessionID)
+        let agentPane = existing.first(where: { $0.isAgentSurface(session: session) })
+        guard let requestedCwd = agentPane?.cwd ?? devRoot else {
             throw AgentHandoffError.noWorktree
         }
         let cwd = ManagerIdentity.resolvedCwd(
@@ -797,19 +826,26 @@ final class ManagerSessionController {
             }
         }
 
-        // Tear down managed agent terminals only — keep unmanaged Shell tabs,
-        // exactly like the worktree handoff.
-        let terminals = appState.terminals(for: sessionID)
-        let unmanaged = terminals.filter { !$0.isManaged }
-        for terminal in terminals where terminal.isManaged {
+        // Replace the agent pane. Work sessions key this on `isManaged` so
+        // Shell tabs survive; a Manager agent pane is `isManaged: false` on
+        // purpose, so that filter left the old agent running and appended a
+        // second window (CROW-1297). `isAgentSurface` is the existing test
+        // for "this Manager terminal is the agent pane": `command` is set.
+        // Command-less Shell tabs stay. Do not set `isManaged` on the
+        // replacement — that flag is the work-session relaunch path
+        // (shell, then `claude --continue`).
+        let (agentPanes, shells) = Self.extraManagerHandoffSplit(
+            terminals: existing, session: session)
+        for terminal in agentPanes {
             appState.terminalReadiness.removeValue(forKey: terminal.id)
             appState.autoLaunchTerminals.remove(terminal.id)
             appState.pendingLaunchCommands.removeValue(forKey: terminal.id)
             appState.remoteControlActiveTerminals.remove(terminal.id)
             TerminalRouter.destroy(terminal)
         }
+        let replacingIDs = Set(agentPanes.map(\.id))
         store.mutate { data in
-            data.terminals.removeAll { $0.sessionID == sessionID && $0.isManaged }
+            data.terminals.removeAll { replacingIDs.contains($0.id) }
         }
         // The old agent process is gone; drop its SessionStart so the new
         // agent's readiness is observed fresh (parity with `restartManager`).
@@ -820,7 +856,7 @@ final class ManagerSessionController {
         // writes the new agent's hook + gateway config into `cwd` and syncs its
         // MCP bridge (via `writeManagerHookConfig`).
         let prepared = createManagerTerminal(
-            session: session, cwd: cwd, initialPrompt: brief, preserving: unmanaged)
+            session: session, cwd: cwd, initialPrompt: brief, preserving: shells)
         appState.activeTerminalID[sessionID] = prepared.id
 
         CrowLog.info("[CrowTelemetry agent:handoff] session=\(sessionID.uuidString) manager=true from=\(priorKind.rawValue) to=\(targetKind.rawValue) terminal=\(prepared.id.uuidString)")
