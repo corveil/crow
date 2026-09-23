@@ -48,6 +48,7 @@ function load() {
     runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/',
   });
   const { window } = dom;
+  window.TextEncoder = TextEncoder; // jsdom omits it; real browsers have it
   window.WebSocket = function () {
     return { send() {}, close() {}, readyState: 1,
       set onopen(v) {}, set onmessage(v) {}, set onclose(v) {}, set onerror(v) {} };
