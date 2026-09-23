@@ -307,6 +307,25 @@ extension GitHubCodeBackend {
             }
             return nil
         }
+        // corveil/corveil's label-gated CI convention (ADR 0082, CROW-3716):
+        // detect it by the *presence* of a check context named exactly
+        // `CI Gate`, so no other repo grows the behaviour. `anyCheckPending`
+        // distinguishes a settled run from the in-flight window — the aggregate
+        // `checksState` reports FAILURE while a stale gate red coexists with
+        // still-running workers, so it can't answer "has the suite settled?".
+        let ciGatePresent = contextNodes.contains { ctx in
+            (ctx["name"] as? String) == CIGateConvention.checkName
+                || (ctx["context"] as? String) == CIGateConvention.checkName
+        }
+        let anyCheckPending = contextNodes.contains { ctx in
+            if let status = ctx["status"] as? String {        // CheckRun.status
+                return status != "COMPLETED"
+            }
+            if let st = ctx["state"] as? String {             // StatusContext.state
+                return st == "PENDING" || st == "EXPECTED"
+            }
+            return false
+        }
         let latestReviewNodes = LenientJSON.nodes(node, "latestReviews")
         let reviewStates = latestReviewNodes.compactMap { $0["state"] as? String }
         // Stateless "needs refine" rule (CROW-508): the latest CHANGES_REQUESTED
@@ -431,7 +450,9 @@ extension GitHubCodeBackend {
             hasPendingReviewRequest: hasPendingReviewRequest,
             viewerLastReviewedAt: viewerLastReviewedAt,
             mergeCommitOid: mergeCommitOid,
-            repoAutoMergeAllowed: repoAutoMergeAllowed
+            repoAutoMergeAllowed: repoAutoMergeAllowed,
+            ciGatePresent: ciGatePresent,
+            anyCheckPending: anyCheckPending
         )
     }
 

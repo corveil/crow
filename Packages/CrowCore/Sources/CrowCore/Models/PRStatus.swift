@@ -52,6 +52,12 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// *enabled* GitHub auto-merge: the label is the request, the timestamp is
     /// the action. The UI shows them as separate indicators (CROW-773).
     public var hasMergeLabel: Bool
+    /// Whether the PR uses the `corveil/corveil` label-gated CI convention —
+    /// i.e. carries a check context named exactly `CI Gate` (ADR 0082,
+    /// CROW-3716). Lets `addMergeLabel` decide whether to also apply `ci:full`
+    /// without hardcoding the repository. `false` on every repo that doesn't
+    /// run the convention, and on providers/paths that don't fetch checks.
+    public var usesCIGate: Bool
 
     public init(
         checksPass: CheckStatus = .unknown,
@@ -63,7 +69,8 @@ public struct PRStatus: Codable, Sendable, Equatable {
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
         changesRequestedReviewerIsPending: Bool = false,
-        hasMergeLabel: Bool = false
+        hasMergeLabel: Bool = false,
+        usesCIGate: Bool = false
     ) {
         self.checksPass = checksPass
         self.reviewStatus = reviewStatus
@@ -75,6 +82,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
         self.changesRequestedReviewerIsPending = changesRequestedReviewerIsPending
         self.hasMergeLabel = hasMergeLabel
+        self.usesCIGate = usesCIGate
     }
 
     public init(from decoder: Decoder) throws {
@@ -89,11 +97,13 @@ public struct PRStatus: Codable, Sendable, Equatable {
         lastSubstantiveCommitAt = try c.decodeIfPresent(Date.self, forKey: .lastSubstantiveCommitAt)
         changesRequestedReviewerIsPending = try c.decodeIfPresent(Bool.self, forKey: .changesRequestedReviewerIsPending) ?? false
         hasMergeLabel = try c.decodeIfPresent(Bool.self, forKey: .hasMergeLabel) ?? false
+        usesCIGate = try c.decodeIfPresent(Bool.self, forKey: .usesCIGate) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, isOpen
         case lastChangesRequestedAt, lastSubstantiveCommitAt, changesRequestedReviewerIsPending, hasMergeLabel
+        case usesCIGate
     }
 
     public enum CheckStatus: String, Codable, Sendable {

@@ -70,6 +70,23 @@ public struct GitHubCodeBackend: CodeBackend {
         }
     }
 
+    public func ensureCIFullLabel(repo: String) async throws {
+        // Mirrors `ensureMergeLabel`: create the label idempotently, swallowing
+        // "already exists". `ci:full` runs corveil/corveil's gated test.yml
+        // suite (ADR 0082, CROW-3716). Distinct colour from crow:merge so the
+        // two intents read apart at a glance on the PR.
+        do {
+            _ = try await shellRunner.run(
+                "gh", "label", "create", CIGateConvention.fullSuiteLabel,
+                "--repo", repo,
+                "--color", "0E8A16",
+                "--description", "Run the full CI suite (ADR 0082)"
+            )
+        } catch ShellRunnerError.nonZeroExit(_, let output) where output.localizedCaseInsensitiveContains("already exists") {
+            return
+        }
+    }
+
     // MARK: - resolveCanonicalRepoSlug
 
     /// Resolve `slug` ("owner/repo") to GitHub's canonical `full_name` via the
@@ -383,6 +400,17 @@ public struct GitHubCodeBackend: CodeBackend {
         // `prURL`; $TMPDIR cwd so gh doesn't infer the repo from the cwd.
         _ = try await shellRunner.run(
             args: ["gh", "pr", "edit", prURL, "--add-label", "crow:merge"],
+            env: [:],
+            cwd: NSTemporaryDirectory()
+        )
+    }
+
+    public func addCIFullLabel(prURL: String) async throws {
+        // Same direct-argv + $TMPDIR convention as `addMergeLabel`. `ci:full`
+        // triggers corveil/corveil's gated test.yml suite (ADR 0082,
+        // CROW-3716) — added alongside `crow:merge`, never in place of it.
+        _ = try await shellRunner.run(
+            args: ["gh", "pr", "edit", prURL, "--add-label", CIGateConvention.fullSuiteLabel],
             env: [:],
             cwd: NSTemporaryDirectory()
         )

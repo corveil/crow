@@ -435,8 +435,28 @@ final class PRStatusController {
         case "SUCCESS":
             checksPass = .passing
         case "FAILURE", "ERROR":
-            checksPass = .failing
-            failedChecks = pr.failedCheckNames
+            // corveil/corveil's fail-closed `CI Gate` reports red *on purpose*
+            // before `ci:full`/approval, and again during the in-flight window
+            // while the post-label suite runs (ADR 0082 decision 5, CROW-3716).
+            // Drop that expected red so Crow neither reports it as a regression
+            // nor fires respond-to-failed-checks against it — which would
+            // `synchronize` the PR and cancel the very run about to go green.
+            // A no-op on every repo without a `CI Gate` check.
+            let ciFull = CIGateConvention.hasFullSuiteLabel(pr.labels)
+            let effective = CIGateConvention.actionableFailedChecks(
+                rawFailed: pr.failedCheckNames,
+                ciFullPresent: ciFull,
+                anyCheckPending: pr.anyCheckPending
+            )
+            if effective.isEmpty, pr.failedCheckNames.contains(CIGateConvention.checkName) {
+                // The only failure was an expected `CI Gate` red: report it as
+                // not-yet-run (in-flight ⇒ pending, otherwise unknown), never
+                // failing.
+                checksPass = pr.anyCheckPending ? .pending : .unknown
+            } else {
+                checksPass = .failing
+                failedChecks = effective
+            }
         case "PENDING", "EXPECTED":
             checksPass = .pending
         default:
@@ -495,7 +515,11 @@ final class PRStatusController {
             // separately from "auto-merge already enabled" (CROW-773).
             hasMergeLabel: pr.labels.contains {
                 $0.name.caseInsensitiveCompare(AutoMergeController.autoMergeLabel) == .orderedSame
-            }
+            },
+            // Whether this PR runs the ADR-0082 label-gated CI convention, so
+            // `addMergeLabel` can decide to also apply `ci:full` without keying
+            // off the repo name (CROW-3716).
+            usesCIGate: pr.ciGatePresent
         )
     }
 }
