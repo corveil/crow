@@ -477,7 +477,7 @@ function ensureTerminal() {
 // The one guarded writer to the PTY socket, shared by term.onData and the touch
 // scroll shim below (mirrors terminal.html's sendToPTY of the same name).
 function sendToPTY(text) {
-  if (!text) return;
+  if (!text || terminalDetached) return;
   if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(text));
 }
 
@@ -872,6 +872,9 @@ function connectTerminalWs() {
     }
   };
   termWs.onmessage = (event) => {
+    // The socket is still the previous session's window until the next
+    // select-window. Drop those frames while the empty state is up.
+    if (terminalDetached) return;
     if (event.data instanceof ArrayBuffer) {
       term.write(new Uint8Array(event.data));
       noteTerminalFrame(); // CROW-934 scrollback re-sync bookkeeping
@@ -1301,6 +1304,10 @@ function maybeHydrateScrollback() {
 // re-clicking the active tab don't churn. When the socket isn't open yet,
 // connectTerminalWs's onopen selects this window against a fresh surface.
 let attachedWindow = null;
+// CROW-1295: set while the selected session has no terminal, so the shared
+// socket keeps streaming the previous window without painting or accepting
+// keystrokes for it. Cleared once a real terminal is attached again.
+let terminalDetached = false;
 function attachWindow(win) {
   if (win == null || win === attachedWindow) return;
   attachedWindow = win;

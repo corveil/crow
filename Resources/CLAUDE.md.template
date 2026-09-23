@@ -159,6 +159,7 @@ crow list-worktrees --session <uuid>
 ```
 crow new-terminal --session <uuid> --cwd "/path" [--name "Claude Code"] [--managed]
 crow list-terminals --session <uuid>
+crow relaunch-agent --session <uuid>            → resume the agent when the session has no terminal
 crow send --session <uuid> --terminal <uuid> "text to send"
 ```
 

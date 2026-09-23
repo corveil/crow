@@ -251,6 +251,7 @@ crow list-terminals --session <uuid>
 crow close-terminal --session <uuid> --terminal <uuid>
 crow rename-terminal --session <uuid> --terminal <uuid> "new name"
 crow recreate-terminal --session <uuid> --terminal <uuid>   → DESTRUCTIVE: rebuilds the pane to restore scrollback; relaunches the agent with --continue
+crow relaunch-agent --session <uuid>                   → open a managed terminal and resume the agent when the session has none (CROW-1295)
 crow send --session <uuid> --terminal <uuid> "text to send"
 ```
 

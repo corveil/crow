@@ -190,6 +190,22 @@ func makeEngineTerminalHandlers(
             }
         },
 
+        // CROW-1295: a session whose tmux window was pruned has no terminal to
+        // attach, so the web pane was left on the previous session. This opens
+        // one managed terminal and arms `launchAgent` (resume / `--continue`).
+        "relaunch-agent": { @Sendable params in
+            guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
+                throw RPCError.invalidParams("session_id required")
+            }
+            let terminalID = try await MainActor.run {
+                try capturedService.relaunchSessionAgent(sessionID: sessionID, devRoot: devRoot)
+            }
+            return [
+                "terminal_id": .string(terminalID.uuidString),
+                "session_id": .string(idStr),
+            ]
+        },
+
         "list-terminals": { @Sendable params in
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw RPCError.invalidParams("session_id required")

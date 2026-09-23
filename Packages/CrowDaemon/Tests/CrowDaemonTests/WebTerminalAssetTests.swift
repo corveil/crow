@@ -231,6 +231,12 @@ import Testing
         #expect(
             body.contains("applySurfaceScrollback()"),
             "rebinding the active row must re-apply the alt-buffer vs inline vs shell xterm scrollback cap (CROW-1010)")
+        #expect(
+            body.contains("if (!listed) return;")
+                && body.contains("showNoTerminalPane()")
+                && body.contains("hideNoTerminalPane()")
+                && body.contains("attachWindow(activeTerminal.window)"),
+            "an empty list must detach the previous window; a failed list must not (CROW-1295)")
     }
 
     /// CROW-1035: attaching to an agent TUI must switch in place, not take the

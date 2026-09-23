@@ -88,4 +88,5 @@ private let sampleUUID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
     // tmux tab inside Crow. Subcommand matching is exact, so this must hold.
     #expect(try CrowCommand.parseAsRoot(["open-terminal", "--session", sampleUUID]) is OpenTerminal)
     #expect(try CrowCommand.parseAsRoot(["new-terminal", "--session", sampleUUID, "--cwd", "/tmp"]) is NewTerminal)
+    #expect(try CrowCommand.parseAsRoot(["relaunch-agent", "--session", sampleUUID]) is RelaunchAgent)
 }

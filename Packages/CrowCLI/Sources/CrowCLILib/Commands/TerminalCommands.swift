@@ -98,6 +98,27 @@ public struct RecreateTerminal: ParsableCommand {
     }
 }
 
+/// Open a managed agent terminal for a session that no longer has one
+/// (CROW-1295) and resume the agent the way a recovered terminal does.
+public struct RelaunchAgent: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "relaunch-agent",
+        abstract: "Relaunch a session's agent into a new terminal (CROW-1295)"
+    )
+    @Option(name: .long, help: "Session UUID") var session: String
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+    }
+
+    public func run() throws {
+        let result = try rpc("relaunch-agent", params: ["session_id": .string(session)])
+        printJSON(result)
+    }
+}
+
 /// Rename a terminal tab.
 public struct RenameTerminal: ParsableCommand {
     public static let configuration = CommandConfiguration(commandName: "rename-terminal", abstract: "Rename a terminal tab")

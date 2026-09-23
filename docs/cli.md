@@ -109,6 +109,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow rebuild-scorecard`](#crow-rebuild-scorecard) | Backfill analytics snapshots and recompute the scorecard |
 | [`crow recreate-terminal`](#crow-recreate-terminal) | Recreate a terminal to restore full scrollback (CROW-804) |
 | [`crow refresh-tickets`](#crow-refresh-tickets) | Re-poll the ticket provider now |
+| [`crow relaunch-agent`](#crow-relaunch-agent) | Relaunch a session's agent into a new terminal (CROW-1295) |
 | [`crow reload-tmux-config`](#crow-reload-tmux-config) | Reload the bundled tmux config into the running server |
 | [`crow remove-link`](#crow-remove-link) | Remove a link from a session |
 | [`crow rename-session`](#crow-rename-session) | Rename a session |
@@ -1727,6 +1728,20 @@ Re-poll the ticket provider now.
 ```
 crow refresh-tickets
 ```
+
+---
+
+## `crow relaunch-agent`
+
+Relaunch a session's agent into a new terminal (CROW-1295).
+
+```
+crow relaunch-agent --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
 
 ---
 
