@@ -9,8 +9,11 @@ import Foundation
 /// the six worker jobs skip and `CI Gate` reports red **on purpose** — that red
 /// means "CI has not run yet", not a real failure. So Crow must:
 ///
-///  1. add `ci:full` alongside `crow:merge` when it labels a PR for merge, or
-///     the suite never runs and the fail-closed gate keeps the PR red forever;
+///  1. add `ci:full` from the approver's `crow-review-pr` skill, after
+///     `gh pr review --approve` succeeds, and only when the PR already has a
+///     `CI Gate` check (CROW-1306). `crow:merge` stays the author's merge
+///     intent. Without `ci:full` the suite never runs and the fail-closed
+///     gate keeps the PR red forever;
 ///  2. never strip `ci:full` on auto-rebase (the strict up-to-date policy needs
 ///     the suite to re-run on the rebased tip, which only happens while the
 ///     label is present);

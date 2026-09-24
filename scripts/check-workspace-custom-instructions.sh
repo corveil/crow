@@ -132,6 +132,23 @@ for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.templa
         "do not post"
 done
 
+# CROW-1306: `ci:full` is the approver's action, applied only after
+# `gh pr review --approve` on a PR that already has a `CI Gate` check.
+# `--request-changes` and `--no-post` must not add it, and a repo with no
+# `CI Gate` check must not grow the label. Both skill halves carry the step.
+# shellcheck disable=SC2016  # the gh/jq needles are literal, not expansion
+for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.template; do
+    require "$f" \
+        "### Step 5c: Add \`ci:full\` after an approve (CROW-1306)" \
+        "do not add \`ci:full\`" \
+        "\`--request-changes\` does not add \`ci:full\`" \
+        "\`--no-post\` / \`--dry-run\` (\`POST=false\`) does not add \`ci:full\`" \
+        "no check named exactly \`CI Gate\` does not get \`ci:full\`" \
+        'any(. == "CI Gate")' \
+        'gh label create "ci:full" --repo "$REPO"' \
+        'gh pr edit "$PR" --add-label "ci:full"'
+done
+
 # CROW-960: `gh pr checkout` restores attacker-controlled harness config into
 # a live review session. Both halves must re-strip immediately after checkout
 # (working-tree `rm`, never `git rm`) so Cursor/Grok/Antigravity/Claude/Muse/

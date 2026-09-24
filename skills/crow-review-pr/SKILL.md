@@ -134,7 +134,7 @@ State in the finding which you did ("reproduced with a temporary test that trigg
 
 ### Step 5: Post Review
 
-> **Dry run (`--no-post` / `--dry-run`):** if `POST=false`, render the full review body below to **stdout** and **stop** — do not run `gh pr review`. The Step 5a guardrails still apply to the drafted body. Everything past this note assumes `POST=true`.
+> **Dry run (`--no-post` / `--dry-run`):** if `POST=false`, render the full review body below to **stdout** and **stop** — do not run `gh pr review`, and do not add `ci:full`. The Step 5a guardrails still apply to the drafted body. Everything past this note assumes `POST=true`.
 
 Every Crow review must end with a verdict — **exactly one** of the two actions below. Comment-only reviews (`--comment` / `event: COMMENT`) are **not permitted**: they are ambiguous, don't move the PR forward, and effectively no-op the review.
 
@@ -229,6 +229,38 @@ See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The review b
 - Do not modify the URL — the link target is always `https://github.com/corveil/crow`, never a fork or a derived value from the local git remote.
 - Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
 - This line MUST appear in every review body, regardless of whether you used `--approve` or `--request-changes`.
+
+### Step 5c: Add `ci:full` after an approve (CROW-1306)
+
+`ci:full` starts the label-gated suite on a repo whose required check is named `CI Gate` (ADR 0082). The approver's review session applies it. Run this step only after `gh pr review "$PR" --approve` exits 0.
+
+- `--request-changes` does not add `ci:full`. Stop after that review posts.
+- `--no-post` / `--dry-run` (`POST=false`) does not add `ci:full`. Step 5 never posts, so this step does not run.
+- A PR with no check named exactly `CI Gate` does not get `ci:full`. Do not create the label in that repo.
+
+After `--approve` succeeds, run this on its own (one Bash call):
+
+```bash
+gh pr view "$PR" --json statusCheckRollup --jq '[.statusCheckRollup[]? | (.name // .context)] | any(. == "CI Gate")'
+```
+
+If that command does not print `true`, stop. Do not create `ci:full` and do not edit the PR.
+
+If it prints `true`, resolve the PR's repo, ensure the label there, then add it. Each of these is its own Bash call. The label lives on the repo that owns the PR (the base), so pass `--repo` — a fork checkout must not grow the label. Set `REPO` to the `owner/repo` the first command prints. `gh label create` exiting because the label already exists is success — continue to the add. `gh pr edit --add-label` on a PR that already has `ci:full` is success.
+
+```bash
+gh pr view "$PR" --json url --jq '(.url | split("/"))[3:5] | join("/")'
+```
+
+```bash
+gh label create "ci:full" --repo "$REPO" --color 0E8A16 --description "Run the full CI suite (ADR 0082)"
+```
+
+```bash
+gh pr edit "$PR" --add-label "ci:full"
+```
+
+If creating or adding the label fails for a reason other than the label already existing, report the failure and leave the approval in place. A missing `ci:full` keeps the fail-closed `CI Gate` red.
 
 ### Important Notes
 

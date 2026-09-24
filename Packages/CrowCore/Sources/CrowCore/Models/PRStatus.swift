@@ -52,11 +52,9 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// *enabled* GitHub auto-merge: the label is the request, the timestamp is
     /// the action. The UI shows them as separate indicators (CROW-773).
     public var hasMergeLabel: Bool
-    /// Whether the PR uses the `corveil/corveil` label-gated CI convention —
-    /// i.e. carries a check context named exactly `CI Gate` (ADR 0082,
-    /// CROW-3716). Lets `addMergeLabel` decide whether to also apply `ci:full`
-    /// without hardcoding the repository. `false` on every repo that doesn't
-    /// run the convention, and on providers/paths that don't fetch checks.
+    /// Whether the last poll saw a check context named exactly `CI Gate`
+    /// (ADR 0082, CROW-3716). `false` on every repo that doesn't run the
+    /// convention, and on providers/paths that don't fetch checks.
     public var usesCIGate: Bool
 
     public init(
