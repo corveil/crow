@@ -86,7 +86,8 @@ public final class SessionService {
     /// Scheduled-job runs (CROW-317) — worktree + session + clone-on-demand.
     lazy var jobs = JobRunner(owner: self)
 
-    /// Review-session creation + clone prep + per-agent strips (CROW-1113).
+    /// Review-session creation (CROW-1113). Clone prep, strips, prompts, and
+    /// the `SessionService` facade live in sibling files (CROW-1302).
     lazy var review = ReviewSessionController(owner: self)
 
     /// Session deletion + orphan-worktree recovery (CROW-1113).
