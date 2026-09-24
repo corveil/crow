@@ -32,6 +32,8 @@ const epilogue = `
   set sessionCameFromGrid(v){ sessionCameFromGrid = v; },
   sidebarLeftStack(){ return sidebarLeftStack(); },
   sessionMenuItems: (s) => sessionMenuItems(s),
+  get rpc(){ return rpc; },
+  set rpc(v){ rpc = v; },
   renderBoard(){ return renderBoard(); },
   renderHeader: (s) => renderHeader(s),
   selectBoard: (k) => selectBoard(k),
@@ -271,6 +273,34 @@ console.log('\ncontext menu Switch agent — extra vs primary Manager (CROW-1283
     sess('m2', { kind: 'manager', is_primary_manager: false }));
   check('extra Manager offers Switch agent…', hasSwitch(extra));
   check('extra Manager still offers Delete', extra.some((it) => it.label === 'Delete'));
+}
+
+console.log('\ncontext menu Lock — completed review (CROW-1304):');
+{
+  const T = load();
+  const hasLock = (its) => its.some((it) => it.label === 'Lock' || it.label === 'Unlock');
+  const active = T.sessionMenuItems(sess('r-active', { kind: 'review', status: 'active' }));
+  check('in-progress review has no Lock', !hasLock(active));
+  check('in-progress review still offers Delete', active.some((it) => it.label === 'Delete'));
+  const done = T.sessionMenuItems(sess('r-done', { kind: 'review', status: 'completed' }));
+  check('completed review offers Lock', done.some((it) => it.label === 'Lock'));
+  const archived = T.sessionMenuItems(
+    sess('r-arch', { kind: 'review', status: 'archived', locked: true }));
+  check('locked archived review offers Unlock', archived.some((it) => it.label === 'Unlock'));
+  const work = T.sessionMenuItems(sess('w-active', { kind: 'work', status: 'active' }));
+  check('work session still offers Lock', work.some((it) => it.label === 'Lock'));
+  const workLabels = work.filter((it) => !it.sep).map((it) => it.label);
+  eq('work menu labels are unchanged', workLabels, [
+    'Pin to grid', 'Set org goal…', 'Mark as Completed', 'Lock', 'Switch agent…', 'Delete',
+  ]);
+  const calls = [];
+  T.rpc = (method, params) => { calls.push({ method, params }); return Promise.resolve({}); };
+  done.find((it) => it.label === 'Lock').action();
+  archived.find((it) => it.label === 'Unlock').action();
+  eq('Lock and Unlock call set-locked', calls, [
+    { method: 'set-locked', params: { session_id: 'r-done', locked: true } },
+    { method: 'set-locked', params: { session_id: 'r-arch', locked: false } },
+  ]);
 }
 
 console.log('\nroute:');

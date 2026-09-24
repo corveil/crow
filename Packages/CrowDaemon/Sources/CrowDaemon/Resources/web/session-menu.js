@@ -164,6 +164,13 @@ function sessionMenuItems(s) {
   }
   if (s.kind === 'review') {
     if (hasPR) items.push({ label: 'Add label crow:merge to PR', action: () => sessionAction('add-merge-label', s.id) });
+    // Retention deletes completed and archived sessions. Offer the same
+    // Lock/Unlock a work session gets, so a finished review can outlive
+    // cleanup.retentionHours (CROW-1304). An in-progress review keeps this
+    // shorter menu — it is not eligible until it completes or is archived.
+    if (s.status === 'completed' || s.status === 'archived') {
+      items.push({ label: s.locked ? 'Unlock' : 'Lock', action: () => sessionAction('set-locked', s.id, { locked: !s.locked }) });
+    }
     items.push({ label: 'Switch agent…', action: () => openHandoffAgentMenu(s, null) });
     items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
     return items;
