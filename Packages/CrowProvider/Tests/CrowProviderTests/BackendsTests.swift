@@ -1125,6 +1125,36 @@ final class BackendsTests: XCTestCase {
         try await backend.ensureMergeLabel(repo: "a/b")
     }
 
+    // CROW-3716 / ADR 0082: `ci:full` runs corveil/corveil's gated test.yml
+    // suite. Same idempotent-create + direct-argv shape as the crow:merge label.
+    func testGitHubCodeBackendEnsureCIFullLabelCreatesLabel() async throws {
+        let fake = FakeShellRunner()
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        try await backend.ensureCIFullLabel(repo: "a/b")
+        XCTAssertEqual(fake.calls.count, 1)
+        let args = fake.calls[0].args
+        XCTAssertEqual(args.prefix(4), ArraySlice(["gh", "label", "create", "ci:full"]))
+        XCTAssertTrue(args.contains("a/b"))
+    }
+
+    func testGitHubCodeBackendEnsureCIFullLabelSwallowsAlreadyExists() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: "label ci:full already exists"))]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        try await backend.ensureCIFullLabel(repo: "a/b")
+    }
+
+    func testGitHubCodeBackendAddCIFullLabelEditsPR() async throws {
+        let fake = FakeShellRunner()
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        try await backend.addCIFullLabel(prURL: "https://github.com/a/b/pull/1")
+        XCTAssertEqual(fake.calls.count, 1)
+        XCTAssertEqual(fake.calls[0].args,
+            ["gh", "pr", "edit", "https://github.com/a/b/pull/1", "--add-label", "ci:full"])
+        // Direct argv + $TMPDIR cwd, matching addMergeLabel.
+        XCTAssertEqual(fake.calls[0].cwd, NSTemporaryDirectory())
+    }
+
     func testGitHubCodeBackendPRStatesBatchesQuery() async throws {
         let fake = FakeShellRunner()
         let json = """
@@ -1257,6 +1287,102 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(fake.calls.count, 1)
         XCTAssertEqual(fake.calls[0].args, ["gh", "pr", "update-branch", "https://github.com/a/b/pull/1"])
         XCTAssertEqual(fake.calls[0].cwd, NSTemporaryDirectory())
+    }
+
+    // CROW-3716 point 2: auto-rebase / update-branch must never strip a label
+    // (ci:full has to persist so the suite re-runs on the rebased tip). The
+    // update-branch call is pure `gh pr update-branch` with no label flags —
+    // pin that so a future edit can't quietly add a label mutation here.
+    func testGitHubCodeBackendUpdateBranchTouchesNoLabels() async throws {
+        let fake = FakeShellRunner()
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        try await backend.updateBranch(prURL: "https://github.com/a/b/pull/1")
+        let args = fake.calls[0].args
+        XCTAssertFalse(args.contains("--add-label"))
+        XCTAssertFalse(args.contains("--remove-label"))
+        XCTAssertFalse(args.contains(where: { $0.localizedCaseInsensitiveContains("ci:full") }))
+    }
+
+    // CROW-3716 / ADR 0082: parsePRNode (shared by listMonitoredPRs and the
+    // stale-PR prStates path) must surface the `CI Gate` context and whether any
+    // check is still running, so the classifier can tell a settled failure from
+    // the in-flight window.
+    func testGitHubCodeBackendPRStatesParsesCIGateAndPending() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":1,"url":"https://github.com/a/b/pull/1","state":"OPEN",
+                 "mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","isDraft":false,
+                 "headRefName":"f","headRefOid":"abc","baseRefName":"main",
+                 "repository":{"nameWithOwner":"a/b"},
+                 "statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+                   {"__typename":"CheckRun","name":"CI Gate","conclusion":"FAILURE","status":"COMPLETED"},
+                   {"__typename":"CheckRun","name":"Test (PostgreSQL)","conclusion":null,"status":"IN_PROGRESS"}
+                 ]}}}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let ref = PRRef(owner: "a", repo: "b", number: 1)
+        let states = try await backend.prStates(refs: [ref], viewerLogin: nil)
+        let rec = try XCTUnwrap(states[ref])
+        XCTAssertTrue(rec.ciGatePresent)
+        XCTAssertTrue(rec.anyCheckPending)                 // the IN_PROGRESS worker
+        XCTAssertEqual(rec.failedCheckNames, ["CI Gate"])
+        // The in-progress worker is not terminal, so nothing corroborates the
+        // (stale) CI Gate red yet.
+        XCTAssertFalse(rec.hasNonGateTerminalNonSuccess)
+    }
+
+    func testGitHubCodeBackendPRStatesTimedOutWorkerCorroboratesCIGate() async throws {
+        // CROW-3716 (review of #1300): a gated job that TIMED_OUT never lands in
+        // failedCheckNames (FAILURE-only), but must corroborate a real CI Gate
+        // red once the run has settled.
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":1,"url":"https://github.com/a/b/pull/1","state":"OPEN",
+                 "mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","isDraft":false,
+                 "headRefName":"f","headRefOid":"abc","baseRefName":"main",
+                 "repository":{"nameWithOwner":"a/b"},
+                 "statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+                   {"__typename":"CheckRun","name":"CI Gate","conclusion":"FAILURE","status":"COMPLETED"},
+                   {"__typename":"CheckRun","name":"Test (PostgreSQL)","conclusion":"TIMED_OUT","status":"COMPLETED"}
+                 ]}}}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let ref = PRRef(owner: "a", repo: "b", number: 1)
+        let states = try await backend.prStates(refs: [ref], viewerLogin: nil)
+        let rec = try XCTUnwrap(states[ref])
+        XCTAssertTrue(rec.ciGatePresent)
+        XCTAssertFalse(rec.anyCheckPending)                // settled
+        XCTAssertEqual(rec.failedCheckNames, ["CI Gate"])  // TIMED_OUT is not FAILURE
+        XCTAssertTrue(rec.hasNonGateTerminalNonSuccess)    // …but it corroborates
+    }
+
+    func testGitHubCodeBackendPRStatesCIGateAbsentWhenNoSuchCheck() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":1,"url":"https://github.com/a/b/pull/1","state":"OPEN",
+                 "mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isDraft":false,
+                 "headRefName":"f","headRefOid":"abc","baseRefName":"main",
+                 "repository":{"nameWithOwner":"a/b"},
+                 "statusCheckRollup":{"state":"SUCCESS","contexts":{"nodes":[
+                   {"__typename":"CheckRun","name":"lint","conclusion":"SUCCESS","status":"COMPLETED"}
+                 ]}}}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let ref = PRRef(owner: "a", repo: "b", number: 1)
+        let states = try await backend.prStates(refs: [ref], viewerLogin: nil)
+        let rec = try XCTUnwrap(states[ref])
+        XCTAssertFalse(rec.ciGatePresent)
+        XCTAssertFalse(rec.anyCheckPending)
+        XCTAssertFalse(rec.hasNonGateTerminalNonSuccess)
     }
 
     func testGitHubCodeBackendFetchPRMetadataParses() async throws {

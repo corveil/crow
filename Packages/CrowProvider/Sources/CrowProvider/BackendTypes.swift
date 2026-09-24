@@ -140,6 +140,27 @@ public struct PRRecord: Sendable {
     /// (#888), because guessing wrong here either freezes a healthy PR or
     /// merges one Crow shouldn't touch.
     public let repoAutoMergeAllowed: Bool?
+    /// Whether the PR carries a check context named exactly `CI Gate` — the
+    /// fail-closed aggregate required check `corveil/corveil` uses under ADR
+    /// 0082. Its presence is how Crow detects the label-gated-CI convention
+    /// without hardcoding the repo (CROW-3716). `false` when no such context is
+    /// present, and on paths/providers that don't fetch `statusCheckRollup`.
+    public let ciGatePresent: Bool
+    /// Whether any check on the PR is still queued/in-progress/pending (a
+    /// CheckRun whose `status` is not `COMPLETED`, or a StatusContext in
+    /// `PENDING`/`EXPECTED`). Lets the `CI Gate` classifier tell a *settled* run
+    /// from the in-flight window (ADR 0082 decision 5), which the aggregate
+    /// `checksState` can't when a stale `FAILURE` dominates it. `false` means
+    /// "nothing known pending".
+    public let anyCheckPending: Bool
+    /// Whether any check **other than `CI Gate`** reached a terminal non-success
+    /// conclusion (FAILURE / TIMED_OUT / CANCELLED / …, or a StatusContext
+    /// FAILURE / ERROR). Corroborates a real `CI Gate` red: the gate is only the
+    /// aggregate of the gated jobs, so a genuine failure shows up as one of
+    /// those jobs' own red **or timeout/cancel** — which the FAILURE-only
+    /// `failedCheckNames` can miss (ADR 0082, CROW-3716). `false` ⇒ a lone
+    /// `CI Gate` red is the stale pre-label conclusion, not a real failure.
+    public let hasNonGateTerminalNonSuccess: Bool
 
     public init(
         number: Int,
@@ -166,7 +187,10 @@ public struct PRRecord: Sendable {
         viewerLastReviewedAt: Date? = nil,
         updatedAt: Date? = nil,
         mergeCommitOid: String? = nil,
-        repoAutoMergeAllowed: Bool? = nil
+        repoAutoMergeAllowed: Bool? = nil,
+        ciGatePresent: Bool = false,
+        anyCheckPending: Bool = false,
+        hasNonGateTerminalNonSuccess: Bool = false
     ) {
         self.number = number
         self.url = url
@@ -193,6 +217,9 @@ public struct PRRecord: Sendable {
         self.updatedAt = updatedAt
         self.mergeCommitOid = mergeCommitOid
         self.repoAutoMergeAllowed = repoAutoMergeAllowed
+        self.ciGatePresent = ciGatePresent
+        self.anyCheckPending = anyCheckPending
+        self.hasNonGateTerminalNonSuccess = hasNonGateTerminalNonSuccess
     }
 }
 

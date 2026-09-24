@@ -435,8 +435,43 @@ final class PRStatusController {
         case "SUCCESS":
             checksPass = .passing
         case "FAILURE", "ERROR":
-            checksPass = .failing
-            failedChecks = pr.failedCheckNames
+            // corveil/corveil's fail-closed `CI Gate` reports red *on purpose*
+            // before `ci:full`/approval, and again through the in-flight window
+            // while the post-label suite runs (ADR 0082 decision 5, CROW-3716).
+            // Suppress those expected reds so Crow neither reports a regression
+            // nor fires respond-to-failed-checks — which would `synchronize` the
+            // PR and cancel the very run about to go green. All of this is a
+            // no-op on every repo without the convention.
+            let ciFull = CIGateConvention.hasFullSuiteLabel(pr.labels)
+            // The label persists through the in-flight window even when the
+            // dependent `CI Gate` check run doesn't exist yet, so either signal
+            // marks a convention PR.
+            let conventionPR = pr.ciGatePresent || ciFull
+            if !conventionPR {
+                checksPass = .failing
+                failedChecks = pr.failedCheckNames
+            } else if pr.anyCheckPending {
+                // The gated run has not settled. Its authoritative `CI Gate`
+                // conclusion hasn't posted yet, and a sibling worker that has
+                // already failed does NOT make the PR actionable — reacting now
+                // cancels the in-flight suite. Stay pending until it settles.
+                checksPass = .pending
+            } else {
+                let effective = CIGateConvention.actionableFailedChecks(
+                    rawFailed: pr.failedCheckNames,
+                    ciFullPresent: ciFull,
+                    hasOtherTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess
+                )
+                if effective.isEmpty {
+                    // Only an expected `CI Gate` red remained: the pre-approval
+                    // fail-closed state, or a stale lone gate red. Not-yet-run,
+                    // never failing.
+                    checksPass = .unknown
+                } else {
+                    checksPass = .failing
+                    failedChecks = effective
+                }
+            }
         case "PENDING", "EXPECTED":
             checksPass = .pending
         default:
@@ -495,7 +530,11 @@ final class PRStatusController {
             // separately from "auto-merge already enabled" (CROW-773).
             hasMergeLabel: pr.labels.contains {
                 $0.name.caseInsensitiveCompare(AutoMergeController.autoMergeLabel) == .orderedSame
-            }
+            },
+            // Whether this PR runs the ADR-0082 label-gated CI convention, so
+            // `addMergeLabel` can decide to also apply `ci:full` without keying
+            // off the repo name (CROW-3716).
+            usesCIGate: pr.ciGatePresent
         )
     }
 }

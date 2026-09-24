@@ -935,6 +935,33 @@ public final class IssueTracker {
             try await autoMerge.ensureMergeLabelOnce(repo: repo, backend: backend)
             try await backend.addMergeLabel(prURL: prLink.url)
             CrowLog.info("[Crow] Added crow:merge to \(prLink.url)")
+            // corveil/corveil (and any repo using the ADR-0082 CI Gate
+            // convention) needs `ci:full` alongside `crow:merge`, or the
+            // label-gated test.yml suite never runs and the fail-closed `CI Gate`
+            // keeps the PR red forever (CROW-3716). Gate on the PR actually
+            // carrying a `CI Gate` check (`usesCIGate`, set by the last poll) so
+            // no other repo grows a spurious label. Best-effort: a `ci:full`
+            // failure must not fail the `crow:merge` action — the merge intent
+            // still landed, and an un-run suite is the fail-closed direction
+            // (stuck, not wrongly merged), not a regression to surface here.
+            if appState.prStatus[sessionID]?.usesCIGate == true {
+                do {
+                    try await backend.ensureCIFullLabel(repo: repo)
+                    try await backend.addCIFullLabel(prURL: prLink.url)
+                    CrowLog.info("[Crow] Added ci:full to \(prLink.url) (CI Gate convention)")
+                } catch {
+                    print("[IssueTracker] addCIFullLabel failed for \(prLink.url): \(String(error.localizedDescription.prefix(200)))")
+                }
+            } else {
+                // Not (yet) known to use the convention — usually a genuine
+                // non-convention repo, but also the case a poll hasn't observed
+                // `CI Gate` on a convention PR yet. Log it so that miss is
+                // visible: without ci:full the fail-closed gate keeps an
+                // approved PR red and it never merges (the fail-closed direction
+                // ADR 0082 accepts). `addMergeLabel` is a rare operator action,
+                // so one line per call is not noise.
+                CrowLog.info("[Crow] addMergeLabel: not adding ci:full to \(prLink.url) — PR not known to use the CI Gate convention")
+            }
             // Optimistically flip the merge icon so the user sees the label
             // land immediately, rather than waiting for — and getting stuck
             // behind — the next full poll's snapshot (#838). The sticky marker

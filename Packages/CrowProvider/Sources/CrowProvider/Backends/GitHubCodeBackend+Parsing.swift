@@ -307,6 +307,41 @@ extension GitHubCodeBackend {
             }
             return nil
         }
+        // corveil/corveil's label-gated CI convention (ADR 0082, CROW-3716):
+        // detect it by the *presence* of a check context named exactly
+        // `CI Gate`, so no other repo grows the behaviour. `anyCheckPending`
+        // distinguishes a settled run from the in-flight window — the aggregate
+        // `checksState` reports FAILURE while a stale gate red coexists with
+        // still-running workers, so it can't answer "has the suite settled?".
+        let ciGatePresent = contextNodes.contains { ctx in
+            (ctx["name"] as? String) == CIGateConvention.checkName
+                || (ctx["context"] as? String) == CIGateConvention.checkName
+        }
+        let anyCheckPending = contextNodes.contains { ctx in
+            if let status = ctx["status"] as? String {        // CheckRun.status
+                return status != "COMPLETED"
+            }
+            if let st = ctx["state"] as? String {             // StatusContext.state
+                return st == "PENDING" || st == "EXPECTED"
+            }
+            return false
+        }
+        // Corroboration for a real `CI Gate` red (CROW-3716): any *other* check
+        // that reached a terminal non-success conclusion — including a gated job
+        // that timed out or was cancelled, which never lands in
+        // `failedCheckNames` (FAILURE-only). A lone `CI Gate` red with no such
+        // sibling is the stale pre-label conclusion, not a failure to chase.
+        let hasNonGateTerminalNonSuccess = contextNodes.contains { ctx in
+            let name = (ctx["name"] as? String) ?? (ctx["context"] as? String)
+            if name == CIGateConvention.checkName { return false }
+            if let conclusion = ctx["conclusion"] as? String {   // CheckRun
+                return CIGateConvention.terminalNonSuccessConclusions.contains(conclusion)
+            }
+            if let st = ctx["state"] as? String {                // StatusContext
+                return st == "FAILURE" || st == "ERROR"
+            }
+            return false
+        }
         let latestReviewNodes = LenientJSON.nodes(node, "latestReviews")
         let reviewStates = latestReviewNodes.compactMap { $0["state"] as? String }
         // Stateless "needs refine" rule (CROW-508): the latest CHANGES_REQUESTED
@@ -431,7 +466,10 @@ extension GitHubCodeBackend {
             hasPendingReviewRequest: hasPendingReviewRequest,
             viewerLastReviewedAt: viewerLastReviewedAt,
             mergeCommitOid: mergeCommitOid,
-            repoAutoMergeAllowed: repoAutoMergeAllowed
+            repoAutoMergeAllowed: repoAutoMergeAllowed,
+            ciGatePresent: ciGatePresent,
+            anyCheckPending: anyCheckPending,
+            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess
         )
     }
 
