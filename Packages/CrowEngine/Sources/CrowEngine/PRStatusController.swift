@@ -436,26 +436,41 @@ final class PRStatusController {
             checksPass = .passing
         case "FAILURE", "ERROR":
             // corveil/corveil's fail-closed `CI Gate` reports red *on purpose*
-            // before `ci:full`/approval, and again during the in-flight window
+            // before `ci:full`/approval, and again through the in-flight window
             // while the post-label suite runs (ADR 0082 decision 5, CROW-3716).
-            // Drop that expected red so Crow neither reports it as a regression
-            // nor fires respond-to-failed-checks against it — which would
-            // `synchronize` the PR and cancel the very run about to go green.
-            // A no-op on every repo without a `CI Gate` check.
+            // Suppress those expected reds so Crow neither reports a regression
+            // nor fires respond-to-failed-checks — which would `synchronize` the
+            // PR and cancel the very run about to go green. All of this is a
+            // no-op on every repo without the convention.
             let ciFull = CIGateConvention.hasFullSuiteLabel(pr.labels)
-            let effective = CIGateConvention.actionableFailedChecks(
-                rawFailed: pr.failedCheckNames,
-                ciFullPresent: ciFull,
-                anyCheckPending: pr.anyCheckPending
-            )
-            if effective.isEmpty, pr.failedCheckNames.contains(CIGateConvention.checkName) {
-                // The only failure was an expected `CI Gate` red: report it as
-                // not-yet-run (in-flight ⇒ pending, otherwise unknown), never
-                // failing.
-                checksPass = pr.anyCheckPending ? .pending : .unknown
-            } else {
+            // The label persists through the in-flight window even when the
+            // dependent `CI Gate` check run doesn't exist yet, so either signal
+            // marks a convention PR.
+            let conventionPR = pr.ciGatePresent || ciFull
+            if !conventionPR {
                 checksPass = .failing
-                failedChecks = effective
+                failedChecks = pr.failedCheckNames
+            } else if pr.anyCheckPending {
+                // The gated run has not settled. Its authoritative `CI Gate`
+                // conclusion hasn't posted yet, and a sibling worker that has
+                // already failed does NOT make the PR actionable — reacting now
+                // cancels the in-flight suite. Stay pending until it settles.
+                checksPass = .pending
+            } else {
+                let effective = CIGateConvention.actionableFailedChecks(
+                    rawFailed: pr.failedCheckNames,
+                    ciFullPresent: ciFull,
+                    hasOtherTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess
+                )
+                if effective.isEmpty {
+                    // Only an expected `CI Gate` red remained: the pre-approval
+                    // fail-closed state, or a stale lone gate red. Not-yet-run,
+                    // never failing.
+                    checksPass = .unknown
+                } else {
+                    checksPass = .failing
+                    failedChecks = effective
+                }
             }
         case "PENDING", "EXPECTED":
             checksPass = .pending

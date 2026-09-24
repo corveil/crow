@@ -153,6 +153,14 @@ public struct PRRecord: Sendable {
     /// `checksState` can't when a stale `FAILURE` dominates it. `false` means
     /// "nothing known pending".
     public let anyCheckPending: Bool
+    /// Whether any check **other than `CI Gate`** reached a terminal non-success
+    /// conclusion (FAILURE / TIMED_OUT / CANCELLED / …, or a StatusContext
+    /// FAILURE / ERROR). Corroborates a real `CI Gate` red: the gate is only the
+    /// aggregate of the gated jobs, so a genuine failure shows up as one of
+    /// those jobs' own red **or timeout/cancel** — which the FAILURE-only
+    /// `failedCheckNames` can miss (ADR 0082, CROW-3716). `false` ⇒ a lone
+    /// `CI Gate` red is the stale pre-label conclusion, not a real failure.
+    public let hasNonGateTerminalNonSuccess: Bool
 
     public init(
         number: Int,
@@ -181,7 +189,8 @@ public struct PRRecord: Sendable {
         mergeCommitOid: String? = nil,
         repoAutoMergeAllowed: Bool? = nil,
         ciGatePresent: Bool = false,
-        anyCheckPending: Bool = false
+        anyCheckPending: Bool = false,
+        hasNonGateTerminalNonSuccess: Bool = false
     ) {
         self.number = number
         self.url = url
@@ -210,6 +219,7 @@ public struct PRRecord: Sendable {
         self.repoAutoMergeAllowed = repoAutoMergeAllowed
         self.ciGatePresent = ciGatePresent
         self.anyCheckPending = anyCheckPending
+        self.hasNonGateTerminalNonSuccess = hasNonGateTerminalNonSuccess
     }
 }
 

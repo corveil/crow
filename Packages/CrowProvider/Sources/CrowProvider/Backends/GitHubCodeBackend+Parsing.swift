@@ -326,6 +326,22 @@ extension GitHubCodeBackend {
             }
             return false
         }
+        // Corroboration for a real `CI Gate` red (CROW-3716): any *other* check
+        // that reached a terminal non-success conclusion — including a gated job
+        // that timed out or was cancelled, which never lands in
+        // `failedCheckNames` (FAILURE-only). A lone `CI Gate` red with no such
+        // sibling is the stale pre-label conclusion, not a failure to chase.
+        let hasNonGateTerminalNonSuccess = contextNodes.contains { ctx in
+            let name = (ctx["name"] as? String) ?? (ctx["context"] as? String)
+            if name == CIGateConvention.checkName { return false }
+            if let conclusion = ctx["conclusion"] as? String {   // CheckRun
+                return CIGateConvention.terminalNonSuccessConclusions.contains(conclusion)
+            }
+            if let st = ctx["state"] as? String {                // StatusContext
+                return st == "FAILURE" || st == "ERROR"
+            }
+            return false
+        }
         let latestReviewNodes = LenientJSON.nodes(node, "latestReviews")
         let reviewStates = latestReviewNodes.compactMap { $0["state"] as? String }
         // Stateless "needs refine" rule (CROW-508): the latest CHANGES_REQUESTED
@@ -452,7 +468,8 @@ extension GitHubCodeBackend {
             mergeCommitOid: mergeCommitOid,
             repoAutoMergeAllowed: repoAutoMergeAllowed,
             ciGatePresent: ciGatePresent,
-            anyCheckPending: anyCheckPending
+            anyCheckPending: anyCheckPending,
+            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess
         )
     }
 

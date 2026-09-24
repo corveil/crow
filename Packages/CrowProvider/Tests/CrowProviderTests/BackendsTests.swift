@@ -1329,6 +1329,37 @@ final class BackendsTests: XCTestCase {
         XCTAssertTrue(rec.ciGatePresent)
         XCTAssertTrue(rec.anyCheckPending)                 // the IN_PROGRESS worker
         XCTAssertEqual(rec.failedCheckNames, ["CI Gate"])
+        // The in-progress worker is not terminal, so nothing corroborates the
+        // (stale) CI Gate red yet.
+        XCTAssertFalse(rec.hasNonGateTerminalNonSuccess)
+    }
+
+    func testGitHubCodeBackendPRStatesTimedOutWorkerCorroboratesCIGate() async throws {
+        // CROW-3716 (review of #1300): a gated job that TIMED_OUT never lands in
+        // failedCheckNames (FAILURE-only), but must corroborate a real CI Gate
+        // red once the run has settled.
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":1,"url":"https://github.com/a/b/pull/1","state":"OPEN",
+                 "mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","isDraft":false,
+                 "headRefName":"f","headRefOid":"abc","baseRefName":"main",
+                 "repository":{"nameWithOwner":"a/b"},
+                 "statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+                   {"__typename":"CheckRun","name":"CI Gate","conclusion":"FAILURE","status":"COMPLETED"},
+                   {"__typename":"CheckRun","name":"Test (PostgreSQL)","conclusion":"TIMED_OUT","status":"COMPLETED"}
+                 ]}}}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let ref = PRRef(owner: "a", repo: "b", number: 1)
+        let states = try await backend.prStates(refs: [ref], viewerLogin: nil)
+        let rec = try XCTUnwrap(states[ref])
+        XCTAssertTrue(rec.ciGatePresent)
+        XCTAssertFalse(rec.anyCheckPending)                // settled
+        XCTAssertEqual(rec.failedCheckNames, ["CI Gate"])  // TIMED_OUT is not FAILURE
+        XCTAssertTrue(rec.hasNonGateTerminalNonSuccess)    // …but it corroborates
     }
 
     func testGitHubCodeBackendPRStatesCIGateAbsentWhenNoSuchCheck() async throws {
@@ -1351,6 +1382,7 @@ final class BackendsTests: XCTestCase {
         let rec = try XCTUnwrap(states[ref])
         XCTAssertFalse(rec.ciGatePresent)
         XCTAssertFalse(rec.anyCheckPending)
+        XCTAssertFalse(rec.hasNonGateTerminalNonSuccess)
     }
 
     func testGitHubCodeBackendFetchPRMetadataParses() async throws {

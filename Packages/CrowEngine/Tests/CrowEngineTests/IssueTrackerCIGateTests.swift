@@ -30,6 +30,7 @@ struct IssueTrackerCIGateTests {
         labels: [LabelInfo] = [],
         ciGatePresent: Bool = true,
         anyCheckPending: Bool = false,
+        hasNonGateTerminalNonSuccess: Bool = false,
         repoAutoMergeAllowed: Bool? = false
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
@@ -51,7 +52,8 @@ struct IssueTrackerCIGateTests {
             latestReviewStates: ["APPROVED"],
             repoAutoMergeAllowed: repoAutoMergeAllowed,
             ciGatePresent: ciGatePresent,
-            anyCheckPending: anyCheckPending
+            anyCheckPending: anyCheckPending,
+            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess
         )
     }
 
@@ -88,9 +90,42 @@ struct IssueTrackerCIGateTests {
         let status = IssueTracker.buildPRStatus(from: makePR(
             checksState: "FAILURE",
             failedCheckNames: ["Test (PostgreSQL)", "CI Gate"],
-            labels: [Self.ciFullLabel, Self.crowMergeLabel]))
+            labels: [Self.ciFullLabel, Self.crowMergeLabel],
+            hasNonGateTerminalNonSuccess: true))
         #expect(status.checksPass == .failing)
         #expect(status.failedCheckNames == ["Test (PostgreSQL)", "CI Gate"])
+    }
+
+    @Test func inFlightSiblingFailureStaysPending() {
+        // Review of #1300 (Red): a fast worker (Lint) is already FAILURE while
+        // another is still running. The run has NOT settled, so the PR must read
+        // pending — reacting now would cancel the suite about to finish. This is
+        // true whether or not the stale CI Gate is still in the rollup.
+        for failed in [["Lint"], ["Lint", "CI Gate"]] {
+            let status = IssueTracker.buildPRStatus(from: makePR(
+                checksState: "FAILURE",
+                failedCheckNames: failed,
+                labels: [Self.ciFullLabel],
+                anyCheckPending: true,
+                hasNonGateTerminalNonSuccess: true))
+            #expect(status.checksPass == .pending, "failed=\(failed)")
+            #expect(status.failedCheckNames.isEmpty, "failed=\(failed)")
+        }
+    }
+
+    @Test func settledTimedOutGatedJobIsFailing() {
+        // Review of #1300 (Yellow): a gated job hit timeout-minutes ⇒ conclusion
+        // TIMED_OUT, which never enters failedCheckNames (FAILURE-only). Once the
+        // run settles, only `CI Gate` is named, but the terminal non-success
+        // sibling corroborates it as a real failure rather than a stale red.
+        let status = IssueTracker.buildPRStatus(from: makePR(
+            checksState: "FAILURE",
+            failedCheckNames: ["CI Gate"],
+            labels: [Self.ciFullLabel, Self.crowMergeLabel],
+            anyCheckPending: false,
+            hasNonGateTerminalNonSuccess: true))
+        #expect(status.checksPass == .failing)
+        #expect(status.failedCheckNames == ["CI Gate"])
     }
 
     @Test func nonConventionRepoIsUnaffected() {
@@ -118,6 +153,25 @@ struct IssueTrackerCIGateTests {
         #expect(transitions.isEmpty)
     }
 
+    @Test func inFlightSiblingFailureFiresNoChecksFailingTransition() {
+        // Review of #1300 (Red), end to end: a sibling worker failing mid-run
+        // must not produce a .checksFailing transition (which would notify and
+        // dispatch respond-to-failed-checks).
+        let sessionID = UUID()
+        let prURL = "https://github.com/corveil/corveil/pull/1"
+        let before = IssueTracker.buildPRStatus(from: makePR(
+            checksState: "PENDING", labels: [Self.ciFullLabel], anyCheckPending: true))
+        let after = IssueTracker.buildPRStatus(from: makePR(
+            checksState: "FAILURE",
+            failedCheckNames: ["Lint"],
+            labels: [Self.ciFullLabel],
+            anyCheckPending: true,
+            hasNonGateTerminalNonSuccess: true))
+        let transitions = PRStatus.transitions(
+            from: before, to: after, sessionID: sessionID, prURL: prURL, prNumber: 1)
+        #expect(transitions.isEmpty)
+    }
+
     @Test func realGatedFailureFiresChecksFailingTransition() {
         let sessionID = UUID()
         let prURL = "https://github.com/corveil/corveil/pull/1"
@@ -125,7 +179,8 @@ struct IssueTrackerCIGateTests {
         let after = IssueTracker.buildPRStatus(from: makePR(
             checksState: "FAILURE",
             failedCheckNames: ["Test (PostgreSQL)", "CI Gate"],
-            labels: [Self.ciFullLabel]))
+            labels: [Self.ciFullLabel],
+            hasNonGateTerminalNonSuccess: true))
         let transitions = PRStatus.transitions(
             from: before, to: after, sessionID: sessionID, prURL: prURL, prNumber: 1)
         #expect(transitions.count == 1)

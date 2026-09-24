@@ -19,10 +19,10 @@ import Foundation
 ///  4. **not** chase a `CI Gate` red that is the expected pre-approval /
 ///     in-flight state (decision 5 of the ADR).
 ///
-/// This convention is deliberately **self-gating on the check name**: nothing
-/// here fires unless a PR actually carries a check context named exactly
-/// `CI Gate`, so repos without the convention (the crow repo's own CI, every
-/// other workspace) are untouched — no repo hardcoding required.
+/// This convention is deliberately **self-gating**: nothing here fires unless a
+/// PR actually carries a check context named exactly `CI Gate` or the `ci:full`
+/// label, so repos without the convention (the crow repo's own CI, every other
+/// workspace) are untouched — no repo hardcoding required.
 public enum CIGateConvention {
     /// The single fail-closed aggregate required check on `corveil/corveil`
     /// (ADR 0082 decision 2). Its presence on a PR is how Crow detects the
@@ -35,6 +35,16 @@ public enum CIGateConvention {
     /// expressible.
     public static let fullSuiteLabel = "ci:full"
 
+    /// The terminal, non-success CheckRun conclusions that corroborate a real
+    /// `CI Gate` failure. The gate is `needs: [lint, migrations, ui, test]` and
+    /// fails closed on any `needs.*.result != success` — which includes a job
+    /// that hit `timeout-minutes` (`TIMED_OUT`) or was cancelled (`CANCELLED`),
+    /// not just one that ran and `FAILURE`d. `SUCCESS`, `SKIPPED` and `NEUTRAL`
+    /// are GitHub's "counts as passing" conclusions and are deliberately absent.
+    public static let terminalNonSuccessConclusions: Set<String> = [
+        "FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE",
+    ]
+
     /// Whether `labels` carries the `ci:full` label (case-insensitive, matching
     /// how `crow:merge` is matched elsewhere).
     public static func hasFullSuiteLabel(_ labels: [LabelInfo]) -> Bool {
@@ -42,38 +52,40 @@ public enum CIGateConvention {
     }
 
     /// Filter an **expected** (non-actionable) `CI Gate` red out of the raw
-    /// failing-check names, so Crow neither reports it as a regression nor
-    /// chases it with respond-to-failed-checks (ADR 0082 decision 5).
+    /// failing-check names for a **settled** run, so Crow neither reports it as
+    /// a regression nor chases it (ADR 0082 decision 5).
     ///
-    /// A `CI Gate` red is a **real, actionable** failure only when all three
-    /// hold — otherwise it is the fail-closed "CI not run" / in-flight state and
-    /// the name is dropped:
+    /// Caller contract: only invoke this once the run has *settled*
+    /// (`buildPRStatus` maps a still-pending convention run to `.pending`
+    /// upstream — an in-flight run is never actionable, no matter which sibling
+    /// jobs have failed so far). Given a settled run, a `CI Gate` red is a
+    /// **real** failure only when:
     ///
     ///  - `ciFullPresent` — the suite was actually requested. Absent ⇒ the red
     ///    is the pre-approval fail-closed state (expected; the PR is blocked by
     ///    the missing approval anyway).
-    ///  - `!anyCheckPending` — the run has settled. A pending/in-progress check
-    ///    means the post-label suite is still in flight, and its `CI Gate` has
-    ///    not posted its real conclusion yet (the in-flight window). Acting now
-    ///    would `synchronize` the PR and `cancel-in-progress` the very run about
-    ///    to go green — the exact loop the ADR warns against.
-    ///  - a **non-`CI Gate`** check is itself failing — `CI Gate` is only the
-    ///    aggregate of the gated jobs, so a genuine failure shows up as one of
-    ///    those jobs' own red. If every other check is green/skipped, a lone
-    ///    `CI Gate` red is a stale conclusion from an earlier run (e.g. the
-    ///    brief window after the workers finish but before the post-label gate
-    ///    is recreated), not a real failure.
+    ///  - a **non-`CI Gate`** check reached a terminal non-success conclusion —
+    ///    `CI Gate` is only the aggregate of the gated jobs, so a genuine
+    ///    failure shows up as one of those jobs' own red **or** timeout/cancel
+    ///    (`hasOtherTerminalNonSuccess`, which the raw `FAILURE`-only
+    ///    `failedCheckNames` can miss). If every other check is
+    ///    success/skipped, a lone `CI Gate` red is a stale conclusion from an
+    ///    earlier run (the brief window after the workers finish but before the
+    ///    post-label gate is recreated), not a real failure.
     ///
     /// When `rawFailed` contains no `CI Gate` entry this is a no-op that returns
     /// the input unchanged — which is every repo without the convention.
     public static func actionableFailedChecks(
         rawFailed: [String],
         ciFullPresent: Bool,
-        anyCheckPending: Bool
+        hasOtherTerminalNonSuccess: Bool
     ) -> [String] {
         guard rawFailed.contains(checkName) else { return rawFailed }
         let others = rawFailed.filter { $0 != checkName }
-        let ciGateIsRealFailure = ciFullPresent && !anyCheckPending && !others.isEmpty
+        // `others` (FAILURE-named non-gate checks) ⊆ the terminal-non-success
+        // set, so the boolean already subsumes it; the `||` is belt-and-braces
+        // against the two being computed from different snapshots.
+        let ciGateIsRealFailure = ciFullPresent && (hasOtherTerminalNonSuccess || !others.isEmpty)
         return ciGateIsRealFailure ? rawFailed : others
     }
 }
