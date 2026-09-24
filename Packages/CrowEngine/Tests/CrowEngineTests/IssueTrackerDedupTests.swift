@@ -30,7 +30,10 @@ struct IssueTrackerDedupTests {
         pendingReviewerLogins: [String] = [],
         hasPendingReviewRequest: Bool = false,
         viewerLastReviewedAt: Date? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        ciGatePresent: Bool = false,
+        anyCheckPending: Bool = false,
+        hasNonGateTerminalNonSuccess: Bool = false
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: number,
@@ -55,7 +58,10 @@ struct IssueTrackerDedupTests {
             pendingReviewerLogins: pendingReviewerLogins,
             hasPendingReviewRequest: hasPendingReviewRequest,
             viewerLastReviewedAt: viewerLastReviewedAt,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            ciGatePresent: ciGatePresent,
+            anyCheckPending: anyCheckPending,
+            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess
         )
     }
 
@@ -187,6 +193,7 @@ struct IssueTrackerDedupTests {
 
     private static let crowMerge = LabelInfo(name: "crow:merge", color: "0E8A16")
     private static let docs = LabelInfo(name: "documentation", color: "ffffff")
+    private static let ciFull = LabelInfo(name: "ci:full", color: "0E8A16")
 
     private func hasCrowMerge(_ pr: IssueTracker.ViewerPR) -> Bool {
         pr.labels.contains { $0.name.caseInsensitiveCompare("crow:merge") == .orderedSame }
@@ -255,7 +262,10 @@ struct IssueTrackerDedupTests {
             changesRequestedReviewerLogins: ["dgershman"],
             pendingReviewerLogins: ["someoneelse"],
             hasPendingReviewRequest: true,
-            updatedAt: stamp)
+            updatedAt: stamp,
+            ciGatePresent: true,
+            anyCheckPending: true,
+            hasNonGateTerminalNonSuccess: true)
         let stale = makeViewerPR(
             url: url, state: "MERGED", labels: [],
             viewerLastReviewedAt: stamp)
@@ -267,6 +277,14 @@ struct IssueTrackerDedupTests {
         #expect(deduped[0].changesRequestedReviewerLogins == ["dgershman"])
         #expect(deduped[0].pendingReviewerLogins == ["someoneelse"])
         #expect(deduped[0].hasPendingReviewRequest)
+        // CROW-3716 (review of #1300): the three CI-Gate flags arrive only from
+        // the viewer record (the loser on state rank here). Dropping them makes
+        // the merged record read as outside the convention (usesCIGate false ⇒
+        // ci:full skipped) and as a settled real failure (anyCheckPending false ⇒
+        // an in-flight sibling red chased). They must survive the merge.
+        #expect(deduped[0].ciGatePresent)
+        #expect(deduped[0].anyCheckPending)
+        #expect(deduped[0].hasNonGateTerminalNonSuccess)
         // CROW-945. `viewerLastReviewedAt` arrives ONLY from the stale record
         // (the viewer-PR query never selects it) and the stale record wins the
         // state rank here, so both merge directions have to carry it — dropping
@@ -275,6 +293,29 @@ struct IssueTrackerDedupTests {
         // `updatedAt` arrives only from the viewer record, i.e. the loser.
         // It was silently dropped before CROW-945.
         #expect(deduped[0].updatedAt == stamp)
+    }
+
+    @Test func mergedInFlightSiblingFailureStaysPendingThroughBuildPRStatus() {
+        // CROW-3716 (review of #1300), end to end: the in-flight sibling-failure
+        // record the poll actually stores is the *merged* one. Reproduce the
+        // review's probe — a convention PR whose viewer record has all three
+        // flags set and a failed sibling, deduped against a stale record — and
+        // confirm the projection off the merged record still suppresses it.
+        let url = "https://github.com/corveil/crow/pull/836"
+        let viewer = makeViewerPR(
+            url: url, state: "OPEN", labels: [Self.crowMerge, Self.ciFull],
+            checksState: "FAILURE", failedCheckNames: ["Lint", "CI Gate"],
+            ciGatePresent: true, anyCheckPending: true, hasNonGateTerminalNonSuccess: true)
+        let stale = makeViewerPR(url: url, state: "OPEN")
+        for pair in [[viewer, stale], [stale, viewer]] {
+            let deduped = IssueTracker.dedupedByURL(pair)
+            #expect(deduped.count == 1)
+            let status = IssueTracker.buildPRStatus(from: deduped[0])
+            // Not `.failing`, and the convention is still recognised.
+            #expect(status.checksPass == .pending)
+            #expect(status.failedCheckNames.isEmpty)
+            #expect(status.usesCIGate)
+        }
     }
 
     @Test func mergePRRecordsCarriesReviewerFieldsFromEitherSide() {

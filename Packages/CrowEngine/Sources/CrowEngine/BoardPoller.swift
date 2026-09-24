@@ -318,7 +318,18 @@ final class BoardPoller {
             // policy — the stale-PR query and the viewer fetch don't always
             // both carry it, and `nil` here means "unknown", so a known value
             // from the loser is strictly better than dropping it (#888).
-            repoAutoMergeAllowed: winner.repoAutoMergeAllowed ?? loser.repoAutoMergeAllowed
+            repoAutoMergeAllowed: winner.repoAutoMergeAllowed ?? loser.repoAutoMergeAllowed,
+            // OR, not pick-a-side (CROW-3716, review of #1300): `false` means
+            // "checks not observed on this path", so a `true` from either record
+            // is the only informative value — exactly like `hasPendingReviewRequest`.
+            // Dropping these blinds the CI-Gate classifier both ways: a lost
+            // `ciGatePresent` reads as outside the convention (usesCIGate false ⇒
+            // ci:full skipped), and a lost `anyCheckPending` reads as settled ⇒
+            // an in-flight sibling red is chased. `hasNonGateTerminalNonSuccess`
+            // OR-s for the same "not observed" reason.
+            ciGatePresent: winner.ciGatePresent || loser.ciGatePresent,
+            anyCheckPending: winner.anyCheckPending || loser.anyCheckPending,
+            hasNonGateTerminalNonSuccess: winner.hasNonGateTerminalNonSuccess || loser.hasNonGateTerminalNonSuccess
         )
     }
 
@@ -599,7 +610,10 @@ final class BoardPoller {
             viewerLastReviewedAt: pr.viewerLastReviewedAt,
             updatedAt: pr.updatedAt,
             mergeCommitOid: pr.mergeCommitOid,
-            repoAutoMergeAllowed: pr.repoAutoMergeAllowed
+            repoAutoMergeAllowed: pr.repoAutoMergeAllowed,
+            ciGatePresent: pr.ciGatePresent,
+            anyCheckPending: pr.anyCheckPending,
+            hasNonGateTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess
         )
     }
 
@@ -642,7 +656,10 @@ final class BoardPoller {
             viewerLastReviewedAt: pr.viewerLastReviewedAt,
             updatedAt: pr.updatedAt,
             mergeCommitOid: pr.mergeCommitOid,
-            repoAutoMergeAllowed: pr.repoAutoMergeAllowed
+            repoAutoMergeAllowed: pr.repoAutoMergeAllowed,
+            ciGatePresent: pr.ciGatePresent,
+            anyCheckPending: pr.anyCheckPending,
+            hasNonGateTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess
         )
     }
 
