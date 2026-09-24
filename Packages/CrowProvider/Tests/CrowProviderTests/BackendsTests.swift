@@ -1125,36 +1125,6 @@ final class BackendsTests: XCTestCase {
         try await backend.ensureMergeLabel(repo: "a/b")
     }
 
-    // CROW-3716 / ADR 0082: `ci:full` runs corveil/corveil's gated test.yml
-    // suite. Same idempotent-create + direct-argv shape as the crow:merge label.
-    func testGitHubCodeBackendEnsureCIFullLabelCreatesLabel() async throws {
-        let fake = FakeShellRunner()
-        let backend = GitHubCodeBackend(shellRunner: fake)
-        try await backend.ensureCIFullLabel(repo: "a/b")
-        XCTAssertEqual(fake.calls.count, 1)
-        let args = fake.calls[0].args
-        XCTAssertEqual(args.prefix(4), ArraySlice(["gh", "label", "create", "ci:full"]))
-        XCTAssertTrue(args.contains("a/b"))
-    }
-
-    func testGitHubCodeBackendEnsureCIFullLabelSwallowsAlreadyExists() async throws {
-        let fake = FakeShellRunner()
-        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: "label ci:full already exists"))]
-        let backend = GitHubCodeBackend(shellRunner: fake)
-        try await backend.ensureCIFullLabel(repo: "a/b")
-    }
-
-    func testGitHubCodeBackendAddCIFullLabelEditsPR() async throws {
-        let fake = FakeShellRunner()
-        let backend = GitHubCodeBackend(shellRunner: fake)
-        try await backend.addCIFullLabel(prURL: "https://github.com/a/b/pull/1")
-        XCTAssertEqual(fake.calls.count, 1)
-        XCTAssertEqual(fake.calls[0].args,
-            ["gh", "pr", "edit", "https://github.com/a/b/pull/1", "--add-label", "ci:full"])
-        // Direct argv + $TMPDIR cwd, matching addMergeLabel.
-        XCTAssertEqual(fake.calls[0].cwd, NSTemporaryDirectory())
-    }
-
     func testGitHubCodeBackendPRStatesBatchesQuery() async throws {
         let fake = FakeShellRunner()
         let json = """

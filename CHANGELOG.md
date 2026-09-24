@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CROW-1306 — **`ci:full` is applied on review approval, not with `crow:merge`.** `addMergeLabel` only adds `crow:merge`. The approver's `crow-review-pr` skill adds `ci:full` after `gh pr review --approve` succeeds, and only when the PR already has a check named `CI Gate`. `--request-changes` and `--no-post` do not add it. Reading an expected pre-approval or in-flight `CI Gate` red is unchanged, and auto-rebase still does not strip `ci:full`.
+
 - CROW-1292 — **Scratch Ticket ignores a second file while the first is in flight.** `todo ticket` still opens a Manager ([ADR 0029](docs/adr/0029-scratch-ticket-opens-a-manager.md)). It stamps `ticketRequestedAt` before that launch, and another call within 15 minutes returns `already_dispatched` without opening a second Manager, until `todo link --type ticket` attaches the issue. The Scratch Ticket button stays disabled for that window across refresh.
 
 - CROW-1289 — **Scratch Ticket opens a Manager instead of filing a provider issue.** The Scratch **Ticket** button and `crow todo ticket` now do what **Explore** does: open (or reuse) a Manager and seed a file-ticket brief. The agent picks the repo, writes the issue, and attaches it with `crow todo link --type ticket`, which moves the item to `ticketed` unless it is already `working` or `done`. The repo dropdown is gone. `--workspace` / `--repo` are no longer accepted. Decision: [ADR 0029](docs/adr/0029-scratch-ticket-opens-a-manager.md).

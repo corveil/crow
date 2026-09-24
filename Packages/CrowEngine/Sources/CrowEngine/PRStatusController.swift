@@ -531,9 +531,7 @@ final class PRStatusController {
             hasMergeLabel: pr.labels.contains {
                 $0.name.caseInsensitiveCompare(AutoMergeController.autoMergeLabel) == .orderedSame
             },
-            // Whether this PR runs the ADR-0082 label-gated CI convention, so
-            // `addMergeLabel` can decide to also apply `ci:full` without keying
-            // off the repo name (CROW-3716).
+            // Whether this PR's checks include `CI Gate` (ADR 0082, CROW-3716).
             usesCIGate: pr.ciGatePresent
         )
     }

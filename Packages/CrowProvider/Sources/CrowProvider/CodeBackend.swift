@@ -33,13 +33,6 @@ public protocol CodeBackend: Sendable {
     /// "this provider doesn't need the same setup step").
     func ensureMergeLabel(repo: String) async throws
 
-    /// Ensure the `ci:full` label exists in `repo` — the label that runs
-    /// `corveil/corveil`'s gated `test.yml` suite (ADR 0082, CROW-3716).
-    /// Backends without label management inherit the default no-op in the
-    /// extension below; only GitHub creates it. Same "provider doesn't need
-    /// this setup step" semantics as `ensureMergeLabel`.
-    func ensureCIFullLabel(repo: String) async throws
-
     /// Fetch the viewer's monitored PRs and review requests in one logical
     /// operation. GitHub batches both into a single GraphQL call; GitLab issues
     /// two REST calls. Returned together because IssueTracker consumes them
@@ -97,14 +90,6 @@ public protocol CodeBackend: Sendable {
     /// Capability-gated on `.autoMergeLabel`. Backends without the capability
     /// inherit the default no-op-throw in the protocol extension below.
     func addMergeLabel(prURL: String) async throws
-
-    /// Add the `ci:full` label to the PR at `prURL` so `corveil/corveil`'s
-    /// label-gated `test.yml` suite runs and the fail-closed `CI Gate` can go
-    /// green (ADR 0082, CROW-3716). Applied alongside `crow:merge` — "run the
-    /// full suite" and "merge this PR" are distinct intents. Capability-gated on
-    /// `.autoMergeLabel` (same label-management capability); backends without it
-    /// inherit the default throw below.
-    func addCIFullLabel(prURL: String) async throws
 
     /// Enable auto-merge on the PR at `prURL` (squash + delete branch).
     /// Capability-gated on `.autoMerge`. Backends without the capability throw
@@ -181,20 +166,6 @@ public extension CodeBackend {
     /// caller that slips through degrades to an error rather than a silent no-op.
     func addMergeLabel(prURL: String) async throws {
         throw ProviderError.unimplemented("addMergeLabel not supported by \(provider)")
-    }
-
-    /// Default: only GitHub manages the `ci:full` label; other providers inherit
-    /// this no-op so a caller that slips through the capability gate does nothing
-    /// rather than erroring, matching `ensureMergeLabel`'s "this provider doesn't
-    /// need the setup step" semantics.
-    func ensureCIFullLabel(repo: String) async throws { }
-
-    /// Default: backends without `.autoMergeLabel` can't add `ci:full`. GitHub
-    /// overrides this; others inherit the throw so a capability-gated caller that
-    /// slips through degrades to an error rather than a silent no-op, mirroring
-    /// `addMergeLabel`.
-    func addCIFullLabel(prURL: String) async throws {
-        throw ProviderError.unimplemented("addCIFullLabel not supported by \(provider)")
     }
 
     /// Default: backends without `.directMerge` can't merge a PR outright.

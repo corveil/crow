@@ -323,10 +323,10 @@ final class BoardPoller {
             // "checks not observed on this path", so a `true` from either record
             // is the only informative value — exactly like `hasPendingReviewRequest`.
             // Dropping these blinds the CI-Gate classifier both ways: a lost
-            // `ciGatePresent` reads as outside the convention (usesCIGate false ⇒
-            // ci:full skipped), and a lost `anyCheckPending` reads as settled ⇒
-            // an in-flight sibling red is chased. `hasNonGateTerminalNonSuccess`
-            // OR-s for the same "not observed" reason.
+            // `ciGatePresent` reads as outside the convention, and a lost
+            // `anyCheckPending` reads as settled ⇒ an in-flight sibling red is
+            // chased. `hasNonGateTerminalNonSuccess` OR-s for the same
+            // "not observed" reason.
             ciGatePresent: winner.ciGatePresent || loser.ciGatePresent,
             anyCheckPending: winner.anyCheckPending || loser.anyCheckPending,
             hasNonGateTerminalNonSuccess: winner.hasNonGateTerminalNonSuccess || loser.hasNonGateTerminalNonSuccess

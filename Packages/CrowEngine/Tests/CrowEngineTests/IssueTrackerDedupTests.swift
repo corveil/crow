@@ -279,9 +279,9 @@ struct IssueTrackerDedupTests {
         #expect(deduped[0].hasPendingReviewRequest)
         // CROW-3716 (review of #1300): the three CI-Gate flags arrive only from
         // the viewer record (the loser on state rank here). Dropping them makes
-        // the merged record read as outside the convention (usesCIGate false ⇒
-        // ci:full skipped) and as a settled real failure (anyCheckPending false ⇒
-        // an in-flight sibling red chased). They must survive the merge.
+        // the merged record read as outside the convention and as a settled
+        // real failure (anyCheckPending false ⇒ an in-flight sibling red
+        // chased). They must survive the merge.
         #expect(deduped[0].ciGatePresent)
         #expect(deduped[0].anyCheckPending)
         #expect(deduped[0].hasNonGateTerminalNonSuccess)
