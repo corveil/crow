@@ -150,8 +150,18 @@ extension CrowDaemon {
                 let now = store.storeModificationDate
                 if now != lastModified {
                     lastModified = now
-                    store.reload()
-                    await reseed(appState, from: store)
+                    // Reseed AppState only when `reload()` actually adopted a
+                    // change made by ANOTHER writer. `reload()` returns false for
+                    // our own writes (and for the pre-save window of an in-flight
+                    // mutate), so this poll no longer rebuilds AppState from the
+                    // daemon's own store writes — which, mid-burst, could read a
+                    // snapshot that a just-registered worktree hadn't landed in yet
+                    // and drop it from `list-worktrees` (CROW-1301). The `changed`
+                    // nudge still fires on every mtime move so web clients re-fetch
+                    // as before.
+                    if store.reload() {
+                        await reseed(appState, from: store)
+                    }
                     await eventHub.broadcast()
                 }
                 let configNow = configModified()

@@ -127,25 +127,69 @@ public final class JSONStore: Sendable {
         (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate]) as? Date
     }
 
-    /// Re-read `store.json` from disk into the in-memory snapshot, discarding a
-    /// stale cached copy. Used by the daemon to pick up writes made by the
-    /// desktop app (the primary writer) without a restart. A missing or
-    /// undecodable file leaves the current snapshot untouched.
-    public func reload() {
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+    /// Re-read `store.json` from disk into the in-memory snapshot, **but only
+    /// when a DIFFERENT writer changed the file.** Returns `true` when a genuine
+    /// external change was adopted, and `false` when the read was skipped
+    /// (nothing external to adopt, or we have unpersisted in-memory writes) or
+    /// the file was missing / undecodable. A missing or undecodable file leaves
+    /// the current snapshot untouched.
+    ///
+    /// Used by the daemon's store-mtime poll to pick up writes made by another
+    /// process without a restart. That poll only knows the file's mtime changed
+    /// — not *who* changed it — so it fires on the daemon's OWN writes too, and
+    /// the daemon is (via the #759 flock) the sole store writer in the shipping
+    /// topology. Reloading our own write is not merely wasteful churn: a
+    /// `mutate` appends to `_data` under `lock` and only *then* saves to disk
+    /// under `writeLock`, so for a brief window `_data` is ahead of the file. A
+    /// reload landing in that window would read the pre-save file and overwrite
+    /// `_data` with it, dropping the just-appended record; a caller that reseeds
+    /// its own in-memory model from the store (the daemon's `reseed`) then
+    /// propagates that loss — surfacing as a worktree that vanishes from
+    /// `list-worktrees` immediately after `add-worktree` "succeeded" under rapid
+    /// session creation (CROW-1301). The two guards below make reload adopt disk
+    /// ONLY for a true foreign write with nothing of ours pending.
+    @discardableResult
+    public func reload() -> Bool {
+        guard let raw = try? Data(contentsOf: fileURL) else { return false }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let decoded = try? decoder.decode(StoreData.self, from: data) else { return }
-        // Adopting a disk copy we didn't write is exactly the single-writer
-        // violation the tripwire watches for; check + re-baseline before we
-        // overwrite our in-memory view (#759).
+        guard let decoded = try? decoder.decode(StoreData.self, from: raw) else { return false }
+
         writeLock.lock()
+        defer { writeLock.unlock() }
+
+        // Guard 1 — never clobber in-memory state that is ahead of disk. A
+        // `mutate` bumps `writeSeq` under `lock` but advances `lastWrittenSeq`
+        // (under this `writeLock`) only once its save lands; while they differ,
+        // `raw` above is the pre-save file and adopting it would drop the
+        // just-appended record. The pending save makes disk authoritative, and a
+        // later reload can adopt a real external change once we are caught up.
+        // Taking `lock` while holding `writeLock` cannot deadlock: `mutate`
+        // releases `lock` before it ever acquires `writeLock`, so nothing holds
+        // `lock` while waiting on `writeLock`.
+        lock.lock()
+        let hasUnpersistedWrites = writeSeq != lastWrittenSeq
+        lock.unlock()
+        if hasUnpersistedWrites { return false }
+
+        // Guard 2 — the file is byte-for-byte our own last write, so there is
+        // nothing external to adopt. Skipping keeps our own writes from driving a
+        // reseed (the CROW-1301 clobber vector) while still letting a genuine
+        // foreign write — which changes the (mtime, size) signature — through.
+        let signature = currentSignature()
+        if let expected = lastWrittenSignature, let signature, signature == expected {
+            return false
+        }
+
+        // A real external change with nothing of ours pending → adopt it. This is
+        // exactly the single-writer violation the tripwire watches for, so log +
+        // re-baseline before overwriting our in-memory view (#759).
         detectExternalWrite(context: "reload")
-        lastWrittenSignature = currentSignature()
-        writeLock.unlock()
+        lastWrittenSignature = signature
         lock.lock()
         _data = decoded
         lock.unlock()
+        return true
     }
 
     public init(directory: URL? = nil) {
