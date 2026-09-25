@@ -429,3 +429,61 @@ import Testing
     #expect(rollup.sessionID == nil)
     #expect(rollup.compactionCount == nil)
 }
+
+// MARK: - reload() conflict-awareness (CROW-1301)
+
+// reload() must NOT re-adopt (or report a change for) a file this store itself
+// just wrote. The daemon's store-mtime poll can't tell its own writes from an
+// external one, so it fires reload() on every write; if reload adopted our own
+// write it would drive a `reseed` that — mid-burst, reading the pre-save window
+// of an in-flight mutate — dropped a just-registered worktree from AppState
+// (the lost `list-worktrees` row in CROW-1301). A settled self-write must read
+// back as "nothing to adopt".
+@Test func reloadSkipsOurOwnWrite() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = JSONStore(directory: dir)
+    let sessionID = UUID()
+    store.mutate { $0.sessions.append(Session(id: sessionID, name: "s")) }
+    store.mutate {
+        $0.worktrees.append(SessionWorktree(
+            sessionID: sessionID, repoName: "crow", repoPath: "/repo",
+            worktreePath: "/repo/wt", branch: "feature/crow-1301"))
+    }
+
+    // Our own committed write → no external change to adopt, and the snapshot is
+    // left exactly as we wrote it.
+    #expect(store.reload() == false)
+    #expect(store.data.worktrees.count == 1)
+    #expect(store.data.worktrees.first?.branch == "feature/crow-1301")
+    // Idempotent: a second reload still finds nothing to adopt.
+    #expect(store.reload() == false)
+    #expect(store.data.worktrees.count == 1)
+}
+
+// The flip side: reload() must still adopt a write made by a DIFFERENT process
+// (a hand edit, or a second writer) so the cross-process live-reload the poll
+// exists for keeps working. A foreign write changes the file's (mtime, size)
+// signature, which is how reload tells it apart from its own.
+@Test func reloadAdoptsExternalWrite() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = JSONStore(directory: dir)
+    store.mutate { $0.sessions.append(Session(name: "ours")) }
+    #expect(store.data.sessions.count == 1)
+
+    // Simulate a second writer replacing store.json with more content (so the
+    // size — and thus the signature — differs from our last write).
+    var external = StoreData()
+    external.sessions = [Session(name: "ours"), Session(name: "theirs")]
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(external).write(to: dir.appendingPathComponent("store.json"), options: .atomic)
+
+    #expect(store.reload() == true)
+    #expect(store.data.sessions.count == 2)
+    #expect(store.data.sessions.contains { $0.name == "theirs" })
+}
