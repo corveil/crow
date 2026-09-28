@@ -6,6 +6,17 @@ import CrowPersistence
 import CrowTerminal
 import Foundation
 
+/// `before_id` / `after_id` on `reorder-manager`. Missing and JSON null are
+/// "not passed". Anything else that isn't a UUID is a param error.
+private func optionalUUIDParam(_ params: [String: JSONValue], _ key: String) throws -> UUID? {
+    guard let value = params[key] else { return nil }
+    if case .null = value { return nil }
+    guard let raw = value.stringValue, let id = UUID(uuidString: raw) else {
+        throw DaemonRPCError.invalidParams("\(key) must be a UUID")
+    }
+    return id
+}
+
 /// Open Scratch items keyed by the Manager session they link. A done item is
 /// dropped so the header control disappears after "Mark Scratch Done". When
 /// several open items point at one session, the newest `updatedAt` wins; ties
@@ -384,6 +395,42 @@ func makeSessionHandlers(
                     }
                 }
                 return ["session_id": .string(idStr), "locked": .bool(locked)]
+            }
+        },
+
+        // Move an extra Manager above or below another (CROW-1294). The primary
+        // stays the well-known id — array position does not choose the nav pill,
+        // and this verb refuses to move it. Extra Managers are permuted among
+        // the indices they already occupy, so work / job / review order is
+        // unchanged. One synchronous MainActor read-modify-write.
+        "reorder-manager": { params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            let beforeID = try optionalUUIDParam(params, "before_id")
+            let afterID = try optionalUUIDParam(params, "after_id")
+            return try await MainActor.run {
+                let order: [UUID]
+                do {
+                    order = try ManagerReorder.extraOrder(
+                        moving: id, before: beforeID, after: afterID, in: appState.sessions)
+                } catch let error as ManagerReorder.Failure {
+                    if case .ambiguousAnchor = error {
+                        throw DaemonRPCError.invalidParams(error.description)
+                    }
+                    throw DaemonRPCError.applicationError(error.description)
+                }
+                let current = appState.sessions.filter(ManagerReorder.isExtraManager).map(\.id)
+                if order != current {
+                    appState.sessions = ManagerReorder.apply(extraOrder: order, to: appState.sessions)
+                    store.mutate { data in
+                        data.sessions = ManagerReorder.apply(extraOrder: order, to: data.sessions)
+                    }
+                }
+                return [
+                    "session_id": .string(id.uuidString),
+                    "order": .array(order.map { .string($0.uuidString) }),
+                ]
             }
         },
 

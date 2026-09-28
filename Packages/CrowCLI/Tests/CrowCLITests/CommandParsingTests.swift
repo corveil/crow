@@ -264,3 +264,40 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         try cmd.validate()
     }
 }
+
+private let otherUUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+@Test func reorderManagerParsesBefore() throws {
+    let cmd = try ReorderManager.parse(["--session", validUUID, "--before", otherUUID])
+    try cmd.validate()
+    #expect(cmd.session == validUUID)
+    #expect(cmd.before == otherUUID)
+    #expect(cmd.after == nil)
+}
+
+@Test func reorderManagerParsesAfter() throws {
+    let cmd = try ReorderManager.parse(["--session", validUUID, "--after", otherUUID])
+    try cmd.validate()
+    #expect(cmd.after == otherUUID)
+    #expect(cmd.before == nil)
+}
+
+@Test func reorderManagerRequiresExactlyOneAnchor() {
+    #expect(throws: (any Error).self) {
+        let cmd = try ReorderManager.parse(["--session", validUUID])
+        try cmd.validate()
+    }
+    #expect(throws: (any Error).self) {
+        let cmd = try ReorderManager.parse([
+            "--session", validUUID, "--before", otherUUID, "--after", otherUUID,
+        ])
+        try cmd.validate()
+    }
+}
+
+@Test func reorderManagerRejectsInvalidUUID() {
+    #expect(throws: (any Error).self) {
+        let cmd = try ReorderManager.parse(["--session", "not-a-uuid", "--before", otherUUID])
+        try cmd.validate()
+    }
+}

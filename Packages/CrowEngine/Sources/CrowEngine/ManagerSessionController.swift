@@ -731,6 +731,10 @@ final class ManagerSessionController {
         if isolated != cwd, let root = devRoot {
             ManagerIdentity.prepareDirectory(at: isolated, orchestrationRoot: root)
         }
+        // Append, so a new extra Manager is last in store order and therefore
+        // last among the sidebar's extra-Manager rows until `reorder-manager`
+        // moves it (CROW-1294). The primary is the well-known id; array
+        // position does not choose the nav pill.
         appState.sessions.append(session)
         store.mutate { $0.sessions.append(session) }
         createManagerTerminal(session: session, cwd: isolated, initialPrompt: initialPrompt)

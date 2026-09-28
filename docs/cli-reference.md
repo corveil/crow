@@ -237,6 +237,23 @@ crow delete-session --session <uuid>
 
 Deletes the session metadata. Sessions on protected branches (main/master/develop) preserve the repo folder and branch — see [Configuration › Safe Deletion](configuration.md#safe-deletion).
 
+### `crow reorder-manager`
+
+Move an extra Manager above or below another in the left sidebar. The order is the stored session array, so it survives a reload. The primary Manager (the nav pill, the well-known id) cannot be moved and is not a valid anchor. A newly created extra Manager stays at the end of those rows until this moves it. Work, job, and review rows are not part of the order.
+
+```bash
+crow reorder-manager --session <uuid> --before <uuid>
+crow reorder-manager --session <uuid> --after <uuid>
+```
+
+| Flag        | Required | Description                                      |
+| ----------- | -------- | ------------------------------------------------ |
+| `--session` | yes      | Extra Manager session UUID to move               |
+| `--before`  | one of   | Place it immediately before this extra Manager   |
+| `--after`   | one of   | Place it immediately after this extra Manager    |
+
+Pass exactly one of `--before` or `--after`. Returns `{"session_id":"…","order":["…"]}` — `order` is the extra-Manager ids after the move.
+
 ---
 
 ## Metadata Commands

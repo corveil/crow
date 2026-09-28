@@ -32,6 +32,7 @@ crow get-session --session <uuid>               → {id, name, status, ticket_ur
 crow set-status --session <uuid> active|completed|archived
 crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}
 crow delete-session --session <uuid>            → {"deleted":true}
+crow reorder-manager --session <uuid> (--before <uuid> | --after <uuid>) → {"session_id":"...","order":["..."]}
 ```
 
 ### Metadata Commands

@@ -186,7 +186,8 @@ const GROUPS = [
 // clone lands two open reviews in "Reviews"), and hiding either would strand a
 // running agent with no way to select or delete it (CROW-877 review).
 // Managers carry no PR link and match no GROUP, so they drop out here and are
-// rendered by renderSidebar's dedicated managers pass.
+// rendered by renderSidebar's dedicated extra-Manager pass. The primary is the
+// nav pill (`isPrimaryManager`), not a row in that pass.
 function isTerminal(s) {
   return s.status === 'completed' || s.status === 'archived';
 }
@@ -248,12 +249,30 @@ function groupSessions(list) {
 // can return later with the old Scratch link and would put "Mark Scratch
 // Done" back on a Manager that just finished the item (CROW-1288).
 let sessionsRefreshGen = 0;
+// Extra-Manager drag (CROW-1294). While a reorder RPC is in flight, or a poll
+// started before that RPC settled, list-sessions must not paint the pre-drop
+// order back over the sidebar. The overlay uses the local extra-Manager id
+// order and the server's session objects, so other fields still refresh.
+let managerReorderInFlight = 0;
+let managerReorderEpoch = 0;
+let managerReorderChain = Promise.resolve();
+// Bumped when a reorder RPC fails. Later drops already queued were computed
+// against an optimistic order the server rejected, so they must not run.
+let managerReorderChainGen = 0;
+// Set for the whole grip gesture. renderSidebar bails so a poll cannot
+// destroy the row under the pointer.
+let managerDrag = null;
+
 async function refreshSessions() {
   const gen = ++sessionsRefreshGen;
+  const reorderEpochAtStart = managerReorderEpoch;
   try {
     const res = await rpc('list-sessions');
     if (gen !== sessionsRefreshGen) return;
-    const next = res.sessions || [];
+    let next = res.sessions || [];
+    if (managerReorderInFlight > 0 || reorderEpochAtStart !== managerReorderEpoch) {
+      next = applyExtraManagerOrder(next, extraManagersOf(sessions).map((s) => s.id));
+    }
     const changed = JSON.stringify(sessions) !== JSON.stringify(next);
     // The open session's Scratch link lives on this payload (CROW-1288).
     // Re-render the header when it appears or disappears so "Mark Scratch
@@ -343,6 +362,12 @@ function sidebarSignature() {
 }
 
 function renderSidebar() {
+  if (managerDrag) {
+    // A poll mid-drag must not rebuild the row the pointer is holding.
+    // Clearing the signature makes the next render (after pointerup) rebuild.
+    lastSidebarSig = null;
+    return;
+  }
   const sig = sidebarSignature();
   if (sig === lastSidebarSig) return; // nothing changed — don't repaint
   lastSidebarSig = sig;
@@ -374,17 +399,249 @@ function renderSidebar() {
     return;
   }
 
-  // Extra (non-primary) manager sessions render as rows, no section header.
-  const managers = sessions.filter((s) => s.kind === 'manager');
-  for (const m of managers.slice(1)) root.appendChild(sessionRow(m));
+  // Extra Managers render as rows, no section header. The primary is the nav
+  // pill (`isPrimaryManager`), not "first manager in the array" — a drop must
+  // not be able to move the pill onto a different session (CROW-1294).
+  const extras = extraManagersOf(sessions);
+  for (const m of extras) {
+    const row = sessionRow(m);
+    if (!selectionMode && extras.length > 1) attachExtraManagerDrag(row, m);
+    root.appendChild(row);
+  }
 
   let shown = 0;
   for (const { title, rows, allIds } of groupSessions(sessions)) {
     root.appendChild(selectionMode ? sectionHeader(title, allIds) : el('div', 'divider', title));
     for (const s of rows) { root.appendChild(sessionRow(s)); shown++; }
   }
-  if ((sessionsLoaded || sidebarCacheHit) && !shown && !managers.length) {
+  const anyManager = extras.length > 0 || sessions.some(isPrimaryManager);
+  if ((sessionsLoaded || sidebarCacheHit) && !shown && !anyManager) {
     root.appendChild(el('div', 'empty', 'No sessions'));
+  }
+}
+
+// The primary Manager is the nav pill. `is_primary_manager` is authoritative.
+// A sidebar cache written before that flag existed still names the well-known
+// id; an explicit false never promotes a row into the pill.
+const PRIMARY_MANAGER_ID = '00000000-0000-0000-0000-000000000000';
+function isPrimaryManager(s) {
+  if (!s || s.kind !== 'manager') return false;
+  if (s.is_primary_manager === true) return true;
+  if (s.is_primary_manager === false) return false;
+  return String(s.id).toLowerCase() === PRIMARY_MANAGER_ID;
+}
+
+function extraManagersOf(list) {
+  return list.filter((s) => s.kind === 'manager' && !isPrimaryManager(s));
+}
+
+// Permute extra Managers among the indices they already occupy. `beforeId`
+// null places `movingId` last. Returns `list` unchanged (same reference) when
+// the drop doesn't move anything, so the caller can skip the RPC.
+function reorderExtraManagers(list, movingId, beforeId) {
+  const extras = extraManagersOf(list);
+  const movingIdx = extras.findIndex((s) => s.id === movingId);
+  if (movingIdx < 0) return list;
+  const currentBefore = movingIdx + 1 < extras.length ? extras[movingIdx + 1].id : null;
+  if ((beforeId || null) === currentBefore) return list;
+  const moving = extras[movingIdx];
+  const rest = extras.filter((s) => s.id !== movingId);
+  let insertAt = rest.length;
+  if (beforeId) {
+    const i = rest.findIndex((s) => s.id === beforeId);
+    if (i < 0) return list;
+    insertAt = i;
+  }
+  rest.splice(insertAt, 0, moving);
+  const next = list.slice();
+  let k = 0;
+  for (let i = 0; i < next.length; i++) {
+    if (next[i].kind === 'manager' && !isPrimaryManager(next[i])) next[i] = rest[k++];
+  }
+  return next;
+}
+
+// Place server session objects into the local extra-Manager order. Ids the
+// local order doesn't mention (a Manager created while the drag was in
+// flight) follow, which is also where `create-manager` appends them.
+function applyExtraManagerOrder(list, orderIds) {
+  const extras = extraManagersOf(list);
+  const byId = new Map(extras.map((s) => [s.id, s]));
+  const placed = [];
+  const seen = new Set();
+  for (const id of orderIds) {
+    const s = byId.get(id);
+    if (!s || seen.has(id)) continue;
+    placed.push(s);
+    seen.add(id);
+  }
+  for (const s of extras) if (!seen.has(s.id)) placed.push(s);
+  const next = list.slice();
+  let k = 0;
+  for (let i = 0; i < next.length; i++) {
+    if (next[i].kind === 'manager' && !isPrimaryManager(next[i]) && k < placed.length) {
+      next[i] = placed[k++];
+    }
+  }
+  return next;
+}
+
+function managersInSidebarOrder(list) {
+  const primary = [];
+  const extras = [];
+  for (const m of list) {
+    if (m.kind !== 'manager') continue;
+    if (isPrimaryManager(m)) primary.push(m);
+    else extras.push(m);
+  }
+  return primary.concat(extras);
+}
+
+function attachExtraManagerDrag(row, session) {
+  row.dataset.extraManager = '1';
+  row.dataset.sessionId = session.id;
+  const lead = row.querySelector('.row-lead');
+  if (!lead) return;
+  const grip = el('button', 'mgr-grip', '⋮⋮');
+  grip.type = 'button';
+  grip.title = 'Drag to reorder';
+  grip.setAttribute('aria-label', 'Drag to reorder');
+  grip.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+  // The row's long-press listens for touchstart. A grip drag is not a menu.
+  grip.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+  grip.addEventListener('pointerdown', (e) => startManagerDrag(e, session, row));
+  lead.insertBefore(grip, lead.firstChild);
+}
+
+function startManagerDrag(e, session, row) {
+  if (selectionMode || managerDrag) return;
+  if (e.button != null && e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const grip = e.currentTarget;
+  const pointerId = e.pointerId;
+  managerDrag = { movingId: session.id, pointerId: pointerId, startY: e.clientY, active: false, beforeId: null, row: row };
+  try { grip.setPointerCapture(pointerId); } catch (_) {}
+  let ended = false;
+  function finish(ev) {
+    if (ended) return;
+    const drag = managerDrag;
+    if (!drag || (ev.pointerId != null && ev.pointerId !== drag.pointerId)) return;
+    ended = true;
+    grip.removeEventListener('pointermove', onMove);
+    grip.removeEventListener('pointerup', finish);
+    grip.removeEventListener('pointercancel', finish);
+    grip.removeEventListener('lostpointercapture', finish);
+    const movingId = drag.movingId;
+    const beforeId = drag.beforeId;
+    const active = drag.active;
+    managerDrag = null;
+    document.body.classList.remove('mgr-reordering');
+    clearManagerDropMarkers();
+    if (active && ev.type === 'pointerup') commitManagerReorder(movingId, beforeId);
+    else {
+      lastSidebarSig = null;
+      renderSidebar();
+    }
+  }
+  function onMove(ev) {
+    const drag = managerDrag;
+    if (!drag || ev.pointerId !== drag.pointerId) return;
+    if (!drag.active && Math.abs(ev.clientY - drag.startY) < 4) return;
+    drag.active = true;
+    drag.row.classList.add('mgr-dragging');
+    document.body.classList.add('mgr-reordering');
+    drag.beforeId = managerDropBeforeId(ev.clientY, drag.movingId);
+    paintManagerDrop(drag.movingId, drag.beforeId);
+  }
+  grip.addEventListener('pointermove', onMove);
+  grip.addEventListener('pointerup', finish);
+  grip.addEventListener('pointercancel', finish);
+  // pointerup releases capture, which then fires lostpointercapture. `ended`
+  // makes that second event a no-op. If capture is lost without a pointerup,
+  // this cancels the drag instead of leaving the sidebar frozen.
+  grip.addEventListener('lostpointercapture', finish);
+}
+
+function managerDropBeforeId(clientY, movingId) {
+  const rows = document.querySelectorAll('#sidebar .session-row[data-extra-manager]');
+  for (const row of rows) {
+    if (row.dataset.sessionId === movingId) continue;
+    const rect = row.getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) return row.dataset.sessionId;
+  }
+  return null;
+}
+
+function paintManagerDrop(movingId, beforeId) {
+  clearManagerDropMarkers();
+  const rows = [...document.querySelectorAll('#sidebar .session-row[data-extra-manager]')];
+  if (beforeId) {
+    const target = rows.find((r) => r.dataset.sessionId === beforeId);
+    if (target) target.classList.add('mgr-drop-before');
+    return;
+  }
+  const last = rows.filter((r) => r.dataset.sessionId !== movingId).pop();
+  if (last) last.classList.add('mgr-drop-after');
+}
+
+function clearManagerDropMarkers() {
+  document.querySelectorAll('.mgr-drop-before, .mgr-drop-after').forEach((n) => {
+    n.classList.remove('mgr-drop-before', 'mgr-drop-after');
+  });
+}
+
+function managerReorderParams(movingId, beforeId, list) {
+  if (beforeId) return { session_id: movingId, before_id: beforeId };
+  const extras = extraManagersOf(list);
+  const idx = extras.findIndex((s) => s.id === movingId);
+  if (idx <= 0) return null;
+  return { session_id: movingId, after_id: extras[idx - 1].id };
+}
+
+function commitManagerReorder(movingId, beforeId) {
+  const next = reorderExtraManagers(sessions, movingId, beforeId);
+  if (next === sessions) {
+    lastSidebarSig = null;
+    renderSidebar();
+    return;
+  }
+  const params = managerReorderParams(movingId, beforeId, next);
+  if (!params) {
+    lastSidebarSig = null;
+    renderSidebar();
+    return;
+  }
+  sessions = next;
+  lastSidebarSig = null;
+  renderSidebar();
+  const gen = managerReorderChainGen;
+  managerReorderInFlight++;
+  managerReorderChain = managerReorderChain.then(() => {
+    if (gen !== managerReorderChainGen) {
+      managerReorderInFlight = Math.max(0, managerReorderInFlight - 1);
+      managerReorderEpoch++;
+      return;
+    }
+    return deliverManagerReorder(params);
+  });
+}
+
+async function deliverManagerReorder(params) {
+  try {
+    await rpc('reorder-manager', params);
+  } catch (e) {
+    managerReorderChainGen++;
+    try {
+      const res = await rpc('list-sessions');
+      sessions = res.sessions || sessions;
+    } catch (_) { /* next poll retries */ }
+    lastSidebarSig = null;
+    renderSidebar();
+    alertModal('Could not reorder Manager: ' + (e.message || e));
+  } finally {
+    managerReorderInFlight = Math.max(0, managerReorderInFlight - 1);
+    managerReorderEpoch++;
   }
 }
 

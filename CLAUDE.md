@@ -42,6 +42,7 @@ crow set-status --session <uuid> active|paused|inReview|completed|archived
 crow set-locked --session <uuid> true|false     → exempt a session from (or return it to) the retention reaper
 crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}
 crow delete-session --session <uuid>            → {"deleted":true}
+crow reorder-manager --session <uuid> (--before <uuid> | --after <uuid>) → {"session_id":"...","order":["..."]}
 ```
 
 ### Session Lifecycle

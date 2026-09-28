@@ -228,10 +228,14 @@ function sidebarLeftStack() {
   // right icon column no longer divides the left column's height — its buttons are a
   // fixed-size centered stack since CROW-922 — so a Manager-less render can't shrink
   // them below the WCAG floor.)
-  const primaryManager = sessions.find((s) => s.kind === 'manager');
+  // The pill is the primary Manager (`is_primary_manager` / the well-known
+  // id), not whichever Manager happens to be first in the array. A sidebar
+  // reorder of the extra rows must not move this pill (CROW-1294).
+  const primaryManager = sessions.find(isPrimaryManager);
   if (primaryManager) {
     const row3 = el('div', 'nav-pills-row');
     const mgr = navPill('Manager', selectedId === primaryManager.id, () => selectSession(primaryManager.id));
+    mgr.dataset.sessionId = primaryManager.id;
     const ind = activityIndicator(primaryManager);
     const dot = el('span', 'pill-dot' + (ind.pulse ? ' pulse' : ''));
     dot.style.background = ind.color;

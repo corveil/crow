@@ -35,6 +35,11 @@ enum RPCLanePolicy {
         // A brand-new id has nothing to order against, and the append is one
         // synchronous MainActor block.
         "new-session": .concurrent,
+        // One synchronous MainActor permutation of the session array, same
+        // shape as `new-session`. The web client chains drops so two reorders
+        // apply in gesture order; the actor still serializes the write if
+        // they overlap.
+        "reorder-manager": .concurrent,
         "rename-session": .on("session_id"),
         "select-session": .on("session_id"),
         "set-status": .on("session_id"),
