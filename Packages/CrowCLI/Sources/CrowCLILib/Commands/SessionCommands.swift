@@ -181,6 +181,42 @@ public struct DeleteSession: ParsableCommand {
     }
 }
 
+/// Move an extra Manager above or below another in the left sidebar (CROW-1294).
+///
+/// The primary Manager (the well-known id, the nav pill) cannot be moved and
+/// is not a valid `--before` / `--after` anchor. Pass exactly one of those.
+/// A newly created extra Manager stays at the end of the extra-Manager rows
+/// until this verb moves it. Work, job, and review rows are not part of the
+/// order.
+public struct ReorderManager: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "reorder-manager",
+        abstract: "Move an extra Manager above or below another in the sidebar"
+    )
+    @Option(name: .long, help: "Extra Manager session UUID to move") var session: String
+    @Option(name: .long, help: "Place it immediately before this extra Manager") var before: String?
+    @Option(name: .long, help: "Place it immediately after this extra Manager") var after: String?
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+        guard (before == nil) != (after == nil) else {
+            throw ValidationError("Pass exactly one of --before or --after")
+        }
+        if let before { try validateUUID(before, label: "before UUID") }
+        if let after { try validateUUID(after, label: "after UUID") }
+    }
+
+    public func run() throws {
+        var params: [String: JSONValue] = ["session_id": .string(session)]
+        if let before { params["before_id"] = .string(before) }
+        if let after { params["after_id"] = .string(after) }
+        let result = try rpc("reorder-manager", params: params)
+        printJSON(result)
+    }
+}
+
 /// Hand a session off to a different coding agent mid-flight (CROW-627).
 ///
 /// Preserves session identity, worktree, branch, and ticket context. Tears

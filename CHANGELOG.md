@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CROW-1294 — **Drag extra Managers in the left sidebar to reorder them.** A grip on each extra Manager row (when there are two or more) drops that row above or below another extra Manager. The order is written into the stored session array, so a reload shows it. The nav pill stays the primary Manager (`is_primary_manager` / the well-known id), and a new extra Manager still appears at the end until it is moved. Jobs, Active, Reviews, In Review, and Completed are not part of the drag. Sidebar order in the session switcher lists Managers the same way. CLI: `crow reorder-manager --session <uuid> --before <uuid>` or `--after <uuid>`.
+
 - CROW-1293 — **Delete on the Manager session header.** An extra Manager's header shows a red **Delete** immediately left of Reload, and immediately right of **Mark Scratch Done** when a linked Scratch item is still open. The click is the same confirm dialog and `delete-session` path as the row menu. The primary Manager still offers Delete; the daemon rejects it with "Cannot delete manager session" and the header surfaces that failure. Work and review headers are unchanged.
 
 - CROW-1288 — **Mark Scratch done from the session header.** A Manager that Scratch Explore linked to an open item shows **Mark Scratch Done** in the session top bar (next to Reload). The click runs `todo-done` for that item; the button leaves once the item is done. Work sessions are unchanged. `list-sessions` carries `linked_scratch` (`id`, `text`, `state`) only for that Manager, and only while the item is not done — when several open items point at one Manager, the newest update wins.

@@ -220,7 +220,9 @@ function switcherIncludesSession(s, include) {
 function switcherSidebarOrdered(list, include) {
   const eligible = list.filter((s) => switcherIncludesSession(s, include));
   const out = [];
-  for (const m of eligible.filter((s) => s.kind === 'manager')) out.push(m);
+  // Same Manager order as the sidebar: the primary pill, then extra-Manager
+  // rows. Array position does not choose the primary (CROW-1294).
+  for (const m of managersInSidebarOrder(eligible)) out.push(m);
   for (const g of groupSessions(eligible)) {
     for (const row of g.rows) out.push(row);
   }

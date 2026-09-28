@@ -114,6 +114,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow remove-link`](#crow-remove-link) | Remove a link from a session |
 | [`crow rename-session`](#crow-rename-session) | Rename a session |
 | [`crow rename-terminal`](#crow-rename-terminal) | Rename a terminal tab |
+| [`crow reorder-manager`](#crow-reorder-manager) | Move an extra Manager above or below another in the sidebar |
 | [`crow restart-manager`](#crow-restart-manager) | Relaunch the Manager's agent process in place |
 | [`crow restart-tmux-server`](#crow-restart-tmux-server) | Restart the tmux server, rebuilding every terminal (destructive) |
 | [`crow resync-jira`](#crow-resync-jira) | Re-sync Jira ticket statuses from Crow session state |
@@ -1801,6 +1802,22 @@ crow rename-terminal --session <session> --terminal <terminal> <name>
 | `--session` | `<session>` | yes | Session UUID |
 | `--terminal` | `<terminal>` | yes | Terminal UUID |
 | _(positional)_ | `<name>` | yes | New name |
+
+---
+
+## `crow reorder-manager`
+
+Move an extra Manager above or below another in the sidebar.
+
+```
+crow reorder-manager --session <session> [--before <before>] [--after <after>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Extra Manager session UUID to move |
+| `--before` | `<before>` | no | Place it immediately before this extra Manager |
+| `--after` | `<after>` | no | Place it immediately after this extra Manager |
 
 ---
 

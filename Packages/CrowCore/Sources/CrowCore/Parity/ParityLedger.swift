@@ -171,6 +171,7 @@ public enum ParityLedger {
         .write("set-status", cli: "set-status"),
         .write("set-locked", cli: "set-locked"),
         .write("delete-session", cli: "delete-session"),
+        .write("reorder-manager", cli: "reorder-manager"),
         .write("handoff-agent", cli: "handoff-agent"),
         .read(
             "list-sessions-live",
