@@ -57,6 +57,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// disabled, labels are left alone so a later opt-in can still pick
     /// up previously-labeled issues. `crow:auto` wins when both are present.
     public var autoCreateWatcherEnabled: Bool
+    /// When true, the daemon adds `crow:reviewing` to a PR when a Crow review
+    /// session starts and removes it when that review ends (CROW-1310).
+    /// Opt-in: defaults to false. A reviewer without permission to label the
+    /// repo gets no label; the review still starts. Identity is the latest
+    /// `LabeledEvent` actor, not a per-user label.
+    public var reviewInProgressLabelEnabled: Bool
     public var cleanup: CleanupConfig
     /// Periodic check against `corveil/crow` `main` to surface when this build
     /// is behind upstream (CROW-938). Off-able; interval floored at 1h.
@@ -182,6 +188,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         attributionTrailers: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
         autoCreateWatcherEnabled: Bool = false,
+        reviewInProgressLabelEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig(),
         versionUpdate: VersionUpdateConfig = VersionUpdateConfig(),
         jobs: [JobConfig] = [],
@@ -210,6 +217,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.attributionTrailers = attributionTrailers
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
+        self.reviewInProgressLabelEnabled = reviewInProgressLabelEnabled
         self.cleanup = cleanup
         self.versionUpdate = versionUpdate
         self.jobs = jobs
@@ -241,6 +249,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
         autoCreateWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCreateWatcherEnabled) ?? false
+        reviewInProgressLabelEnabled = try container.decodeIfPresent(Bool.self, forKey: .reviewInProgressLabelEnabled) ?? false
         // Backward-compat (CROW-551): the pre-CROW-551 top-level
         // `autoRebaseWatcherEnabled` moved into
         // `autoRespond.autoRebaseAndResolveConflicts`. Carry an existing opt-in
@@ -299,7 +308,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection
+        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection
     }
 
     /// Resolve the agent that should drive a newly-created session of the

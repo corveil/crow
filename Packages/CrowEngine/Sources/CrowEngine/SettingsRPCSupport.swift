@@ -100,7 +100,7 @@ public enum SettingsRPC {
     /// `config_readable` follows `notifications-get`: `ConfigStore.loadConfig`
     /// returns nil both for "no config yet" (defaults really apply) and for
     /// "present but undecodable" (the defaults are a fiction). That matters more
-    /// here than for telemetry — six of these twelve booleans default to `true`,
+    /// here than for telemetry — six of these thirteen booleans default to `true`,
     /// so a caller shown invented settings as fact would conclude automation is
     /// armed when the daemon can't read the file at all.
     public static func automationJSON(
@@ -115,6 +115,7 @@ public enum SettingsRPC {
             "attribution_trailers": .bool(config.attributionTrailers),
             "auto_create_watcher_enabled": .bool(config.autoCreateWatcherEnabled),
             "auto_merge_watcher_enabled": .bool(config.autoMergeWatcherEnabled),
+            "review_in_progress_label_enabled": .bool(config.reviewInProgressLabelEnabled),
             "auto_respond": .object([
                 "respond_to_changes_requested":
                     .bool(config.autoRespond.respondToChangesRequested),

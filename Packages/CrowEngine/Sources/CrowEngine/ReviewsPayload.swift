@@ -103,6 +103,7 @@ public enum ReviewsPayload {
             fields["kickoff_action"] = .string(actionName(action))
             fields["viewer_last_reviewed_at"] = r.viewerLastReviewedAt.map { .string(fmt.string(from: $0)) } ?? .null
             fields["viewer_last_review_state"] = r.viewerLastReviewState.map { .string($0.rawValue) } ?? .null
+            fields["reviewing_by"] = r.reviewingBy.map { .string($0) } ?? .null
             fields["state"] = r.state.map { .string($0) } ?? .null
             fields["completed_at"] = r.completedAt.map { .string(fmt.string(from: $0)) } ?? .null
             fields["group"] = .string(group.rawValue)

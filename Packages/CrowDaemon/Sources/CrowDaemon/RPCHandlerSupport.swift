@@ -122,6 +122,10 @@ func prStatusJSON(_ pr: PRStatus) -> [String: JSONValue] {
         // from `session.auto_merge` (Crow already enabled it). The web row
         // renders them as two indicators (CROW-773).
         "has_merge_label": .bool(pr.hasMergeLabel),
+        // Who last added `crow:reviewing` (CROW-1310). Null when the label
+        // isn't on the PR. The work-session row renders this as
+        // "being reviewed by @x".
+        "reviewing_by": pr.reviewingBy.map { .string($0) } ?? .null,
     ]
 }
 

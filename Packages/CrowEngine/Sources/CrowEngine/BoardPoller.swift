@@ -269,6 +269,10 @@ final class BoardPoller {
     nonisolated static func mergePRRecords(_ lhs: ViewerPR, _ rhs: ViewerPR) -> ViewerPR {
         let (winner, loser) = stateRank(lhs.state) >= stateRank(rhs.state)
             ? (lhs, rhs) : (rhs, lhs)
+        let labels = Self.unionLabels(winner.labels, loser.labels)
+        let reviewingBy = labels.contains(where: {
+            $0.name.caseInsensitiveCompare(ReviewingLabel.name) == .orderedSame
+        }) ? (winner.reviewingBy ?? loser.reviewingBy) : nil
         return ViewerPR(
             number: winner.number,
             url: winner.url,
@@ -281,7 +285,7 @@ final class BoardPoller {
             headRefOid: winner.headRefOid.isEmpty ? loser.headRefOid : winner.headRefOid,
             baseRefName: winner.baseRefName.isEmpty ? loser.baseRefName : winner.baseRefName,
             repoNameWithOwner: winner.repoNameWithOwner.isEmpty ? loser.repoNameWithOwner : winner.repoNameWithOwner,
-            labels: Self.unionLabels(winner.labels, loser.labels),
+            labels: labels,
             linkedIssueReferences: winner.linkedIssueReferences.isEmpty ? loser.linkedIssueReferences : winner.linkedIssueReferences,
             checksState: winner.checksState.isEmpty ? loser.checksState : winner.checksState,
             failedCheckNames: winner.failedCheckNames.isEmpty ? loser.failedCheckNames : winner.failedCheckNames,
@@ -329,7 +333,10 @@ final class BoardPoller {
             // "not observed" reason.
             ciGatePresent: winner.ciGatePresent || loser.ciGatePresent,
             anyCheckPending: winner.anyCheckPending || loser.anyCheckPending,
-            hasNonGateTerminalNonSuccess: winner.hasNonGateTerminalNonSuccess || loser.hasNonGateTerminalNonSuccess
+            hasNonGateTerminalNonSuccess: winner.hasNonGateTerminalNonSuccess || loser.hasNonGateTerminalNonSuccess,
+            // Nil when the label didn't survive the union — a timeline actor
+            // with no label is a review that already ended.
+            reviewingBy: reviewingBy
         )
     }
 
@@ -613,7 +620,8 @@ final class BoardPoller {
             repoAutoMergeAllowed: pr.repoAutoMergeAllowed,
             ciGatePresent: pr.ciGatePresent,
             anyCheckPending: pr.anyCheckPending,
-            hasNonGateTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess
+            hasNonGateTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess,
+            reviewingBy: pr.reviewingBy
         )
     }
 
@@ -659,7 +667,10 @@ final class BoardPoller {
             repoAutoMergeAllowed: pr.repoAutoMergeAllowed,
             ciGatePresent: pr.ciGatePresent,
             anyCheckPending: pr.anyCheckPending,
-            hasNonGateTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess
+            hasNonGateTerminalNonSuccess: pr.hasNonGateTerminalNonSuccess,
+            reviewingBy: labels.contains(where: {
+                $0.name.caseInsensitiveCompare(ReviewingLabel.name) == .orderedSame
+            }) ? pr.reviewingBy : nil
         )
     }
 

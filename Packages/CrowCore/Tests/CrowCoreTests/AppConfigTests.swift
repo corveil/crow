@@ -77,6 +77,7 @@ import Testing
     #expect(config.attributionTrailers == true)
     #expect(config.autoMergeWatcherEnabled == false)
     #expect(config.autoCreateWatcherEnabled == false)
+    #expect(config.reviewInProgressLabelEnabled == false)
     #expect(config.cleanup.enabled == false)
     #expect(config.cleanup.retentionHours == 24)
 }

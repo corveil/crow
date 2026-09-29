@@ -452,6 +452,19 @@ public final class IssueTracker {
         // full retention window.
         await completion.autoCleanupExpiredSessions(config: config)
 
+        // Stale `crow:reviewing` labels: the viewer added one and no live
+        // review session covers that PR (crash, abandoned round, restart).
+        // No-ops when the toggle is off. Runs after cleanup so a session this
+        // poll just deleted is already gone from the live set.
+        if config.reviewInProgressLabelEnabled {
+            let live = ReviewingLabelService.protectedPRURLs(appState: appState)
+            await ReviewingLabelService.sweep(
+                livePRURLs: live,
+                backend: providerManager.codeBackend(for: .github),
+                enabled: true
+            )
+        }
+
         logRefreshSummary(elapsed: Date().timeIntervalSince(startedAt))
     }
 

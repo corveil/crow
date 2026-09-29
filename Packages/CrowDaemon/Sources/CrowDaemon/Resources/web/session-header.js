@@ -100,6 +100,8 @@ function renderHeader(s) {
   if (pr && pr.has_pr) {
     headerRow.appendChild(prStatusInline(pr, liveFor(s.id).auto_merge_state, s.auto_merge,
                                          liveFor(s.id).auto_rebase_state));
+    const reviewing = reviewingBadge(pr.reviewing_by);
+    if (reviewing) headerRow.appendChild(reviewing);
   }
 
   // Right-aligned action cluster. Managers lead with Mark Scratch Done (when a

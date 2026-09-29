@@ -331,7 +331,7 @@ Changes take effect on next app launch — the Manager's stored command is rebui
 
 ## Automation
 
-The twelve booleans behind **Settings → Automation**, editable there or from the CLI (`crow automation get|set` — see the [CLI reference](cli-reference.md#automation-commands)). Eight are top-level keys in `{devRoot}/.claude/config.json`; four live under `autoRespond`.
+The thirteen booleans behind **Settings → Automation**, editable there or from the CLI (`crow automation get|set` — see the [CLI reference](cli-reference.md#automation-commands)). Nine are top-level keys in `{devRoot}/.claude/config.json`; four live under `autoRespond`.
 
 | Key                                          | Default | Applies to                                                       |
 | -------------------------------------------- | ------- | ---------------------------------------------------------------- |
@@ -343,6 +343,7 @@ The twelve booleans behind **Settings → Automation**, editable there or from t
 | `attributionTrailers`                        | `true`  | Newly created worktrees (installs the commit-trailer hook)       |
 | `autoCreateWatcherEnabled`                   | `false` | The `crow:auto` / `crow:explore` issue watcher                    |
 | `autoMergeWatcherEnabled`                    | `false` | The `crow:merge` PR watcher                                       |
+| `reviewInProgressLabelEnabled`               | `false` | The `crow:reviewing` label while a Crow review is in progress     |
 | `autoRespond.respondToChangesRequested`      | `true`  | Changes-requested reviews                                         |
 | `autoRespond.respondToFailedChecks`          | `false` | Failed CI checks                                                  |
 | `autoRespond.autoRebaseAndResolveConflicts`  | `false` | Conflicted PRs (rebase + `--force-with-lease` push)              |
@@ -350,7 +351,7 @@ The twelve booleans behind **Settings → Automation**, editable there or from t
 
 **Live — no `crowd` restart.** The daemon re-reads `config.json` rather than holding a snapshot: `applyConfigToAppState` runs each board tick, the watcher gates are closures that reload config on every call, and `AutoRespondCoordinator` takes a settings closure. So a change is picked up within about a minute. The "applies to" column is about *scope*, not latency — a permission-mode change reaches the next session you launch, not the ones already running.
 
-Six of the twelve default to **on**, which is why `crow automation set` takes explicit `true`/`false` values rather than bare flags: a bare-flag design could never turn one off.
+Six of the thirteen default to **on**, which is why `crow automation set` takes explicit `true`/`false` values rather than bare flags: a bare-flag design could never turn one off.
 
 **Hand-editing note.** `autoRebaseAndResolveConflicts` replaced a pre-CROW-551 top-level `autoRebaseWatcherEnabled`. That legacy key is still honored on read as a one-way opt-in (a stored `true` forces the new field on) but is dropped on the next write, so an opt-out through Settings or the CLI sticks. If you are editing the file by hand, delete the legacy key rather than setting it to `false`.
 

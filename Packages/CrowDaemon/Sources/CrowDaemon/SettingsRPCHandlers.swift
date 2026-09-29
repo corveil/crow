@@ -196,7 +196,7 @@ func makeSettingsHandlers(
         // likewise un-gated on remote `/rpc` — see the ledger in
         // `RPCWebSocketHandler.localOnlyDenial`.
         //
-        // Writes the twelve booleans only. The Automation tab also renders three
+        // Writes the thirteen booleans only. The Automation tab also renders three
         // board-filter lists, but those are `AppConfig.defaults` fields owned by
         // `defaults-set` (CROW-810) — two writers for one field with two sets of
         // list semantics is exactly the drift the parity work exists to prevent.
@@ -225,6 +225,8 @@ func makeSettingsHandlers(
                 let trailers = try SettingsRPC.patchBool(params, "attribution_trailers")
                 let autoCreate = try SettingsRPC.patchBool(params, "auto_create_watcher_enabled")
                 let autoMerge = try SettingsRPC.patchBool(params, "auto_merge_watcher_enabled")
+                let reviewInProgress = try SettingsRPC.patchBool(
+                    params, "review_in_progress_label_enabled")
                 let changesRequested = try SettingsRPC.patchBool(
                     params, "respond_to_changes_requested")
                 let failedChecks = try SettingsRPC.patchBool(params, "respond_to_failed_checks")
@@ -234,8 +236,8 @@ func makeSettingsHandlers(
 
                 let booleans = [
                     remoteControl, managerMode, reviewMode, coderViewMode, jobsMode, trailers,
-                    autoCreate, autoMerge, changesRequested, failedChecks, autoRebase,
-                    autoReRequest,
+                    autoCreate, autoMerge, reviewInProgress, changesRequested, failedChecks,
+                    autoRebase, autoReRequest,
                 ]
                 guard booleans.contains(where: { $0 != nil }) else {
                     throw RPCError.invalidParams("Nothing to set — provide at least one field")
@@ -252,6 +254,7 @@ func makeSettingsHandlers(
                     if let trailers { config.attributionTrailers = trailers }
                     if let autoCreate { config.autoCreateWatcherEnabled = autoCreate }
                     if let autoMerge { config.autoMergeWatcherEnabled = autoMerge }
+                    if let reviewInProgress { config.reviewInProgressLabelEnabled = reviewInProgress }
                     if let changesRequested {
                         config.autoRespond.respondToChangesRequested = changesRequested
                     }

@@ -506,7 +506,32 @@ public final class SessionService {
         }
     }
 
-    public func completeSession(id: UUID) {        updateSessionStatus(id, to: .completed)
+    /// `keepReviewingLabel` is the re-review handoff (CROW-1310): the old
+    /// round completes, but `crow:reviewing` stays because the new round
+    /// starts immediately. Every other completion of a review session tries
+    /// to remove the label, and only succeeds when this viewer added it.
+    public func completeSession(id: UUID, keepReviewingLabel: Bool = false) {
+        let end: ReviewingLabel.SessionEnd = keepReviewingLabel ? .reReviewHandoff : .completed
+        clearReviewingLabel(sessionID: id, end: end)
+        updateSessionStatus(id, to: .completed)
+    }
+
+    /// Best-effort `crow:reviewing` removal when a review session leaves the
+    /// active set. No-op for other kinds, when the toggle is off, and on the
+    /// re-review handoff.
+    func clearReviewingLabel(sessionID: UUID, end: ReviewingLabel.SessionEnd) {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+              session.kind == .review,
+              let prURL = appState.links(for: sessionID).first(where: { $0.linkType == .pr })?.url else { return }
+        clearReviewingLabel(prURL: prURL, end: end)
+    }
+
+    /// URL form used by deletion, which has already copied the PR link out of
+    /// state. Still no-ops when the toggle is off or this end keeps the label.
+    func clearReviewingLabel(prURL: String, end: ReviewingLabel.SessionEnd) {
+        guard ReviewingLabel.shouldClear(on: end, enabled: ReviewingLabelService.isEnabled()) else { return }
+        let backend = providerManager?.codeBackend(for: .github)
+        Task { await ReviewingLabelService.removeIfViewer(prURL: prURL, backend: backend, enabled: true) }
     }
 
     public func setSessionInReview(id: UUID) {

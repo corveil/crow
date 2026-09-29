@@ -56,6 +56,9 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// (ADR 0082, CROW-3716). `false` on every repo that doesn't run the
     /// convention, and on providers/paths that don't fetch checks.
     public var usesCIGate: Bool
+    /// Login of whoever last added `crow:reviewing`, when that label is on the
+    /// PR (CROW-1310). Nil when nobody's Crow has marked the PR in review.
+    public var reviewingBy: String?
 
     public init(
         checksPass: CheckStatus = .unknown,
@@ -68,7 +71,8 @@ public struct PRStatus: Codable, Sendable, Equatable {
         lastSubstantiveCommitAt: Date? = nil,
         changesRequestedReviewerIsPending: Bool = false,
         hasMergeLabel: Bool = false,
-        usesCIGate: Bool = false
+        usesCIGate: Bool = false,
+        reviewingBy: String? = nil
     ) {
         self.checksPass = checksPass
         self.reviewStatus = reviewStatus
@@ -81,6 +85,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.changesRequestedReviewerIsPending = changesRequestedReviewerIsPending
         self.hasMergeLabel = hasMergeLabel
         self.usesCIGate = usesCIGate
+        self.reviewingBy = reviewingBy
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,12 +101,13 @@ public struct PRStatus: Codable, Sendable, Equatable {
         changesRequestedReviewerIsPending = try c.decodeIfPresent(Bool.self, forKey: .changesRequestedReviewerIsPending) ?? false
         hasMergeLabel = try c.decodeIfPresent(Bool.self, forKey: .hasMergeLabel) ?? false
         usesCIGate = try c.decodeIfPresent(Bool.self, forKey: .usesCIGate) ?? false
+        reviewingBy = try c.decodeIfPresent(String.self, forKey: .reviewingBy)
     }
 
     private enum CodingKeys: String, CodingKey {
         case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, isOpen
         case lastChangesRequestedAt, lastSubstantiveCommitAt, changesRequestedReviewerIsPending, hasMergeLabel
-        case usesCIGate
+        case usesCIGate, reviewingBy
     }
 
     public enum CheckStatus: String, Codable, Sendable {

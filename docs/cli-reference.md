@@ -1127,7 +1127,7 @@ Settings → Automation: which sessions launch in auto permission mode, whether 
 
 The tab also renders three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos). Those are `AppConfig.defaults` fields and are written by [`crow defaults set`](#crow-defaults-get--set) — one writer, one set of list semantics. `crow automation get` echoes them read-only so the tab still reads as a whole from one call.
 
-Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these twelve toggles default to on**, so a bare-flag design could never turn one off.
+Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these thirteen toggles default to on**, so a bare-flag design could never turn one off.
 
 ### `crow automation get | set`
 
@@ -1156,6 +1156,7 @@ crow automation set --manager-auto-permission-mode false && crow restart-manager
 | `--attribution-trailers`        | `true`  | Write a per-worktree hook adding a `Crow-Session: <uuid>` commit trailer  |
 | `--auto-create-watcher-enabled` | `false` | Auto-launch a workspace for issues assigned to you labeled `crow:auto` or `crow:explore` |
 | `--auto-merge-watcher-enabled`  | `false` | Auto-merge Crow-authored PRs labeled `crow:merge`                         |
+| `--review-in-progress-label`    | `false` | Label PRs `crow:reviewing` while a Crow review is in progress             |
 
 **Auto-respond** — Crow acts on a PR's behalf without you asking: three of these type an instruction into the session's agent terminal, one calls the host API directly.
 

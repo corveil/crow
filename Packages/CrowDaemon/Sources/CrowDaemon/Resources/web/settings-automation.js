@@ -14,6 +14,8 @@
     S.cfg.autoRespond = S.cfg.autoRespond || {};
 
     body.appendChild(S.group('Reviews'));
+    body.appendChild(S.toggleField('Label PRs crow:reviewing while a review is running', S.cfg, 'reviewInProgressLabelEnabled',
+      'Adds crow:reviewing when a Crow review starts and removes it when that review ends, so others can see a review is in progress. Off by default. Missing permission to label the repo is logged and does not fail the review.'));
     body.appendChild(S.listField('Excluded repos', S.cfg.defaults, 'excludeReviewRepos',
       'One per line. Repos to hide from the review board. Supports wildcards (e.g. owner/*).'));
     body.appendChild(S.listField('Ignored labels', S.cfg.defaults, 'ignoreReviewLabels',

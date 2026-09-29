@@ -28,7 +28,7 @@ import Testing
 
 /// The reason these are `@Option ... Bool?` and not `@Flag`: a patch has to tell
 /// "set it to false" apart from "don't touch it", which a flag cannot express.
-/// Six of the twelve default to `true`, so a `@Flag` design could never turn one
+/// Six of the thirteen default to `true`, so a `@Flag` design could never turn one
 /// off.
 @Test func automationSetParsesExplicitFalse() throws {
     let cmd = try AutomationSet.parse(["--manager-auto-permission-mode", "false"])
@@ -58,6 +58,7 @@ import Testing
         "--attribution-trailers", "false",
         "--auto-create-watcher-enabled", "true",
         "--auto-merge-watcher-enabled", "true",
+        "--review-in-progress-label", "true",
         "--respond-to-changes-requested", "false",
         "--respond-to-failed-checks", "true",
         "--auto-rebase-and-resolve-conflicts", "true",
@@ -65,6 +66,7 @@ import Testing
     #expect(cmd.watchers.attributionTrailers == false)
     #expect(cmd.watchers.autoCreateWatcherEnabled == true)
     #expect(cmd.watchers.autoMergeWatcherEnabled == true)
+    #expect(cmd.watchers.reviewInProgressLabel == true)
     #expect(cmd.respond.respondToChangesRequested == false)
     #expect(cmd.respond.respondToFailedChecks == true)
     #expect(cmd.respond.autoRebaseAndResolveConflicts == true)
@@ -158,6 +160,7 @@ private func setParseError(_ args: [String]) -> String {
         "--attribution-trailers", "false",
         "--auto-create-watcher-enabled", "true",
         "--auto-merge-watcher-enabled", "true",
+        "--review-in-progress-label", "true",
         "--respond-to-changes-requested", "false",
         "--respond-to-failed-checks", "true",
         "--auto-rebase-and-resolve-conflicts", "true",
@@ -188,6 +191,7 @@ let automationWireKeys = [
     "attribution_trailers",
     "auto_create_watcher_enabled",
     "auto_merge_watcher_enabled",
+    "review_in_progress_label_enabled",
     "respond_to_changes_requested",
     "respond_to_failed_checks",
     "auto_rebase_and_resolve_conflicts",

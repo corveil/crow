@@ -532,7 +532,8 @@ final class PRStatusController {
                 $0.name.caseInsensitiveCompare(AutoMergeController.autoMergeLabel) == .orderedSame
             },
             // Whether this PR's checks include `CI Gate` (ADR 0082, CROW-3716).
-            usesCIGate: pr.ciGatePresent
+            usesCIGate: pr.ciGatePresent,
+            reviewingBy: pr.reviewingBy
         )
     }
 }

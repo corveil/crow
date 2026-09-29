@@ -909,6 +909,11 @@ body.update-banner-visible #back-to-sidebar {
   color: var(--blue); border: 1px solid rgba(10, 132, 255, 0.4);
   background: var(--bg-card); white-space: nowrap;
 }
+.reviewing-badge {
+  padding: 2px 9px; border-radius: 10px; font-size: 10px; font-weight: 600;
+  color: var(--orange); border: 1px solid rgba(255, 159, 10, 0.45);
+  background: var(--bg-card); white-space: nowrap;
+}
 
 /* #751 inline PR state + CI checks badges (JS sets color + border-color). */
 .pr-state-badge, .checks-badge {
