@@ -179,7 +179,7 @@ It validates the plan and writes `wave` onto each ticket, plus a `waves` list, b
 bash .claude/skills/crow-cascade-epic/cascade.sh status --plan-file {devRoot}/.claude/cascades/{slug}.json
 ```
 
-`status` reads GitHub and Crow — nothing in the plan file is trusted for progress — and returns:
+`status` reads GitHub and Crow — nothing in the plan file is trusted for progress. If it can't read Crow's session list, it returns an error instead of guessing, so a ticket already in flight is never offered for launch again. Otherwise it returns:
 
 - `tickets[]` — each with `state` (below), `satisfied`, `blocked`, `prs`, `session` (the work session whose `ticket_url` matches), `explore_session`, and `drift` (contract violations on its open PR).
 - `waves[]` — `{wave, total, satisfied, complete, skipped, blocked}`.
@@ -191,7 +191,7 @@ bash .claude/skills/crow-cascade-epic/cascade.sh status --plan-file {devRoot}/.c
 | `merged` | A PR that closes the ticket, or one registered on any of the ticket's work sessions, merged. A second PR still open is reported as drift. | yes |
 | `closed` | A human closed the ticket as completed, and no PR is still open | yes |
 | `in_review` / `draft` | An open PR | no |
-| `pr_closed` | Only closed-unmerged PRs — the ticket is launchable again | no |
+| `pr_closed` | Only closed-unmerged PRs. The ticket returns to `to_launch` only once it has **no** work session left — a leftover session, even a completed one, holds it (see **Idempotency and resume**). To restart it, reopen that session, or delete it and re-run. | no |
 | `no_pr` | Nothing yet — and **always** when the change lands as a GitLab MR (see **Limitations**) | no |
 | `closed_not_planned` | Closed as not planned / duplicate — its dependents can never release | no — **blocked** |
 | `unknown` | The GitHub query failed (transient) | no — never releases a wave |
@@ -373,7 +373,7 @@ and for the **`auto`** gate:
 
 ## Contract drift
 
-`status` and `watch` report drift only on **open** PRs. Fix what's yours to fix, and report the rest:
+`status` and `watch` report drift on **open** PRs, plus one check on merged ones. Fix what's yours to fix, and report the rest:
 
 | Drift | Response |
 |---|---|
@@ -382,6 +382,7 @@ and for the **`auto`** gate:
 | `is missing the crow:merge label (auto gate)` | `crow add-merge-label --session {session_id}` (the ticket's session from `status`). |
 | `is approved by its own author` | Report it to the operator. Don't dismiss reviews yourself. |
 | `N open PRs … exactly one PR per ticket` | Tell the coder, and let the operator pick which PR survives. |
+| `PR #X merged without an approval from anyone but its author (human gate)` | Tell the operator right away: unreviewed code is now on the default branch, and only they can decide whether to revert it. The ticket still counts as merged — its change has landed, and holding dependents wouldn't undo it. (Who clicked merge isn't checked: Crow's auto-merge runs as the author even after a human approves.) |
 | `PR #X still open although #Y already merged this ticket` | The ticket is satisfied and its wave can release, but the stray PR could still merge later. Ask the operator whether to close it or move its work to a new ticket. |
 
 To tell a coder something, find its terminal with `crow list-terminals --session {session_id}`, then `crow send --session {session_id} --terminal {terminal_id} "…\n"`.
@@ -421,6 +422,7 @@ Re-running `/crow-cascade-epic {epic_url}` is always safe:
 | `cascade.sh plan` → `dependency cycle among: …` | Stop. Show the cycle; the operator decides which edge is wrong. |
 | `cascade.sh plan` → `… depends on X, which is not in the plan` | Add X as an `"external": true` ticket, or drop the edge if the reference was not a dependency. |
 | `cascade.sh` → `jq is required` / `jq 1.6 or newer is required` | Install or upgrade jq (`brew install jq`; macOS 15+ ships 1.7 at `/usr/bin/jq`). Check which one wins with `command -v jq`. |
+| `crow list-sessions failed …` (or `watch` exits 2 with it) | Crow didn't answer, so `status` couldn't tell which tickets already have a session. Nothing was launched or released. Check that the daemon is up (`crow list-sessions`), then re-run `status` or re-arm the watcher. |
 | `status filter failed: …` (or `watch` exits 2 with `status unavailable`) | The installed jq couldn't run the status filter. Nothing was released — `watch` fails closed rather than guess. Check `jq --version`, fix it, then re-run `status`. |
 | `setup.sh` error | Per `/crow-workspace` → **Error Handling**, and the Phase 5 recovery for `launch_agent`. |
 | `status` shows `unknown` | Transient GitHub failure. Re-run `status`; an `unknown` ticket never releases a wave. |

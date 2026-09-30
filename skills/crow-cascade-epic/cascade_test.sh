@@ -49,10 +49,15 @@ done
 cat "$f"
 SH
 # Fake crow: list-sessions → $FIX/sessions.json, list-links → $FIX/links-<id>.json.
+# FAKE_CROW_FAIL makes list-sessions fail; FAKE_CROW_GARBAGE makes it print
+# something that is not a session list.
 cat > "$TMP/fake-crow" <<'SH'
 #!/usr/bin/env bash
 case "$1" in
-  list-sessions) cat "$FIX/sessions.json" ;;
+  list-sessions)
+    [[ -n "${FAKE_CROW_FAIL:-}" ]] && { echo "crow: socket timeout" >&2; exit 1; }
+    [[ -n "${FAKE_CROW_GARBAGE:-}" ]] && { echo '{"error": "no daemon"}'; exit 0; }
+    cat "$FIX/sessions.json" ;;
   list-links)    f="$FIX/links-$3.json"; [[ -f "$f" ]] && cat "$f" || echo '{"links":[]}' ;;
   *) exit 1 ;;
 esac
@@ -217,6 +222,7 @@ check "explore session is not the work session" "null" "$(field o/r#4 .session)"
 contains "human gate: crow:merge before approval is drift" "$(field o/r#3 '.drift | join("|")')" "carries crow:merge before any human approval"
 contains "missing reviewer request is drift" "$(field o/r#3 '.drift | join("|")')" "no review request for @dgershman"
 check "compliant PR has no drift" "0" "$(field o/r#5 '.drift | length')"
+check "a merged PR a human approved has no drift" "0" "$(field o/r#1 '.drift | length')"
 
 check "wave 1 complete (merged + closed + external)" "true" "$(jq -r '.waves[0].complete' <<< "$st")"
 check "current wave is 2" "2" "$(jq -r .current_wave <<< "$st")"
@@ -285,6 +291,33 @@ contains "the later session's open PR is leftover drift" "$d5" "PR #52 still ope
 contains "and its premature crow:merge is drift" "$d5" "PR #52 carries crow:merge before any human approval"
 mv "$TMP/sessions.bak" "$FIX/sessions.json"
 rm -f "$FIX/links-S5a.json" "$FIX/links-S5b.json"
+
+echo "status: merged without a human approval"
+issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false "" dgershman "")"
+st=$(cascade status --plan-file "$PLAN")
+contains "human gate: merged with no approval is drift" "$(field o/r#1 '.drift | join("|")')" \
+  "PR #11 merged without an approval from anyone but its author (human gate)"
+check "it still satisfies the ticket" "true" "$(field o/r#1 .satisfied)"
+issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false "" "" coder)"
+st=$(cascade status --plan-file "$PLAN")
+contains "an approval from the author alone doesn't count" "$(field o/r#1 '.drift | join("|")')" \
+  "PR #11 merged without an approval from anyone but its author"
+st=$(cascade status --plan-file "$TMP/auto.json")
+check "auto gate: no merged-without-approval drift" "0" "$(field o/r#1 '[.drift[] | select(test("merged without"))] | length')"
+issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false crow:merge "" dgershman)"
+
+echo "fail closed: crow unreachable"
+out=$(FAKE_CROW_FAIL=1 bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
+check "a failed list-sessions exits 2" "2" "$rc"
+check "a failed list-sessions is an error object" "error" "$(jq -r .status <<< "$out")"
+contains "names list-sessions" "$out" "crow list-sessions failed"
+check "and offers nothing to launch" "null" "$(jq -c .to_launch <<< "$out")"
+out=$(FAKE_CROW_GARBAGE=1 bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
+check "an unreadable session list exits 2" "2" "$rc"
+contains "an unreadable session list is named" "$out" "crow list-sessions failed"
+out=$(FAKE_CROW_FAIL=1 bash "$CASCADE_SH" watch --plan-file "$PLAN" --wave 1 --interval 0 --timeout 60); rc=$?
+check "watch with crow unreachable exits 2" "2" "$rc"
+contains "watch says why" "$out" "WAVE 1 status unavailable — crow list-sessions failed"
 
 echo "fail closed: a jq that can't run the status filter"
 out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_BREAK="def classify" bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?

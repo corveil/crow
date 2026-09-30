@@ -238,7 +238,15 @@ def classify($issue; $prs; $error):
 def drift($gate; $reviewer; $prs):
   [$prs[] | select(.state == "OPEN")] as $open
   | [$prs[] | select(.merged)] as $merged
-  | [ (if ($merged | length) > 0 and ($open | length) > 0
+  | [ # Who clicked merge proves nothing: the Crow auto-merge runs as the PR
+      # author even after a human approves. So the human-gate check is
+      # whether anyone but the author approved. Reported, not gating: the
+      # change has already landed, and holding dependents would not undo it.
+      ($merged[] | . as $p
+        | if $gate == "human" and ([$p.approved_by[] | select(. != $p.author)] | length) == 0
+            then "PR #\($p.number) merged without an approval from anyone but its author (human gate)"
+          else empty end),
+      (if ($merged | length) > 0 and ($open | length) > 0
          then "\($open | map("PR #\(.number)") | join(", ")) still open although \($merged | map("#\(.number)") | join(", ")) already merged this ticket — close it, or move that work to its own ticket"
        else empty end),
       (if ($open | length) > 1
@@ -317,9 +325,17 @@ def session_for($url; $explore):
 '
 
 collect_status() { # collect_status <wave-or-empty>  → status JSON on stdout
-  local wave="$1" sessions raw ticket tickets
-  sessions=$("$CROW_BIN" list-sessions 2>/dev/null | jq -c '.sessions // []' 2>/dev/null) || sessions='[]'
-  [[ -n "$sessions" ]] || sessions='[]'
+  local wave="$1" sessions sessions_out raw ticket tickets
+  # Fail closed here too: `to_launch` reads "no session" as "launch it", so a
+  # Crow we couldn't read must be an error, never an empty session list — or a
+  # socket timeout would start a second coder on a ticket already in flight.
+  if ! sessions_out=$("$CROW_BIN" list-sessions 2>&1) \
+     || ! jq_true '.sessions | type == "array"' <<< "$sessions_out"; then
+    jq -cn --arg msg "$(head -c 300 <<< "$sessions_out")" \
+      '{status: "error", step: "status", message: ("crow list-sessions failed, so which tickets already have a session is unknown: " + $msg)}'
+    return
+  fi
+  sessions=$(jq -c '.sessions' <<< "$sessions_out")
 
   raw=$(mktemp "${TMPDIR:-/tmp}/crow-cascade-raw.XXXXXX")
   tickets=$(jq -c --arg w "$wave" '.tickets[] | select($w == "" or .wave == ($w | tonumber))' "$PLAN_FILE")
