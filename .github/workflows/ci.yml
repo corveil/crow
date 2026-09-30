@@ -149,6 +149,19 @@ jobs:
       - name: crow-cascade-epic wave planner / merge-gate watcher (CROW-1312)
         run: bash skills/crow-cascade-epic/cascade_test.sh
 
+      # jq 1.6 is still what some Macs resolve first (Homebrew), and it rejects
+      # 1.7-only syntax such as a keyword used as an object key — which once
+      # made `watch` release an unmerged wave. The runner's jq is newer, so run
+      # the suite again under a pinned, checksum-verified 1.6.
+      - name: crow-cascade-epic under jq 1.6 (CROW-1312)
+        run: |
+          mkdir -p "$RUNNER_TEMP/jq16"
+          curl -fsSL -o "$RUNNER_TEMP/jq16/jq" https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64
+          echo "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44  $RUNNER_TEMP/jq16/jq" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/jq16/jq"
+          PATH="$RUNNER_TEMP/jq16:$PATH" jq --version
+          PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-cascade-epic/cascade_test.sh
+
       - name: NSLog ban (CROW-874)
         run: bash scripts/check-no-nslog.sh
 

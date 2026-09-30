@@ -57,7 +57,23 @@ case "$1" in
   *) exit 1 ;;
 esac
 SH
-chmod +x "$TMP/fake-gh" "$TMP/fake-crow"
+# Fake jq, only for the fail-closed tests: FAKE_JQ_VERSION overrides
+# `--version`, and FAKE_JQ_BREAK makes any program containing that text fail
+# to compile — what jq 1.6 did to 1.7-only syntax (PR #1313 review).
+mkdir -p "$TMP/jqbin"
+REAL_JQ=$(command -v jq)
+export REAL_JQ
+cat > "$TMP/jqbin/jq" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" && -n "${FAKE_JQ_VERSION:-}" ]]; then echo "$FAKE_JQ_VERSION"; exit 0; fi
+if [[ -n "${FAKE_JQ_BREAK:-}" ]]; then
+  for a in "$@"; do
+    [[ "$a" == *"$FAKE_JQ_BREAK"* ]] && { echo "jq: error: syntax error (fake)" >&2; exit 3; }
+  done
+fi
+exec "$REAL_JQ" "$@"
+SH
+chmod +x "$TMP/fake-gh" "$TMP/fake-crow" "$TMP/jqbin/jq"
 export GH_BIN="$TMP/fake-gh" CROW_BIN="$TMP/fake-crow"
 
 cascade() { bash "$CASCADE_SH" "$@"; }
@@ -194,6 +210,13 @@ check "current wave is 2" "2" "$(jq -r .current_wave <<< "$st")"
 check "to_launch = wave-2 tickets with nothing in flight" '["o/r#10"]' "$(jq -c .to_launch <<< "$st")"
 check "cascade not complete" "false" "$(jq -r .complete <<< "$st")"
 
+out=$(cascade watch --plan-file "$PLAN" --wave 2 --interval 0 --timeout 0); rc=$?
+check "open wave 2 at timeout exits 10" "10" "$rc"
+contains "watch streams contract drift" "$out" \
+  "wave 2 · T3 o/r#3 ⚠ contract: PR #13 carries crow:merge before any human approval (human gate)"
+contains "watch streams every drift line" "$out" "wave 2 · T3 o/r#3 ⚠ contract: PR #13 has no review request for @dgershman"
+contains "watch still streams the state line" "$out" "wave 2 · T3 o/r#3 → in_review (PR #13 open)"
+
 st=$(cascade status --plan-file "$PLAN" --wave 2)
 check "--wave narrows the tickets" "5" "$(jq -r '.tickets | length' <<< "$st")"
 check "--wave leaves the resume point null" "null" "$(jq -c .current_wave <<< "$st")"
@@ -214,6 +237,35 @@ st=$(cascade status --plan-file "$TMP/start3.json")
 check "waves before start_wave are skipped" "true true" "$(jq -r '[.waves[0].skipped, .waves[1].complete] | map(tostring) | join(" ")' <<< "$st")"
 check "resume jumps to start_wave" "3" "$(jq -r .current_wave <<< "$st")"
 check "pr_closed ticket is relaunchable" '["o/r#8"]' "$(jq -c .to_launch <<< "$st")"
+
+echo "status: leftover open PR after a merge"
+issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false crow:merge "" dgershman)" \
+  "$(pr_node 12 OPEN false crow:merge dgershman "")"
+st=$(cascade status --plan-file "$PLAN")
+check "a merged PR still satisfies the ticket" "merged" "$(state o/r#1)"
+contains "the leftover open PR is drift" "$(field o/r#1 '.drift | join("|")')" \
+  "PR #12 still open although #11 already merged this ticket"
+check "the wave stays complete" "true" "$(jq -r '.waves[0].complete' <<< "$st")"
+issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false crow:merge "" dgershman)"
+
+echo "fail closed: a jq that can't run the status filter"
+out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_BREAK="def classify" bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
+check "status exits 2" "2" "$rc"
+check "status prints an error object" "error" "$(jq -r .status <<< "$out")"
+contains "status names the failure" "$out" "status filter failed"
+out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_BREAK="def classify" bash "$CASCADE_SH" watch --plan-file "$PLAN" --wave 1 --interval 0 --timeout 60); rc=$?
+check "watch on a complete wave exits 2, not 0" "2" "$rc"
+contains "watch says status is unavailable" "$out" "WAVE 1 status unavailable"
+if [[ "$out" == *"COMPLETE"* ]]; then
+  fail=$((fail+1)); echo "  FAIL: watch released a wave it could not read"
+else
+  pass=$((pass+1)); echo "  ok: watch never releases a wave it could not read"
+fi
+out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_VERSION="jq-1.5" bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
+check "jq older than 1.6 exits 2" "2" "$rc"
+contains "names the jq requirement" "$out" "jq 1.6 or newer is required (found jq-1.5"
+out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_VERSION="jq-1.6" bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
+check "jq 1.6 passes the version gate" "0" "$rc"
 
 # ─── watch ───────────────────────────────────────────────────────────────────
 echo "watch: exit codes"

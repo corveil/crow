@@ -37,6 +37,21 @@ usage() {
   exit 2
 }
 
+# The filters are written for jq 1.6 (so no keyword-named keys like a bare
+# `label`, which 1.7 accepts and 1.6 rejects). Older jq lacks IN/any-with-
+# generator, so refuse it up front rather than mis-evaluating a gate. An
+# unparseable version string is let through: collect_status fails closed.
+require_jq_16() {
+  local v
+  v=$(jq --version 2>/dev/null)
+  if [[ "$v" =~ ^jq-([0-9]+)\.([0-9]+) ]]; then
+    local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
+    if (( major < 1 || (major == 1 && minor < 6) )); then
+      die "preflight" "jq 1.6 or newer is required (found $v at $(command -v jq))"
+    fi
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,6 +64,7 @@ parse_args() {
     esac
   done
   command -v jq >/dev/null 2>&1 || die "preflight" "jq is required"
+  require_jq_16
   [[ -n "$PLAN_FILE" ]] || die "parse_args" "--plan-file is required"
   [[ -f "$PLAN_FILE" ]] || die "parse_args" "plan file not found: $PLAN_FILE"
   jq -e 'type == "object"' "$PLAN_FILE" >/dev/null 2>&1 || die "parse_args" "plan file is not a JSON object: $PLAN_FILE"
@@ -117,7 +133,7 @@ cmd_plan() {
       status: "ok", plan_file: $file, gate, reviewer, start_wave,
       wave_count: (.waves | length),
       waves: [.waves[] | .wave as $w | {wave: $w, tickets: [$tickets[] | select(.wave == $w)
-               | {id, label, title, external, deps}]}]
+               | {id, "label": ."label", title, external, deps}]}]
     }' "$PLAN_FILE"
 }
 
@@ -209,7 +225,11 @@ def classify($issue; $prs; $error):
 
 def drift($gate; $reviewer; $prs):
   [$prs[] | select(.state == "OPEN")] as $open
-  | [ (if ($open | length) > 1
+  | [$prs[] | select(.merged)] as $merged
+  | [ (if ($merged | length) > 0 and ($open | length) > 0
+         then "\($open | map("PR #\(.number)") | join(", ")) still open although \($merged | map("#\(.number)") | join(", ")) already merged this ticket — close it, or move that work to its own ticket"
+       else empty end),
+      (if ($open | length) > 1
          then "\($open | length) open PRs (\($open | map("#\(.number)") | join(", "))) — the cascade expects exactly one PR per ticket"
        else empty end),
       ($open[] | . as $p
@@ -239,7 +259,7 @@ def session_for($url; $explore):
     | [$f.prs[] | pr] as $prs
     | classify($f.issue; $prs; $f.error) as $state
     | {
-        id, label, title, url, wave,
+        id, "label": ."label", title, url, wave,
         external: (.external // false),
         state: $state,
         satisfied: ($state == "merged" or $state == "closed"),
@@ -296,11 +316,17 @@ collect_status() { # collect_status <wave-or-empty>  → status JSON on stdout
     collect_ticket "$ticket" "$sessions" >> "$raw"
   done <<< "$tickets"
 
-  local wave_arg='null'
+  local wave_arg='null' out
   [[ -n "$wave" ]] && wave_arg="$wave"
-  jq -c --slurpfile raw "$raw" --argjson sessions "$sessions" --argjson wave "$wave_arg" \
-    "$STATUS_JQ" "$PLAN_FILE"
+  # Fail closed: a filter this jq can't run must never look like a finished
+  # wave to `watch`, so any failure becomes an explicit error object.
+  if ! out=$(jq -c --slurpfile raw "$raw" --argjson sessions "$sessions" --argjson wave "$wave_arg" \
+      "$STATUS_JQ" "$PLAN_FILE" 2>&1) || ! jq -e '.status == "ok"' <<< "$out" >/dev/null 2>&1; then
+    out=$(jq -cn --arg msg "$(head -c 500 <<< "$out")" \
+      '{status: "error", step: "status", message: ("status filter failed: " + $msg)}')
+  fi
   rm -f "$raw"
+  printf '%s\n' "$out"
 }
 
 # Checked outside collect_status: a `die` inside `$(collect_status)` would only
@@ -315,7 +341,10 @@ require_planned() {
 
 cmd_status() {
   require_planned
-  collect_status "$WAVE"
+  local out
+  out=$(collect_status "$WAVE")
+  printf '%s\n' "$out"
+  jq -e '.status == "ok"' <<< "$out" >/dev/null 2>&1 || exit 2
 }
 
 # ─── watch ───────────────────────────────────────────────────────────────────
@@ -332,20 +361,26 @@ cmd_watch() {
   echo "watching wave $WAVE of $(jq -r '.epic.url // "the epic"' "$PLAN_FILE") every ${INTERVAL}s (timeout ${TIMEOUT}s)"
   while :; do
     status=$(collect_status "$WAVE")
+    # Only an ok status object may release a wave — `jq -e` on an empty or
+    # error document is not evidence that anything merged.
+    if ! jq -e '.status == "ok"' <<< "$status" >/dev/null 2>&1; then
+      echo "WAVE $WAVE status unavailable — $(jq -r '.message // "no status output"' <<< "$status" 2>/dev/null || echo "no status output")"
+      exit 2
+    fi
 
     # One line per ticket state + one per drift finding; print only lines that
     # are new since the last poll, so the event stream carries changes only.
-    jq -r '.tickets[] | (.label // .id) as $name
-      | "wave \(.wave) · \($name) \(.id) → \(.state)"
-        + (if (.prs | length) > 0 then " (" + (.prs | map("PR #\(.number) \(.state | ascii_downcase)") | join(", ")) + ")" else "" end)
-        + (if .error then " — \(.error)" else "" end),
-        (.drift[] | "wave \(.wave) · \($name) \(.id) ⚠ contract: \(.)")' <<< "$status" > "$cur"
+    jq -r '.tickets[] | . as $t | "wave \($t.wave) · \($t."label" // $t.id) \($t.id)" as $name
+      | "\($name) → \($t.state)"
+        + (if ($t.prs | length) > 0 then " (" + ($t.prs | map("PR #\(.number) \(.state | ascii_downcase)") | join(", ")) + ")" else "" end)
+        + (if $t.error then " — \($t.error)" else "" end),
+        ($t.drift[] | "\($name) ⚠ contract: \(.)")' <<< "$status" > "$cur"
     grep -Fxv -f "$prev" "$cur" || true
     mv "$cur" "$prev"
 
-    if jq -e '.waves[0].complete' <<< "$status" >/dev/null; then
+    if jq -e '.waves[0].complete == true' <<< "$status" >/dev/null; then
       next=$(jq -r --argjson w "$WAVE" \
-        '[.tickets[] | select(.wave == $w + 1) | "\(.label // .id) \(.id)"] | join(", ")' "$PLAN_FILE")
+        '[.tickets[] | select(.wave == $w + 1) | "\(."label" // .id) \(.id)"] | join(", ")' "$PLAN_FILE")
       if [[ -n "$next" ]]; then
         echo "WAVE $WAVE COMPLETE — release wave $((WAVE + 1)): $next"
       else

@@ -188,7 +188,7 @@ bash .claude/skills/crow-cascade-epic/cascade.sh status --plan-file {devRoot}/.c
 
 | `state` | Meaning | Satisfies the gate? |
 |---|---|---|
-| `merged` | A PR that closes the ticket (or that the coder registered on the session) merged | yes |
+| `merged` | A PR that closes the ticket (or that the coder registered on the session) merged. A second PR still open is reported as drift. | yes |
 | `closed` | A human closed the ticket as completed, and no PR is still open | yes |
 | `in_review` / `draft` | An open PR | no |
 | `pr_closed` | Only closed-unmerged PRs — the ticket is launchable again | no |
@@ -244,7 +244,7 @@ It polls every 2 minutes, prints a line whenever a ticket's state or drift chang
 | `0` | `WAVE n COMPLETE — release wave n+1: …` | Tell the operator in one line, then go back to **Phase 4**: status → launch `to_launch` → arm a watcher on the new `current_wave`. |
 | `10` | `WAVE n still open after …s — re-arm the watcher` | Run the same command again. Say nothing unless a streamed line needs action. |
 | `3` | `WAVE n BLOCKED — needs the operator: …` | Stop and ask about the blocked tickets (see Phase 4). |
-| `2` | JSON error | Report it. |
+| `2` | A JSON error, or `WAVE n status unavailable — …` | Report it. The watcher couldn't read the wave, so it released nothing — see **Error Handling**. |
 
 Act on any `⚠ contract:` line in the stream per **Contract drift**. Arm **one** watcher per epic — if one you started for this plan file is still running, don't start another.
 
@@ -382,6 +382,7 @@ and for the **`auto`** gate:
 | `is missing the crow:merge label (auto gate)` | `crow add-merge-label --session {session_id}` (the ticket's session from `status`). |
 | `is approved by its own author` | Report it to the operator. Don't dismiss reviews yourself. |
 | `N open PRs … exactly one PR per ticket` | Tell the coder, and let the operator pick which PR survives. |
+| `PR #X still open although #Y already merged this ticket` | The ticket is satisfied and its wave can release, but the stray PR could still merge later. Ask the operator whether to close it or move its work to a new ticket. |
 
 To tell a coder something, find its terminal with `crow list-terminals --session {session_id}`, then `crow send --session {session_id} --terminal {terminal_id} "…\n"`.
 
@@ -419,7 +420,8 @@ Re-running `/crow-cascade-epic {epic_url}` is always safe:
 |---|---|
 | `cascade.sh plan` → `dependency cycle among: …` | Stop. Show the cycle; the operator decides which edge is wrong. |
 | `cascade.sh plan` → `… depends on X, which is not in the plan` | Add X as an `"external": true` ticket, or drop the edge if the reference was not a dependency. |
-| `cascade.sh` → `jq is required` | `brew install jq` (macOS 15+ ships it at `/usr/bin/jq`). |
+| `cascade.sh` → `jq is required` / `jq 1.6 or newer is required` | Install or upgrade jq (`brew install jq`; macOS 15+ ships 1.7 at `/usr/bin/jq`). Check which one wins with `command -v jq`. |
+| `status filter failed: …` (or `watch` exits 2 with `status unavailable`) | The installed jq couldn't run the status filter. Nothing was released — `watch` fails closed rather than guess. Check `jq --version`, fix it, then re-run `status`. |
 | `setup.sh` error | Per `/crow-workspace` → **Error Handling**, and the Phase 5 recovery for `launch_agent`. |
 | `status` shows `unknown` | Transient GitHub failure. Re-run `status`; an `unknown` ticket never releases a wave. |
 | Reviewer = the pushing account | Stop and ask for another reviewer (Phase 2). |
