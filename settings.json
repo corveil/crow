@@ -4,6 +4,8 @@
       "Bash(crow *)",
       "Bash(bash .claude/skills/crow-workspace/setup.sh *)",
       "Bash(.claude/skills/crow-workspace/setup.sh *)",
+      "Bash(bash .claude/skills/crow-cascade-epic/cascade.sh *)",
+      "Bash(.claude/skills/crow-cascade-epic/cascade.sh *)",
       "Bash(crow new-session:*)",
       "Bash(crow rename-session:*)",
       "Bash(crow select-session:*)",

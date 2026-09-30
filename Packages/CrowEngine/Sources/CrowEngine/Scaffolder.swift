@@ -72,6 +72,9 @@ public struct Scaffolder {
         let createTicketSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-create-ticket")
         try fm.createDirectory(atPath: createTicketSkillsDir, withIntermediateDirectories: true)
 
+        let cascadeSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-cascade-epic")
+        try fm.createDirectory(atPath: cascadeSkillsDir, withIntermediateDirectories: true)
+
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
@@ -137,6 +140,16 @@ public struct Scaffolder {
         let createTicketSkillTemplate = Self.bundledCreateTicketSkill()
         try CrowAttribution.expandSkillBody(createTicketSkillTemplate, agentKind: managerAgentKind)
             .write(toFile: createTicketSkillPath, atomically: true, encoding: .utf8)
+
+        // Always overwrite the cascade-epic skill and its helper script
+        // (CROW-1312). The skill orchestrates crow-workspace/setup.sh; the
+        // script is its deterministic half (wave layering, merge-gate watch).
+        let cascadeSkillPath = (cascadeSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try CrowAttribution.expandSkillBody(Self.bundledCascadeSkill(), agentKind: managerAgentKind)
+            .write(toFile: cascadeSkillPath, atomically: true, encoding: .utf8)
+        let cascadeScriptPath = (cascadeSkillsDir as NSString).appendingPathComponent("cascade.sh")
+        try Self.bundledCascadeScript().write(toFile: cascadeScriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cascadeScriptPath)
 
         // Always overwrite the show-image skill (surfaces generated images in
         // Crow's Images panel). No attribution expansion — it has no agent
@@ -763,6 +776,43 @@ public struct Scaffolder {
         """
     }
 
+    /// The crow-cascade-epic SKILL.md template bundled with the app (CROW-1312).
+    static func bundledCascadeSkill() -> String {
+        if let content = loadFromRepo("skills/crow-cascade-epic/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-cascade-epic-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        # Crow Cascade Epic
+
+        ## Activation
+        This skill activates when user invokes `/crow-cascade-epic <epic-url>` command.
+
+        ## Important
+        Drives a dependency-gated epic cascade on top of `/crow-workspace`. All `crow`,
+        `gh`, `glab`, and `git worktree` commands require `dangerouslyDisableSandbox: true`.
+        """
+    }
+
+    /// The crow-cascade-epic cascade.sh helper bundled with the app (CROW-1312).
+    static func bundledCascadeScript() -> String {
+        if let content = loadFromRepo("skills/crow-cascade-epic/cascade.sh") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-cascade-epic-cascade.sh", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        #!/bin/bash
+        echo '{"status":"error","message":"cascade.sh not bundled"}'
+        exit 2
+        """
+    }
+
     /// Shared attribution footer instructions (issue #443).
     static func bundledAttributionFooter() -> String {
         if let content = loadFromRepo("skills/crow-attribution/FOOTER.md") {
@@ -791,6 +841,8 @@ public struct Scaffolder {
               "Bash(crow *)",
               "Bash(bash .claude/skills/crow-workspace/setup.sh *)",
               "Bash(.claude/skills/crow-workspace/setup.sh *)",
+              "Bash(bash .claude/skills/crow-cascade-epic/cascade.sh *)",
+              "Bash(.claude/skills/crow-cascade-epic/cascade.sh *)",
               "Bash(gh issue view:*)",
               "Bash(gh issue create:*)",
               "Bash(gh issue edit:*)",

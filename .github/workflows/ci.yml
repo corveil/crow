@@ -146,6 +146,9 @@ jobs:
       - name: setup.sh set-ticket / worktree launch gate (CROW-1166 / CROW-1218)
         run: bash skills/crow-workspace/setup_session_test.sh
 
+      - name: crow-cascade-epic wave planner / merge-gate watcher (CROW-1312)
+        run: bash skills/crow-cascade-epic/cascade_test.sh
+
       - name: NSLog ban (CROW-874)
         run: bash scripts/check-no-nslog.sh
 

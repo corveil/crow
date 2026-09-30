@@ -82,6 +82,7 @@ for skill in \
     crow-batch-workspace \
     crow-review-pr \
     crow-create-ticket \
+    crow-cascade-epic \
     crow-show-image; do
     require_frontmatter "skills/${skill}/SKILL.md" "$skill"
     require_frontmatter "Resources/${skill}-SKILL.md.template" "$skill"
@@ -192,6 +193,40 @@ for f in skills/crow-workspace/SKILL.md Resources/crow-workspace-SKILL.md.templa
         'do not continue into `new-terminal`' \
         'Do not assemble a work session with raw CLI and skip `add-worktree`'
 done
+
+# CROW-1312: /crow-cascade-epic ships a skill + helper script. Both halves of
+# each must stay byte-identical (dev builds read skills/, installed builds
+# scaffold from Resources/), and the skill must keep the policy it exists to
+# encode: both merge gates, the human reviewer, no self-approval, delegation
+# to crow-workspace/setup.sh, and sequential creation with the list-worktrees
+# check (the #1301 race).
+for pair in \
+    "skills/crow-cascade-epic/SKILL.md:Resources/crow-cascade-epic-SKILL.md.template" \
+    "skills/crow-cascade-epic/cascade.sh:Resources/crow-cascade-epic-cascade.sh.template"; do
+    left="${pair%%:*}"
+    right="${pair#*:}"
+    if [ -f "$left" ] && [ -f "$right" ] && ! diff -q "$left" "$right" >/dev/null; then
+        echo "DRIFT: $left and $right differ — an edit must land in both halves" >&2
+        # `|| true`: diff exits 1 on a difference, which pipefail + set -e would
+        # turn into an abort before the checks below get to report.
+        diff -u "$right" "$left" | head -40 >&2 || true
+        fail=1
+    fi
+done
+# shellcheck disable=SC2016  # backticks in the needles are literal, not command substitution
+for f in skills/crow-cascade-epic/SKILL.md Resources/crow-cascade-epic-SKILL.md.template; do
+    require "$f" \
+        '.claude/skills/crow-workspace/setup.sh' \
+        '**Do NOT add the `crow:merge` label.**' \
+        'crow add-merge-label --session "$CROW_SESSION_ID"' \
+        'gh pr edit <number> --add-reviewer {reviewer}' \
+        'default **`dgershman`**' \
+        'Never approve, merge, or admin-merge your own PR' \
+        'crow list-worktrees --session {session_id}' \
+        'Never** hand a wave to `/crow-batch-workspace`' \
+        'cascade.sh watch --plan-file'
+done
+require settings.json 'Bash(bash .claude/skills/crow-cascade-epic/cascade.sh *)'
 
 if [ "$fail" -ne 0 ]; then
     echo "check-workspace-custom-instructions: FAILED (see #683)" >&2
