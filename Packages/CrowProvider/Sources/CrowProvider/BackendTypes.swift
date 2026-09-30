@@ -161,6 +161,10 @@ public struct PRRecord: Sendable {
     /// `failedCheckNames` can miss (ADR 0082, CROW-3716). `false` ⇒ a lone
     /// `CI Gate` red is the stale pre-label conclusion, not a real failure.
     public let hasNonGateTerminalNonSuccess: Bool
+    /// Login of whoever last added `crow:reviewing`, when that label is on the
+    /// PR right now (CROW-1310). Nil when the label is absent, or when the
+    /// query didn't select the timeline.
+    public let reviewingBy: String?
 
     public init(
         number: Int,
@@ -190,7 +194,8 @@ public struct PRRecord: Sendable {
         repoAutoMergeAllowed: Bool? = nil,
         ciGatePresent: Bool = false,
         anyCheckPending: Bool = false,
-        hasNonGateTerminalNonSuccess: Bool = false
+        hasNonGateTerminalNonSuccess: Bool = false,
+        reviewingBy: String? = nil
     ) {
         self.number = number
         self.url = url
@@ -220,6 +225,7 @@ public struct PRRecord: Sendable {
         self.ciGatePresent = ciGatePresent
         self.anyCheckPending = anyCheckPending
         self.hasNonGateTerminalNonSuccess = hasNonGateTerminalNonSuccess
+        self.reviewingBy = reviewingBy
     }
 }
 

@@ -429,6 +429,7 @@ crow automation set [--remote-control-enabled true|false]
                     [--attribution-trailers true|false]
                     [--auto-create-watcher-enabled true|false]
                     [--auto-merge-watcher-enabled true|false]
+                    [--review-in-progress-label true|false]            → crow:reviewing while a review runs
                     [--respond-to-changes-requested true|false]
                     [--respond-to-failed-checks true|false]
                     [--auto-re-request-review true|false]

@@ -97,6 +97,7 @@ crow automation set --remote-control-enabled true|false
                     --attribution-trailers true|false             → new worktrees only
                     --auto-create-watcher-enabled true|false      → crow:auto issue → workspace
                     --auto-merge-watcher-enabled true|false       → crow:merge PR → merge
+                    --review-in-progress-label true|false        → crow:reviewing while a review runs
                     --respond-to-changes-requested true|false
                     --respond-to-failed-checks true|false
                     --auto-rebase-and-resolve-conflicts true|false

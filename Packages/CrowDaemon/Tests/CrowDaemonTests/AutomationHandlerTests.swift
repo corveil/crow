@@ -235,7 +235,7 @@ import CrowPersistence
     /// while silently dropping the field on the wire.
     ///
     /// This is the exact dictionary `AutomationSet.params` produces with every
-    /// flag passed — twelve booleans, no lists — kept in step with
+    /// flag passed — thirteen booleans, no lists — kept in step with
     /// `AutomationCommandParsingTests.automationSetEmitsTheExpectedWireKeys`,
     /// which asserts the CLI emits precisely these keys and no others.
     @Test @MainActor func setAcceptsEveryWireKeyTheCLIEmits() async throws {
@@ -256,6 +256,7 @@ import CrowPersistence
             "attribution_trailers": .bool(false),
             "auto_create_watcher_enabled": .bool(true),
             "auto_merge_watcher_enabled": .bool(true),
+            "review_in_progress_label_enabled": .bool(true),
             "respond_to_changes_requested": .bool(false),
             "respond_to_failed_checks": .bool(true),
             "auto_rebase_and_resolve_conflicts": .bool(true),
@@ -275,6 +276,7 @@ import CrowPersistence
         #expect(onDisk.attributionTrailers == false)
         #expect(onDisk.autoCreateWatcherEnabled == true)
         #expect(onDisk.autoMergeWatcherEnabled == true)
+        #expect(onDisk.reviewInProgressLabelEnabled == true)
         #expect(onDisk.autoRespond.respondToChangesRequested == false)
         #expect(onDisk.autoRespond.respondToFailedChecks == true)
         #expect(onDisk.autoRespond.autoRebaseAndResolveConflicts == true)

@@ -173,6 +173,12 @@ PR #312 gated the existing `crow:auto` label automation behind a single opt-in t
 
 Backed by `AppConfig.autoCreateWatcherEnabled`. Issues in `excludeTicketRepos` are filtered before the toggle is consulted, so they remain ignored regardless of the setting.
 
+### Review in progress
+
+When a Crow review session starts, the daemon can add a `crow:reviewing` label to that PR and remove it when the review ends (completes, is deleted, or is reaped). Off by default. Other Crows read the label's latest timeline actor and show "being reviewed by @x" on the author's PR row and on the review board. The review clone never writes the label. A reviewer without permission to label the repo gets no label; the review still starts. A re-review keeps the label across the handoff. Only the viewer who last added the label removes it, so one reviewer's Crow doesn't clear the label while someone else is still reviewing.
+
+Backed by `AppConfig.reviewInProgressLabelEnabled`. `crow automation set --review-in-progress-label true`.
+
 ### Auto-merge
 
 PR #299 added a single toggle that lets Crow enable GitHub's native auto-merge on Crow-authored PRs carrying the `crow:merge` label. Off by default.

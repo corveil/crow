@@ -329,7 +329,7 @@ config_readable is false when config.json exists but could not be decoded — th
 Change the automation settings.
 
 ```
-crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>] [--auto-re-request-review <auto-re-request-review>]
+crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--review-in-progress-label <review-in-progress-label>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>] [--auto-re-request-review <auto-re-request-review>]
 ```
 
 Only the flags you pass change; at least one is required.
@@ -350,6 +350,7 @@ The tab's three board-filter lists (excluded review repos, ignored review labels
 | `--attribution-trailers` | `<attribution-trailers>` | no | Add a Crow-Session trailer to commits in new worktrees (true or false) |
 | `--auto-create-watcher-enabled` | `<auto-create-watcher-enabled>` | no | Auto-launch a workspace for crow:auto / crow:explore labeled issues (true or false) |
 | `--auto-merge-watcher-enabled` | `<auto-merge-watcher-enabled>` | no | Auto-merge Crow-authored PRs labeled crow:merge (true or false) |
+| `--review-in-progress-label` | `<review-in-progress-label>` | no | Label PRs crow:reviewing while a Crow review is in progress (true or false) |
 | `--respond-to-changes-requested` | `<respond-to-changes-requested>` | no | Type a fix-it instruction into the session on a changes-requested review (true or false) |
 | `--respond-to-failed-checks` | `<respond-to-failed-checks>` | no | Type a fix-it instruction into the session when CI checks fail (true or false) |
 | `--auto-rebase-and-resolve-conflicts` | `<auto-rebase-and-resolve-conflicts>` | no | Rebase onto the base branch and force-with-lease push on conflict (true or false) |

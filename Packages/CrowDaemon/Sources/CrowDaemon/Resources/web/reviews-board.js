@@ -251,6 +251,8 @@ function reviewCard(r) {
   const sub = el('div', 'card-sub');
   sub.appendChild(el('span', null, '@' + r.author));
   if (r.head_branch) sub.appendChild(el('span', 'branch-tag', r.head_branch));
+  const reviewing = reviewingBadge(r.reviewing_by);
+  if (reviewing) sub.appendChild(reviewing);
   card.appendChild(sub);
   if (r.labels && r.labels.length) card.appendChild(labelPills(r.labels));
   const foot = el('div', 'card-foot');

@@ -185,6 +185,7 @@ struct SettingsRPCSupportTests {
         #expect(json["coder_view_auto_permission_mode"] == .bool(false))
         #expect(json["auto_create_watcher_enabled"] == .bool(false))
         #expect(json["auto_merge_watcher_enabled"] == .bool(false))
+        #expect(json["review_in_progress_label_enabled"] == .bool(false))
         #expect(json["config_readable"] == .bool(true))
 
         #expect(json["auto_respond"] == .object([

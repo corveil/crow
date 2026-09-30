@@ -11,6 +11,7 @@ const epilogue = `
 ;globalThis.__t = {
   sessionRow(s){ return sessionRow(s); },
   prStatusInline(pr, am, enabled, ar){ return prStatusInline(pr, am, enabled, ar); },
+  reviewCard(r){ return reviewCard(r); },
   ICONS,
   set live(v){ liveById = v; },
   set hideDetails(v){ uiConfig.hideSessionDetails = v; },
@@ -306,6 +307,19 @@ r = render({ has_pr: false }, { labels: LABELS });
 check('hidden under hideSessionDetails', !r.row.querySelector('.label-row'));
 check('PR pill still shown under hideSessionDetails', !!badge(r.row));
 T.hideDetails = false;
+
+console.log('\nBeing reviewed badge (CROW-1310):');
+r = render({ ...GREEN_PR, reviewing_by: 'ada' });
+const reviewing = r.row.querySelector('.reviewing-badge');
+check('sidebar row names who is reviewing', reviewing && reviewing.textContent === 'being reviewed by @ada');
+r = render(GREEN_PR);
+check('sidebar row omits the badge when nobody is reviewing', !r.row.querySelector('.reviewing-badge'));
+const card = T.reviewCard({
+  url: 'https://github.com/corveil/crow/pull/1310', repo: 'corveil/crow', pr_number: 1310,
+  title: 'Label PRs', author: 'bob', kickoff_action: 'create', reviewing_by: 'ada',
+});
+const cardBadge = card.querySelector('.reviewing-badge');
+check('review card names who is reviewing', cardBadge && cardBadge.textContent === 'being reviewed by @ada');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

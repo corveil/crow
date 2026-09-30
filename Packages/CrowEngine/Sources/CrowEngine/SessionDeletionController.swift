@@ -62,6 +62,11 @@ final class SessionDeletionController {
         guard appState.isDeletingSession[id] != true else { return }
 
         let session = appState.sessions.first(where: { $0.id == id })
+        // Captured before teardown. Removal waits until the delete succeeds —
+        // a failed delete leaves the session active, and the label should stay.
+        let reviewingPRURL: String? = (session?.kind == .review)
+            ? appState.links(for: id).first(where: { $0.linkType == .pr })?.url
+            : nil
         let wts = appState.worktrees(for: id)
         let terminals = appState.terminals(for: id)
         let isReview = session?.kind == .review
@@ -103,6 +108,13 @@ final class SessionDeletionController {
                 _ = await MainActor.run { appState?.sessionDeletionError.removeValue(forKey: id) }
             }
             return
+        }
+
+        // Cleanup succeeded — the review has left the active set, so drop
+        // `crow:reviewing` if this viewer added it (CROW-1310). Retention
+        // cleanup deletes through this same path.
+        if let reviewingPRURL {
+            owner.clearReviewingLabel(prURL: reviewingPRURL, end: .deleted)
         }
 
         // Cleanup succeeded — destroy live terminal surfaces and tear down state.

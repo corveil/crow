@@ -110,6 +110,16 @@ function prReviewGlyph(pr) {
   return PR_REVIEW_GLYPH[pr.review] || PR_REVIEW_GLYPH.unknown;
 }
 
+// "being reviewed by @x" — the crow:reviewing label's latest actor (CROW-1310).
+// Shared by the sidebar row, the session header, and the review board so the
+// three can't disagree about who is reviewing.
+function reviewingBadge(login) {
+  if (!login) return null;
+  const b = el('span', 'reviewing-badge', 'being reviewed by @' + login);
+  b.title = 'being reviewed by @' + login;
+  return b;
+}
+
 // The ordered glyphs for a session-row PR pill, mirroring native `PRBadge`:
 // merged collapses to a single check, otherwise checks + review, plus the
 // conflict and crow:merge-label markers the native pill folded into its tint,

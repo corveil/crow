@@ -128,6 +128,15 @@ extension GitHubCodeBackend {
             number url state mergeable mergeStateStatus reviewDecision isDraft headRefName headRefOid baseRefName
             repository { nameWithOwner autoMergeAllowed }
             labels(first: 20) { nodes { name color } }
+            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+              nodes {
+                ... on LabeledEvent {
+                  createdAt
+                  actor { login }
+                  label { name }
+                }
+              }
+            }
             closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } }
             statusCheckRollup {
               state
@@ -166,6 +175,15 @@ extension GitHubCodeBackend {
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
+            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+              nodes {
+                ... on LabeledEvent {
+                  createdAt
+                  actor { login }
+                  label { name }
+                }
+              }
+            }
             reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
@@ -178,6 +196,15 @@ extension GitHubCodeBackend {
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
+            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+              nodes {
+                ... on LabeledEvent {
+                  createdAt
+                  actor { login }
+                  label { name }
+                }
+              }
+            }
             reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
@@ -190,6 +217,15 @@ extension GitHubCodeBackend {
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
+            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+              nodes {
+                ... on LabeledEvent {
+                  createdAt
+                  actor { login }
+                  label { name }
+                }
+              }
+            }
             reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
@@ -469,7 +505,8 @@ extension GitHubCodeBackend {
             repoAutoMergeAllowed: repoAutoMergeAllowed,
             ciGatePresent: ciGatePresent,
             anyCheckPending: anyCheckPending,
-            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess
+            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess,
+            reviewingBy: reviewingBy(from: node, labels: labels)
         )
     }
 
@@ -591,6 +628,7 @@ extension GitHubCodeBackend {
                 viewerLastReviewedAt: viewerLastReviewedAt,
                 viewerLastReviewState: viewerLastReviewState,
                 viewerLastReviewedHeadSha: viewerLastReviewedHeadSha,
+                reviewingBy: reviewingBy(from: node, labels: labels),
                 state: prState,
                 completedAt: completedAt
             ))
@@ -707,5 +745,115 @@ extension GitHubCodeBackend {
             }
         }
         return matches
+    }
+
+    // MARK: - crow:reviewing (CROW-1310)
+
+    /// Latest `LabeledEvent`s for the in-progress label. `last: 30` is the
+    /// recent window; the decision takes the newest matching event, so an
+    /// older add that fell out of the window only matters when thirty other
+    /// labels were applied after it.
+    static let reviewingLabelActorQuery = """
+    query($owner: String!, $name: String!, $number: Int!) {
+      viewer { login }
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          labels(first: 20) { nodes { name } }
+          timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+            nodes {
+              ... on LabeledEvent {
+                createdAt
+                actor { login }
+                label { name }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    static let openReviewingLabelsSearch = #"label:"crow:reviewing" is:open"#
+
+    static let openReviewingLabelsQuery = """
+    query($q: String!) {
+      viewer { login }
+      search(type: ISSUE, query: $q, first: 30) {
+        nodes {
+          ... on PullRequest {
+            url
+            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+              nodes {
+                ... on LabeledEvent {
+                  createdAt
+                  actor { login }
+                  label { name }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    /// Login of the latest `crow:reviewing` add, but only when that label is
+    /// on the PR now. A leftover `LabeledEvent` after a hand removal must not
+    /// keep advertising a review that has ended.
+    static func reviewingBy(from node: [String: Any], labels: [LabelInfo]) -> String? {
+        guard labels.contains(where: {
+            $0.name.caseInsensitiveCompare(ReviewingLabel.name) == .orderedSame
+        }) else { return nil }
+        return ReviewingLabel.latestActor(in: labeledEvents(from: node))
+    }
+
+    static func labeledEvents(from node: [String: Any]) -> [ReviewingLabel.Event] {
+        LenientJSON.nodes(node, "timelineItems").compactMap { item in
+            guard let name = (item["label"] as? [String: Any])?["name"] as? String else { return nil }
+            let actor = (item["actor"] as? [String: Any])?["login"] as? String
+            return ReviewingLabel.Event(
+                label: name,
+                actor: actor,
+                createdAt: IssueDate.parse(item["createdAt"] as? String)
+            )
+        }
+    }
+
+    static func parseReviewingLabelActor(_ output: String) throws -> ReviewingLabelActor {
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataObj = json["data"] as? [String: Any] else {
+            throw ProviderError.commandFailed("reviewingLabelActor: failed to parse GraphQL response")
+        }
+        let viewer = (dataObj["viewer"] as? [String: Any])?["login"] as? String ?? ""
+        guard let pr = (dataObj["repository"] as? [String: Any])?["pullRequest"] as? [String: Any] else {
+            throw ProviderError.commandFailed("reviewingLabelActor: pull request not in response")
+        }
+        let labels = LenientJSON.nodes(pr, "labels").compactMap { $0["name"] as? String }
+        let present = labels.contains {
+            $0.caseInsensitiveCompare(ReviewingLabel.name) == .orderedSame
+        }
+        return ReviewingLabelActor(
+            labelPresent: present,
+            latestActor: ReviewingLabel.latestActor(in: labeledEvents(from: pr)),
+            viewerLogin: viewer
+        )
+    }
+
+    static func parseOpenReviewingLabels(_ output: String) throws -> ReviewingLabelListing {
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataObj = json["data"] as? [String: Any] else {
+            throw ProviderError.commandFailed("listOpenReviewingLabels: failed to parse GraphQL response")
+        }
+        let viewer = (dataObj["viewer"] as? [String: Any])?["login"] as? String ?? ""
+        let candidates = LenientJSON.nodes(dataObj["search"] as? [String: Any]).compactMap { node -> ReviewingLabel.Candidate? in
+            guard let url = node["url"] as? String, !url.isEmpty else { return nil }
+            return ReviewingLabel.Candidate(
+                url: url,
+                latestActor: ReviewingLabel.latestActor(in: labeledEvents(from: node))
+            )
+        }
+        return ReviewingLabelListing(viewerLogin: viewer, candidates: candidates)
     }
 }

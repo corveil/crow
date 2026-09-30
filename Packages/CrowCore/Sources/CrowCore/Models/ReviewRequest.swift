@@ -82,6 +82,10 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
     /// board also carries PRs that merged or closed in the last 24 h, and it
     /// needs to tell those from the ones still waiting on someone.
     public var state: String?
+    /// Login of whoever last added `crow:reviewing`, when that label is on the
+    /// PR (CROW-1310). Nil when the label is absent. The review board renders
+    /// this as "being reviewed by @x".
+    public var reviewingBy: String?
     /// When the PR left everyone's queue for good — `mergedAt ?? closedAt`.
     ///
     /// Separate from `requestedAt` (the PR's `updatedAt`, which any later
@@ -130,6 +134,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         viewerLastReviewedAt: Date? = nil,
         viewerLastReviewState: ReviewVerdict? = nil,
         viewerLastReviewedHeadSha: String? = nil,
+        reviewingBy: String? = nil,
         state: String? = nil,
         completedAt: Date? = nil
     ) {
@@ -150,6 +155,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         self.viewerLastReviewedAt = viewerLastReviewedAt
         self.viewerLastReviewState = viewerLastReviewState
         self.viewerLastReviewedHeadSha = viewerLastReviewedHeadSha
+        self.reviewingBy = reviewingBy
         self.state = state
         self.completedAt = completedAt
     }

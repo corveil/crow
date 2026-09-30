@@ -751,7 +751,7 @@ public enum ParityLedger {
 
         // MARK: Automation toggles (web Settings tab + `crow automation`)
 
-        // Covered since CROW-812 (#884): `crow automation get` reads all twelve
+        // Covered since CROW-812 (#884): `crow automation get` reads all thirteen
         // and `crow automation set` patches them. Neither method is on
         // `RPCWebSocketHandler.localOnlyDenial`, so an authenticated remote
         // `/rpc` peer can write these fields too — deliberately, because that
@@ -769,6 +769,7 @@ public enum ParityLedger {
         .field("attributionTrailers", read: "automation get", write: "automation set"),
         .field("autoMergeWatcherEnabled", read: "automation get", write: "automation set"),
         .field("autoCreateWatcherEnabled", read: "automation get", write: "automation set"),
+        .field("reviewInProgressLabelEnabled", read: "automation get", write: "automation set"),
         .field("autoRespond.respondToChangesRequested", read: "automation get", write: "automation set"),
         .field("autoRespond.respondToFailedChecks", read: "automation get", write: "automation set"),
         .field("autoRespond.autoRebaseAndResolveConflicts", read: "automation get", write: "automation set"),

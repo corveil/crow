@@ -118,6 +118,10 @@ func makeEngineSessionHandlers(
                     "workspace_match": match.map { .string($0.source.rawValue) } ?? .null,
                     "gateway_set": .bool(!(match?.gateway?.isEmpty ?? true)),
                     "gateway_base_url": match?.gateway.map { .string($0.baseURL) } ?? .null,
+                    // Who last added `crow:reviewing` on this session's PR
+                    // (CROW-1310). Null when the label isn't there, or when
+                    // this session has no PR status yet.
+                    "reviewing_by": capturedAppState.prStatus[id]?.reviewingBy.map { .string($0) } ?? .null,
                 ]
             }
         },

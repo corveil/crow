@@ -148,9 +148,14 @@ struct AutomationWatcherArgs: ParsableArguments {
         help: "Auto-merge Crow-authored PRs labeled crow:merge (true or false)")
     var autoMergeWatcherEnabled: Bool?
 
+    @Option(
+        name: .customLong("review-in-progress-label"),
+        help: "Label PRs crow:reviewing while a Crow review is in progress (true or false)")
+    var reviewInProgressLabel: Bool?
+
     var isEmpty: Bool {
         attributionTrailers == nil && autoCreateWatcherEnabled == nil
-            && autoMergeWatcherEnabled == nil
+            && autoMergeWatcherEnabled == nil && reviewInProgressLabel == nil
     }
 
     var params: [String: JSONValue] {
@@ -163,6 +168,9 @@ struct AutomationWatcherArgs: ParsableArguments {
         }
         if let autoMergeWatcherEnabled {
             params["auto_merge_watcher_enabled"] = .bool(autoMergeWatcherEnabled)
+        }
+        if let reviewInProgressLabel {
+            params["review_in_progress_label_enabled"] = .bool(reviewInProgressLabel)
         }
         return params
     }

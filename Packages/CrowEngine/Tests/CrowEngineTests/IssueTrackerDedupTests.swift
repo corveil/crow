@@ -33,7 +33,8 @@ struct IssueTrackerDedupTests {
         updatedAt: Date? = nil,
         ciGatePresent: Bool = false,
         anyCheckPending: Bool = false,
-        hasNonGateTerminalNonSuccess: Bool = false
+        hasNonGateTerminalNonSuccess: Bool = false,
+        reviewingBy: String? = nil
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: number,
@@ -61,7 +62,8 @@ struct IssueTrackerDedupTests {
             updatedAt: updatedAt,
             ciGatePresent: ciGatePresent,
             anyCheckPending: anyCheckPending,
-            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess
+            hasNonGateTerminalNonSuccess: hasNonGateTerminalNonSuccess,
+            reviewingBy: reviewingBy
         )
     }
 
@@ -354,5 +356,21 @@ struct IssueTrackerDedupTests {
         #expect(merged.changesRequestedReviewerLogins == ["a"])
         #expect(merged.pendingReviewerLogins == ["b"])
         #expect(merged.hasPendingReviewRequest)
+    }
+
+    @Test func mergePRRecordsKeepsReviewingByOnlyWhileTheLabelSurvives() {
+        let url = "https://github.com/corveil/crow/pull/1310"
+        let label = LabelInfo(name: "crow:reviewing", color: "FBCA04")
+        let labeled = makeViewerPR(url: url, state: "OPEN", labels: [label], reviewingBy: "ada")
+        let stale = makeViewerPR(url: url, state: "MERGED")
+        for merged in [
+            IssueTracker.mergePRRecords(labeled, stale),
+            IssueTracker.mergePRRecords(stale, labeled),
+        ] {
+            #expect(merged.reviewingBy == "ada")
+        }
+        let leftover = makeViewerPR(url: url, state: "OPEN", reviewingBy: "ada")
+        #expect(IssueTracker.mergePRRecords(leftover, stale).reviewingBy == nil)
+        #expect(IssueTracker.withLabels(labeled, labels: []).reviewingBy == nil)
     }
 }

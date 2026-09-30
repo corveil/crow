@@ -144,10 +144,20 @@ final class ReviewSessionController {
                 // round's end-of-run analytics snapshot, and makes it invisible
                 // to `existingReviewSession`, which is what lets the create
                 // below proceed.
+                //
+                // Keep `crow:reviewing` across the handoff (CROW-1310). The
+                // new round starts in this same call; removing the label here
+                // would flash it off, and a poll during the clone would sweep
+                // it because the old session is already gone.
                 CrowLog.info("[SessionService] PR head advanced past review session \(staleID); completing it and starting a new round for \(prURL)")
-                self.owner.completeSession(id: staleID)
+                self.owner.completeSession(id: staleID, keepReviewingLabel: true)
             }
         }
+
+        // Held until the new session exists and the label add has been
+        // attempted, so the stale sweep doesn't see a gap (CROW-1310).
+        ReviewingLabelService.hold(prURL)
+        defer { ReviewingLabelService.release(prURL) }
 
         let prep: ReviewClonePrep
         do {
@@ -239,6 +249,14 @@ final class ReviewSessionController {
         }
 
         CrowLog.info("[SessionService] Created review session '\(session.name)' for \(prURL)")
+        // The daemon labels the PR. The review clone runs untrusted code, so
+        // it is never handed this write. A missing label permission is logged
+        // inside the service and does not fail the session we just created.
+        await ReviewingLabelService.addOnReviewStart(
+            prURL: prURL,
+            repo: repoSlug,
+            backend: providerManager?.codeBackend(for: .github)
+        )
         return session.id
     }
 

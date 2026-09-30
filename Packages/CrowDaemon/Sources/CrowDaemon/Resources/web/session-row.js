@@ -147,6 +147,8 @@ function sessionRow(s) {
     prb.title = detail ? desc + '\n' + detail : desc;
     prb.setAttribute('aria-label', detail ? desc + '. ' + detail : desc);
     badges.appendChild(prb);
+    const reviewing = pr && reviewingBadge(pr.reviewing_by);
+    if (reviewing) badges.appendChild(reviewing);
   }
   // Activity badge (Working/Waiting/Done/…) is redundant on managers — they
   // already show the trailing status dot, and the badge forces a second line.

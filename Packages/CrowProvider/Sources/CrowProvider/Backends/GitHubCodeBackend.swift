@@ -26,7 +26,8 @@ public struct GitHubCodeBackend: CodeBackend {
         .autoMerge,
         .updateBranch,
         .directMerge,
-        .requestReviewers
+        .requestReviewers,
+        .reviewInProgressLabel
     ]
 
     private let shellRunner: ShellRunner
@@ -194,6 +195,15 @@ public struct GitHubCodeBackend: CodeBackend {
                   mergeCommit { oid }
                   repository { nameWithOwner autoMergeAllowed }
                   labels(first: 20) { nodes { name color } }
+                  timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+                    nodes {
+                      ... on LabeledEvent {
+                        createdAt
+                        actor { login }
+                        label { name }
+                      }
+                    }
+                  }
                   statusCheckRollup {
                     state
                     contexts(first: 25) {
@@ -386,6 +396,61 @@ public struct GitHubCodeBackend: CodeBackend {
             env: [:],
             cwd: NSTemporaryDirectory()
         )
+    }
+
+    public func ensureReviewingLabel(repo: String) async throws {
+        do {
+            _ = try await shellRunner.run(
+                "gh", "label", "create", ReviewingLabel.name,
+                "--repo", repo,
+                "--color", "FBCA04",
+                "--description", "Crow review in progress"
+            )
+        } catch ShellRunnerError.nonZeroExit(_, let output) where output.localizedCaseInsensitiveContains("already exists") {
+            return
+        }
+    }
+
+    public func addReviewingLabel(prURL: String) async throws {
+        // Same direct-argv + $TMPDIR convention as `addMergeLabel`: the review
+        // clone's cwd is untrusted PR code, so the daemon labels from a temp
+        // directory and never hands this to the review agent.
+        _ = try await shellRunner.run(
+            args: ["gh", "pr", "edit", prURL, "--add-label", ReviewingLabel.name],
+            env: [:],
+            cwd: NSTemporaryDirectory()
+        )
+    }
+
+    public func removeReviewingLabel(prURL: String) async throws {
+        _ = try await shellRunner.run(
+            args: ["gh", "pr", "edit", prURL, "--remove-label", ReviewingLabel.name],
+            env: [:],
+            cwd: NSTemporaryDirectory()
+        )
+    }
+
+    public func reviewingLabelActor(prURL: String) async throws -> ReviewingLabelActor {
+        guard let parsed = Session.parseReviewPR(url: prURL) else {
+            throw ProviderError.commandFailed("reviewingLabelActor: could not parse \(prURL)")
+        }
+        let output = try await shellRunner.run(
+            "gh", "api", "graphql",
+            "-f", "query=\(Self.reviewingLabelActorQuery)",
+            "-F", "owner=\(parsed.owner)",
+            "-F", "name=\(parsed.repo)",
+            "-F", "number=\(parsed.number)"
+        )
+        return try Self.parseReviewingLabelActor(output)
+    }
+
+    public func listOpenReviewingLabels() async throws -> ReviewingLabelListing {
+        let output = try await shellRunner.run(
+            "gh", "api", "graphql",
+            "-f", "query=\(Self.openReviewingLabelsQuery)",
+            "-f", "q=\(Self.openReviewingLabelsSearch)"
+        )
+        return try Self.parseOpenReviewingLabels(output)
     }
 
     public func enableAutoMerge(prURL: String) async throws {

@@ -123,6 +123,28 @@ public protocol CodeBackend: Sendable {
     /// caller may safely race the prompt-driven hint in `AutoRespondPrompts`.
     func requestReviewers(prURL: String, logins: [String]) async throws
 
+    /// Ensure the `crow:reviewing` label exists in `repo` (CROW-1310).
+    /// Capability-gated on `.reviewInProgressLabel`. A label that already
+    /// exists is success, not an error.
+    func ensureReviewingLabel(repo: String) async throws
+
+    /// Add `crow:reviewing` to the PR at `prURL`. Capability-gated on
+    /// `.reviewInProgressLabel`.
+    func addReviewingLabel(prURL: String) async throws
+
+    /// Remove `crow:reviewing` from the PR at `prURL`. Capability-gated on
+    /// `.reviewInProgressLabel`.
+    func removeReviewingLabel(prURL: String) async throws
+
+    /// Whether `crow:reviewing` is on the PR, who last added it, and the
+    /// authenticated viewer's login. The actor is the latest `LabeledEvent`
+    /// for that label, which is what a removal decision compares against.
+    func reviewingLabelActor(prURL: String) async throws -> ReviewingLabelActor
+
+    /// Open PRs that currently carry `crow:reviewing`, each with the login of
+    /// whoever last added it. The stale-label sweep's input.
+    func listOpenReviewingLabels() async throws -> ReviewingLabelListing
+
     /// Fetch the metadata SessionService needs to prep a review clone:
     /// title, head/base branch names, head commit SHA, number. Issues one
     /// `gh pr view` / `glab mr view` call.
@@ -190,6 +212,26 @@ public extension CodeBackend {
     /// (CROW-1268) leaves non-GitHub links untouched rather than forcing every
     /// conformer to implement it.
     func resolveCanonicalRepoSlug(_ slug: String) async throws -> String? { nil }
+
+    func ensureReviewingLabel(repo: String) async throws {
+        throw ProviderError.unimplemented("ensureReviewingLabel not supported by \(provider)")
+    }
+
+    func addReviewingLabel(prURL: String) async throws {
+        throw ProviderError.unimplemented("addReviewingLabel not supported by \(provider)")
+    }
+
+    func removeReviewingLabel(prURL: String) async throws {
+        throw ProviderError.unimplemented("removeReviewingLabel not supported by \(provider)")
+    }
+
+    func reviewingLabelActor(prURL: String) async throws -> ReviewingLabelActor {
+        throw ProviderError.unimplemented("reviewingLabelActor not supported by \(provider)")
+    }
+
+    func listOpenReviewingLabels() async throws -> ReviewingLabelListing {
+        throw ProviderError.unimplemented("listOpenReviewingLabels not supported by \(provider)")
+    }
 }
 
 /// Optional capabilities a `CodeBackend` may declare.
@@ -226,6 +268,37 @@ public enum CodeCapability: Sendable, Hashable {
     /// listing path doesn't populate `changesRequestedReviewerLogins`, so the
     /// watcher would have nobody to request (CROW-921).
     case requestReviewers
+
+    /// Supports the `crow:reviewing` in-progress label (CROW-1310): create it,
+    /// add it, remove it, and read the latest `LabeledEvent` actor. GitHub
+    /// declares this; GitLab does not.
+    case reviewInProgressLabel
+}
+
+/// Who last added `crow:reviewing` on one PR, plus whether the label is there
+/// now and who the authenticated viewer is (CROW-1310).
+public struct ReviewingLabelActor: Sendable, Equatable {
+    public var labelPresent: Bool
+    public var latestActor: String?
+    public var viewerLogin: String
+
+    public init(labelPresent: Bool, latestActor: String?, viewerLogin: String) {
+        self.labelPresent = labelPresent
+        self.latestActor = latestActor
+        self.viewerLogin = viewerLogin
+    }
+}
+
+/// Open PRs carrying `crow:reviewing`, with the viewer's login so the sweep
+/// can keep only the ones that viewer added (CROW-1310).
+public struct ReviewingLabelListing: Sendable, Equatable {
+    public var viewerLogin: String
+    public var candidates: [ReviewingLabel.Candidate]
+
+    public init(viewerLogin: String, candidates: [ReviewingLabel.Candidate]) {
+        self.viewerLogin = viewerLogin
+        self.candidates = candidates
+    }
 }
 
 /// Minimal PR/MR identity returned from `CodeBackend.linkedPR`.
