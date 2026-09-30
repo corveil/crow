@@ -37,6 +37,13 @@ usage() {
   exit 2
 }
 
+# True when the jq program prints exactly `true`. Use this instead of
+# `jq -e`: jq 1.6's `-e` exits 0 on empty or blank input, which would let a
+# missing status object pass for a finished wave. Args are passed to jq as-is.
+jq_true() {
+  [[ "$(jq -r "$@" 2>/dev/null)" == "true" ]]
+}
+
 # The filters are written for jq 1.6 (so no keyword-named keys like a bare
 # `label`, which 1.7 accepts and 1.6 rejects). Older jq lacks IN/any-with-
 # generator, so refuse it up front rather than mis-evaluating a gate. An
@@ -67,7 +74,7 @@ parse_args() {
   require_jq_16
   [[ -n "$PLAN_FILE" ]] || die "parse_args" "--plan-file is required"
   [[ -f "$PLAN_FILE" ]] || die "parse_args" "plan file not found: $PLAN_FILE"
-  jq -e 'type == "object"' "$PLAN_FILE" >/dev/null 2>&1 || die "parse_args" "plan file is not a JSON object: $PLAN_FILE"
+  jq_true 'type == "object"' "$PLAN_FILE" || die "parse_args" "plan file is not a JSON object: $PLAN_FILE"
   if [[ -n "$WAVE" && ! "$WAVE" =~ ^[0-9]+$ ]]; then
     die "parse_args" "--wave must be a positive integer (got $WAVE)"
   fi
@@ -120,7 +127,7 @@ PLAN_JQ='
 cmd_plan() {
   local out tmp
   out=$(jq "$PLAN_JQ" "$PLAN_FILE" 2>&1) || die "plan" "jq failed: $out"
-  if jq -e 'has("errors")' <<< "$out" >/dev/null; then
+  if jq_true 'has("errors")' <<< "$out"; then
     jq -c '{status:"error", step:"plan", errors:.errors}' <<< "$out"
     exit 2
   fi
@@ -160,7 +167,7 @@ collect_ticket() { # collect_ticket <ticket-json> <sessions-json>
   if [[ "$url" =~ $GITHUB_ISSUE_RE ]]; then
     if resp=$("$GH_BIN" api graphql -f query="$ISSUE_QUERY" \
         -F owner="${BASH_REMATCH[1]}" -F name="${BASH_REMATCH[2]}" -F number="${BASH_REMATCH[3]}" 2>&1) \
-       && jq -e '.data.repository.issue' <<< "$resp" >/dev/null 2>&1; then
+       && jq_true '.data.repository.issue != null' <<< "$resp"; then
       issue=$(jq -c '.data.repository.issue | {state, stateReason}' <<< "$resp")
       prs=$(jq -c '[.data.repository.issue.closedByPullRequestsReferences.nodes[]?]' <<< "$resp")
     else
@@ -170,21 +177,26 @@ collect_ticket() { # collect_ticket <ticket-json> <sessions-json>
 
   # The coder registers its PR with `crow add-link --type pr` — that link is
   # the fallback when the PR body lacks `Closes #N` (and the only source for a
-  # Jira ticket whose code lands on GitHub).
-  local sid link_urls pr_url pr_resp
-  sid=$(jq -r --arg url "$url" '[.[] | select(.kind == "work" and .ticket_url == $url and (.is_explore | not))][0].id // empty' <<< "$sessions")
-  if [[ -n "$sid" ]]; then
+  # Jira ticket whose code lands on GitHub). Read it from *every* work session
+  # on the ticket: a re-launched ticket has an old session and a new one, and a
+  # PR registered on either must count toward the gate and toward drift.
+  local sids sid link_urls pr_url pr_resp
+  sids=$(jq -r --arg url "$url" \
+    '.[] | select(.kind == "work" and .ticket_url == $url and ((.is_explore // false) | not)) | .id' <<< "$sessions")
+  while IFS= read -r sid; do
+    [[ -n "$sid" ]] || continue
     link_urls=$("$CROW_BIN" list-links --session "$sid" 2>/dev/null \
       | jq -r '.links[]? | select(.type == "pr") | .url' 2>/dev/null) || link_urls=''
     while IFS= read -r pr_url; do
       [[ -n "$pr_url" ]] || continue
-      jq -e --arg u "$pr_url" 'any(.[]; .url == $u)' <<< "$prs" >/dev/null && continue
+      # shellcheck disable=SC2016  # $u / $w are jq variables
+      jq_true --arg u "$pr_url" 'any(.[]; .url == $u)' <<< "$prs" && continue
       if pr_resp=$("$GH_BIN" api graphql -f query="$PR_QUERY" -F url="$pr_url" 2>/dev/null) \
-         && jq -e '.data.resource.number' <<< "$pr_resp" >/dev/null 2>&1; then
+         && jq_true '.data.resource.number != null' <<< "$pr_resp"; then
         prs=$(jq -c --argjson pr "$(jq -c '.data.resource' <<< "$pr_resp")" '. + [$pr]' <<< "$prs")
       fi
     done <<< "$link_urls"
-  fi
+  done <<< "$sids"
 
   jq -cn --arg id "$id" --argjson issue "$issue" --argjson prs "$prs" --arg error "$error" \
     '{id: $id, issue: $issue, prs: $prs, error: (if $error == "" then null else $error end)}'
@@ -321,7 +333,7 @@ collect_status() { # collect_status <wave-or-empty>  → status JSON on stdout
   # Fail closed: a filter this jq can't run must never look like a finished
   # wave to `watch`, so any failure becomes an explicit error object.
   if ! out=$(jq -c --slurpfile raw "$raw" --argjson sessions "$sessions" --argjson wave "$wave_arg" \
-      "$STATUS_JQ" "$PLAN_FILE" 2>&1) || ! jq -e '.status == "ok"' <<< "$out" >/dev/null 2>&1; then
+      "$STATUS_JQ" "$PLAN_FILE" 2>&1) || ! jq_true '.status == "ok"' <<< "$out"; then
     out=$(jq -cn --arg msg "$(head -c 500 <<< "$out")" \
       '{status: "error", step: "status", message: ("status filter failed: " + $msg)}')
   fi
@@ -332,9 +344,10 @@ collect_status() { # collect_status <wave-or-empty>  → status JSON on stdout
 # Checked outside collect_status: a `die` inside `$(collect_status)` would only
 # leave the subshell.
 require_planned() {
-  jq -e '.waves | length > 0' "$PLAN_FILE" >/dev/null 2>&1 \
+  jq_true '.waves | length > 0' "$PLAN_FILE" \
     || die "status" "plan file has no waves — run \`cascade.sh plan\` first"
-  if [[ -n "$WAVE" ]] && ! jq -e --argjson w "$WAVE" 'any(.waves[]; .wave == $w)' "$PLAN_FILE" >/dev/null; then
+  # shellcheck disable=SC2016  # $u / $w are jq variables
+  if [[ -n "$WAVE" ]] && ! jq_true --argjson w "$WAVE" 'any(.waves[]; .wave == $w)' "$PLAN_FILE"; then
     die "status" "wave $WAVE is not in the plan ($(jq -r '.waves | length' "$PLAN_FILE") waves)"
   fi
 }
@@ -344,7 +357,7 @@ cmd_status() {
   local out
   out=$(collect_status "$WAVE")
   printf '%s\n' "$out"
-  jq -e '.status == "ok"' <<< "$out" >/dev/null 2>&1 || exit 2
+  jq_true '.status == "ok"' <<< "$out" || exit 2
 }
 
 # ─── watch ───────────────────────────────────────────────────────────────────
@@ -361,9 +374,9 @@ cmd_watch() {
   echo "watching wave $WAVE of $(jq -r '.epic.url // "the epic"' "$PLAN_FILE") every ${INTERVAL}s (timeout ${TIMEOUT}s)"
   while :; do
     status=$(collect_status "$WAVE")
-    # Only an ok status object may release a wave — `jq -e` on an empty or
-    # error document is not evidence that anything merged.
-    if ! jq -e '.status == "ok"' <<< "$status" >/dev/null 2>&1; then
+    # Only an ok status object may release a wave — an empty, blank, or error
+    # document is not evidence that anything merged.
+    if ! jq_true '.status == "ok"' <<< "$status"; then
       echo "WAVE $WAVE status unavailable — $(jq -r '.message // "no status output"' <<< "$status" 2>/dev/null || echo "no status output")"
       exit 2
     fi
@@ -378,7 +391,7 @@ cmd_watch() {
     grep -Fxv -f "$prev" "$cur" || true
     mv "$cur" "$prev"
 
-    if jq -e '.waves[0].complete == true' <<< "$status" >/dev/null; then
+    if jq_true '.waves[0].complete == true' <<< "$status"; then
       next=$(jq -r --argjson w "$WAVE" \
         '[.tickets[] | select(.wave == $w + 1) | "\(."label" // .id) \(.id)"] | join(", ")' "$PLAN_FILE")
       if [[ -n "$next" ]]; then
@@ -389,7 +402,7 @@ cmd_watch() {
       exit 0
     fi
 
-    if jq -e '[.tickets[] | select(.satisfied | not)] | length > 0 and all(.[]; .blocked)' <<< "$status" >/dev/null; then
+    if jq_true '[.tickets[] | select(.satisfied | not)] | length > 0 and all(.[]; .blocked)' <<< "$status"; then
       echo "WAVE $WAVE BLOCKED — needs the operator: $(jq -r '[.tickets[] | select(.blocked) | .id] | join(", ")' <<< "$status") closed without a merged PR"
       exit 3
     fi

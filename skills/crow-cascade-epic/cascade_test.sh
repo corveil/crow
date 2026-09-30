@@ -58,19 +58,24 @@ case "$1" in
 esac
 SH
 # Fake jq, only for the fail-closed tests: FAKE_JQ_VERSION overrides
-# `--version`, and FAKE_JQ_BREAK makes any program containing that text fail
-# to compile — what jq 1.6 did to 1.7-only syntax (PR #1313 review).
+# `--version`, FAKE_JQ_BREAK makes any program containing that text fail to
+# compile (what jq 1.6 did to 1.7-only syntax), and FAKE_JQ_BLANK makes it
+# print a blank line and exit 0 — which jq 1.6's `-e` reads as success
+# (PR #1313 review).
 mkdir -p "$TMP/jqbin"
 REAL_JQ=$(command -v jq)
 export REAL_JQ
 cat > "$TMP/jqbin/jq" <<'SH'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" && -n "${FAKE_JQ_VERSION:-}" ]]; then echo "$FAKE_JQ_VERSION"; exit 0; fi
-if [[ -n "${FAKE_JQ_BREAK:-}" ]]; then
-  for a in "$@"; do
-    [[ "$a" == *"$FAKE_JQ_BREAK"* ]] && { echo "jq: error: syntax error (fake)" >&2; exit 3; }
-  done
-fi
+for a in "$@"; do
+  if [[ -n "${FAKE_JQ_BREAK:-}" && "$a" == *"$FAKE_JQ_BREAK"* ]]; then
+    echo "jq: error: syntax error (fake)" >&2; exit 3
+  fi
+  if [[ -n "${FAKE_JQ_BLANK:-}" && "$a" == *"$FAKE_JQ_BLANK"* ]]; then
+    echo; exit 0
+  fi
+done
 exec "$REAL_JQ" "$@"
 SH
 chmod +x "$TMP/fake-gh" "$TMP/fake-crow" "$TMP/jqbin/jq"
@@ -153,6 +158,14 @@ contains "requires a reviewer" "$out" "reviewer is required"
 contains "rejects a self-dependency" "$out" "c depends on itself"
 contains "rejects a dependency outside the plan" "$out" "c depends on zz, which is not in the plan"
 contains "rejects duplicate ids" "$out" "duplicate ticket id: c"
+
+: > "$TMP/empty.json"
+out=$(cascade status --plan-file "$TMP/empty.json"); rc=$?
+check "an empty plan file exits 2" "2" "$rc"
+contains "an empty plan file is not an object" "$out" "plan file is not a JSON object"
+printf '\n' > "$TMP/blank.json"
+out=$(cascade status --plan-file "$TMP/blank.json"); rc=$?
+check "a blank plan file exits 2" "2" "$rc"
 
 # ─── status ──────────────────────────────────────────────────────────────────
 echo "status: classification, drift, resume point"
@@ -248,6 +261,31 @@ contains "the leftover open PR is drift" "$(field o/r#1 '.drift | join("|")')" \
 check "the wave stays complete" "true" "$(jq -r '.waves[0].complete' <<< "$st")"
 issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false crow:merge "" dgershman)"
 
+echo "status: PR links from every work session on the ticket"
+# The reviewer's repro: the oldest session holds merged PR #51, a later active
+# session holds open PR #52 (crow:merge, no reviewer), and neither PR is a
+# closing reference on the issue.
+cp "$FIX/sessions.json" "$TMP/sessions.bak"
+cat > "$FIX/sessions.json" <<JSON
+{"sessions": [
+  {"id": "S5a", "name": "r-5-five", "kind": "work", "status": "completed", "is_explore": false, "ticket_url": "$U/5"},
+  {"id": "S5b", "name": "r-5-five-2", "kind": "work", "status": "active", "is_explore": false, "ticket_url": "$U/5"}
+]}
+JSON
+echo '{"links": [{"type": "pr", "url": "https://github.com/o/r/pull/51"}]}' > "$FIX/links-S5a.json"
+echo '{"links": [{"type": "pr", "url": "https://github.com/o/r/pull/52"}]}' > "$FIX/links-S5b.json"
+pr_resource 51 "$(pr_node 51 MERGED false "" "" dgershman)"
+pr_resource 52 "$(pr_node 52 OPEN false crow:merge "" "")"
+st=$(cascade status --plan-file "$PLAN")
+check "PRs from both sessions are collected" "51 52" "$(field o/r#5 '[.prs[].number] | map(tostring) | join(" ")')"
+check "the merged one satisfies the ticket" "merged" "$(state o/r#5)"
+check "status reports the active session" "S5b" "$(field o/r#5 .session.id)"
+d5=$(field o/r#5 '.drift | join("|")')
+contains "the later session's open PR is leftover drift" "$d5" "PR #52 still open although #51 already merged this ticket"
+contains "and its premature crow:merge is drift" "$d5" "PR #52 carries crow:merge before any human approval"
+mv "$TMP/sessions.bak" "$FIX/sessions.json"
+rm -f "$FIX/links-S5a.json" "$FIX/links-S5b.json"
+
 echo "fail closed: a jq that can't run the status filter"
 out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_BREAK="def classify" bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
 check "status exits 2" "2" "$rc"
@@ -260,6 +298,16 @@ if [[ "$out" == *"COMPLETE"* ]]; then
   fail=$((fail+1)); echo "  FAIL: watch released a wave it could not read"
 else
   pass=$((pass+1)); echo "  ok: watch never releases a wave it could not read"
+fi
+out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_BLANK="def classify" bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
+check "a blank status line exits 2" "2" "$rc"
+check "a blank status line becomes an error object" "error" "$(jq -r .status <<< "$out")"
+out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_BLANK="def classify" bash "$CASCADE_SH" watch --plan-file "$PLAN" --wave 1 --interval 0 --timeout 60); rc=$?
+check "watch on a blank status exits 2" "2" "$rc"
+if [[ "$out" == *"COMPLETE"* ]]; then
+  fail=$((fail+1)); echo "  FAIL: watch released a wave on a blank status line"
+else
+  pass=$((pass+1)); echo "  ok: watch never releases a wave on a blank status line"
 fi
 out=$(PATH="$TMP/jqbin:$PATH" FAKE_JQ_VERSION="jq-1.5" bash "$CASCADE_SH" status --plan-file "$PLAN"); rc=$?
 check "jq older than 1.6 exits 2" "2" "$rc"

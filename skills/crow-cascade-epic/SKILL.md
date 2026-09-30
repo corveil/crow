@@ -188,11 +188,11 @@ bash .claude/skills/crow-cascade-epic/cascade.sh status --plan-file {devRoot}/.c
 
 | `state` | Meaning | Satisfies the gate? |
 |---|---|---|
-| `merged` | A PR that closes the ticket (or that the coder registered on the session) merged. A second PR still open is reported as drift. | yes |
+| `merged` | A PR that closes the ticket, or one registered on any of the ticket's work sessions, merged. A second PR still open is reported as drift. | yes |
 | `closed` | A human closed the ticket as completed, and no PR is still open | yes |
 | `in_review` / `draft` | An open PR | no |
 | `pr_closed` | Only closed-unmerged PRs — the ticket is launchable again | no |
-| `no_pr` | Nothing yet | no |
+| `no_pr` | Nothing yet — and **always** when the change lands as a GitLab MR (see **Limitations**) | no |
 | `closed_not_planned` | Closed as not planned / duplicate — its dependents can never release | no — **blocked** |
 | `unknown` | The GitHub query failed (transient) | no — never releases a wave |
 
@@ -246,7 +246,7 @@ It polls every 2 minutes, prints a line whenever a ticket's state or drift chang
 | `3` | `WAVE n BLOCKED — needs the operator: …` | Stop and ask about the blocked tickets (see Phase 4). |
 | `2` | A JSON error, or `WAVE n status unavailable — …` | Report it. The watcher couldn't read the wave, so it released nothing — see **Error Handling**. |
 
-Act on any `⚠ contract:` line in the stream per **Contract drift**. Arm **one** watcher per epic — if one you started for this plan file is still running, don't start another.
+A wave whose change lands as a GitLab MR never completes on its own — advance it by hand, per **Limitations**. Act on any `⚠ contract:` line in the stream per **Contract drift**. Arm **one** watcher per epic — if one you started for this plan file is still running, don't start another.
 
 Without background re-invocation (Cursor, Codex, and other Manager harnesses), skip the watcher. Tell the operator to re-run `/crow-cascade-epic {epic_url}` after a wave merges; it picks up exactly where the cascade stands.
 
@@ -429,8 +429,12 @@ Re-running `/crow-cascade-epic {epic_url}` is always safe:
 
 ## Limitations
 
-- **Merge tracking reads GitHub.** `cascade.sh` resolves ticket state from GitHub issues and PRs — the PRs that close the issue, plus the PR the coder registered on its Crow session. A **Jira** ticket whose code lands on GitHub works through that registered PR. A **GitLab** MR is not tracked yet: plan and launch GitLab tickets as usual, check `glab mr view` yourself, and re-run the skill to advance.
-- **The gate follows the default branch.** A PR merged into another base doesn't close the issue, and only counts when the coder registered it on the session.
+- **Merge tracking reads GitHub only.** `cascade.sh` resolves ticket state from GitHub issues and PRs: the PRs that close the issue, plus any PR registered on one of the ticket's work sessions. A **Jira** ticket whose code lands on GitHub works through that registered PR.
+- **A GitLab merge does not release its wave.** `cascade.sh` can't read GitLab issues or MRs, so a ticket whose change lands as a GitLab MR always reads as `no_pr`. (A GitLab ticket whose code lands as a GitHub PR is tracked through the registered PR, like Jira.) Once the ticket has a session, it also drops out of `to_launch`, so its wave never completes. Neither the watcher nor a plain re-run can advance past it — don't arm a watcher on that wave expecting it to fire. Advance by hand instead:
+  1. Confirm each GitLab MR in the wave merged: `GITLAB_HOST={host} glab mr view {iid} --repo {org/repo}`.
+  2. Run `status` and check that every **other** ticket in the wave is satisfied.
+  3. Only then run `/crow-cascade-epic {epic_url} --wave {n+1}`. `--wave` skips the **whole** wave, so running it early would also skip an unmerged GitHub ticket in that wave.
+- **The gate follows the default branch.** A PR merged into another base doesn't close the issue, and only counts when it's registered on one of the ticket's sessions.
 
 ## Worked example: corveil-cloud-terraform#618
 
