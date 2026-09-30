@@ -227,6 +227,16 @@ for f in skills/crow-cascade-epic/SKILL.md Resources/crow-cascade-epic-SKILL.md.
         'cascade.sh watch --plan-file'
 done
 require settings.json 'Bash(bash .claude/skills/crow-cascade-epic/cascade.sh *)'
+# The Manager reads SKILL.md raw, so a table-escaped pipe (`\|`) inside a
+# command is a command that doesn't run (PR #1313 review). Commands with pipes
+# belong in fenced blocks.
+for f in skills/crow-cascade-epic/SKILL.md Resources/crow-cascade-epic-SKILL.md.template; do
+    if [ -f "$f" ] && grep -Fq '\|' "$f"; then
+        echo "DRIFT: $f has a table-escaped pipe (\\|) — move that command into a fenced block" >&2
+        grep -Fn '\|' "$f" | head -5 >&2
+        fail=1
+    fi
+done
 
 if [ "$fail" -ne 0 ]; then
     echo "check-workspace-custom-instructions: FAILED (see #683)" >&2

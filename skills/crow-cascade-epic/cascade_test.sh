@@ -90,14 +90,19 @@ cascade() { bash "$CASCADE_SH" "$@"; }
 
 U="https://github.com/o/r/issues"
 
-pr_node() { # pr_node <number> <state> <draft> <labels,csv> <requested,csv> <approved,csv> [author]
+# [hidden,csv] are approvals GitHub keeps only in latestOpinionatedReviews —
+# what a re-request does to a standing review (the shape of corveil/crow#1261).
+pr_node() { # pr_node <number> <state> <draft> <labels,csv> <requested,csv> <approved,csv> [author] [hidden,csv]
   jq -cn --argjson n "$1" --arg st "$2" --argjson d "$3" --arg l "$4" --arg rq "$5" --arg ap "$6" \
-    --arg au "${7:-coder}" '{
+    --arg au "${7:-coder}" --arg hid "${8:-}" '
+    def approvals($csv): [$csv | split(",")[] | select(. != "") | {state: "APPROVED", author: {login: .}}];
+    {
       number: $n, url: "https://github.com/o/r/pull/\($n)", state: $st, isDraft: $d,
       author: {login: $au},
       labels: {nodes: [$l | split(",")[] | select(. != "") | {name: .}]},
       reviewRequests: {nodes: [$rq | split(",")[] | select(. != "") | {requestedReviewer: {login: .}}]},
-      latestReviews: {nodes: [$ap | split(",")[] | select(. != "") | {state: "APPROVED", author: {login: .}}]}
+      latestReviews: {nodes: approvals($ap)},
+      latestOpinionatedReviews: {nodes: (approvals($ap) + approvals($hid))}
     }'
 }
 issue() { # issue <number> <OPEN|CLOSED> <stateReason|null> [pr-node-json…]
@@ -302,6 +307,16 @@ issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false "" "" coder)"
 st=$(cascade status --plan-file "$PLAN")
 contains "an approval from the author alone doesn't count" "$(field o/r#1 '.drift | join("|")')" \
   "PR #11 merged without an approval from anyone but its author"
+# corveil/crow#1261: the approval survives only in latestOpinionatedReviews,
+# and its author has been re-requested.
+issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false "" dgershman "" coder dgershman)"
+st=$(cascade status --plan-file "$PLAN")
+check "an approval hidden by a re-request still counts" "0" "$(field o/r#1 '.drift | length')"
+issue 3 OPEN null "$(pr_node 13 OPEN false crow:merge dgershman "" coder dgershman)"
+st=$(cascade status --plan-file "$PLAN")
+check "a hidden approval also clears the crow:merge check" "0" "$(field o/r#3 '.drift | length')"
+issue 3 OPEN null "$(pr_node 13 OPEN false crow:merge "" "")"
+issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false "" "" coder)"
 st=$(cascade status --plan-file "$TMP/auto.json")
 check "auto gate: no merged-without-approval drift" "0" "$(field o/r#1 '[.drift[] | select(test("merged without"))] | length')"
 issue 1 CLOSED '"COMPLETED"' "$(pr_node 11 MERGED false crow:merge "" dgershman)"

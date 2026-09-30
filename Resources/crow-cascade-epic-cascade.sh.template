@@ -147,7 +147,7 @@ cmd_plan() {
 # ─── status ──────────────────────────────────────────────────────────────────
 
 # shellcheck disable=SC2016  # GraphQL variables, not shell expansion
-PR_FRAGMENT='fragment P on PullRequest { number url state mergedAt isDraft author { login } labels(first: 30) { nodes { name } } reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } } latestReviews(first: 20) { nodes { state author { login } } } }'
+PR_FRAGMENT='fragment P on PullRequest { number url state mergedAt isDraft author { login } labels(first: 30) { nodes { name } } reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } } latestReviews(first: 20) { nodes { state author { login } } } latestOpinionatedReviews(first: 20) { nodes { state author { login } } } }'
 # shellcheck disable=SC2016
 ISSUE_QUERY='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { state stateReason closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { ...P } } } } } '"$PR_FRAGMENT"
 # shellcheck disable=SC2016
@@ -221,8 +221,12 @@ def pr: {
   author: (.author.login // null),
   labels: [.labels.nodes[]?.name],
   requested: [.reviewRequests.nodes[]?.requestedReviewer | (.login // .slug) | select(. != null)],
-  reviewed_by: [.latestReviews.nodes[]?.author.login | select(. != null)],
-  approved_by: [.latestReviews.nodes[]? | select(.state == "APPROVED") | .author.login | select(. != null)]
+  # latestReviews hides a review once its author is re-requested, even though
+  # the verdict still stands (see PRStatus.swift). latestOpinionatedReviews
+  # keeps it, so read both — or a re-requested approval reads as none.
+  reviewed_by: ([.latestReviews.nodes[]?, .latestOpinionatedReviews.nodes[]?] | map(.author.login | select(. != null)) | unique),
+  approved_by: ([.latestReviews.nodes[]?, .latestOpinionatedReviews.nodes[]?]
+                | map(select(.state == "APPROVED") | .author.login | select(. != null)) | unique)
 };
 
 def classify($issue; $prs; $error):

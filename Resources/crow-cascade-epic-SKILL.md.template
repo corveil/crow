@@ -44,7 +44,7 @@ This skill activates when:
 | Flag | Default | Meaning |
 |---|---|---|
 | `<epic-url>` | required | The epic issue that owns the sub-tickets — GitHub, GitLab, or Jira (see **Limitations**). |
-| `--gate human\|auto` | inferred (see **Phase 2**) | Which merge gate releases the next wave. |
+| `--gate <human or auto>` | inferred (see **Phase 2**) | Which merge gate releases the next wave. |
 | `--reviewer <login>` | `dgershman` | The human who reviews every PR in the cascade. |
 | `--wave <n>` | resume point | Start at wave `n`, treating waves `< n` as done (persisted as `start_wave`). |
 | `--dry-run` | off | Plan only: print the wave map and stop. No sessions, comments, or watcher. |
@@ -377,13 +377,19 @@ and for the **`auto`** gate:
 
 | Drift | Response |
 |---|---|
-| `carries crow:merge before any human approval (human gate)` | Find who added it: `gh api repos/{owner}/{repo}/issues/{pr}/events --jq '[.[] \| select(.event == "labeled" and .label.name == "crow:merge")] \| last \| .actor.login'`. If it was the coder's account, remove it (`gh pr edit {pr} --repo {owner}/{repo} --remove-label crow:merge`) and tell the coder why. If the reviewer added it, leave it — that's the human's call. |
+| `carries crow:merge before any human approval (human gate)` | Find who added it (**Who added `crow:merge`**, below). If it was the coder's account, remove it (`gh pr edit {pr} --repo {owner}/{repo} --remove-label crow:merge`) and tell the coder why. If the reviewer added it, leave it — that's the human's call. |
 | `has no review request for @{reviewer}` | `gh pr edit {pr} --repo {owner}/{repo} --add-reviewer {reviewer}` |
 | `is missing the crow:merge label (auto gate)` | `crow add-merge-label --session {session_id}` (the ticket's session from `status`). |
 | `is approved by its own author` | Report it to the operator. Don't dismiss reviews yourself. |
 | `N open PRs … exactly one PR per ticket` | Tell the coder, and let the operator pick which PR survives. |
 | `PR #X merged without an approval from anyone but its author (human gate)` | Tell the operator right away: unreviewed code is now on the default branch, and only they can decide whether to revert it. The ticket still counts as merged — its change has landed, and holding dependents wouldn't undo it. (Who clicked merge isn't checked: Crow's auto-merge runs as the author even after a human approves.) |
 | `PR #X still open although #Y already merged this ticket` | The ticket is satisfied and its wave can release, but the stray PR could still merge later. Ask the operator whether to close it or move its work to a new ticket. |
+
+**Who added `crow:merge`** — the most recent account to apply the label:
+
+```bash
+gh api repos/{owner}/{repo}/issues/{pr}/events --jq '[.[] | select(.event == "labeled" and .label.name == "crow:merge")] | last | .actor.login'
+```
 
 To tell a coder something, find its terminal with `crow list-terminals --session {session_id}`, then `crow send --session {session_id} --terminal {terminal_id} "…\n"`.
 
