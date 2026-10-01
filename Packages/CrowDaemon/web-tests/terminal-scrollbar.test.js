@@ -139,19 +139,22 @@ console.log('\n  theme handoff');
   // wired to the resting colour, say — with every assertion still green.
   const style = window.document.createElement('style');
   style.textContent = ':root {'
-    + ' --scroll-thumb: rgba(221, 196, 130, 0.50);'
-    + ' --scroll-thumb-hover: rgba(221, 196, 130, 0.72);'
-    + ' --scroll-thumb-active: rgba(221, 196, 130, 0.90);'
+    + ' --scroll-thumb: rgba(255, 45, 122, 0.72);'
+    + ' --scroll-thumb-hover: rgba(255, 45, 122, 0.88);'
+    + ' --scroll-thumb-active: rgba(255, 45, 122, 1);'
     + ' }';
   window.document.head.appendChild(style);
 
   const theme = T.scrollbarTheme();
+  // jsdom's computed style drops whitespace inside rgba(); browsers keep the
+  // specified text. Compare without spaces so either form still pins the mapping.
+  const flat = (s) => (s || '').replace(/\s+/g, '');
   check('the resting thumb comes from --scroll-thumb',
-    theme.scrollbarSliderBackground === 'rgba(221, 196, 130, 0.50)');
+    flat(theme.scrollbarSliderBackground) === 'rgba(255,45,122,0.72)');
   check('the hover thumb comes from --scroll-thumb-hover',
-    theme.scrollbarSliderHoverBackground === 'rgba(221, 196, 130, 0.72)');
+    flat(theme.scrollbarSliderHoverBackground) === 'rgba(255,45,122,0.88)');
   check('the drag thumb comes from --scroll-thumb-active',
-    theme.scrollbarSliderActiveBackground === 'rgba(221, 196, 130, 0.90)');
+    flat(theme.scrollbarSliderActiveBackground) === 'rgba(255,45,122,1)');
   check('and nothing else is smuggled into the theme', Object.keys(theme).length === 3);
 
   // `rgba(r, g, b, a)` is one of the forms xterm's css.toColor parses, so the

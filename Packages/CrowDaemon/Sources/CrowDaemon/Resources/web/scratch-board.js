@@ -193,7 +193,7 @@ function scratchStateChip(state) {
     captured: 'var(--text-muted)',
     exploring: 'var(--blue)',
     ticketed: 'var(--orange)',
-    working: 'var(--gold)',
+    working: 'var(--accent)',
     done: 'var(--green)',
     parked: 'var(--purple)',
     dropped: 'var(--text-muted)',

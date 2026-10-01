@@ -1,12 +1,12 @@
 /* Crow web UI — Settings modal (CROW-581). Reuses the CorveilTheme tokens from
-   app.css (:root) and the shared .action-btn button styles; adds the first
+   theme.css and the shared .action-btn button styles; adds the first
    modal + form-control styles in the app. */
 
 .settings-backdrop {
   position: fixed;
   inset: 0;
   z-index: 2000;
-  background: rgba(0, 0, 0, 0.58);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -41,7 +41,7 @@
 .settings-title {
   font-size: 15px;
   font-weight: 700;
-  color: var(--gold);
+  color: var(--accent);
   flex: 1;
 }
 .settings-close {
@@ -76,8 +76,8 @@
 }
 .settings-tab:hover { color: var(--text-primary); }
 .settings-tab.active {
-  color: var(--gold);
-  border-bottom-color: var(--gold);
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 .settings-body {
@@ -102,7 +102,7 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--gold-dark);
+  color: var(--accent-muted);
   margin: 18px 0 8px;
 }
 .st-group:first-child { margin-top: 0; }
@@ -134,10 +134,10 @@
   font-family: inherit;
   font-size: 12px;
 }
-.st-textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.st-textarea { resize: vertical; min-height: 60px; font-family: var(--font-mono); }
 .st-input:focus,
 .st-select:focus,
-.st-textarea:focus { outline: none; border-color: var(--gold); }
+.st-textarea:focus { outline: none; border-color: var(--accent); }
 .st-input.st-readonly,
 .st-readonly { opacity: 0.55; cursor: default; }
 
@@ -147,7 +147,7 @@
   padding: 6px 8px; min-height: 34px;
   background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px;
 }
-.st-chips:focus-within { border-color: var(--gold); }
+.st-chips:focus-within { border-color: var(--accent); }
 .st-chip {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 6px 2px 9px; border-radius: 12px;
@@ -191,9 +191,9 @@
   background: var(--text-primary);
   transition: transform 0.16s ease, background 0.16s ease;
 }
-.st-switch:checked { background: var(--gold); border-color: var(--gold); }
-.st-switch:checked::before { transform: translateX(14px); background: var(--bg-deep); }
-.st-switch:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.st-switch:checked { background: var(--accent-fill); border-color: var(--accent-fill); }
+.st-switch:checked::before { transform: translateX(14px); background: var(--on-accent); }
+.st-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .st-switch-label { font-size: 12px; color: var(--text-primary); }
 
 /* -------- list rows (workspaces / jobs) -------- */
@@ -220,11 +220,11 @@
   border: 1px solid var(--border-subtle); border-radius: 7px; cursor: pointer;
 }
 .st-icon-btn svg { display: block; }
-.st-icon-btn:hover { color: var(--gold); border-color: var(--border-strong); background: rgba(221, 196, 130, 0.10); }
+.st-icon-btn:hover { color: var(--accent); border-color: var(--border-strong); background: var(--accent-wash); }
 .st-icon-btn:active { transform: translateY(1px); }
 .st-icon-btn:disabled { opacity: 0.5; cursor: default; }
-.st-icon-btn.danger { color: var(--red); border-color: rgba(255, 69, 58, 0.35); }
-.st-icon-btn.danger:hover { color: var(--red); border-color: var(--red); background: rgba(255, 69, 58, 0.12); }
+.st-icon-btn.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
+.st-icon-btn.danger:hover { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 
 .st-add {
   margin-top: 4px;
@@ -232,13 +232,13 @@
   border: 1px dashed var(--border-strong);
   border-radius: 6px;
   background: transparent;
-  color: var(--gold);
+  color: var(--accent);
   font-family: inherit;
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
 }
-.st-add:hover { background: rgba(221, 196, 130, 0.1); }
+.st-add:hover { background: var(--accent-wash); }
 
 .st-note {
   font-size: 11px;
@@ -257,24 +257,24 @@
 /* Settings → About tab (CROW-593) */
 .st-about-head { display: flex; align-items: center; gap: 14px; margin: 2px 0 10px; }
 .st-about-logo { width: 46px; height: 46px; flex: 0 0 auto; }
-.st-about-name { font-size: 18px; font-weight: 700; color: var(--gold); line-height: 1.1; }
+.st-about-name { font-size: 18px; font-weight: 700; color: var(--accent); line-height: 1.1; }
 .st-about-ver { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
 /* CROW-1030: the build SHA links to its commit on corveil/crow. Padded a little
    past the 7-char glyph run so it's tappable on a phone, where this UI mostly
    lives; an unlinkable stamp renders as plain text and gets none of this. */
 .st-about-sha {
-  color: var(--gold);
+  color: var(--accent);
   text-decoration: none;
   padding: 2px 3px;
   margin: 0 -3px;
   border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
-.st-about-sha:hover { text-decoration: underline; background: rgba(221, 196, 130, 0.10); }
-.st-about-sha:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+.st-about-sha:hover { text-decoration: underline; background: var(--accent-wash); }
+.st-about-sha:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .st-about-update { font-size: 12px; margin-top: 6px; }
 .st-about-update.st-update-ok { color: var(--text-muted); }
-.st-about-update.st-update-behind { color: var(--gold); }
+.st-about-update.st-update-behind { color: var(--accent); }
 .st-about-update.st-update-unknown { color: var(--text-muted); font-style: italic; }
 
 /* -------- Backfill history dialog (CROW-1075) -------- */
@@ -301,12 +301,12 @@
   background: var(--bg-card); color: var(--text-secondary);
   font-weight: 600;
 }
-.backfill-table tbody tr:hover { background: rgba(221, 196, 130, 0.05); }
+.backfill-table tbody tr:hover { background: var(--accent-wash); }
 .backfill-check { width: 32px; text-align: center; }
-.backfill-repo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-primary); }
+.backfill-repo { font-family: var(--font-mono); color: var(--text-primary); }
 .backfill-conf { color: var(--text-muted); }
 .backfill-row.conf-high .backfill-conf { color: var(--green); }
-.backfill-row.conf-medium .backfill-conf { color: var(--gold); }
+.backfill-row.conf-medium .backfill-conf { color: var(--accent); }
 .backfill-row.conf-low .backfill-conf { color: var(--text-muted); }
 .backfill-status.status-uploaded { color: var(--green); }
 .backfill-status.status-skipped { color: var(--orange); }

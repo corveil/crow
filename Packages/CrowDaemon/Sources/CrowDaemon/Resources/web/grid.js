@@ -318,7 +318,7 @@ function mountGridTerm(sessionId, host) {
     disableStdin: true,
     fontSize: 11,
     fontFamily: DEFAULT_TERM_FONT,
-    theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+    theme: (typeof crowXtermTheme === 'function') ? crowXtermTheme() : { background: '#0A060B', foreground: '#FFF7FB' },
     scrollback: 0,
     allowTransparency: true,
   });
@@ -394,3 +394,11 @@ function paintGridSnapshot(id, row) {
     scaleGridTerm(id);
   }
 }
+
+window.addEventListener('crow-theme', () => {
+  if (typeof crowXtermTheme !== 'function') return;
+  const theme = crowXtermTheme();
+  for (const pane of gridTerms.values()) {
+    if (pane.term && pane.term.options) pane.term.options.theme = theme;
+  }
+});

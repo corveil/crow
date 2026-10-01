@@ -19,7 +19,7 @@ enum StaticAssets {
     /// catch-all. Settings tab bodies load before the Settings shell;
     /// `settings.js` is last. `session-modals.js` precedes sidebar callers.
     static let uiJavaScriptFiles = [
-        "rpc.js", "notifications.js", "session-modals.js", "sidebar.js", "sidebar-chrome.js",
+        "theme.js", "rpc.js", "notifications.js", "session-modals.js", "sidebar.js", "sidebar-chrome.js",
         "pr-glyphs.js", "session-row.js", "session-menu.js", "switcher.js",
         "session.js", "session-header.js", "session-tabs.js", "grid.js", "boards.js", "scorecard-board.js",
         "tickets-board.js", "reviews-board.js", "scratch-board.js",
@@ -36,6 +36,7 @@ enum StaticAssets {
         // Login page (CROW-593) — reachable without auth; the auth middleware
         // also serves it as the fallback for unauthenticated navigational GETs.
         router.get("/login") { req, _ in webResponse("login.html", webDir: webDir, request: req) }
+        router.get("/theme.css") { req, _ in webResponse("theme.css", webDir: webDir, request: req) }
         router.get("/app.css") { req, _ in webResponse("app.css", webDir: webDir, request: req) }
         // Classic client scripts (CROW-1155). Each is an exact literal path with
         // the CROW-1024 revalidate policy; `webResponse` already sets `revalidate`.
@@ -65,6 +66,15 @@ enum StaticAssets {
         router.get("/auth/check") { _, _ in Response(status: .noContent) }
         // The standalone single-terminal page from M1, kept for debugging.
         router.get("/terminal.html") { req, _ in webResponse("terminal.html", webDir: webDir, request: req) }
+
+        // Bundled IBM Plex (CROW-1316). Basename-only, same traversal guard as
+        // /xterm/:file. Auth-exempt so the login page can load faces before sign-in.
+        router.get("/fonts/:file") { req, context -> Response in
+            guard let file = context.parameters.get("file"), isSafeAssetName(file) else {
+                return Response(status: .badRequest)
+            }
+            return fontResponse(file, webDir: webDir, request: req)
+        }
 
         router.get("/xterm/:file") { _, context -> Response in
             // Basename-only guard against path traversal.
@@ -105,6 +115,24 @@ enum StaticAssets {
         let base = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
         guard let url = Bundle.module.url(forResource: base, withExtension: ext, subdirectory: "web"),
+              let data = try? Data(contentsOf: url) else {
+            return Response(status: .notFound)
+        }
+        return fileResponse(data, name: name, request: request, revalidate: true)
+    }
+
+    /// A face or the OFL text under `web/fonts/`. `webDir` is the live source
+    /// tree (`--web-dir`); otherwise the copy inside the daemon bundle.
+    private static func fontResponse(_ name: String, webDir: String?, request: Request?) -> Response {
+        if let webDir {
+            let url = URL(fileURLWithPath: webDir).appendingPathComponent("fonts").appendingPathComponent(name)
+            if let data = try? Data(contentsOf: url) {
+                return fileResponse(data, name: name, request: request, revalidate: true)
+            }
+        }
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        guard let url = Bundle.module.url(forResource: base, withExtension: ext, subdirectory: "web/fonts"),
               let data = try? Data(contentsOf: url) else {
             return Response(status: .notFound)
         }
@@ -202,6 +230,11 @@ enum StaticAssets {
         if file.hasSuffix(".json") { return "application/json; charset=utf-8" }
         if file.hasSuffix(".webmanifest") { return "application/manifest+json" }
         if file.hasSuffix(".png") { return "image/png" }
+        if file.hasSuffix(".woff2") { return "font/woff2" }
+        if file.hasSuffix(".woff") { return "font/woff" }
+        if file.hasSuffix(".ttf") { return "font/ttf" }
+        if file.hasSuffix(".otf") { return "font/otf" }
+        if file.hasSuffix(".txt") { return "text/plain; charset=utf-8" }
         return "application/octet-stream"
     }
 }

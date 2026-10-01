@@ -865,11 +865,15 @@ import CrowPersistence
         // The install assets (CROW-1073) are exempt like brand.svg: the pre-auth
         // login page references them and Chrome's install prompt fetches them
         // regardless of auth state.
-        for path in ["/login", "/logout", "/health", "/brand.svg",
+        for path in ["/login", "/logout", "/health", "/brand.svg", "/theme.css",
+                     "/fonts/IBMPlexSans-Regular.woff2", "/fonts/OFL.txt",
                      "/manifest.webmanifest", "/icon-192.png", "/icon-512.png",
                      "/apple-touch-icon.png"] {
             #expect(MW.isAuthExempt(path: path), "\(path) must bypass the auth gate")
         }
+        // The font prefix is not a backdoor onto the rest of the UI.
+        #expect(!MW.isAuthExempt(path: "/fonts/../app.css"))
+        #expect(!MW.isAuthExempt(path: "/fonts/evil.js"))
     }
 
     @Test func authCheckAndAppRoutesAreGated() {

@@ -34,7 +34,7 @@ function scoreWeekLabel(millis) {
   const fmt = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   return 'Week of ' + fmt(start) + ' – ' + fmt(end);
 }
-const GRADE_COLORS = { A: '#4ade80', B: '#6ee7b7', C: '#facc15', D: '#fb923c', F: '#f87171' };
+const GRADE_COLORS = { A: 'var(--grade-a)', B: 'var(--grade-b)', C: 'var(--grade-c)', D: 'var(--grade-d)', F: 'var(--grade-f)' };
 function gradeColor(letter) { return GRADE_COLORS[letter] || 'var(--text-muted)'; }
 // One coachable sentence per metric — the view-layer copy from the desktop.
 const COACHING = {
@@ -420,7 +420,8 @@ function gradeBadgeEl(grade) {
   if (grade.graded) {
     const badge = el('span', 'score-badge', grade.letter);
     badge.style.color = gradeColor(grade.letter);
-    badge.style.background = gradeColor(grade.letter) + '26'; // ~15% alpha
+    // 15% wash. Appending a hex alpha to var(--grade-b) is not a color.
+    badge.style.background = 'color-mix(in srgb, ' + gradeColor(grade.letter) + ' 15%, transparent)';
     return badge;
   }
   const badge = el('span', 'score-badge muted', '—');

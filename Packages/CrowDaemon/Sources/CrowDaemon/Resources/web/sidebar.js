@@ -154,7 +154,7 @@ const TICKET_STATUS_ICON = {
 
 const STATUS_COLOR = {
   active: 'var(--green)', paused: 'var(--yellow)',
-  inReview: 'var(--gold)', completed: 'var(--gold)', archived: 'var(--text-muted)',
+  inReview: 'var(--accent)', completed: 'var(--accent)', archived: 'var(--text-muted)',
 };
 const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇', opencode: '◇', grok: '⚡', antigravity: '↑', muse: '✶' };
 

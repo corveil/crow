@@ -101,7 +101,7 @@ function setTerminalReconnecting(on) {
 }
 
 // Terminal font stack: Nerd Fonts → system monospace.
-const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace';
+const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "IBM Plex Mono", ui-monospace, Menlo, Monaco, monospace';
 
 // --- Per-surface hybrid scroll model (ADR-0013) -----------------------------
 //
@@ -292,14 +292,14 @@ function appOwnsScroll() {
 }
 
 // CROW-1020: xterm paints its scrollbar slider from the JS `theme` object, not
-// from CSS, so the gold thumb has to be handed across from app.css's --scroll-*
+// from CSS, so the thumb has to be handed across from theme.css's --scroll-*
 // tokens rather than styled in place. Left alone, xterm derives the slider from
-// the FOREGROUND at 0.20 alpha — #d4d4d4 over #1e1e1e is 1.67:1, under WCAG 2.2
+// the FOREGROUND at 0.20 alpha — under WCAG 2.2
 // §1.4.11's 3:1 floor, which is why the bar read as "gone" even while it was
 // technically being drawn.
 //
 // A missing token yields an omitted key, so xterm falls back to its own default
-// instead of us duplicating the literal here — app.css stays the one place the
+// instead of us duplicating the literal here — theme.css stays the one place the
 // palette is written down. `rgba(r, g, b, a)` is one of the forms xterm's
 // css.toColor parses (alongside #rgb/#rrggbb/#rrggbbaa), so the token text goes
 // over verbatim.
@@ -318,6 +318,19 @@ function scrollbarTheme() {
   }
   return theme;
 }
+
+// theme.css is the palette. crowXtermTheme() (theme.js) reads the active
+// --term-* tokens; scrollbarTheme() adds the thumb. Re-applied on `crow-theme`
+// so a Settings / system switch repaints the live grid.
+function terminalTheme() {
+  const base = (typeof crowXtermTheme === 'function') ? crowXtermTheme() : {
+    background: '#0A060B', foreground: '#FFF7FB', cursor: '#FF2D7A',
+  };
+  return { ...base, ...scrollbarTheme() };
+}
+window.addEventListener('crow-theme', () => {
+  if (term && term.options) term.options.theme = terminalTheme();
+});
 
 // CROW-1020: xterm 6 scrolls through a VS Code scrollable element built with
 // `vertical: ScrollbarVisibility.Auto`, so the thumb fades out whenever the
@@ -352,7 +365,7 @@ function ensureTerminal() {
     cursorBlink: true,
     fontSize: 14,
     fontFamily: DEFAULT_TERM_FONT,
-    theme: { background: '#1e1e1e', foreground: '#d4d4d4', ...scrollbarTheme() },
+    theme: terminalTheme(),
     scrollback: UNIFIED_SCROLLBACK,
     allowTransparency: true,
     // Required to switch `term.unicode.activeVersion` off Unicode 6 (CROW-1157).

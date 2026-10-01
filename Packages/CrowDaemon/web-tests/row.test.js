@@ -273,7 +273,7 @@ check('pill still rendered from the link', !!badge(r.row) && /#800/.test(badge(r
 check('no glyphs without live PR state', r.glyphs.length === 0);
 r = render({ has_pr: false });
 check('has_pr:false renders no glyphs', r.glyphs.length === 0);
-check('has_pr:false pill is gold', badge(r.row).style.color === 'var(--gold)');
+check('has_pr:false pill uses the accent', badge(r.row).style.color === 'var(--accent)');
 r = render({ has_pr: true, is_merged: false, has_blockers: false, ready_to_merge: false });
 check('missing checks/review fall back to ? and ○ as .pr-ico',
   r.glyphs.join('') === '?○' && r.row.querySelectorAll('.pr-badge .ico').length === 0);

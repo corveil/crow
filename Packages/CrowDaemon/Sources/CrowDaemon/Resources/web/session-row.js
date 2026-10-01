@@ -14,7 +14,7 @@ function activityIndicator(s) {
   switch (s.activity) {
     case 'working': return { color: 'var(--green)', pulse: true, label: 'Working' };
     case 'waiting': return { color: 'var(--orange)', pulse: true, label: 'Waiting' };
-    case 'done': return { color: 'var(--gold)', label: 'Done' };
+    case 'done': return { color: 'var(--accent)', label: 'Done' };
     default: return { color: 'var(--green)' };
   }
 }
@@ -41,9 +41,9 @@ function sessionRow(s) {
     : (s.activity === 'done' ? 'var(--green)' : 'var(--border-subtle)');
   // Full-card background tint by state, matching the desktop rowBackgroundColor
   // (orange tint on attention, green tint when done). Left unset when the row is
-  // selected (single or multi) so the gold selected background wins (CROW-593).
+  // selected (single or multi) so the selected background wins (CROW-593).
   if (!multiSel && !(s.id === selectedId && !selectionMode)) {
-    row.style.background = s.attention ? 'rgba(230,145,50,0.14)'
+    row.style.background = s.attention ? 'var(--attention-wash)'
       : (s.activity === 'done' ? 'var(--bg-done)' : '');
   }
 
