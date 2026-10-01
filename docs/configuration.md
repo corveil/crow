@@ -20,6 +20,9 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-workspace/setup.sh`                    | Deterministic setup script called by the skill                |
 | `{devRoot}/.claude/skills/crow-review-pr/SKILL.md`                    | PR review skill invoked via `/crow-review-pr`                 |
 | `{devRoot}/.claude/skills/crow-batch-workspace/SKILL.md`              | Batch workspace setup skill                                   |
+| `{devRoot}/.claude/skills/crow-cascade-epic/SKILL.md`                 | Epic cascade skill invoked via `/crow-cascade-epic`           |
+| `{devRoot}/.claude/skills/crow-cascade-epic/cascade.sh`               | Wave planner + merge-gate watcher called by the cascade skill |
+| `{devRoot}/.claude/cascades/`                                         | Per-epic cascade plan files written by `/crow-cascade-epic`   |
 | `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
 
 ## Workspace Configuration
