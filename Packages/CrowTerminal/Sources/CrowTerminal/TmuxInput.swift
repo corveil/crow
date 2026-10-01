@@ -165,6 +165,25 @@ extension TmuxBackend {
         }
     }
 
+    /// Last `linesBack` lines of terminal `id`'s pane, without SGR escapes
+    /// (`capture-pane -p`, no `-e`). Nil when the window is not bound, tmux
+    /// fails, or the pane is blank. Extra-Manager handoff reads this before
+    /// destroying the old agent pane (CROW-1314).
+    public func captureScrollback(id: UUID, linesBack: Int = 200) -> String? {
+        guard let windowIndex = bindings[id] else { return nil }
+        let lines = max(1, linesBack)
+        do {
+            let ctrl = try ensureRunningServer()
+            let target = "\(ctrl.sessionName):\(windowIndex)"
+            let raw = try ctrl.capturePane(target: target, linesBack: lines, escapes: false)
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        } catch {
+            reportIfTimeout(error)
+            return nil
+        }
+    }
+
     /// Direction for `searchInScrollback`. `backward` walks toward older
     /// output (the common case for Cmd+F on terminal history); `forward`
     /// walks toward newer output.

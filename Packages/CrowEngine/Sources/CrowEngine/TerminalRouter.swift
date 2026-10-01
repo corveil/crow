@@ -46,4 +46,11 @@ public enum TerminalRouter {
     public static func paneCurrentCommand(_ terminal: SessionTerminal) -> String? {
         TmuxBackend.shared.paneCurrentCommand(id: terminal.id)
     }
+
+    /// Last `linesBack` lines of `terminal`'s pane, without SGR escapes.
+    /// Nil when the window is not bound or tmux fails. Extra-Manager handoff
+    /// calls this before `destroy` (CROW-1314).
+    public static func captureScrollback(_ terminal: SessionTerminal, linesBack: Int = 200) -> String? {
+        TmuxBackend.shared.captureScrollback(id: terminal.id, linesBack: linesBack)
+    }
 }

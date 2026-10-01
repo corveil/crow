@@ -132,6 +132,124 @@ struct AgentHandoffManagerPromptTests {
         #expect(prompt.contains("# Manager Agent Handoff"))
         #expect(!prompt.contains("## Handoff note"))
         #expect(!prompt.contains("Dev root:"))
+        // Empty context omits every optional section (CROW-1314).
+        #expect(!prompt.contains("## Session"))
+        #expect(!prompt.contains("## Originating Scratch item"))
+        #expect(!prompt.contains("## Prior agent transcript"))
+        #expect(!prompt.contains("## Recent terminal scrollback"))
+        #expect(!prompt.contains("git status"))
+    }
+
+    @Test func managerBriefIncludesSessionTicketAndLinks() {
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .claudeCode, to: .cursor, note: nil, devRoot: "/dev",
+            context: ManagerHandoffContext(
+                sessionName: "PacVue",
+                ticketURL: "https://github.com/corveil/crow/issues/1314",
+                ticketTitle: "Manager handoff context",
+                links: [
+                    ManagerHandoffLink(
+                        label: "Issue #1314",
+                        url: "https://github.com/corveil/crow/issues/1314",
+                        type: "ticket"),
+                ]
+            ))
+        #expect(prompt.contains("## Session"))
+        #expect(prompt.contains("Name: PacVue"))
+        #expect(prompt.contains("Ticket: Manager handoff context — https://github.com/corveil/crow/issues/1314"))
+        #expect(prompt.contains("Issue #1314 (ticket): https://github.com/corveil/crow/issues/1314"))
+    }
+
+    @Test func managerBriefIncludesOriginatingScratchAndCapsIt() {
+        let huge = String(repeating: "a", count: AgentHandoff.scratchTextMaxCharacters + 40)
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .grok, to: .cursor, note: nil, devRoot: nil,
+            context: ManagerHandoffContext(
+                scratch: ManagerHandoffScratch(
+                    text: huge,
+                    note: "Look at the identity directory.",
+                    tags: ["handoff", "manager"],
+                    state: "exploring")
+            ))
+        #expect(prompt.contains("## Originating Scratch item"))
+        #expect(prompt.contains("State: exploring"))
+        #expect(prompt.contains("### Notes"))
+        #expect(prompt.contains("Look at the identity directory."))
+        #expect(prompt.contains("Tags: handoff, manager"))
+        #expect(prompt.contains("…"))
+        #expect(!prompt.contains(huge))
+    }
+
+    @Test func managerBriefOmitsBlankScratch() {
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .cursor, to: .claudeCode, note: nil, devRoot: nil,
+            context: ManagerHandoffContext(
+                scratch: ManagerHandoffScratch(text: "  ", note: "", tags: [" "], state: "exploring")
+            ))
+        #expect(!prompt.contains("## Originating Scratch item"))
+    }
+
+    @Test func originatingScratchMatchesLinkedSession() {
+        let sessionID = UUID()
+        let other = UUID()
+        let older = TodoItem(
+            text: "older ask",
+            state: .exploring,
+            links: [TodoLink(type: .session, sessionID: sessionID, label: "Manager")],
+            updatedAt: Date(timeIntervalSince1970: 1))
+        let newer = TodoItem(
+            text: "switch agent should resume",
+            note: "from the prior agent",
+            tags: ["crow"],
+            state: .ticketed,
+            links: [TodoLink(type: .session, sessionID: sessionID, label: "Manager")],
+            updatedAt: Date(timeIntervalSince1970: 10))
+        let unrelated = TodoItem(
+            text: "someone else",
+            links: [TodoLink(type: .session, sessionID: other, label: "Other")])
+        let scratch = AgentHandoff.originatingScratch(
+            in: [older, unrelated, newer], sessionID: sessionID)
+        #expect(scratch?.text == "switch agent should resume")
+        #expect(scratch?.note == "from the prior agent")
+        #expect(scratch?.tags == ["crow"])
+        #expect(scratch?.state == "ticketed")
+        #expect(AgentHandoff.originatingScratch(in: [unrelated], sessionID: sessionID) == nil)
+        #expect(AgentHandoff.originatingScratch(in: nil, sessionID: sessionID) == nil)
+    }
+
+    @Test func managerBriefPointsAtTranscript() {
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .claudeCode, to: .cursor, note: nil, devRoot: nil,
+            context: ManagerHandoffContext(
+                transcriptPath: "/Users/dev/.claude/projects/-Users-dev/.jsonl"
+            ))
+        #expect(prompt.contains("## Prior agent transcript"))
+        #expect(prompt.contains("Read this file to see where the previous agent left off:"))
+        #expect(prompt.contains("/Users/dev/.claude/projects/-Users-dev/.jsonl"))
+    }
+
+    @Test func managerBriefIncludesScrollbackTailAndCapsLines() {
+        let total = AgentHandoff.scrollbackMaxLines + 40
+        let lines = (0..<total).map { "LINE-\($0)" }
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .cursor, to: .grok, note: nil, devRoot: nil,
+            context: ManagerHandoffContext(scrollback: lines.joined(separator: "\n") + "\n\n")
+        )
+        let firstKept = total - AgentHandoff.scrollbackMaxLines
+        #expect(prompt.contains("## Recent terminal scrollback"))
+        #expect(prompt.contains("Last lines from the previous agent's pane:"))
+        #expect(prompt.contains("LINE-\(total - 1)"))
+        #expect(prompt.contains("LINE-\(firstKept)"))
+        #expect(!prompt.contains("LINE-\(firstKept - 1)"))
+        #expect(!prompt.contains("LINE-0"))
+    }
+
+    @Test func managerBriefOmitsBlankScrollback() {
+        let prompt = AgentHandoff.buildManagerPrompt(
+            from: .cursor, to: .claudeCode, note: nil, devRoot: nil,
+            context: ManagerHandoffContext(scrollback: "  \n\t\n  ")
+        )
+        #expect(!prompt.contains("## Recent terminal scrollback"))
     }
 
     /// The primary Manager (fixed id) is the only Manager refused handoff; any
@@ -198,6 +316,136 @@ struct ExtraManagerHandoffPaneTests {
         await #expect(throws: AgentHandoffError.managerNotSupported) {
             try await service.handoffAgent(sessionID: primary.id, to: .grok)
         }
+    }
+}
+
+@Suite("Harness transcript locator (CROW-1314)")
+struct HarnessTranscriptLocatorTests {
+    private func roots(in dir: URL) -> HarnessTranscriptLocator.Roots {
+        HarnessTranscriptLocator.Roots(
+            claudeProjectsDir: dir.appendingPathComponent("claude").path,
+            grokSessionsDir: dir.appendingPathComponent("grok").path,
+            codexSessionsDir: dir.appendingPathComponent("codex").path,
+            cursorChatsDir: dir.appendingPathComponent("cursor").path,
+            antigravityBrainDir: dir.appendingPathComponent("agy").path,
+            museSessionsDir: dir.appendingPathComponent("muse").path
+        )
+    }
+
+    /// `/var` and `/private/var` are the same file. Directory listings
+    /// realpath the temp dir; `URL` built from `NSTemporaryDirectory()` may not.
+    private func sameFile(_ found: String?, _ expected: String) -> Bool {
+        guard let found else { return false }
+        let a = URL(fileURLWithPath: found).resolvingSymlinksInPath().path
+        let b = URL(fileURLWithPath: expected).resolvingSymlinksInPath().path
+        return a == b
+    }
+
+    private func write(_ path: String, _ body: String = "{}\n") throws {
+        let url = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try body.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    @Test func claudePathUsesProjectSlugAndOmitsAMissingFile() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-1314-claude-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cwd = "/Users/dev/.crow/managers/ABC"
+        let slug = AgentLogSource.posixPathSlug(cwd)
+        let id = "11111111-1111-1111-1111-111111111111"
+        let file = dir.appendingPathComponent("claude").appendingPathComponent(slug)
+            .appendingPathComponent("\(id).jsonl").path
+        try write(file, "{\"type\":\"user\"}\n")
+        let roots = roots(in: dir)
+        #expect(HarnessTranscriptLocator.path(
+            kind: .claudeCode, conversationID: id, cwd: cwd, roots: roots) == file)
+        #expect(HarnessTranscriptLocator.path(
+            kind: .claudeCode, conversationID: "missing", cwd: cwd, roots: roots) == nil)
+        #expect(HarnessTranscriptLocator.path(
+            kind: .claudeCode, conversationID: "../\(id)", cwd: cwd, roots: roots) == nil)
+    }
+
+    @Test func grokAntigravityCursorCodexAndMuseResolve() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .resolvingSymlinksInPath()
+        let dir = tmp.appendingPathComponent("crow-1314-locate-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let roots = roots(in: dir)
+        let cwd = "/Users/dev/work"
+        let id = "22222222-2222-2222-2222-222222222222"
+
+        let grok = dir.appendingPathComponent("grok")
+            .appendingPathComponent(GrokSessionDir.encode(cwd))
+            .appendingPathComponent(id)
+            .appendingPathComponent("chat_history.jsonl").path
+        try write(grok)
+        #expect(sameFile(HarnessTranscriptLocator.path(
+            kind: .grok, conversationID: id, cwd: cwd, roots: roots), grok))
+
+        let agy = dir.appendingPathComponent("agy")
+            .appendingPathComponent(id)
+            .appendingPathComponent(".system_generated")
+            .appendingPathComponent("logs")
+            .appendingPathComponent("transcript_full.jsonl").path
+        try write(agy)
+        #expect(sameFile(HarnessTranscriptLocator.path(
+            kind: .antigravity, conversationID: id, cwd: cwd, roots: roots), agy))
+
+        let older = dir.appendingPathComponent("cursor").appendingPathComponent(id)
+            .appendingPathComponent("old").appendingPathComponent("store.db").path
+        let newer = dir.appendingPathComponent("cursor").appendingPathComponent(id)
+            .appendingPathComponent("new").appendingPathComponent("store.db").path
+        try write(older, "old")
+        try write(newer, "new")
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: older)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 100)], ofItemAtPath: newer)
+        #expect(sameFile(HarnessTranscriptLocator.path(
+            kind: .cursor, conversationID: id, cwd: cwd, roots: roots), newer))
+
+        let rollout = dir
+            .appendingPathComponent("codex/2026/09/30/rollout-2026-09-30T00-00-00-\(id).jsonl").path
+        try write(rollout)
+        #expect(sameFile(HarnessTranscriptLocator.path(
+            kind: .codex, conversationID: id, cwd: cwd, roots: roots), rollout))
+
+        let journal = dir.appendingPathComponent("muse/2026/09/30/\(id)/session.jsonl").path
+        try write(journal)
+        #expect(sameFile(HarnessTranscriptLocator.path(
+            kind: .muse, conversationID: id, cwd: cwd, roots: roots), journal))
+
+        #expect(HarnessTranscriptLocator.path(
+            kind: .openCode, conversationID: id, cwd: cwd, roots: roots) == nil)
+        #expect(HarnessTranscriptLocator.path(
+            kind: .claudeCode, conversationID: nil, cwd: cwd, roots: roots) == nil)
+        #expect(HarnessTranscriptLocator.path(
+            kind: .claudeCode, conversationID: "   ", cwd: cwd, roots: roots) == nil)
+    }
+
+    @Test func handoffPromptPathDoesNotOverwriteExploreSeed() throws {
+        let session = Session(name: "Scratch", kind: .manager, agentKind: .cursor)
+        let explore = TodoRPC.explorePromptPath(sessionID: session.id)
+        let handoff = TodoRPC.handoffPromptPath(sessionID: session.id)
+        #expect(explore != handoff)
+        try "explore brief".write(toFile: explore, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(atPath: explore)
+            try? FileManager.default.removeItem(atPath: handoff)
+        }
+        let cmd = try #require(ManagerSessionController.exploreSeedLaunchCommand(
+            session: session,
+            baseCommand: "claude",
+            prompt: "handoff brief",
+            promptPath: handoff))
+        #expect(cmd.contains(handoff))
+        #expect(!cmd.contains(explore))
+        let exploreBody = try String(contentsOfFile: explore, encoding: .utf8)
+        let handoffBody = try String(contentsOfFile: handoff, encoding: .utf8)
+        #expect(exploreBody == "explore brief")
+        #expect(handoffBody == "handoff brief")
     }
 }
 

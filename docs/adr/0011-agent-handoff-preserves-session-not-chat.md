@@ -19,10 +19,12 @@ Crow treats agent handoff as **session metadata + managed-terminal replace**:
 
 Exposed as RPC/CLI `handoff-agent` and a web UI “Switch agent…” control. The **primary** Manager stays out of scope (Settings + restart — it reconciles via `reconcilePrimaryManagerAgentKind`). **Extra** Managers hand off too as of [CROW-1283](https://github.com/corveil/crow/issues/1283): they launch the incoming agent in the session's identity directory (`.crow/managers/<uuid>/`, [ADR 0028](./0028-manager-resume-by-id.md)) with a Manager resume brief (`buildManagerPrompt`) instead of the `git status` worktree brief — no worktree is required or created. That arm does **not** key teardown on `isManaged`. A Manager agent pane is `isManaged: false` on purpose ([ADR 0013](./0013-terminal-scroll-model.md)); extra-Manager handoff replaces terminals `SessionTerminal.isAgentSurface` already classifies (a Manager row whose `command` is set) and keeps command-less Shell tabs ([CROW-1297](https://github.com/corveil/crow/issues/1297)). The replacement stays unmanaged so a later relaunch still starts the agent as the shell command.
 
+As of [CROW-1314](https://github.com/corveil/crow/issues/1314), that Manager brief may also carry a **context pointer**. A Manager has no worktree, so the prior conversation is the only state, and this ADR still does not migrate it. Before `applyAgentKind` clears `harnessConversationID` and before the old pane is destroyed, handoff records: the originating Scratch item (the todo whose `linkedSessionID` is this session), the prior agent's on-disk transcript path when LogSync's locators can name one file, and a size-capped `capture-pane` tail (no escapes) for harnesses whose transcript Crow cannot place. Each section is omitted when empty. The incoming agent is told to read the transcript file; the file itself is not copied into the prompt. The brief is written to its own temp file, not the Explore seed path.
+
 ## Consequences
 
 - Same Crow session UUID, worktree, branch, and ticket survive the switch.
-- The incoming agent starts a **new** chat with an explicit resume point; prior tool/chat history does not transfer.
+- The incoming agent starts a **new** chat with an explicit resume point; prior tool/chat history does not transfer. Extra-Manager handoff may point at the prior transcript and a scrollback tail; it still does not import that transcript.
 - Hook config and Claude-only trust/gateway prep run for the target agent before launch.
 - Credit exhaustion is user/Manager-initiated; Crow does not auto-detect quota errors in this ADR.
 
@@ -35,5 +37,6 @@ Exposed as RPC/CLI `handoff-agent` and a web UI “Switch agent…” control. T
 ## References
 
 - Issue: https://github.com/corveil/crow/issues/627
-- Code: `Packages/CrowEngine/Sources/CrowEngine/AgentHandoff.swift`, `SessionService.handoffAgent`; extra-Manager arm `ManagerSessionController.handoffExtraManager` (CROW-1283)
+- Extra-Manager context pointer: https://github.com/corveil/crow/issues/1314
+- Code: `Packages/CrowEngine/Sources/CrowEngine/AgentHandoff.swift`, `SessionService.handoffAgent`; extra-Manager arm `ManagerSessionController.handoffExtraManager` (CROW-1283, CROW-1314)
 - Related ADRs: [0003](./0003-worktree-per-task-model.md), [0007](./0007-crowd-sole-authority-clients-only.md), [0028](./0028-manager-resume-by-id.md)
