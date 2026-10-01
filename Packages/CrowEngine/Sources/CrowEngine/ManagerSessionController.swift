@@ -594,7 +594,8 @@ final class ManagerSessionController {
     @discardableResult
     private func createManagerTerminal(
         session: Session, cwd: String, initialPrompt: String? = nil,
-        preserving existing: [SessionTerminal] = []
+        preserving existing: [SessionTerminal] = [],
+        promptPath: String? = nil
     ) -> SessionTerminal {
         let command = managerCommand(for: session, cwd: cwd)
         // CROW-539: install hook config so `crow hook-event` fires for the
@@ -641,7 +642,8 @@ final class ManagerSessionController {
         // the TUI. The explore brief is a one-shot pending launch (#408) —
         // stuffing it into `SessionTerminal.command` would re-fire on Recreate.
         let seedCommand = Self.exploreSeedLaunchCommand(
-            session: session, baseCommand: command, prompt: initialPrompt)
+            session: session, baseCommand: command, prompt: initialPrompt,
+            promptPath: promptPath)
         var rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,
@@ -688,12 +690,15 @@ final class ManagerSessionController {
     /// with it as argv. Nil when there is no prompt or the write failed —
     /// the caller then falls back to a composer paste.
     nonisolated static func exploreSeedLaunchCommand(
-        session: Session, baseCommand: String, prompt: String?
+        session: Session, baseCommand: String, prompt: String?,
+        promptPath: String? = nil
     ) -> String? {
         guard let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
-        let path = TodoRPC.explorePromptPath(sessionID: session.id)
+        // Handoff passes its own file so it does not clobber the Explore seed
+        // (CROW-1314). Explore / ticket launch keeps the original path.
+        let path = promptPath ?? TodoRPC.explorePromptPath(sessionID: session.id)
         do {
             try prompt.write(toFile: path, atomically: true, encoding: .utf8)
         } catch {
@@ -778,9 +783,13 @@ final class ManagerSessionController {
     /// (`.crow/managers/<uuid>/`, #1282 / ADR 0028), seeded with a short resume
     /// brief instead of the `git status` worktree brief. Hook + gateway config
     /// are written into that identity directory by `createManagerTerminal`, the
-    /// same way the current agent's launch does. Persisting the new `agentKind`
-    /// drops `harnessConversationID` (`applyAgentKind`), so a later cold start
-    /// resumes the NEW agent's conversation, never the previous harness's id.
+    /// same way the current agent's launch does. The resume brief is a context
+    /// pointer (CROW-1314 / ADR 0011): the prior `harnessConversationID` and a
+    /// `capture-pane` tail are read **before** `applyAgentKind` clears the id
+    /// and **before** the old pane is destroyed. The brief is written to its
+    /// own temp file, not the Explore seed. Persisting the new `agentKind`
+    /// still drops `harnessConversationID`, so a later cold start resumes the
+    /// NEW agent's conversation, never the previous harness's id.
     @MainActor
     @discardableResult
     func handoffExtraManager(
@@ -814,8 +823,29 @@ final class ManagerSessionController {
             ManagerIdentity.prepareDirectory(at: cwd, orchestrationRoot: root)
         }
 
+        // Capture the prior conversation and the live pane BEFORE
+        // `applyAgentKind` clears `harnessConversationID` and BEFORE
+        // `TerminalRouter.destroy` tears the pane down (CROW-1314).
+        let sessionLinks = appState.links[sessionID] ?? []
+        let scrollback = agentPane.flatMap {
+            TerminalRouter.captureScrollback($0, linesBack: AgentHandoff.scrollbackMaxLines)
+        }
+        let context = ManagerHandoffContext(
+            sessionName: session.name,
+            ticketURL: session.effectiveTicketURL(from: sessionLinks),
+            ticketTitle: session.ticketTitle,
+            links: sessionLinks.map {
+                ManagerHandoffLink(label: $0.label, url: $0.url, type: $0.linkType.rawValue)
+            },
+            scratch: AgentHandoff.originatingScratch(in: store.data.todos, sessionID: sessionID),
+            transcriptPath: HarnessTranscriptLocator.path(
+                kind: priorKind,
+                conversationID: session.harnessConversationID,
+                cwd: agentPane?.cwd ?? cwd),
+            scrollback: scrollback
+        )
         let brief = AgentHandoff.buildManagerPrompt(
-            from: priorKind, to: targetKind, note: note, devRoot: devRoot)
+            from: priorKind, to: targetKind, note: note, devRoot: devRoot, context: context)
 
         // Persist the new agent (drops the prior harness conversation id via
         // `applyAgentKind`). Mirrors the worktree handoff's persist block.
@@ -860,7 +890,8 @@ final class ManagerSessionController {
         // writes the new agent's hook + gateway config into `cwd` and syncs its
         // MCP bridge (via `writeManagerHookConfig`).
         let prepared = createManagerTerminal(
-            session: session, cwd: cwd, initialPrompt: brief, preserving: shells)
+            session: session, cwd: cwd, initialPrompt: brief, preserving: shells,
+            promptPath: TodoRPC.handoffPromptPath(sessionID: session.id))
         appState.activeTerminalID[sessionID] = prepared.id
 
         CrowLog.info("[CrowTelemetry agent:handoff] session=\(sessionID.uuidString) manager=true from=\(priorKind.rawValue) to=\(targetKind.rawValue) terminal=\(prepared.id.uuidString)")

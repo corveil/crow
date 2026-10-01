@@ -183,6 +183,14 @@ public enum TodoRPC {
             .appendingPathComponent("crow-explore-\(sessionID.uuidString).md")
     }
 
+    /// Temp file the extra-Manager handoff brief is read from. Distinct from
+    /// ``explorePromptPath(sessionID:)`` so switching agents does not overwrite
+    /// the original Scratch/explore seed (CROW-1314).
+    public static func handoffPromptPath(sessionID: UUID) -> String {
+        (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crow-manager-handoff-\(sessionID.uuidString).md")
+    }
+
     /// Wrap a Manager launch command so the explore brief is argv (job-style
     /// `evalPromptLaunch`), not a TUI paste. Cursor/Grok need `--` so a brief
     /// whose first character is `-` is not parsed as a flag.
