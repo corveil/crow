@@ -24,71 +24,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="xterm.css">
   <style>
-    /* Mirrors theme.css --term-* (CROW-1316). This retired page is not served
-       by crowd, so it cannot link /theme.css; keep the two blocks in step. */
-    :root {
-      color-scheme: dark;
-      --term-bg: #0A060B;
-      --term-fg: #FFF7FB;
-      --term-cursor: #FF2D7A;
-      --term-cursor-accent: #0A060B;
-      --term-selection: rgba(255, 45, 122, 0.35);
-      --term-black: #0A060B;
-      --term-red: #FF6B63;
-      --term-green: #3DDC84;
-      --term-yellow: #FFD60A;
-      --term-blue: #64B4FF;
-      --term-magenta: #FF2D7A;
-      --term-cyan: #5EE0D0;
-      --term-white: #FFF7FB;
-      --term-bright-black: #A894A2;
-      --term-bright-red: #FF8A84;
-      --term-bright-green: #7AF0A8;
-      --term-bright-yellow: #FFE566;
-      --term-bright-blue: #9DCEFF;
-      --term-bright-magenta: #FF7EAE;
-      --term-bright-cyan: #8FF3E8;
-      --term-bright-white: #FFFFFF;
-      --accent: #FF2D7A;
-      --bg-elev: #24141C;
-      --bg-selected: #2A1420;
-      --border-strong: rgba(255, 247, 251, 0.42);
-    }
-    [data-theme="light"] {
-      color-scheme: light;
-      --term-bg: #FAF9F5;
-      --term-fg: #0A060B;
-      --term-cursor: #C6005B;
-      --term-cursor-accent: #FFFFFF;
-      --term-selection: rgba(198, 0, 91, 0.18);
-      --term-black: #0A060B;
-      --term-red: #C41A22;
-      --term-green: #087A32;
-      --term-yellow: #7A5600;
-      --term-blue: #0054C6;
-      --term-magenta: #C6005B;
-      --term-cyan: #0E6B74;
-      --term-white: #3D3140;
-      --term-bright-black: #5C4854;
-      --term-bright-red: #E23A42;
-      --term-bright-green: #0B6B2E;
-      --term-bright-yellow: #8A6200;
-      --term-bright-blue: #0A4FBF;
-      --term-bright-magenta: #E60073;
-      --term-bright-cyan: #12808A;
-      --term-bright-white: #1A1218;
-      --accent: #C6005B;
-      --bg-elev: #F3F0E8;
-      --bg-selected: #FFE4F0;
-      --border-strong: rgba(10, 6, 11, 0.28);
-    }
     html, body {
       margin: 0;
       padding: 0;
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: var(--term-bg);
+      background: #1e1e1e;
     }
     #terminal {
       width: 100%;
@@ -104,50 +46,6 @@
   <script src="xterm-addon-crow-jumpbottom.js"></script>
   <script>
     (function () {
-      function syncTheme() {
-        var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-      }
-      syncTheme();
-      // Same reader as web/theme.js crowXtermTheme — CSS variables above are the palette.
-      function crowXtermTheme() {
-        var css = getComputedStyle(document.documentElement);
-        function v(name, fallback) {
-          var value = (css.getPropertyValue(name) || '').trim();
-          return value || fallback;
-        }
-        return {
-          background: v('--term-bg', '#0A060B'),
-          foreground: v('--term-fg', '#FFF7FB'),
-          cursor: v('--term-cursor', '#FF2D7A'),
-          cursorAccent: v('--term-cursor-accent', '#0A060B'),
-          selectionBackground: v('--term-selection', 'rgba(255, 45, 122, 0.35)'),
-          selectionForeground: v('--term-fg', '#FFF7FB'),
-          black: v('--term-black', '#0A060B'),
-          red: v('--term-red', '#FF6B63'),
-          green: v('--term-green', '#3DDC84'),
-          yellow: v('--term-yellow', '#FFD60A'),
-          blue: v('--term-blue', '#64B4FF'),
-          magenta: v('--term-magenta', '#FF2D7A'),
-          cyan: v('--term-cyan', '#5EE0D0'),
-          white: v('--term-white', '#FFF7FB'),
-          brightBlack: v('--term-bright-black', '#A894A2'),
-          brightRed: v('--term-bright-red', '#FF8A84'),
-          brightGreen: v('--term-bright-green', '#7AF0A8'),
-          brightYellow: v('--term-bright-yellow', '#FFE566'),
-          brightBlue: v('--term-bright-blue', '#9DCEFF'),
-          brightMagenta: v('--term-bright-magenta', '#FF7EAE'),
-          brightCyan: v('--term-bright-cyan', '#8FF3E8'),
-          brightWhite: v('--term-bright-white', '#FFFFFF'),
-        };
-      }
-      var repaintTerm = function () {};
-      if (window.matchMedia) {
-        var mq = window.matchMedia('(prefers-color-scheme: dark)');
-        var onScheme = function () { syncTheme(); repaintTerm(); };
-        if (mq.addEventListener) mq.addEventListener('change', onScheme);
-        else if (mq.addListener) mq.addListener(onScheme);
-      }
       function reportError(message) {
         console.error('Crow:', message);
         const handlers = window.webkit && window.webkit.messageHandlers;
@@ -190,8 +88,8 @@
           cursorBlink: true,
           fontSize: 14,
           // Nerd Font first for Claude/Cursor TUI icons; Menlo fallback if not installed.
-          fontFamily: '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "IBM Plex Mono", ui-monospace, Menlo, Monaco, monospace',
-          theme: crowXtermTheme(),
+          fontFamily: '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace',
+          theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
           // Match the web UI (app.js), the tmux history-limit, and the daemon
           // replay window so the full retained transcript survives a reconnect
           // (CROW-804). Was 10000, which truncated scroll-up below the 50000
@@ -202,7 +100,6 @@
         term.loadAddon(fitAddon);
         term.loadAddon(imageAddon);
         term.open(document.getElementById('terminal'));
-        repaintTerm = function () { term.options.theme = crowXtermTheme(); };
         // After open() so the addon can find term.element's container and
         // anchor its button to the terminal viewport.
         term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());

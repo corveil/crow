@@ -8,8 +8,8 @@
 
    :root is dark. theme.js sets data-theme="light"|"dark" before first paint
    (system preference unless Settings overrides it). Login and the debug
-   terminal set the same attribute. Desktop CrowTerminal/Resources/xterm/terminal.html
-   mirrors the --term-* block so the three terminal front-ends stay aligned. */
+   terminal (web/terminal.html) set the same attribute. The retired
+   CrowTerminal WKWebView page is not a third copy of this palette. */
 
 @font-face {
   font-family: "IBM Plex Sans";
@@ -102,6 +102,13 @@
   --accent-wash: color-mix(in srgb, var(--accent) 8%, transparent);
   --accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
   --attention-wash: color-mix(in srgb, var(--orange) 16%, transparent);
+  /* Shimmer and status chips. Mixed from --text-muted so [data-theme=light]
+     (a Settings override, not only the OS) darkens them instead of leaving
+     a white wash on paper. */
+  --skel-lo: color-mix(in srgb, var(--text-muted) 14%, transparent);
+  --skel-hi: color-mix(in srgb, var(--text-muted) 28%, transparent);
+  --skel-still: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  --badge-wash: color-mix(in srgb, var(--text-muted) 16%, transparent);
 
   /* Status text. Each pair is ≥4.5:1 on this theme's page background. */
   --green: #3DDC84;

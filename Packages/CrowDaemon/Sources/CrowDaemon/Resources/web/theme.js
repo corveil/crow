@@ -31,9 +31,8 @@
   }
 
   // Read by terminal.js, grid.js, tui-record.js, and web/terminal.html.
-  // Desktop CrowTerminal/.../terminal.html mirrors this reader against the
-  // same --term-* names. Missing tokens fall back to the dark palette so a
-  // stylesheet race cannot hand xterm an empty color (css.toColor throws).
+  // Missing tokens fall back to the dark palette so a stylesheet race cannot
+  // hand xterm an empty color (css.toColor throws).
   function xtermTheme() {
     return {
       background: cssVar('--term-bg', '#0A060B'),

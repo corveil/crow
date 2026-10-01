@@ -13,6 +13,7 @@ const epilogue = `
   set selectedBoard(v){selectedBoard=v;},
   renderBoard(){ return renderBoard(); },
   groupManagerWeeks(w){ return groupManagerWeeks(w); },
+  gradeBadgeEl(g){ return gradeBadgeEl(g); },
 };
 `;
 const appjs = loadClientSource() + epilogue;
@@ -192,6 +193,12 @@ let threw = false;
 try { T.renderBoard(); } catch (e) { threw = true; console.log('  [threw] ' + e.message); }
 check('missing managerWeeks does not throw', !threw);
 check('no Manager card when there are no Manager weeks', q('.score-manager-week-block').length === 0);
+
+console.log('\nGrade badge wash:');
+const badge = T.gradeBadgeEl(grade('B', 85));
+check('letter color is the grade token', badge.style.color === 'var(--grade-b)');
+check('wash is a color-mix, not a hex alpha glued onto the variable',
+  badge.style.background === 'color-mix(in srgb, var(--grade-b) 15%, transparent)');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

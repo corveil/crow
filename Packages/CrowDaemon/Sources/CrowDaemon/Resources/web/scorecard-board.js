@@ -420,7 +420,8 @@ function gradeBadgeEl(grade) {
   if (grade.graded) {
     const badge = el('span', 'score-badge', grade.letter);
     badge.style.color = gradeColor(grade.letter);
-    badge.style.background = gradeColor(grade.letter) + '26'; // ~15% alpha
+    // 15% wash. Appending a hex alpha to var(--grade-b) is not a color.
+    badge.style.background = 'color-mix(in srgb, ' + gradeColor(grade.letter) + ' 15%, transparent)';
     return badge;
   }
   const badge = el('span', 'score-badge muted', '—');
