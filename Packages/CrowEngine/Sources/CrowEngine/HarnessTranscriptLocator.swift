@@ -2,7 +2,6 @@ import Foundation
 import CrowAntigravity
 import CrowCodex
 import CrowCore
-import CrowCursor
 import CrowGrok
 import CrowMuse
 
@@ -10,15 +9,17 @@ import CrowMuse
 /// file, using the same path formulas LogSync and `BackfillScanner` already
 /// use (CROW-1314).
 ///
-/// This is a pointer, not a transcript copy (ADR 0011). OpenCode is omitted:
-/// its log is one shared `opencode.db`, not this conversation's file. A miss
-/// returns nil so the handoff brief can fall back to the pane's scrollback.
+/// This is a pointer, not a transcript copy (ADR 0011). OpenCode is omitted
+/// because its log is one shared `opencode.db`. Cursor is omitted because
+/// `store.db` is a SQLite blob store — a plain read is not the conversation
+/// (`CursorStore.messageLines` is what LogSync uploads). Copying those lines
+/// into the brief would migrate the transcript, which this ADR refuses. A miss
+/// returns nil so the handoff brief falls back to the pane's scrollback.
 enum HarnessTranscriptLocator {
     struct Roots: Sendable {
         var claudeProjectsDir: String
         var grokSessionsDir: String
         var codexSessionsDir: String
-        var cursorChatsDir: String
         var antigravityBrainDir: String
         var museSessionsDir: String
 
@@ -28,7 +29,6 @@ enum HarnessTranscriptLocator {
                     .appendingPathComponent(".claude/projects", isDirectory: true).path,
                 grokSessionsDir: GrokHome.sessionsDir(),
                 codexSessionsDir: CodexHome.sessionsDir(),
-                cursorChatsDir: CursorHome.chatsDir(),
                 antigravityBrainDir: AntigravityHome.brainDir(),
                 museSessionsDir: MuseHome.sessionsDir()
             )
@@ -52,17 +52,14 @@ enum HarnessTranscriptLocator {
             return regularFile(AntigravityHome.transcriptPath(
                 conversationID: id, brainDir: roots.antigravityBrainDir))
         }
-        if kind == .cursor {
-            return cursorStore(id: id, chatsDir: roots.cursorChatsDir)
-        }
         if kind == .codex {
             return codexRollout(id: id, sessionsDir: roots.codexSessionsDir)
         }
         if kind == .muse {
             return museJournal(id: id, sessionsDir: roots.museSessionsDir)
         }
-        // OpenCode's database is shared across every session. Pointing at it
-        // would not show where *this* agent left off.
+        // Cursor's `store.db` and OpenCode's shared database are not a
+        // readable transcript for this conversation. The pane tail covers them.
         return nil
     }
 
@@ -93,31 +90,6 @@ enum HarnessTranscriptLocator {
         dir = (dir as NSString).appendingPathComponent(id)
         let file = (dir as NSString).appendingPathComponent("chat_history.jsonl")
         return regularFile(file)
-    }
-
-    /// `<chats>/<chatId>/<subId>/store.db`. The hook id is the chat id
-    /// (`cursor-agent --resume`), so the search stays inside that one directory.
-    private static func cursorStore(id: String, chatsDir: String) -> String? {
-        let chat = (chatsDir as NSString).appendingPathComponent(id)
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: chat, isDirectory: &isDir), isDir.boolValue else {
-            return nil
-        }
-        let root = URL(fileURLWithPath: chat, isDirectory: true)
-        guard let children = try? FileManager.default.contentsOfDirectory(
-            at: root, includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey]
-        ) else { return nil }
-        var best: (path: String, date: Date)?
-        for child in children {
-            let store = child.appendingPathComponent("store.db")
-            guard let path = regularFile(store.path) else { continue }
-            let date = (try? store.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? .distantPast
-            if best == nil || date > best!.date {
-                best = (path, date)
-            }
-        }
-        return best?.path
     }
 
     /// `sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`. Days are walked

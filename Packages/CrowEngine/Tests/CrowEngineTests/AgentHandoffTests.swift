@@ -326,7 +326,6 @@ struct HarnessTranscriptLocatorTests {
             claudeProjectsDir: dir.appendingPathComponent("claude").path,
             grokSessionsDir: dir.appendingPathComponent("grok").path,
             codexSessionsDir: dir.appendingPathComponent("codex").path,
-            cursorChatsDir: dir.appendingPathComponent("cursor").path,
             antigravityBrainDir: dir.appendingPathComponent("agy").path,
             museSessionsDir: dir.appendingPathComponent("muse").path
         )
@@ -393,18 +392,10 @@ struct HarnessTranscriptLocatorTests {
         #expect(sameFile(HarnessTranscriptLocator.path(
             kind: .antigravity, conversationID: id, cwd: cwd, roots: roots), agy))
 
-        let older = dir.appendingPathComponent("cursor").appendingPathComponent(id)
-            .appendingPathComponent("old").appendingPathComponent("store.db").path
-        let newer = dir.appendingPathComponent("cursor").appendingPathComponent(id)
-            .appendingPathComponent("new").appendingPathComponent("store.db").path
-        try write(older, "old")
-        try write(newer, "new")
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: older)
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date(timeIntervalSince1970: 100)], ofItemAtPath: newer)
-        #expect(sameFile(HarnessTranscriptLocator.path(
-            kind: .cursor, conversationID: id, cwd: cwd, roots: roots), newer))
+        // Cursor's on-disk chat is `store.db`, a SQLite blob store. A path to
+        // that file is not a transcript, so Cursor is omitted like OpenCode.
+        #expect(HarnessTranscriptLocator.path(
+            kind: .cursor, conversationID: id, cwd: cwd, roots: roots) == nil)
 
         let rollout = dir
             .appendingPathComponent("codex/2026/09/30/rollout-2026-09-30T00-00-00-\(id).jsonl").path
