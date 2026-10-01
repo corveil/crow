@@ -78,11 +78,12 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
     }
 
     /// Paths served without the web-auth gate: the login/logout endpoints, the
-    /// health probe, the brand asset the login page needs before auth, the web app
-    /// manifest + its install icons (CROW-1073 — the pre-auth login page references
-    /// them and Chrome's install prompt fetches them regardless of auth state), and
-    /// the MCP endpoint. Every other path (incl. `/auth/check`, `/`, `/rpc`, the
-    /// secret POSTs) is gated.
+    /// health probe, the brand asset the login page needs before auth, theme.css
+    /// and the bundled fonts (CROW-1316 — the pre-auth login page paints with
+    /// them), the web app manifest + its install icons (CROW-1073 — Chrome's
+    /// install prompt fetches them regardless of auth state), and the MCP
+    /// endpoint. Every other path (incl. `/auth/check`, `/`, `/rpc`, the secret
+    /// POSTs) is gated.
     ///
     /// `/mcp` is exempt because it authenticates **differently and more strictly**
     /// (CROW-1004): this middleware gates on the `crow_session` cookie and is
@@ -91,8 +92,23 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
     /// scope-bearing bearer token on every request with no loopback bypass. Leaving
     /// `/mcp` here would 401 every legitimate token client while waving anyone
     /// through on a passwordless daemon. `MCPRoutesTests` pins the stricter behavior.
+    ///
+    /// `/fonts/<face>` is only a single safe component that is a font or the OFL
+    /// text. A traversal or a script under that prefix stays gated.
+    static func isBundledFont(path: String) -> Bool {
+        let prefix = "/fonts/"
+        guard path.hasPrefix(prefix) else { return false }
+        let name = String(path.dropFirst(prefix.count))
+        guard StaticAssets.isSafeAssetName(name) else { return false }
+        return name == "OFL.txt"
+            || name.hasSuffix(".woff2") || name.hasSuffix(".woff")
+            || name.hasSuffix(".ttf") || name.hasSuffix(".otf")
+    }
+
     static func isAuthExempt(path: String) -> Bool {
-        path == "/login" || path == "/logout" || path == "/health" || path == "/brand.svg"
+        if isBundledFont(path: path) { return true }
+        return path == "/login" || path == "/logout" || path == "/health" || path == "/brand.svg"
+            || path == "/theme.css"
             || path == "/manifest.webmanifest" || path == "/icon-192.png"
             || path == "/icon-512.png" || path == "/apple-touch-icon.png"
             || path == "/mcp"

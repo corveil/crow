@@ -204,7 +204,12 @@ async function openTuiPlayback(recordingId) {
   head.textContent = 'TUI recording ' + recordingId + ' — this captures keystrokes and screen contents. Never uploaded.';
   if (tuiPlaybackTerm) { try { tuiPlaybackTerm.dispose(); } catch (_) {} tuiPlaybackTerm = null; }
   if (typeof Terminal === 'function') {
-    tuiPlaybackTerm = new Terminal({ convertEol: true, fontFamily: 'Menlo, Monaco, monospace', fontSize: 13, theme: { background: '#1e1e1e' } });
+    tuiPlaybackTerm = new Terminal({
+      convertEol: true,
+      fontFamily: (typeof DEFAULT_TERM_FONT === 'string') ? DEFAULT_TERM_FONT : '"IBM Plex Mono", ui-monospace, monospace',
+      fontSize: 13,
+      theme: (typeof crowXtermTheme === 'function') ? crowXtermTheme() : { background: '#0A060B', foreground: '#FFF7FB' },
+    });
     tuiPlaybackTerm.open(document.getElementById('tui-playback-term'));
   }
   streamTuiPlayback(recordingId, tuiPlaybackTerm);
@@ -304,3 +309,8 @@ window.tuiNoteTouchmove = function (preventDefault, delta) {
 window.tuiNoteEvent = function (kind) {
   if (tuiTrace) tuiTrace.noteEvent({ kind: kind, at_client: Date.now() });
 };
+window.addEventListener('crow-theme', () => {
+  if (tuiPlaybackTerm && tuiPlaybackTerm.options && typeof crowXtermTheme === 'function') {
+    tuiPlaybackTerm.options.theme = crowXtermTheme();
+  }
+});

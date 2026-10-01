@@ -9,28 +9,51 @@
   <link rel="icon" type="image/svg+xml" href="/brand.svg">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <meta name="theme-color" content="#121416">
+  <meta name="theme-color" content="#0A060B">
   <!-- Standalone: the auth gate blocks app.css/app.js until you're in, so this
-       page inlines its own styles (CROW-593). -->
+       page inlines its layout and loads only the exempt theme + fonts (CROW-593,
+       CROW-1316). The boot script sets data-theme before theme.css paints. -->
+  <script>
+    (function () {
+      var pref = 'system';
+      try { pref = localStorage.getItem('crow.color-scheme') || 'system'; } catch (e) {}
+      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = (pref === 'light' || pref === 'dark') ? pref : (dark ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', theme === 'light' ? '#FAF9F5' : '#0A060B');
+      if (pref === 'system' && window.matchMedia) {
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        var sync = function () {
+          var next = mq.matches ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', next);
+          if (meta) meta.setAttribute('content', next === 'light' ? '#FAF9F5' : '#0A060B');
+        };
+        if (mq.addEventListener) mq.addEventListener('change', sync);
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/theme.css">
   <style>
-    :root { color-scheme: dark; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-           background: #1e1e1e; color: #d4d4d4;
-           font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-    .card { width: 320px; padding: 28px; background: #252526; border: 1px solid #333;
-            border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+           background: var(--bg-deep); color: var(--text-primary);
+           font: 14px/1.5 var(--font-ui); }
+    .card { width: 320px; padding: 28px; background: var(--bg-surface); border: 1px solid var(--border-strong);
+            border-radius: 10px; box-shadow: 0 8px 30px var(--overlay); }
     .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
     .brand img { width: 28px; height: 28px; }
-    .brand h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
-    label { display: block; font-size: 12px; color: #9aa0a6; margin-bottom: 6px; }
-    input[type=password] { width: 100%; padding: 10px 12px; font-size: 14px; background: #1e1e1e;
-            color: #d4d4d4; border: 1px solid #3a3a3a; border-radius: 6px; }
-    input:focus { outline: none; border-color: #c8a24a; }
+    .brand h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: -0.02em; color: var(--accent); }
+    label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+    input[type=password] { width: 100%; padding: 10px 12px; font-size: 14px; font-family: inherit;
+            background: var(--bg-deep); color: var(--text-primary);
+            border: 1px solid var(--border-strong); border-radius: 6px; }
+    input:focus { outline: none; border-color: var(--accent); }
     button { width: 100%; margin-top: 16px; padding: 10px; font-size: 14px; font-weight: 600;
-             cursor: pointer; background: #c8a24a; color: #1e1e1e; border: none; border-radius: 6px; }
+             font-family: inherit; cursor: pointer; background: var(--accent-fill);
+             color: var(--on-accent); border: none; border-radius: 6px; }
     button:disabled { opacity: .6; cursor: default; }
-    .err { margin-top: 12px; min-height: 16px; font-size: 12px; color: #e06c75; }
+    .err { margin-top: 12px; min-height: 16px; font-size: 12px; color: var(--red); }
   </style>
 </head>
 <body>

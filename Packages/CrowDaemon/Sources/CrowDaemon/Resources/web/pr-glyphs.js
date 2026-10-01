@@ -3,11 +3,11 @@
 // detail header (CROW-773). Extracted from sidebar.js (CROW-1238).
 
 function prBadgeColor(pr) {
-  if (!pr || !pr.has_pr) return 'var(--gold)';
+  if (!pr || !pr.has_pr) return 'var(--accent)';
   if (pr.is_merged) return 'var(--purple)';
   if (pr.has_blockers) return 'var(--red)';
   if (pr.ready_to_merge) return 'var(--green)';
-  return 'var(--gold)';
+  return 'var(--accent)';
 }
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ const PR_CONFLICT_GLYPH = { glyph: '⚠', icon: 'warning', color: 'var(--red)', 
 // Chip text drops the redundant "label" (the tag glyph shows it beside the
 // text); the aria path keeps it via `a11yLabel` — there the glyph is never
 // announced, so the noun is the only signal it's a label (CROW-846).
-const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', icon: 'tag', color: 'var(--gold)', label: 'crow:merge', a11yLabel: 'crow:merge label' };
+const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', icon: 'tag', color: 'var(--accent)', label: 'crow:merge', a11yLabel: 'crow:merge label' };
 // Auto-merge lifecycle — one FAMILY (the ⛙ merge mark), five COLORS for the
 // five outcomes. Before #888 the row drew the same untinted ⛙ whether Crow was
 // about to merge the PR or had permanently given up on it, so "armed" and

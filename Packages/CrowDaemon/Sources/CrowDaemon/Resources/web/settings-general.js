@@ -17,6 +17,9 @@
     S.cfg.cleanup = S.cfg.cleanup || {};
     S.cfg.terminal = S.cfg.terminal || {};
 
+    body.appendChild(S.group('Appearance'));
+    body.appendChild(appearanceField());
+
     body.appendChild(S.group('Development Root'));
     body.appendChild(S.textField('Path', { path: S.devRoot }, 'path',
       { readonly: true, help: 'The dev root is fixed for this daemon and managed in the desktop app.' }));
@@ -106,6 +109,24 @@
     ], { number: true, help: 'How long the local upload ledger keeps a record of each session before pruning.' }));
     body.appendChild(S.textField('Max upload size (bytes)', S.cfg.logSync, 'maxUploadBytes',
       { number: true, type: 'number', help: 'Per-transcript upload cap (default 8000000). Larger transcripts are truncated and flagged.' }));
+  }
+
+  // Local to this browser (localStorage). Not part of the daemon config, so it
+  // applies immediately and does not mark Settings dirty.
+  function appearanceField() {
+    const current = (window.CrowTheme && CrowTheme.preference()) || 'system';
+    const sel = el('select', 'st-select');
+    for (const [val, lab] of [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]) {
+      const o = el('option', null, lab);
+      o.value = val;
+      if (val === current) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => {
+      if (window.CrowTheme) CrowTheme.setPreference(sel.value);
+    };
+    return S.field('Theme', sel,
+      'Follows this device’s appearance unless you choose Light or Dark. Saved in this browser.');
   }
 
   // Path + Verify + Reinstall skill for the Corveil CLI (CROW-1011).

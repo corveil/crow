@@ -34,7 +34,7 @@ function scoreWeekLabel(millis) {
   const fmt = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   return 'Week of ' + fmt(start) + ' – ' + fmt(end);
 }
-const GRADE_COLORS = { A: '#4ade80', B: '#6ee7b7', C: '#facc15', D: '#fb923c', F: '#f87171' };
+const GRADE_COLORS = { A: 'var(--grade-a)', B: 'var(--grade-b)', C: 'var(--grade-c)', D: 'var(--grade-d)', F: 'var(--grade-f)' };
 function gradeColor(letter) { return GRADE_COLORS[letter] || 'var(--text-muted)'; }
 // One coachable sentence per metric — the view-layer copy from the desktop.
 const COACHING = {

@@ -255,7 +255,7 @@ function navPill(label, active, onClick) {
   return p;
 }
 
-// Gold antenna glyph = this session's agent was launched with remote control
+// Accent antenna glyph = this session's agent was launched with remote control
 // enabled, so it's driveable from claude.ai. (The underlying flag tracks
 // terminals started with `--rc`, i.e. RC-enabled — not a live claude.ai drive,
 // so the badge means "enabled", not "currently being driven" — CROW-863.)

@@ -1,0 +1,208 @@
+/* Corveil brand theme (CROW-1316).
+   Tokens follow corveil.com/style: ink/plum surfaces, pink as the only
+   accent, paper for light. IBM Plex is bundled and served from /fonts
+   (OFL.txt sits next to the files). The retired gold palette is gone.
+
+   IBM Plex Sans stops at weight 700, so display type uses Bold with tight
+   tracking rather than a synthesized 800.
+
+   :root is dark. theme.js sets data-theme="light"|"dark" before first paint
+   (system preference unless Settings overrides it). Login and the debug
+   terminal set the same attribute. Desktop CrowTerminal/Resources/xterm/terminal.html
+   mirrors the --term-* block so the three terminal front-ends stay aligned. */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-Medium.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-SemiBold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/IBMPlexMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/IBMPlexMono-Medium.woff2") format("woff2");
+}
+
+:root {
+  /* Brand primitives — constant across themes. */
+  --ink-900: #0A060B;
+  --ink-850: #0D090E;
+  --plum-900: #190713;
+  --pink: #E60073;
+  --pink-bright: #FF2D7A;
+  --pink-deep: #C6005B;
+  --paper: #FFFFFF;
+  --paper-soft: #FAF9F5;
+  --brand-text: #FFF7FB;
+
+  --font-ui: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Fills that keep their contrast pair in both themes.
+     White on #E60073 is 4.55:1. Ink on #34C759 is 9.06:1.
+     White on #C41A22 is 5.97:1 (bright #FF453A with white is only 3.4:1). */
+  --accent-fill: var(--pink);
+  --on-accent: #FFFFFF;
+  --green-fill: #34C759;
+  --on-green: var(--ink-900);
+  --red-fill: #C41A22;
+  --on-red: #FFFFFF;
+  --overlay: rgba(10, 6, 11, 0.58);
+  --overlay-strong: rgba(10, 6, 11, 0.82);
+
+  color-scheme: dark;
+  --bg-deep: var(--ink-900);
+  --bg-surface: var(--ink-850);
+  --bg-card: #160C12;
+  --bg-elev: #24141C;
+  --bg-elevated: var(--bg-elev);
+  --bg-selected: #2A1420;
+  --bg-done: #10240F;
+  --border-subtle: rgba(255, 247, 251, 0.14);
+  --border-strong: rgba(255, 247, 251, 0.42);
+  --text-primary: var(--brand-text);
+  --text-secondary: #D7C6D2;
+  --text-muted: #A894A2;
+  /* Accent text is pink-bright on ink (5.66:1). Pink itself is 4.42:1 and
+     fails AA for body-size text on this background. */
+  --accent: var(--pink-bright);
+  --accent-muted: #FF7EAE;
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-wash: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
+  --attention-wash: color-mix(in srgb, var(--orange) 16%, transparent);
+
+  /* Status text. Each pair is ≥4.5:1 on this theme's page background. */
+  --green: #3DDC84;
+  --yellow: #FFD60A;
+  --orange: #FF9F0A;
+  --red: #FF6B63;
+  --blue: #64B4FF;
+  --purple: #D09BFF;
+
+  --grade-a: #3DDC84;
+  --grade-b: #6EE7B7;
+  --grade-c: #FFD60A;
+  --grade-d: #FF9F0A;
+  --grade-f: #FF6B63;
+
+  /* Terminal. xterm paints from JS, which reads these back out.
+     Scroll thumb: pink-bright at 0.72 over #0A060B is ~3.3:1 (WCAG 2.2
+     §1.4.11 needs 3:1). 0.70 measured 3.21:1; do not drop below 0.72. */
+  /* Literals, not var() — xterm reads these strings from JS and cannot resolve var(). */
+  --term-bg: #0A060B;
+  --term-fg: #FFF7FB;
+  --term-cursor: #FF2D7A;
+  --term-cursor-accent: #0A060B;
+  --term-selection: rgba(255, 45, 122, 0.35);
+  --term-black: #0A060B;
+  --term-red: #FF6B63;
+  --term-green: #3DDC84;
+  --term-yellow: #FFD60A;
+  --term-blue: #64B4FF;
+  --term-magenta: #FF2D7A;
+  --term-cyan: #5EE0D0;
+  --term-white: #FFF7FB;
+  --term-bright-black: #A894A2;
+  --term-bright-red: #FF8A84;
+  --term-bright-green: #7AF0A8;
+  --term-bright-yellow: #FFE566;
+  --term-bright-blue: #9DCEFF;
+  --term-bright-magenta: #FF7EAE;
+  --term-bright-cyan: #8FF3E8;
+  --term-bright-white: #FFFFFF;
+  --term-hud-bg: rgba(10, 6, 11, 0.72);
+  --scroll-thumb: rgba(255, 45, 122, 0.72);
+  --scroll-thumb-hover: rgba(255, 45, 122, 0.88);
+  --scroll-thumb-active: #FF2D7A;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-deep: var(--paper-soft);
+  --bg-surface: var(--paper);
+  --bg-card: var(--paper);
+  --bg-elev: #F3F0E8;
+  --bg-elevated: var(--bg-elev);
+  --bg-selected: #FFE4F0;
+  --bg-done: #E5F6EA;
+  --border-subtle: rgba(10, 6, 11, 0.10);
+  --border-strong: rgba(10, 6, 11, 0.28);
+  --text-primary: var(--ink-900);
+  --text-secondary: #4A3944;
+  --text-muted: #6E5A66;
+  /* pink-deep on paper is 5.91:1. pink-bright on paper is 3.55:1 and fails AA. */
+  --accent: var(--pink-deep);
+  --accent-muted: #A8004E;
+
+  --green: #087A32;
+  --yellow: #7A5600;
+  --orange: #9A4500;
+  --red: #C41A22;
+  --blue: #0054C6;
+  --purple: #6E28B0;
+
+  --grade-a: #087A32;
+  --grade-b: #0F766E;
+  --grade-c: #854D0E;
+  --grade-d: #C2410C;
+  --grade-f: #B91C1C;
+
+  --term-bg: #FAF9F5;
+  --term-fg: #0A060B;
+  --term-cursor: #C6005B;
+  --term-cursor-accent: #FFFFFF;
+  --term-selection: rgba(198, 0, 91, 0.18);
+  --term-black: #0A060B;
+  --term-red: #C41A22;
+  --term-green: #087A32;
+  --term-yellow: #7A5600;
+  --term-blue: #0054C6;
+  --term-magenta: #C6005B;
+  --term-cyan: #0E6B74;
+  --term-white: #3D3140;
+  --term-bright-black: #5C4854;
+  --term-bright-red: #E23A42;
+  --term-bright-green: #0B6B2E;
+  --term-bright-yellow: #8A6200;
+  --term-bright-blue: #0A4FBF;
+  --term-bright-magenta: #E60073;
+  --term-bright-cyan: #12808A;
+  --term-bright-white: #1A1218;
+  --term-hud-bg: rgba(250, 249, 245, 0.88);
+  /* Ink at 0.48 over paper-soft clears 3:1. Active state is pink-deep (5.6:1). */
+  --scroll-thumb: rgba(10, 6, 11, 0.48);
+  --scroll-thumb-hover: rgba(10, 6, 11, 0.66);
+  --scroll-thumb-active: #C6005B;
+}

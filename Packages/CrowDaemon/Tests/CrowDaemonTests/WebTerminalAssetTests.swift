@@ -849,6 +849,7 @@ import Testing
         // raw-file `contains` would false-pass off the prose once a declaration
         // is deleted (mutation-checked, like the CROW-924 pins above).
         let css = Self.stripComments(try Self.webAsset("app.css"))
+        let themeCSS = Self.stripComments(try Self.webAsset("theme.css"))
         let appJS = Self.stripComments(try Self.webClientJS())
 
         // 1. Sidebar and board are back to scrolling without a gutter. Scoped to
@@ -908,8 +909,8 @@ import Testing
         // declarations.
         for token in ["--scroll-thumb:", "--scroll-thumb-hover:", "--scroll-thumb-active:"] {
             #expect(
-                css.contains(token),
-                "the \(token.dropLast()) token app.js reads for xterm's slider must be defined (CROW-1020)")
+                themeCSS.contains(token),
+                "the \(token.dropLast()) token terminal.js reads for xterm's slider must be defined in theme.css (CROW-1020 / CROW-1316)")
         }
     }
 
