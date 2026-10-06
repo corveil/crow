@@ -52,6 +52,28 @@ public struct OpenAICodexAgent: CodingAgent {
     public let hookConfigWriter: any HookConfigWriter
     public let stateSignalSource: any StateSignalSource
 
+    /// Every Codex launch Crow emits passes this, so the TUI renders inline in
+    /// the pane's main buffer (CROW-1319, ADR-0013 #1319 amendment).
+    ///
+    /// Codex 0.157.0 made `tui.fullscreen_transcript` the default: the TUI owns
+    /// the alternate screen and scrolls its transcript only with the mouse-wheel
+    /// events it captures. But Codex turns mouse capture OFF when the enclosing
+    /// tmux session reports `#{mouse}` off — which crow-tmux.conf does on
+    /// purpose — and falls back to DECSET 1007 alternate scroll, which tmux
+    /// drops. Measured on 0.160.1 under the bundled config: `alternate_on=1`,
+    /// `mouse_any_flag=0`. That is the one state the web client cannot scroll:
+    /// the alt-buffer latch caps xterm's scrollback to 0, and a surface that
+    /// isn't mouse-tracking never has its wheel forwarded (#850). The transcript
+    /// was unreachable, and a reload re-attached to the same dead state.
+    ///
+    /// Inline, Codex writes each finished history cell into the terminal's own
+    /// scrollback — one clean copy, re-flowed rather than stacked across
+    /// resizes — so it joins Cursor in the inline-agent class: unified 50k
+    /// history, CROW-606 replay on reload, local wheel scroll, native selection.
+    /// The flag predates Crow's Codex floor (present in 0.110), so it needs no
+    /// version gate, and it outranks a user's `tui.alternate_screen` setting.
+    public static let inlineRenderingFlag = "--no-alt-screen"
+
     private let launcher: CodexLauncher
 
     /// Last-resort search paths for the `codex` binary, used only when the
@@ -82,6 +104,11 @@ public struct OpenAICodexAgent: CodingAgent {
         telemetryPort: UInt16?
     ) -> String? {
         let codexPath = launchBinary() ?? "codex"
+        // CROW-1319: render inline on every path (see `inlineRenderingFlag`).
+        // A fresh launch takes the flag after the binary; a resume takes it
+        // after `resume --last`, whose arguments flatten Codex's TUI options.
+        let codex = "\(codexPath) \(Self.inlineRenderingFlag)"
+        let resumeLast = "\(codexPath) resume --last \(Self.inlineRenderingFlag)"
 
         switch session.kind {
         case .work:
@@ -101,7 +128,7 @@ public struct OpenAICodexAgent: CodingAgent {
             // the launch text even though `supportsRemoteControl` is `true`
             // (the badge tracks the `crow send` paste path, CROW-1001).
             // Mirrors Claude's `--continue`.
-            return "\(codexPath) resume --last\n"
+            return "\(resumeLast)\n"
         case .job:
             if !session.reviewPromptDispatched {
                 // First launch: feed `.crow-job-prompt.md` as the initial
@@ -130,13 +157,13 @@ public struct OpenAICodexAgent: CodingAgent {
                     // for externally-sandboxed runners). Options precede the
                     // positional prompt.
                     return ShellLaunchArgs.evalPromptLaunch(
-                        prefix: "\(codexPath) -a never -s workspace-write",
+                        prefix: "\(codex) -a never -s workspace-write",
                         promptPath: promptPath)
                 }
                 // Auto-permission off: interactive TUI with the initial prompt,
                 // default approval policy so the user approves each step.
                 return ShellLaunchArgs.evalPromptLaunch(
-                    prefix: codexPath,
+                    prefix: codex,
                     promptPath: promptPath)
             }
             // Subsequent restarts resume the prior thread — interactive, so
@@ -144,12 +171,12 @@ public struct OpenAICodexAgent: CodingAgent {
             // auto-permission flags when they're on, so an unattended job
             // resumed after a crowd/app restart doesn't stall at Codex's default
             // approval policy (#843 review round 4 — `codex resume` accepts
-            // `-a`/`-s`). `.work`/`.review` resume flagless (`.work` isn't
+            // `-a`/`-s`). `.work`/`.review` resume without them (`.work` isn't
             // auto-driven; `.review` is human-gated by design).
             if autoPermissionMode {
-                return "\(codexPath) resume --last -a never -s workspace-write\n"
+                return "\(resumeLast) -a never -s workspace-write\n"
             }
-            return "\(codexPath) resume --last\n"
+            return "\(resumeLast)\n"
         case .review:
             // Review sessions inline `.crow-review-prompt.md` (the expanded
             // `/crow-review-pr` skill), exactly like Cursor/OpenCode — the skill
@@ -172,10 +199,10 @@ public struct OpenAICodexAgent: CodingAgent {
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-review-prompt.md")
                 return ShellLaunchArgs.evalPromptLaunch(
-                    prefix: codexPath,
+                    prefix: codex,
                     promptPath: promptPath)
             }
-            return "\(codexPath) resume --last\n"
+            return "\(resumeLast)\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Matches `CursorAgent`'s `.manager` contract.
@@ -226,7 +253,8 @@ public struct OpenAICodexAgent: CodingAgent {
         // Resume-by-id when Crow has captured this Manager's thread
         // (CROW-1281). Never `resume --last`: that is cwd-scoped and extra
         // Managers sharing `{devRoot}` would shuffle. A missing id is a first
-        // launch — bare TUI.
+        // launch — a fresh TUI. Both render inline (CROW-1319), the same as a
+        // work session: the Manager is an agent surface on the same web client.
         //
         // Emitting no `--rc` also keeps the Manager off the RC badge: the
         // Manager's bookkeeping gates on `" --rc"` appearing in the built
@@ -236,9 +264,9 @@ public struct OpenAICodexAgent: CodingAgent {
         let codexPath = launchBinary() ?? "codex"
         if let id = HarnessConversationID.sanitize(conversationID) {
             let quoted = "'" + id.replacingOccurrences(of: "'", with: "'\\''") + "'"
-            return "\(codexPath) resume \(quoted)"
+            return "\(codexPath) resume \(quoted) \(Self.inlineRenderingFlag)"
         }
-        return codexPath
+        return "\(codexPath) \(Self.inlineRenderingFlag)"
     }
 
     /// Codex TUI exposes `/rename` for the current thread (CROW-629).

@@ -29,7 +29,7 @@ struct OpenAICodexAgentTests {
         // Work sessions resume the most recent recorded thread on an app
         // restart instead of reopening a blank TUI (#830) — prefer the absolute
         // binary path when `findBinary()` resolves, otherwise the bare token.
-        #expect(cmd?.hasSuffix("codex resume --last\n") == true)
+        #expect(cmd?.hasSuffix("codex resume --last --no-alt-screen\n") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
@@ -44,7 +44,7 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: 4318
         )
-        #expect(cmd?.hasSuffix("codex resume --last\n") == true)
+        #expect(cmd?.hasSuffix("codex resume --last --no-alt-screen\n") == true)
         // No OTEL env-var prefix and no review/job prompt file should be
         // referenced for a plain work session.
         #expect(cmd?.contains("OTEL_") == false)
@@ -89,15 +89,78 @@ struct OpenAICodexAgentTests {
         let fresh = agent.managerLaunchCommand(
             sessionName: "Manager", remoteControlEnabled: false,
             autoPermissionMode: false, telemetryPort: nil)
-        #expect(fresh == "codex" || fresh.hasSuffix("codex"))
+        #expect(fresh == "codex --no-alt-screen" || fresh.hasSuffix("codex --no-alt-screen"))
         #expect(!fresh.contains("resume"))
 
         let resumed = agent.managerLaunchCommand(
             sessionName: "Manager 2", remoteControlEnabled: false,
             autoPermissionMode: false, telemetryPort: nil,
             conversationID: "thread-abc")
-        #expect(resumed.contains("resume 'thread-abc'"))
+        #expect(resumed.hasSuffix("resume 'thread-abc' --no-alt-screen"))
         #expect(!resumed.contains("--last"))
+    }
+
+    /// CROW-1319: Codex 0.157+ defaults to a fullscreen alt-screen transcript
+    /// that it scrolls only with captured mouse events, and it declines to
+    /// capture under crow-tmux.conf's `mouse off` — so the web terminal had
+    /// nothing to scroll. Every launch Crow emits must keep Codex inline. A
+    /// new branch that forgets the flag regresses that session kind alone, so
+    /// walk every kind × prompt-dispatched × auto-permission combination, plus
+    /// both Manager forms.
+    @Test func everyLaunchRendersInline() {
+        let flag = OpenAICodexAgent.inlineRenderingFlag
+        #expect(flag == "--no-alt-screen")
+        for kind in SessionKind.allCases where kind != .manager {
+            for dispatched in [false, true] {
+                for autoPermission in [false, true] {
+                    var session = Session(name: "inline", kind: kind, agentKind: .codex)
+                    session.reviewPromptDispatched = dispatched
+                    let cmd = agent.autoLaunchCommand(
+                        session: session,
+                        worktreePath: "/tmp/wt",
+                        remoteControlEnabled: false,
+                        autoPermissionMode: autoPermission,
+                        telemetryPort: nil
+                    ) ?? ""
+                    let label = "\(kind) dispatched=\(dispatched) auto=\(autoPermission)"
+                    #expect(cmd.contains(" \(flag)"), "\(label) launch would take the alt screen")
+                    // A prompt launch must put the flag before the prompt
+                    // argv, or Codex reads it as part of the prompt.
+                    if let prompt = cmd.range(of: "$(printf") {
+                        let flagAt = cmd.range(of: flag)
+                        #expect(flagAt.map { $0.lowerBound < prompt.lowerBound } == true,
+                                "\(label) puts the flag after the prompt")
+                    }
+                }
+            }
+        }
+        let fresh = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil)
+        #expect(fresh.hasSuffix(" \(flag)"))
+        let resumed = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil, conversationID: "thread-abc")
+        #expect(resumed.hasSuffix(" \(flag)"))
+        // An explore / handoff seed appends the brief as argv after the base
+        // command (TodoRPC.seedLaunchCommand), so it lands after the flag.
+        let seeded = ShellLaunchArgs.evalPromptLaunch(prefix: fresh, promptPath: "/tmp/brief.md")
+        #expect(seeded.contains("\(flag) $(printf"))
+    }
+
+    /// CROW-1319: a handoff TO Codex launches through `launchCommand`
+    /// (`AgentHandoffController` → `CodexLauncher`), not `autoLaunchCommand`,
+    /// so it needs the inline flag too — ahead of the handed-off brief.
+    @Test func handoffLaunchCommandRendersInline() async throws {
+        let sessionID = UUID()
+        let cmd = try await agent.launchCommand(
+            sessionID: sessionID, worktreePath: "/tmp/wt", prompt: "brief")
+        defer {
+            try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory
+                .appendingPathComponent("crow-codex-\(sessionID.uuidString)-prompt.md"))
+        }
+        #expect(cmd.hasPrefix("cd '/tmp/wt' && "))
+        #expect(cmd.contains("codex \(OpenAICodexAgent.inlineRenderingFlag) $(printf"))
     }
 
     @Test func autoLaunchCommandReviewSessionFirstLaunchFeedsPrompt() {
@@ -132,7 +195,7 @@ struct OpenAICodexAgentTests {
             telemetryPort: nil
         )
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
-        #expect(cmd?.hasSuffix("resume --last\n") == true)
+        #expect(cmd?.hasSuffix("resume --last --no-alt-screen\n") == true)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {
@@ -206,7 +269,7 @@ struct OpenAICodexAgentTests {
         )
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
-        #expect(cmd?.hasSuffix("resume --last\n") == true)
+        #expect(cmd?.hasSuffix("resume --last --no-alt-screen\n") == true)
     }
 
     @Test func autoLaunchCommandJobSessionSubsequentLaunchKeepsAutoPermission() {
@@ -222,7 +285,7 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: true,
             telemetryPort: nil
         )
-        #expect(cmd?.hasSuffix("resume --last -a never -s workspace-write\n") == true)
+        #expect(cmd?.hasSuffix("resume --last --no-alt-screen -a never -s workspace-write\n") == true)
         #expect(cmd?.contains("danger-full-access") == false)
     }
 
@@ -281,7 +344,7 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        #expect(cmd == "/bin/sh resume --last\n")
+        #expect(cmd == "/bin/sh resume --last --no-alt-screen\n")
     }
 
     @Test func findBinaryIgnoresOverrideWhenPathMissing() {
