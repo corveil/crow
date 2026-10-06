@@ -78,7 +78,8 @@ public actor CodexLauncher {
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
         return "cd \(Self.shellEscape(worktreePath)) && "
             + ShellLaunchArgs.evalPromptLaunch(
-                prefix: "codex",
+                // Inline rendering, like every other Codex launch (CROW-1319).
+                prefix: "codex \(OpenAICodexAgent.inlineRenderingFlag)",
                 promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
     }
 

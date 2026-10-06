@@ -1458,7 +1458,14 @@ launch_codex() {
   # pre-fills the TUI composer — same mechanism Cursor's `agent` uses.
   # The prompt-argv form was deferred in MVP because older Codex CLIs
   # ignored extra argv; unblocked here (#492).
-  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin" "$prompt_path")"
+  #
+  # `--no-alt-screen` (CROW-1319): Codex 0.157+ defaults to a fullscreen
+  # alt-screen transcript that it scrolls only with captured mouse events,
+  # and it declines to capture the mouse under crow-tmux.conf's `mouse off`.
+  # That left the web terminal with nothing to scroll. Inline, Codex writes
+  # its transcript into the pane's scrollback like Cursor does. Keep this in
+  # step with OpenAICodexAgent.inlineRenderingFlag.
+  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin --no-alt-screen" "$prompt_path")"
   create_agent_terminal "OpenAI Codex" "$launch_cmd"
 }
 
