@@ -187,12 +187,42 @@ public enum ReviewVerdictPolicy {
     /// written, so it stays gradeable at Yellow/Red rather than being waved through
     /// as a future refactor. That is the grade-side counterpart to the Step 3
     /// "Architecture & Existing Patterns" study the skill body now requires.
+    ///
+    /// **The cross-tenant floor (CROW-1321) comes before all three caps.** In
+    /// corveil/corveil#620 a reviewer wrote "Org A's keyword/regex rules apply to
+    /// Org B's traffic", capped it at Green under the accepted-risk rule, and
+    /// approved; the bug later blocked every tenant's gateway traffic
+    /// (corveil/corveil#4191). The caps are right for a judgment call and wrong
+    /// for a tenant boundary, so a cross-tenant finding is Red, the caps say they
+    /// do not apply to it, and the only way it merges is the deferral bar — an open
+    /// issue, a `DEFERRED(#N)` marker, and an ADR exception row, each checked by
+    /// the reviewer. This is the generic form of corveil ADR 0093 invariant 10;
+    /// repo-specific tenancy rules arrive through each repo's own `CLAUDE.md`.
     public static let gradingGuidanceBlock = """
-    Grading discipline — the rules below bound the **severity you may assign** to a finding. They hold no matter which severities gate the verdict above, because they are about how to grade, not about what blocks:
+    Grading discipline — the rules below bound the **severity you may assign** to a finding. They hold no matter which severities gate the verdict above, because they are about how to grade, not about what blocks.
 
-    - **An accepted risk is not a blocker.** A hazard the PR explicitly documents and consciously accepts is at most **Green**. When the diff is correct and the only disagreement is whether to accept a risk the author has already called out, that acceptance is the author's decision to make — state your view in the body and let the verdict follow the grade, rather than blocking on it.
-    - **Do not re-block a declined finding.** A finding you raised in an earlier round that the author has answered with a rationale — rather than a code change — may be restated at most as **Green**. Re-raising the same point at a blocking severity round after round is not permitted; if you remain unconvinced, leave it Green and, if it is worth tracking, file a follow-up issue instead of holding up the PR.
-    - **Grade against the diff, not the roadmap.** Severity measures a defect in what is written. "The code is correct, but a hazard it identifies is left unenforced" is **Green** — not Yellow or Red. A future improvement you would like to see is not a defect in this change. But building the wrong *shape* is a defect in what is written: a change that reinvents a pathway the codebase already has, misreads the current control flow, or assumes a behavior the system already provides may be graded **Yellow** or **Red**, not waved through as a future refactor. Study the surrounding architecture before you decide which of the two this is.
+    The cross-tenant floor comes first. It sets a minimum grade, and none of the rules after it can lower it:
+
+    - **Cross-tenant effect or exposure is always Red.** A tenant is whatever the repo isolates customers by — an org, workspace, account or team. *Cross-tenant effect* means one tenant's config or data changes another tenant's requests, responses, records, limits, availability or costs. *Cross-tenant exposure* means one tenant can read another tenant's config or data, directly or through an error, a log line, a listing or a count. A finding of either is **Red** — never Yellow, never Green. The accepted-risk, declined-finding and grade-against-the-diff rules below **do not apply** to it: a PR that documents the hazard, calls it defense-in-depth or lower priority, or defers it in prose has not accepted the risk, and an author's reply declining the finding does not lower it. The only way such a finding merges is the deferral bar.
+    - **Deferral bar.** A cross-tenant finding may merge as deferred only when all of these exist, and you have checked each one yourself rather than taking the PR's word for it:
+      - an **open** tracking issue — check with `gh issue view <N> --json state`; an issue this PR closes does not count;
+      - a `// DEFERRED(#N):` marker at the site, naming that issue (in the file's own comment syntax);
+      - a row for the site in the exceptions table of the repo's tenant-isolation ADR, where the repo has one.
+
+      When every one holds, list the finding in the review body's Tenant effect section as **Deferred (#N)** with what you checked; it does not gate the verdict. When any one is missing, the finding stays **Red**.
+    - **Tenant effect checklist.** When the diff touches tenant-scoped code — rows keyed by a tenant id, process-wide state (caches, registries, package-level variables) built from such rows, a function that takes a tenant argument, or access scoping — the review body's `### Tenant effect` section answers these four questions, each with `file:line` or test evidence:
+      1. Which org's requests consult this state?
+      2. Can org A's row change org B's outcome?
+      3. Is any org argument dropped, Nil, or optional?
+      4. Does a test pin cross-org behavior?
+
+      A "yes" to question 2 is a cross-tenant finding. So is a "yes" to question 3, unless you cite the code that rejects the missing org or fails closed. In a repo with no tenancy, or a diff that touches no tenant-scoped code, the section reads `n/a — <why>`. A repo's own tenancy rules (its `CLAUDE.md`, a tenant-isolation ADR) apply on top of this floor: they can add to it, never lower it.
+
+    The three rules below cap a finding's severity. A cross-tenant finding is exempt from all three:
+
+    - **An accepted risk is not a blocker.** A hazard the PR explicitly documents and consciously accepts is at most **Green** — except a cross-tenant finding, which stays **Red** under the floor above. When the diff is correct and the only disagreement is whether to accept a risk the author has already called out, that acceptance is the author's decision to make — state your view in the body and let the verdict follow the grade, rather than blocking on it.
+    - **Do not re-block a declined finding.** A finding you raised in an earlier round that the author has answered with a rationale — rather than a code change — may be restated at most as **Green**, unless it is a cross-tenant finding, which stays **Red** until it is fixed or clears the deferral bar. Re-raising the same point at a blocking severity round after round is not permitted; if you remain unconvinced, leave it Green and, if it is worth tracking, file a follow-up issue instead of holding up the PR.
+    - **Grade against the diff, not the roadmap.** Severity measures a defect in what is written. "The code is correct, but a hazard it identifies is left unenforced" is **Green** — not Yellow or Red — unless the unenforced hazard is cross-tenant, which is **Red** under the floor above. A future improvement you would like to see is not a defect in this change. But building the wrong *shape* is a defect in what is written: a change that reinvents a pathway the codebase already has, misreads the current control flow, or assumes a behavior the system already provides may be graded **Yellow** or **Red**, not waved through as a future refactor. Study the surrounding architecture before you decide which of the two this is.
     """
 
     // MARK: - Helpers

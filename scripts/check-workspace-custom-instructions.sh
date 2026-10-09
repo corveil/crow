@@ -133,6 +133,17 @@ for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.templa
         "do not post"
 done
 
+# CROW-1321: the cross-tenant Red floor lives in `ReviewVerdictPolicy`, but the
+# review body must carry a `### Tenant effect` section and Step 5a must refuse a
+# draft without one — that half is static prose, so pin it in both halves.
+for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.template; do
+    require "$f" \
+        "### Tenant effect" \
+        "#### Tenant effect check" \
+        "Only after **all three** checks pass" \
+        "its absence is the verification"
+done
+
 # CROW-1306: `ci:full` is the approver's action, applied only after
 # `gh pr review --approve` on a PR that already has a `CI Gate` check.
 # `--request-changes` and `--no-post` must not add it, and a repo with no

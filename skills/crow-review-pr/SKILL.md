@@ -132,6 +132,8 @@ A Red finding is merge-blocking, so it must be *established*, not asserted — a
 
 State in the finding which you did ("reproduced with a temporary test that triggered the double write", "confirmed against `mount.go:42` — no filter is applied"). A Red you could not verify is downgraded to **Yellow** or dropped; it must earn its blocking verdict. This composes with the workspace's `--review-blocking-severity` gate — a finding that forces `--request-changes` should have been checked, not guessed.
 
+A cross-tenant finding (see the floor under Grading discipline) is refute-checked against the code that would confine it to its own tenant: the tenant predicate on the query, the tenant key on the cache, the tenant argument the caller passes. If you cannot find that code, its absence is the verification — the finding stays **Red** and is not downgraded for being hard to reproduce.
+
 ### Step 5: Post Review
 
 > **Dry run (`--no-post` / `--dry-run`):** if `POST=false`, render the full review body below to **stdout** and **stop** — do not run `gh pr review`, and do not add `ci:full`. The Step 5a guardrails still apply to the drafted body. Everything past this note assumes `POST=true`.
@@ -153,6 +155,9 @@ Draft the review using this format:
 ### Architecture / Existing Patterns
 - **Existing pathway:** [name the current path the change should have used, or "none — this is a genuinely new capability"]
 - [Architecture findings, if any — with file references and severity. State when the PR reinvents an existing path, over-engineers, assumes a behavior the codebase already has, or misreads the current control flow.]
+
+### Tenant effect
+- [Required in every review. Answer the four tenant-effect checklist questions from Grading discipline, one line each with `file:line` or test evidence, then list each cross-tenant finding as **Red** or as **Deferred (#N)** with the deferral-bar items you checked. Write `n/a — <why>` only when the repo has no tenancy or the diff touches no tenant-scoped code.]
 
 ### Security Review
 **Strengths:**
@@ -178,7 +183,7 @@ Draft the review using this format:
 
 ### Step 5a: Pre-submit Guardrails (REQUIRED)
 
-Before running `gh pr review`, you **must** pass both checks below on your draft body. If either fails, **do not post** — stop and report what failed (which paths or verdict mismatched) so a human can intervene.
+Before running `gh pr review`, you **must** pass all three checks below on your draft body. If the target check or the verdict consistency check fails, **do not post** — stop and report what failed (which paths or verdict mismatched) so a human can intervene. A failed tenant effect check is a drafting error: fix the draft, then run all three checks again.
 
 #### Target check
 
@@ -206,7 +211,16 @@ The `**Recommendation:**` line in your draft body must agree with the `gh pr rev
 
 A body that says **Approve** with `--request-changes` (or the reverse) ⇒ **do not post**. Report the mismatch.
 
-Only after **both** checks pass, post the review using exactly one of these two flags:
+#### Tenant effect check
+
+The draft body must carry a `### Tenant effect` section that agrees with the verdict:
+
+- **No section** ⇒ do not post. Add it.
+- **`n/a`** passes only with a reason, and only when the repo has no tenancy or the diff touches no tenant-scoped code. If the body cites tenant-scoped code anywhere else, `n/a` fails.
+- **"Yes" to "Can org A's row change org B's outcome?"** — or a cross-tenant finding anywhere in the body — needs a matching **Red** finding or a **Deferred (#N)** entry that names every deferral-bar item you checked. Otherwise ⇒ do not post. Grade it Red.
+- **A cross-tenant Red** follows the verdict rule like any Red: under a policy where Red blocks, the recommendation must be `Request Changes`.
+
+Only after **all three** checks pass, post the review using exactly one of these two flags:
 
 ```bash
 # If approving:

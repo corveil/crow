@@ -356,6 +356,46 @@ struct SessionServiceReviewPromptTests {
         }
     }
 
+    /// CROW-1321: the cross-tenant Red floor rides the grading-guidance block, so
+    /// every inline harness must receive it — present, ahead of the accepted-risk
+    /// rule that graded corveil/corveil#620's cross-tenant bug Green, and carved
+    /// out of that rule on the rule's own line. Asserted under the default and a
+    /// relaxed workspace, because the floor bounds the grade, not the gate.
+    @Test func buildReviewPromptPutsTheCrossTenantFloorBeforeTheAcceptedRiskRule() throws {
+        let floor = "**Cross-tenant effect or exposure is always Red.**"
+        let acceptedRisk = "- **An accepted risk is not a blocker.**"
+
+        for blocking in [ReviewSeverity.defaultBlocking, [.red]] {
+            let body = ReviewVerdictPolicy.expand(Self.policyFixtureSkillBody, blocking: blocking)
+
+            for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity, .muse] {
+                let prompt = SessionService.buildReviewPrompt(
+                    prURL: Self.prURL,
+                    prTitle: Self.prTitle,
+                    repoSlug: Self.repoSlug,
+                    prNumber: Self.prNumber,
+                    agentKind: agentKind,
+                    skillBody: body
+                )
+                let label = "\(agentKind.rawValue)/\(blocking)"
+
+                let floorRange = try #require(prompt.range(of: floor), "\(label) lost the cross-tenant floor")
+                let acceptedRange = try #require(prompt.range(of: acceptedRisk), "\(label) lost the accepted-risk rule")
+                #expect(floorRange.lowerBound < acceptedRange.lowerBound,
+                        "\(label) put the accepted-risk rule before the cross-tenant floor")
+                #expect(prompt.contains("rules below **do not apply** to it"),
+                        "\(label) lost the floor's exemption from the caps")
+
+                let acceptedLine = prompt[acceptedRange.lowerBound...].prefix { $0 != "\n" }
+                #expect(acceptedLine.contains("except a cross-tenant finding, which stays **Red**"),
+                        "\(label) accepted-risk rule no longer exempts cross-tenant findings")
+
+                #expect(prompt.contains("a `// DEFERRED(#N):` marker at the site"), "\(label) lost the deferral bar")
+                #expect(prompt.contains("2. Can org A's row change org B's outcome?"), "\(label) lost the checklist")
+            }
+        }
+    }
+
     /// CROW-1062: the Step 3 architecture-study prose is static (not a
     /// placeholder), so the inline pipeline — frontmatter strip, `$ARGUMENTS`
     /// substitution, attribution expansion — must carry it to every non-Claude
