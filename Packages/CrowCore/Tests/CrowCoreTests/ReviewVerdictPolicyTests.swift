@@ -365,6 +365,27 @@ struct ReviewVerdictPolicyTests {
         #expect(gradeAgainstDiff.contains("unless the unenforced hazard is cross-tenant, which is **Red**"))
     }
 
+    /// A carve-out in a cap's first sentence does not qualify the sentences after
+    /// it. A reviewer reads "if you remain unconvinced, leave it Green" on its own
+    /// terms — the #620 failure mode — so every sentence or clause in a cap that
+    /// tells the reviewer to grade Green or stand down must itself carve out a
+    /// cross-tenant finding.
+    @Test func everyStandDownClauseInACapCarvesOutCrossTenantFindings() throws {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        let standDownMarkers = ["Green", "rather than blocking", "instead of holding up", "not permitted"]
+
+        for cap in [Self.acceptedRiskRule, Self.declinedRule, Self.gradeAgainstDiffRule] {
+            let line = try #require(Self.ruleLine(cap, in: guidance))
+            let clauses = line
+                .replacingOccurrences(of: "; ", with: ". ")
+                .components(separatedBy: ". ")
+            for clause in clauses where standDownMarkers.contains(where: clause.contains) {
+                #expect(clause.contains("cross-tenant"),
+                        "\(cap) stands down without a cross-tenant carve-out: \(clause)")
+            }
+        }
+    }
+
     /// #620 deferred the hazard to an issue the same PR closed. All three bar
     /// items must be present, each checked by the reviewer, and a closed — or
     /// about-to-be-closed — issue must not satisfy the first.
