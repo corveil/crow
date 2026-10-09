@@ -307,4 +307,143 @@ struct ReviewVerdictPolicyTests {
         #expect(guidance.contains("Do not re-block a declined finding."))
         #expect(guidance.contains("Grade against the diff, not the roadmap."))
     }
+
+    // MARK: - Cross-tenant Red floor (CROW-1321)
+
+    private static let floorRule = "**Cross-tenant effect or exposure is always Red.**"
+    private static let acceptedRiskRule = "**An accepted risk is not a blocker.**"
+    private static let declinedRule = "**Do not re-block a declined finding.**"
+    private static let gradeAgainstDiffRule = "**Grade against the diff, not the roadmap.**"
+
+    /// The bullet that opens with `header`, up to the end of its line. Each
+    /// grading rule is one line, so a carve-out asserted here sits in the rule
+    /// the agent is applying — not somewhere else in the block.
+    private static func ruleLine(_ header: String, in text: String) -> Substring? {
+        text.split(separator: "\n").first { $0.hasPrefix("- \(header)") }
+    }
+
+    /// corveil/corveil#620 graded "Org A's keyword/regex rules apply to Org B's
+    /// traffic" Green under the accepted-risk rule. The floor must name both
+    /// halves of the class — effect and exposure — and define effect in the
+    /// ticket's terms, so a reviewer can't argue a finding out of it.
+    @Test func gradingGuidanceCarriesTheCrossTenantRedFloor() {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        #expect(guidance.contains(Self.floorRule))
+        #expect(guidance.contains(
+            "*Cross-tenant effect* means one tenant's config or data changes another tenant's requests, responses, records, limits, availability or costs."))
+        #expect(guidance.contains("*Cross-tenant exposure* means one tenant can read another tenant's config or data"))
+        #expect(guidance.contains("A finding of either is **Red** — never Yellow, never Green."))
+        #expect(guidance.contains(
+            "The accepted-risk, declined-finding and grade-against-the-diff rules below **do not apply** to it"))
+    }
+
+    /// The floor has to be read before the caps, or an agent applying the
+    /// accepted-risk rule top-down never reaches it. Order is asserted on all three.
+    @Test func crossTenantFloorPrecedesEveryCap() throws {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        let floor = try #require(guidance.range(of: Self.floorRule))
+        for cap in [Self.acceptedRiskRule, Self.declinedRule, Self.gradeAgainstDiffRule] {
+            let capRange = try #require(guidance.range(of: cap), "lost \(cap)")
+            #expect(floor.lowerBound < capRange.lowerBound, "\(cap) precedes the cross-tenant floor")
+        }
+    }
+
+    /// Stating the floor once is not enough: the #620 reviewer applied the
+    /// accepted-risk rule on its own terms. Each cap carries its own carve-out,
+    /// on the same line as the cap.
+    @Test func everyCapExemptsCrossTenantFindings() throws {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        #expect(guidance.contains("A cross-tenant finding is exempt from all three:"))
+
+        let acceptedRisk = try #require(Self.ruleLine(Self.acceptedRiskRule, in: guidance))
+        #expect(acceptedRisk.contains("except a cross-tenant finding, which stays **Red**"))
+
+        let declined = try #require(Self.ruleLine(Self.declinedRule, in: guidance))
+        #expect(declined.contains("unless it is a cross-tenant finding, which stays **Red**"))
+
+        let gradeAgainstDiff = try #require(Self.ruleLine(Self.gradeAgainstDiffRule, in: guidance))
+        #expect(gradeAgainstDiff.contains("unless the unenforced hazard is cross-tenant, which is **Red**"))
+    }
+
+    /// A carve-out in a cap's first sentence does not qualify the sentences after
+    /// it. A reviewer reads "if you remain unconvinced, leave it Green" on its own
+    /// terms — the #620 failure mode — so every sentence or clause in a cap that
+    /// tells the reviewer to grade Green or stand down must itself carve out a
+    /// cross-tenant finding.
+    @Test func everyStandDownClauseInACapCarvesOutCrossTenantFindings() throws {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        let standDownMarkers = ["Green", "rather than blocking", "instead of holding up", "not permitted"]
+
+        for cap in [Self.acceptedRiskRule, Self.declinedRule, Self.gradeAgainstDiffRule] {
+            let line = try #require(Self.ruleLine(cap, in: guidance))
+            let clauses = line
+                .replacingOccurrences(of: "; ", with: ". ")
+                .components(separatedBy: ". ")
+            for clause in clauses where standDownMarkers.contains(where: clause.contains) {
+                #expect(clause.contains("cross-tenant"),
+                        "\(cap) stands down without a cross-tenant carve-out: \(clause)")
+            }
+        }
+    }
+
+    /// #620 deferred the hazard to an issue the same PR closed. All three bar
+    /// items must be present, each checked by the reviewer, and a closed — or
+    /// about-to-be-closed — issue must not satisfy the first.
+    @Test func gradingGuidanceCarriesTheDeferralBar() {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        #expect(guidance.contains("**Deferral bar.**"))
+        #expect(guidance.contains("you have checked each one yourself rather than taking the PR's word for it"))
+        #expect(guidance.contains("an **open** tracking issue"))
+        #expect(guidance.contains("an issue this PR closes does not count"))
+        #expect(guidance.contains("a `// DEFERRED(#N):` marker at the site"))
+        #expect(guidance.contains("the exceptions table of the repo's tenant-isolation ADR, where the repo has one"))
+        #expect(guidance.contains("When any one is missing, the finding stays **Red**."))
+    }
+
+    @Test func gradingGuidanceCarriesTheTenantEffectChecklist() {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        #expect(guidance.contains("`### Tenant effect`"))
+        for question in [
+            "1. Which org's requests consult this state?",
+            "2. Can org A's row change org B's outcome?",
+            "3. Is any org argument dropped, Nil, or optional?",
+            "4. Does a test pin cross-org behavior?",
+        ] {
+            #expect(guidance.contains(question), "lost checklist question \(question)")
+        }
+        #expect(guidance.contains("`n/a — <why>`"))
+        // Generic: repo rules stack on the floor, never under it.
+        #expect(guidance.contains("they can add to it, never lower it"))
+    }
+
+    /// End-to-end on the real skill: under every policy the floor reaches the
+    /// agent ahead of the accepted-risk rule, the review body asks for the
+    /// Tenant effect section, and Step 5a refuses a draft without it.
+    @Test func expandedSkillCarriesTheTenantEffectGateForEveryPolicy() throws {
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var found: URL?
+        for _ in 0..<10 {
+            let candidate = dir.appendingPathComponent("skills/crow-review-pr/SKILL.md")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                found = candidate
+                break
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        let skill = try String(contentsOf: try #require(found), encoding: .utf8)
+
+        for blocking in [ReviewSeverity.defaultBlocking, [.red], ReviewSeverity.allCases] {
+            let expanded = ReviewVerdictPolicy.expand(skill, blocking: blocking)
+            let floor = try #require(expanded.range(of: Self.floorRule), "\(blocking) lost the floor")
+            let acceptedRisk = try #require(expanded.range(of: Self.acceptedRiskRule))
+            #expect(floor.lowerBound < acceptedRisk.lowerBound, "\(blocking) put the floor after the accepted-risk rule")
+
+            #expect(expanded.contains("### Tenant effect\n"), "\(blocking) lost the review-body section")
+            #expect(expanded.contains("#### Tenant effect check"), "\(blocking) lost the Step 5a check")
+            #expect(expanded.contains("**No section** ⇒ do not post."))
+            #expect(expanded.contains("Only after **all three** checks pass"))
+            // Step 4b's unverified-Red downgrade must not become a back door.
+            #expect(expanded.contains("its absence is the verification — the finding stays **Red**"))
+        }
+    }
 }
