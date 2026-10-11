@@ -111,17 +111,21 @@ abstract a Claude-specific concept:
    checks, and the reason this switch (not just the prep branch) is a candidate
    for a capability member.
 2. **Claude-only prep**, gated by `if …kind == .claudeCode`, for capabilities no
-   other harness has: **trust seeding** (`ClaudeTrustSeeder.seedTrust`, reached
-   on every launch path through the shared `prepareWorktreeForAgentLaunch` gate;
-   `rg prepareWorktreeForAgentLaunch` for the current call sites, because a
+   other harness has: **trust seeding** (`ClaudeTrustSeeder.seedTrust`, run on
+   every launch path through the shared `prepareWorktreeForAgentLaunch` gate,
+   plus a direct Claude-Manager seed in the hydrate path,
+   `SessionSurfaceController.hydrateState`; `rg prepareWorktreeForAgentLaunch`
+   and `rg 'TrustSeeder.seedTrust\('` for the current call sites, because a
    count kept here went stale, CROW-959), **AI-gateway env**
    (`ClaudeHookConfigWriter.writeGatewayEnv` gated at
    `launchAgent` / `handoffAgent`, plus the launch-line `gatewayEnvPrefix` at
    `launchAgent` (and `managerCommand`'s no-registered-agent fallback); the
    **two** Manager gateway writes —
    `createManagerTerminal` and the hydrate path's `writeManagerGatewayEnv` — are
-   unconditional, harmless since a non-Claude agent ignores
-   `settings.local.json`), and **OTEL telemetry env**
+   Claude-gated too: a Claude Manager gets the resolved env, a Grok/Codex
+   Manager gets an active clear because it compat-loads `settings.local.json`
+   (`readsClaudeCompatSettings`, #861 r18), and any other Manager is left
+   untouched), and **OTEL telemetry env**
    (`AgentLaunch.prepareAgentLaunchText`, gated).
 
 These are the accepted exceptions — the candidates for a future
