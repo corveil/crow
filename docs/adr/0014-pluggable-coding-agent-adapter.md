@@ -111,9 +111,11 @@ abstract a Claude-specific concept:
    checks, and the reason this switch (not just the prep branch) is a candidate
    for a capability member.
 2. **Claude-only prep**, gated by `if …kind == .claudeCode`, for capabilities no
-   other harness has: **trust seeding** (`ClaudeTrustSeeder.seedTrust`, gated at
-   all four call sites — `launchAgent`, `handoffAgent`, and the two Manager
-   paths), **AI-gateway env** (`ClaudeHookConfigWriter.writeGatewayEnv` gated at
+   other harness has: **trust seeding** (`ClaudeTrustSeeder.seedTrust`, reached
+   on every launch path through the shared `prepareWorktreeForAgentLaunch` gate;
+   `rg prepareWorktreeForAgentLaunch` for the current call sites, because a
+   count kept here went stale, CROW-959), **AI-gateway env**
+   (`ClaudeHookConfigWriter.writeGatewayEnv` gated at
    `launchAgent` / `handoffAgent`, plus the launch-line `gatewayEnvPrefix` at
    `launchAgent` (and `managerCommand`'s no-registered-agent fallback); the
    **two** Manager gateway writes —
