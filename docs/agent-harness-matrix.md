@@ -916,13 +916,21 @@ else.
 Three capabilities the protocol doesn't abstract — historically Claude-specific
 and gated on Claude identity (`if …kind == .claudeCode`). Trust seeding now has
 bounded per-harness analogues (Cursor's `--trust`, Codex's `config.toml`); the
-AI-gateway env and telemetry legs remain Claude-only (gating is exhaustive except
-the two Manager gateway writes noted below):
+AI-gateway env and telemetry legs remain Claude-only (gating is exhaustive,
+including the two Manager gateway writes noted below):
 
 - **Trust seeding** — `ClaudeTrustSeeder.seedTrust` pre-trusts the worktree in
   `~/.claude.json` so the "Do you trust the files in this folder?" dialog never
-  blocks an auto-launched session (CROW-600). Runs at **four** call sites:
-  `SessionService.launchAgent`, `handoffAgent`, and the two Manager paths.
+  blocks an auto-launched session (CROW-600). Every launch path seeds through
+  `seedTrustIfNeeded` inside the shared `prepareWorktreeForAgentLaunch` gate.
+  `rg prepareWorktreeForAgentLaunch` for the current set; don't restate a count
+  here. This bullet's old "four call sites" missed `pasteDeferredLaunch` and the
+  `send` RPC (CROW-959). One seed sits **outside** the gate:
+  `SessionSurfaceController.hydrateState` re-adopts a Claude Manager's existing
+  terminal (so `createManagerTerminal` never runs) and calls
+  `ClaudeTrustSeeder.seedTrust` directly on the Manager's cwd and, for an extra
+  Manager, its `--add-dir` devRoot (`ManagerIdentity.additionalDirectory`).
+  `rg 'TrustSeeder.seedTrust\('` lists every direct seed.
 - **Trust seeding (Cursor)** — the per-launch analogue of the Claude seed:
   `CursorLaunchArgs.trustSuffix` appends `--trust` to **every** Crow-driven launch
   (auto-launch, Manager, and the handoff one-shot), so no worktree blocks on

@@ -52,8 +52,10 @@ public enum CursorLaunchArgs {
     /// **strip-not-trust** posture Grok and Antigravity reviews already rely on
     /// (`shouldStripGrokReviewClone`, `shouldStripAntigravityReviewClone`), and it
     /// matches Claude, whose `shouldSeedFolderTrust` has always returned `true` for
-    /// `.review`. Codex/Grok keep their `!= .review` trust guards — their trust
-    /// stores are global TOML, a different blast radius from a per-workspace marker.
+    /// `.review`. Codex/Grok keep their `!= .review` trust guards. That is not a
+    /// blast-radius difference (all three persist trust past the session). Their
+    /// project hooks load only in a trusted folder, and nothing has shown that
+    /// Cursor's two failures above apply to them. See ADR 0015 (CROW-959).
     ///
     /// **Interactive as of Cursor CLI 2026.07.20**
     /// ([changelog](https://cursor.com/docs/cli/changelog): "`--trust` works in

@@ -85,11 +85,31 @@ deliberate, documented gaps (full grid in the
 > rely on, and it re-converges Cursor with `ClaudeTrustSeeder`, which has always
 > trusted `.review` (`shouldSeedFolderTrust` returns `true` for Claude on every
 > kind) — so the #890 "divergence from Claude, follow the Codex precedent" framing
-> is retired for Cursor. **Codex and Grok keep their `!= .review` guards**: they
-> write durable global trust records (`~/.codex/config.toml`,
-> `~/.grok/trusted_folders.toml`) that outlive the session, a materially larger
-> blast radius than Cursor's per-workspace marker under `~/.cursor/projects/`, and
+> is retired for Cursor. **Codex and Grok keep their `!= .review` guards**, and
 > nothing about this change argues for touching them.
+>
+> *Rationale restated (CROW-959):* the reason is **not** blast radius. All three
+> harnesses persist trust for the clone path beyond the session: Codex and Grok
+> as an entry in a shared TOML (`~/.codex/config.toml`,
+> `~/.grok/trusted_folders.toml`), Cursor as a per-workspace
+> `.workspace-trusted` marker under `~/.cursor/projects/`. That is a difference
+> in granularity, not scope, and it can't carry the decision. Two things do:
+>
+> 1. **For Codex and Grok, withheld trust still gates something.** Both load
+>    project hooks only in a trusted folder (Grok on a release build), so an
+>    untrusted review clone keeps a committed `.codex/` / `.grok/` hook inert
+>    even if the strip misses it. That is defense-in-depth *under* the strip, not
+>    a replacement for it. For Grok it is partial: trust cascades from a trusted
+>    parent, so a Grok Manager's devRoot seed already covers
+>    `{devRoot}/crow-reviews/`, and the strip stays the durable guard.
+> 2. **The CROW-954 reversal rested on observed, Cursor-specific evidence.**
+>    Cursor's dialog gated nothing, because `--force --approve-mcps` already
+>    applied. It also stranded unattended review, because `--force` did not
+>    suppress it. Nobody has shown either for Codex or Grok.
+>
+> Dropping either guard needs that harness's own version of the CROW-954
+> evidence, observed on a real launch. A comparison of how much the trust record
+> covers is not enough.
 >
 > Verified interactively (not just from `--help`) on `agent 2026.08.04`: running
 > `agent --trust` under a pty in a fresh repo, with no `--print`, writes
