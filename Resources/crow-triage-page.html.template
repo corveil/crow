@@ -1,0 +1,613 @@
+<title>__TRIAGE_TITLE__</title>
+<!--
+  /crow-triage page template (CROW-1325). `triage.sh build` fills the title
+  and the #triage-data block from items.json. Never edit a built page by hand:
+  change items.json and build again. Decisions are not in this file; they live
+  in the artifact's `decisions` db collection, one doc per item id.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one working column (max 1120px). Answer cards first, then the items as a grid per group that stacks into cards on phones. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #f9fafc;
+  --ink: #0f141c;
+  --ink-2: #464f60;
+  --muted: #737c8d;
+  --rule: #dde2ea;
+  --rule-strong: #c4cbd6;
+  --accent: #2a5bd7;
+  --accent-wash: #e8eefc;
+  --good: #0f7a0f;
+  --good-wash: #e5f4e5;
+  --ok: #2a6fb0;
+  --ok-wash: #e4effa;
+  --warn: #9a6400;
+  --warn-wash: #fbf1dc;
+  --crit: #b8302f;
+  --crit-wash: #fbe7e6;
+  --none: #5d6575;
+  --none-wash: #eceff3;
+  --code-bg: #eef1f6;
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --surface: #161a21; --surface-2: #1a1f27; --ink: #eef1f6; --ink-2: #b8c0cd; --muted: #8b94a4;
+    --rule: #262c36; --rule-strong: #343c48; --accent: #7aa2ff; --accent-wash: #1a2440;
+    --good: #4cc14c; --good-wash: #142a16; --ok: #6fb0ee; --ok-wash: #162638; --warn: #e2a634; --warn-wash: #2b2312;
+    --crit: #ef6b69; --crit-wash: #331718; --none: #a3abb9; --none-wash: #232831; --code-bg: #1d222b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1116; --surface: #161a21; --surface-2: #1a1f27; --ink: #eef1f6; --ink-2: #b8c0cd; --muted: #8b94a4;
+  --rule: #262c36; --rule-strong: #343c48; --accent: #7aa2ff; --accent-wash: #1a2440;
+  --good: #4cc14c; --good-wash: #142a16; --ok: #6fb0ee; --ok-wash: #162638; --warn: #e2a634; --warn-wash: #2b2312;
+  --crit: #ef6b69; --crit-wash: #331718; --none: #a3abb9; --none-wash: #232831; --code-bg: #1d222b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 16px; line-height: 1.6; margin: 0; padding-inline: 16px; padding-block: 0 64px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code { font-family: var(--f-mono); font-size: .86em; background: var(--code-bg); padding: .08em .35em; border-radius: 4px; overflow-wrap: anywhere; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; letter-spacing: -.01em; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); line-height: 1.05; font-weight: 800; font-variation-settings: "wdth" 84; }
+h2 { font-size: 1.7rem; line-height: 1.15; font-weight: 750; font-variation-settings: "wdth" 88; }
+h3 { font-size: 1.12rem; line-height: 1.3; font-weight: 700; }
+p { margin: 0; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 40px; }
+.eyebrow { font-family: var(--f-mono); font-size: .76rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.muted { color: var(--muted); }
+.small { font-size: .875rem; }
+.col { max-width: 70ch; }
+.stack { display: grid; gap: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+header.mast { padding-top: 40px; display: grid; gap: 12px; }
+.lede { font-size: 1.1rem; color: var(--ink-2); max-width: 70ch; }
+.summary { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; padding: 14px 16px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; }
+.summary .grp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.summary .k { font-family: var(--f-mono); font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; font-weight: 600; line-height: 1; padding: 5px 9px; border-radius: 999px; white-space: nowrap; }
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.v-strong { color: var(--good); background: var(--good-wash); }
+.v-worth { color: var(--ok); background: var(--ok-wash); }
+.v-marginal { color: var(--warn); background: var(--warn-wash); }
+.v-none { color: var(--none); background: var(--none-wash); }
+.v-counter { color: var(--crit); background: var(--crit-wash); }
+.v-bug { color: var(--crit); background: var(--crit-wash); }
+.v-pending { color: var(--muted); background: var(--none-wash); }
+
+/* Answer cards */
+.answers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; align-items: start; }
+.answer { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.answer .q { font-family: var(--f-display); font-weight: 700; font-size: 1.15rem; line-height: 1.3; }
+.answer .short { font-weight: 600; }
+.answer ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; }
+.tbl-wrap { overflow-x: auto; }
+.atable { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.atable th, .atable td { text-align: left; vertical-align: top; padding: 8px 10px 8px 0; border-top: 1px solid var(--rule); }
+.atable th { font-weight: 600; }
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.fig { background: var(--surface-2); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
+.fig b { font-family: var(--f-display); font-size: 1.35rem; font-variation-settings: "wdth" 90; font-variant-numeric: tabular-nums; }
+.fig span { font-size: .8rem; color: var(--ink-2); line-height: 1.35; }
+
+/* Item list */
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--rule-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { font: inherit; font-size: .85rem; padding: 6px 11px; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; border-right: 1px solid var(--rule); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.status-line { font-size: .85rem; color: var(--muted); }
+
+.group { display: grid; gap: 10px; }
+.group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding-top: 6px; }
+.list { display: grid; border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.thead, .row-main { display: grid; grid-template-columns: 56px minmax(0, 2.4fr) 132px minmax(0, 1.1fr) minmax(0, 1.6fr) 176px; gap: 14px; align-items: start; padding: 12px 16px; }
+.thead { background: var(--surface-2); border-bottom: 1px solid var(--rule); font-family: var(--f-mono); font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.row { border-bottom: 1px solid var(--rule); }
+.row:last-child { border-bottom: 0; }
+.row[data-decision="go"] { box-shadow: inset 3px 0 0 var(--good); }
+.row[data-decision="later"] { box-shadow: inset 3px 0 0 var(--warn); }
+.row[data-decision="drop"] { box-shadow: inset 3px 0 0 var(--none); }
+.row[data-decision="drop"] .t-title { color: var(--muted); }
+.id { font-family: var(--f-mono); font-weight: 500; font-size: .9rem; color: var(--ink-2); padding-top: 2px; overflow-wrap: anywhere; }
+.t-body { min-width: 0; }
+.t-title { font-weight: 600; line-height: 1.4; }
+.t-where { font-size: .8rem; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+.t-one { font-size: .9rem; color: var(--ink-2); margin-top: 6px; }
+.impact, .rec { font-size: .88rem; min-width: 0; }
+.impact b { font-variant-numeric: tabular-nums; }
+.rec-k { display: block; }
+.lbl { display: none; font-family: var(--f-mono); font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.decide { display: grid; gap: 6px; justify-items: start; }
+.decide .seg button { padding: 6px 9px; font-size: .8rem; }
+.decide .seg button[data-v="go"][aria-pressed="true"] { background: var(--good); color: var(--surface); }
+.decide .seg button[data-v="later"][aria-pressed="true"] { background: var(--warn); color: var(--surface); }
+.decide .seg button[data-v="drop"][aria-pressed="true"] { background: var(--none); color: var(--surface); }
+.decide .seg button:disabled { cursor: default; opacity: .6; }
+.who { font-size: .75rem; color: var(--muted); min-height: 1em; }
+.ticket-link { font-size: .85rem; font-weight: 600; }
+.more { font: inherit; font-size: .82rem; color: var(--accent); background: none; border: 0; padding: 0; margin-top: 6px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.detail { padding: 4px 16px 14px 86px; display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+.detail section { display: grid; gap: 4px; min-width: 0; align-content: start; }
+.detail h4, .row-note label { margin: 0; font-family: var(--f-mono); font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+.detail p, .detail li { font-size: .9rem; color: var(--ink-2); }
+.detail ul { margin: 0; padding-left: 1.1em; display: grid; gap: 4px; }
+.row-note { padding: 0 16px 14px 86px; display: grid; gap: 4px; }
+.row-note textarea { width: 100%; min-height: 40px; font: inherit; font-size: .9rem; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--surface-2); color: var(--ink); resize: vertical; }
+.row-note textarea[readonly] { border-style: dashed; }
+.row-note:has(textarea[readonly]:placeholder-shown) { display: none; }
+.empty { padding: 24px 16px; }
+
+.notes { display: grid; gap: 8px; }
+.notes ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; color: var(--ink-2); font-size: .92rem; }
+
+@media (max-width: 900px) {
+  .thead { display: none; }
+  .row-main { grid-template-columns: 48px minmax(0, 1fr); gap: 10px 12px; }
+  .row-main > :nth-child(n+3) { grid-column: 2; }
+  .lbl { display: block; }
+  .detail, .row-note { padding-left: 76px; }
+}
+@media (max-width: 480px) {
+  .detail, .row-note { padding-left: 14px; padding-right: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap" id="app">
+  <header class="mast">
+    <div class="eyebrow" id="context"></div>
+    <h1 id="title">Triage</h1>
+    <p class="lede" id="lede" hidden></p>
+    <div class="summary" aria-live="polite">
+      <div class="grp"><span class="k">Verdicts</span><span id="sum-verdicts"></span></div>
+      <div class="grp"><span class="k">Decisions</span><span id="sum-decisions" class="small muted">Loading saved decisions…</span></div>
+    </div>
+    <p class="col small" id="suggested" hidden></p>
+  </header>
+
+  <section class="stack" id="answers" aria-labelledby="answers-h" hidden>
+    <div class="stack">
+      <span class="eyebrow">Your questions</span>
+      <h2 id="answers-h">Answers</h2>
+    </div>
+    <div class="answers" id="answer-cards"></div>
+  </section>
+
+  <section class="stack" id="items" aria-labelledby="items-h">
+    <div class="stack">
+      <span class="eyebrow">Proposed work</span>
+      <h2 id="items-h">Pick what to kick off</h2>
+      <p class="col muted small" id="items-note">Mark each item <b>Kick off</b>, <b>Later</b> or <b>Drop</b>, and add a note for anything the ticket should say. Choices and notes are saved for everyone who can open this page, and Claude reads them back to file the tickets.</p>
+    </div>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Show items" id="filter">
+        <button type="button" data-f="all" aria-pressed="true">All</button>
+        <button type="button" data-f="undecided" aria-pressed="false">Undecided</button>
+        <button type="button" data-f="go" aria-pressed="false">Kick off</button>
+        <button type="button" data-f="later" aria-pressed="false">Later</button>
+        <button type="button" data-f="drop" aria-pressed="false">Drop</button>
+      </div>
+      <span class="status-line" id="save-status" role="status"></span>
+    </div>
+    <div id="groups" class="stack" style="gap:28px"></div>
+    <p class="muted empty" id="empty" hidden>No items match this filter.</p>
+  </section>
+
+  <section class="notes" id="method" aria-labelledby="method-h" hidden>
+    <span class="eyebrow">How this was checked</span>
+    <h3 id="method-h">Method</h3>
+    <ul class="col" id="method-list"></ul>
+  </section>
+</div>
+
+<script type="application/json" id="triage-data">
+__TRIAGE_DATA__
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  var VERDICT = {
+    strong:            { label: "Strong",               cls: "v-strong" },
+    worth:             { label: "Worthwhile",           cls: "v-worth" },
+    marginal:          { label: "Marginal",             cls: "v-marginal" },
+    none:              { label: "No measurable effect", cls: "v-none" },
+    bug:               { label: "Bug fix",              cls: "v-bug" },
+    counterproductive: { label: "Counterproductive",    cls: "v-counter" },
+    pending:           { label: "Checking…",            cls: "v-pending" }
+  };
+  var VERDICT_ORDER = ["strong", "worth", "bug", "marginal", "none", "counterproductive", "pending"];
+  var DECISION_LABEL = { go: "Kick off", later: "Later", drop: "Drop" };
+  var LABELS = { effect: "Effect", evidence: "Evidence", mechanism: "How it works", risks: "Risks", changed: "What changed since the last pass" };
+  var NOTE_DEBOUNCE_MS = 800;
+  var NOTE_MAX = 4000;
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
+  // Inline markup for item text: `code`, **bold**, [text](https://…). Everything else is escaped.
+  function md(s) {
+    var parts = String(s == null ? "" : s).split("`");
+    if (parts.length % 2 === 0) { var tail = parts.pop(); parts[parts.length - 1] += "`" + tail; }
+    return parts.map(function (p, i) {
+      if (i % 2) return "<code>" + esc(p) + "</code>";
+      return esc(p)
+        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "<a href='$2' target='_blank' rel='noopener'>$1</a>");
+    }).join("");
+  }
+  function safeUrl(u) { return typeof u === "string" && /^https?:\/\/\S+$/.test(u) ? u : null; }
+  function str(v) { return typeof v === "string" ? v : ""; }
+
+  var DATA = null;
+  try { DATA = JSON.parse($("triage-data").textContent); } catch (e) { DATA = null; }
+  if (!DATA || !Array.isArray(DATA.items)) {
+    $("items").innerHTML = "<p class='muted'>This page has no triage data. Build it with <code>triage.sh build</code> from the crow-triage skill.</p>";
+    return;
+  }
+  Object.keys(DATA.labels || {}).forEach(function (k) { if (str(DATA.labels[k])) LABELS[k] = DATA.labels[k]; });
+
+  var ITEMS = DATA.items;
+  var byId = {};
+  ITEMS.forEach(function (it) { byId[it.id] = it; });
+  var GROUPS = (Array.isArray(DATA.groups) && DATA.groups.length) ? DATA.groups : [{ id: "", title: "", sub: "" }];
+  function itemsOf(g) { return ITEMS.filter(function (it) { return (it.group || "") === (g.id || ""); }); }
+
+  // ---- Static content (built once) ----
+
+  $("title").textContent = DATA.title || "Triage";
+  if (str(DATA.context)) $("context").textContent = DATA.context;
+  if (str(DATA.lede)) { $("lede").innerHTML = md(DATA.lede); $("lede").hidden = false; }
+  if (str(DATA.suggested)) { $("suggested").innerHTML = "<b>Claude's suggested starting set:</b> " + md(DATA.suggested); $("suggested").hidden = false; }
+  if (str(DATA.items_heading)) $("items-h").textContent = DATA.items_heading;
+  if (str(DATA.items_note)) $("items-note").innerHTML = md(DATA.items_note);
+
+  var vc = {};
+  ITEMS.forEach(function (it) { vc[it.verdict] = (vc[it.verdict] || 0) + 1; });
+  $("sum-verdicts").innerHTML = VERDICT_ORDER.filter(function (k) { return vc[k]; }).map(function (k) {
+    return "<span class='chip " + VERDICT[k].cls + "'><span class='num'>" + vc[k] + "</span> " + esc(VERDICT[k].label) + "</span>";
+  }).join(" ");
+
+  if (Array.isArray(DATA.answers) && DATA.answers.length) {
+    if (str(DATA.answers_heading)) $("answers-h").textContent = DATA.answers_heading;
+    $("answer-cards").innerHTML = DATA.answers.map(answerHTML).join("");
+    $("answers").hidden = false;
+  }
+  if (Array.isArray(DATA.method) && DATA.method.length) {
+    $("method-list").innerHTML = DATA.method.map(function (m) { return "<li>" + md(m) + "</li>"; }).join("");
+    $("method").hidden = false;
+  }
+
+  function answerHTML(a) {
+    var h = "<article class='answer'" + (str(a.id) ? " id='" + esc(a.id) + "'" : "") + ">";
+    h += "<div class='q'>" + md(a.question) + "</div>";
+    if (str(a.short)) h += "<p class='short'>" + md(a.short) + "</p>";
+    if (a.table && Array.isArray(a.table.rows)) {
+      h += "<div class='tbl-wrap'><table class='atable'>";
+      if (Array.isArray(a.table.columns)) h += "<thead><tr>" + a.table.columns.map(function (c) { return "<th>" + md(c) + "</th>"; }).join("") + "</tr></thead>";
+      h += "<tbody>" + a.table.rows.map(function (r) {
+        return "<tr>" + (Array.isArray(r) ? r : []).map(function (c, i) { return (i ? "<td>" : "<th>") + md(c) + (i ? "</td>" : "</th>"); }).join("") + "</tr>";
+      }).join("") + "</tbody></table></div>";
+    }
+    if (Array.isArray(a.points) && a.points.length) h += "<ul>" + a.points.map(function (p) { return "<li>" + md(p) + "</li>"; }).join("") + "</ul>";
+    if (Array.isArray(a.figures) && a.figures.length) {
+      h += "<div class='figs'>" + a.figures.map(function (f) { return "<div class='fig'><b>" + md(f.value) + "</b><span>" + md(f.label) + "</span></div>"; }).join("") + "</div>";
+    }
+    if (str(a.verdict)) h += "<p><b>" + md(a.verdict) + "</b></p>";
+    if (str(a.footnote)) h += "<p class='small muted'>" + md(a.footnote) + "</p>";
+    return h + "</article>";
+  }
+
+  function rowHTML(it) {
+    var v = VERDICT[it.verdict] || VERDICT.pending;
+    var id = esc(it.id);
+    var hasDetail = (Array.isArray(it.evidence) && it.evidence.length) || str(it.mechanism) || str(it.risks) || str(it.changed);
+    var h = "<article class='row' id='t-" + id + "' data-decision=''>";
+    h += "<div class='row-main'>";
+    h += "<div class='id'>" + id + "</div>";
+    h += "<div class='t-body'><div class='t-title'>" + md(it.title) + "</div>";
+    h += "<div class='t-where'>" + esc(it.repo) + (str(it.where) ? " · " + md(it.where) : "") + "</div>";
+    if (str(it.summary)) h += "<div class='t-one'>" + md(it.summary) + "</div>";
+    if (hasDetail) h += "<button type='button' class='more' aria-expanded='false' aria-controls='d-" + id + "'>Evidence and risks</button>";
+    h += "</div>";
+    h += "<div><span class='lbl'>Verdict</span><span class='chip " + v.cls + "'>" + esc(v.label) + "</span></div>";
+    h += "<div class='impact'><span class='lbl'>" + esc(LABELS.effect) + "</span>" + md(it.effect) + "</div>";
+    h += "<div class='rec'><span class='lbl'>Recommendation · effort</span>" + (str(it.rec) ? "<b class='rec-k'>" + md(it.rec) + "</b>" : "") + md(it.rec_why) + (str(it.effort) ? " <span class='muted'>· " + md(it.effort) + "</span>" : "") + "</div>";
+    h += "<div class='decide'><span class='lbl'>Decision</span><div class='seg' role='group' aria-label='Decision for item " + id + "'>";
+    ["go", "later", "drop"].forEach(function (k) { h += "<button type='button' data-v='" + k + "' aria-pressed='false' disabled>" + DECISION_LABEL[k] + "</button>"; });
+    h += "</div><div class='who'></div><a class='ticket-link' target='_blank' rel='noopener' hidden>Filed ticket ↗</a></div>";
+    h += "</div>";
+    if (hasDetail) {
+      h += "<div class='detail' id='d-" + id + "' hidden>";
+      if (Array.isArray(it.evidence) && it.evidence.length) h += "<section><h4>" + esc(LABELS.evidence) + "</h4><ul>" + it.evidence.map(function (t) { return "<li>" + md(t) + "</li>"; }).join("") + "</ul></section>";
+      if (str(it.mechanism)) h += "<section><h4>" + esc(LABELS.mechanism) + "</h4><p>" + md(it.mechanism) + "</p></section>";
+      if (str(it.risks)) h += "<section><h4>" + esc(LABELS.risks) + "</h4><p>" + md(it.risks) + "</p></section>";
+      if (str(it.changed)) h += "<section><h4>" + esc(LABELS.changed) + "</h4><p>" + md(it.changed) + "</p></section>";
+      h += "</div>";
+    }
+    h += "<div class='row-note'><label for='note-" + id + "'>Notes for the ticket</label>";
+    h += "<textarea id='note-" + id + "' rows='1' maxlength='" + NOTE_MAX + "' placeholder='Scope changes, owner, questions for Claude' readonly></textarea></div>";
+    return h + "</article>";
+  }
+
+  $("groups").innerHTML = GROUPS.map(function (g) {
+    var items = itemsOf(g);
+    if (!items.length) return "";
+    var h = "<div class='group' data-group='" + esc(g.id || "") + "'>";
+    if (str(g.title) || str(g.sub)) h += "<div class='group-head'><h3>" + md(g.title) + "</h3><span class='muted small'>" + md(g.sub) + "</span></div>";
+    h += "<div class='list'><div class='thead' aria-hidden='true'><span>#</span><span>Item</span><span>Verdict</span><span>" + esc(LABELS.effect) + "</span><span>Recommendation</span><span>Decision</span></div>";
+    return h + items.map(rowHTML).join("") + "</div></div>";
+  }).join("");
+
+  // Element handles per item, so live updates patch rows in place and never
+  // rebuild a textarea someone is typing in.
+  var rows = {};
+  ITEMS.forEach(function (it) {
+    var row = $("t-" + it.id);
+    if (!row) return;
+    rows[it.id] = {
+      row: row,
+      btns: Array.prototype.slice.call(row.querySelectorAll(".decide button[data-v]")),
+      who: row.querySelector(".who"),
+      link: row.querySelector(".ticket-link"),
+      ta: $("note-" + it.id),
+      more: row.querySelector(".more"),
+      detail: $("d-" + it.id)
+    };
+  });
+  var groupEls = Array.prototype.slice.call(document.querySelectorAll("#groups .group"));
+
+  // ---- Decisions (the `decisions` db collection, one doc per item id) ----
+
+  var server = {};   // id -> doc body, from the live snapshot
+  var pending = {};  // id -> patch not yet sent
+  var sent = {};     // id -> patch in flight (one write per doc at a time)
+  var written = {};  // id -> fields this view has written
+  var timers = {};   // id -> note debounce timer
+  var held = {};     // id -> true after a failed write, until the next edit
+  var retried = {};
+  var db = null, user = null, myId = null, canWrite = null, ready = false;
+  var names = {};
+  var filter = "all";
+
+  function writable() { return !!db && ready && canWrite !== false; }
+  function view(id) { return Object.assign({}, server[id] || {}, sent[id] || {}, pending[id] || {}); }
+  function statusOf(id) { var s = view(id).status; return DECISION_LABEL[s] ? s : ""; }
+  function setStatus(t) { $("save-status").textContent = t || ""; }
+  function busy() { return Object.keys(sent).length > 0 || Object.keys(pending).length > 0; }
+
+  function whoLine(d) {
+    var what = DECISION_LABEL[d.status] || (str(d.note) ? "Note" : "");
+    if (!what || !d.by) return what && d.status ? what : "";
+    var name = names[d.by] || "Someone";
+    var when = "";
+    try { if (d.at) when = new Date(d.at).toLocaleDateString(undefined, { month: "short", day: "numeric" }); } catch (e) {}
+    return what + " · " + name + (when ? ", " + when : "");
+  }
+
+  function grow(ta) {
+    if (!ta.offsetParent) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight + 2, 420) + "px";
+  }
+
+  function paintRow(it) {
+    var r = rows[it.id];
+    if (!r) return;
+    var d = view(it.id), st = statusOf(it.id), can = writable();
+    r.row.setAttribute("data-decision", st);
+    r.btns.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-v") === st)); b.disabled = !can; });
+    r.who.textContent = whoLine(d);
+    var t = safeUrl(d.ticket);
+    if (t) { r.link.href = t; r.link.hidden = false; } else { r.link.hidden = true; r.link.removeAttribute("href"); }
+    r.ta.readOnly = !can;
+    var typing = document.activeElement === r.ta || (pending[it.id] && "note" in pending[it.id]);
+    if (!typing) { var n = str(d.note); if (r.ta.value !== n) r.ta.value = n; }
+  }
+
+  function paintSummary() {
+    var dc = { go: 0, later: 0, drop: 0, none: 0 }, filed = 0;
+    ITEMS.forEach(function (it) { dc[statusOf(it.id) || "none"]++; if (safeUrl(view(it.id).ticket)) filed++; });
+    var el = $("sum-decisions");
+    if (!db || !ready) return;
+    el.className = "small";
+    el.innerHTML = "<b class='num'>" + dc.go + "</b> kick off · <b class='num'>" + dc.later + "</b> later · <b class='num'>" + dc.drop + "</b> drop · <b class='num'>" + dc.none + "</b> undecided" + (filed ? " · <b class='num'>" + filed + "</b> filed" : "");
+  }
+
+  function applyFilter() {
+    var any = false;
+    groupEls.forEach(function (gEl) {
+      var shown = 0;
+      Array.prototype.forEach.call(gEl.querySelectorAll(".row"), function (row) {
+        var st = statusOf(row.id.slice(2));
+        var show = filter === "all" || (filter === "undecided" ? !st : st === filter);
+        row.hidden = !show;
+        if (show) shown++;
+      });
+      gEl.hidden = !shown;
+      if (shown) any = true;
+    });
+    $("empty").hidden = any;
+  }
+
+  function paint() {
+    ITEMS.forEach(paintRow);
+    paintSummary();
+    applyFilter();
+    ITEMS.forEach(function (it) { if (rows[it.id]) grow(rows[it.id].ta); });
+  }
+
+  function queue(id, patch, delay) {
+    if (!writable()) return;
+    held[id] = false;
+    pending[id] = Object.assign(pending[id] || {}, patch);
+    if (timers[id]) { clearTimeout(timers[id]); timers[id] = null; }
+    if (delay > 0) timers[id] = setTimeout(function () { timers[id] = null; flush(id); }, delay);
+    else flush(id);
+  }
+
+  function fullBody(id, patch) {
+    return Object.assign({ status: null, note: "", by: null, at: null, ticket: null }, server[id] || {}, written[id] || {}, patch);
+  }
+
+  // An existing doc is merged with update(), so fields this view never
+  // touched (the `ticket` Claude writes back) survive a viewer's edit.
+  function write(id, patch) {
+    var ref = db.collection("decisions").doc(id);
+    if (!server[id]) return ref.set(fullBody(id, patch));
+    return ref.update(patch).catch(function (e) {
+      if (e && e.code === "invalid_argument") return ref.set(fullBody(id, patch));
+      throw e;
+    });
+  }
+
+  function flush(id) {
+    if (timers[id]) { clearTimeout(timers[id]); timers[id] = null; }
+    if (sent[id] || !pending[id] || held[id] || !writable()) return;
+    var patch = pending[id];
+    delete pending[id];
+    patch.at = new Date().toISOString();
+    if (myId) patch.by = myId;
+    sent[id] = patch;
+    setStatus("Saving…");
+    write(id, patch).then(function () {
+      written[id] = Object.assign({}, written[id] || {}, patch);
+      retried[id] = 0;
+      delete sent[id];
+      if (!busy()) setStatus("Saved");
+    }, function (e) {
+      delete sent[id];
+      failed(id, patch, e);
+    }).then(function () {
+      if (pending[id] && !timers[id] && !held[id]) flush(id);
+      paint();
+    });
+  }
+
+  function failed(id, patch, e) {
+    var code = e && e.code;
+    var keep = Object.assign({}, patch, pending[id] || {});
+    delete keep.at; delete keep.by;
+    pending[id] = keep;
+    held[id] = true;
+    if (code === "invalid_argument" || code === "revoked" || code === "not_granted" || code === "capability_disabled") {
+      canWrite = false;
+      pending = {};
+      setStatus(code === "revoked" ? "Saving stopped because access to this page changed. Reload to continue." : "You can view these decisions but not change them.");
+    } else if (code === "unavailable" && !retried[id]) {
+      retried[id] = 1;
+      setStatus("Saving…");
+      setTimeout(function () { held[id] = false; flush(id); }, 800 + Math.random() * 1200);
+    } else if (code === "quota_exceeded") {
+      setStatus("This page's storage is full, so the change wasn't saved.");
+    } else {
+      setStatus("Couldn't save. Your change is still here; edit again or reload to retry.");
+    }
+  }
+
+  function resolveNames() {
+    if (!user) return;
+    var ids = [];
+    Object.keys(server).forEach(function (k) { var b = server[k] && server[k].by; if (typeof b === "string" && ids.indexOf(b) < 0) ids.push(b); });
+    if (!ids.length) return;
+    user.profiles(ids).then(function (ps) {
+      ids.forEach(function (i) { names[i] = (ps && ps[i] && ps[i].name) || ""; });
+      ITEMS.forEach(paintRow);
+    }, function () {});
+  }
+
+  // ---- Events ----
+
+  $("filter").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-f]");
+    if (!b) return;
+    filter = b.getAttribute("data-f");
+    Array.prototype.forEach.call(this.querySelectorAll("button"), function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+    applyFilter();
+    ITEMS.forEach(function (it) { if (rows[it.id]) grow(rows[it.id].ta); });
+  });
+  $("groups").addEventListener("click", function (e) {
+    var m = e.target.closest("button.more");
+    if (m) {
+      var det = $(m.getAttribute("aria-controls"));
+      var open = det.hidden;
+      det.hidden = !open;
+      m.setAttribute("aria-expanded", String(open));
+      m.textContent = open ? "Hide details" : "Evidence and risks";
+      return;
+    }
+    var b = e.target.closest(".decide button[data-v]");
+    if (b && !b.disabled) {
+      var id = b.closest(".row").id.slice(2), v = b.getAttribute("data-v");
+      queue(id, { status: statusOf(id) === v ? null : v }, 0);
+      paint();
+    }
+  });
+  $("groups").addEventListener("input", function (e) {
+    var t = e.target;
+    if (!t.matches || !t.matches(".row-note textarea") || t.readOnly) return;
+    grow(t);
+    queue(t.id.slice(5), { note: t.value.slice(0, NOTE_MAX) }, NOTE_DEBOUNCE_MS);
+  });
+  $("groups").addEventListener("focusout", function (e) {
+    var t = e.target;
+    if (!t.matches || !t.matches(".row-note textarea")) return;
+    var id = t.id.slice(5);
+    if (pending[id]) flush(id);
+    setTimeout(function () { paintRow(byId[id]); }, 0);
+  });
+
+  paint();
+
+  // ---- Connect to the artifact runtime ----
+
+  (async function connect() {
+    var c = window.claude;
+    var msg = $("sum-decisions");
+    if (!c || typeof c.use !== "function") { msg.textContent = "Decisions load when this page is opened on claude.ai."; return; }
+    var got = await Promise.all([
+      c.use("user").catch(function () { return null; }),
+      c.use("db").catch(function () { return null; })
+    ]);
+    user = got[0];
+    if (user) {
+      try { myId = await user.id(); } catch (e) { myId = null; }
+      try { canWrite = await user.can("data.write"); } catch (e) { canWrite = null; }
+    }
+    if (!got[1]) { msg.textContent = "Sign in on claude.ai to see and save decisions."; return; }
+    db = got[1];
+    db.collection("decisions").onSnapshot(function (snap) {
+      var next = {};
+      snap.docs.forEach(function (d) {
+        if (!d.exists) return;
+        var body = d.data();
+        if (body && typeof body === "object") next[d.id] = body;
+      });
+      server = next;
+      ready = true;
+      paint();
+      resolveNames();
+    }, function (e) {
+      if (e && e.code === "revoked") canWrite = false;
+      setStatus("Live updates stopped. Reload to see new decisions.");
+      paint();
+    });
+    if (canWrite === false) setStatus("You can view these decisions but not change them.");
+  })();
+})();
+</script>

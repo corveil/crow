@@ -27,6 +27,9 @@ struct LaunchScaffoldTests {
         "skills/crow-create-ticket/SKILL.md",
         "skills/crow-cascade-epic/SKILL.md",
         "skills/crow-cascade-epic/cascade.sh",
+        "skills/crow-triage/SKILL.md",
+        "skills/crow-triage/page.html",
+        "skills/crow-triage/triage.sh",
         "skills/crow-show-image/SKILL.md",
         "skills/crow-attribution/FOOTER.md",
     ]
@@ -78,9 +81,10 @@ struct LaunchScaffoldTests {
         #expect(refreshed.contains("crow-workspace"))
     }
 
-    /// The Manager runs both skill scripts directly as well as via `bash`
+    /// The Manager runs each skill script directly as well as via `bash`
     /// (`settings.json` pre-approves both forms), so each lands executable —
-    /// including `cascade.sh`, the `/crow-cascade-epic` helper (CROW-1312).
+    /// including `cascade.sh`, the `/crow-cascade-epic` helper (CROW-1312),
+    /// and `triage.sh`, the `/crow-triage` helper (CROW-1325).
     @Test func skillScriptsAreExecutable() throws {
         let devRoot = try Self.makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
@@ -88,7 +92,11 @@ struct LaunchScaffoldTests {
         LaunchScaffold.run(devRoot: devRoot, configured: true)
 
         let claudeDir = (devRoot as NSString).appendingPathComponent(".claude")
-        for relative in ["skills/crow-workspace/setup.sh", "skills/crow-cascade-epic/cascade.sh"] {
+        for relative in [
+            "skills/crow-workspace/setup.sh",
+            "skills/crow-cascade-epic/cascade.sh",
+            "skills/crow-triage/triage.sh",
+        ] {
             let path = (claudeDir as NSString).appendingPathComponent(relative)
             #expect(FileManager.default.isExecutableFile(atPath: path), "not executable: \(relative)")
         }
