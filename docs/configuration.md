@@ -23,6 +23,10 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-cascade-epic/SKILL.md`                 | Epic cascade skill invoked via `/crow-cascade-epic`           |
 | `{devRoot}/.claude/skills/crow-cascade-epic/cascade.sh`               | Wave planner + merge-gate watcher called by the cascade skill |
 | `{devRoot}/.claude/cascades/`                                         | Per-epic cascade plan files written by `/crow-cascade-epic`   |
+| `{devRoot}/.claude/skills/crow-triage/SKILL.md`                       | Triage decision-page skill invoked via `/crow-triage`         |
+| `{devRoot}/.claude/skills/crow-triage/page.html`                      | Page template that `triage.sh build` fills from `items.json`  |
+| `{devRoot}/.claude/skills/crow-triage/triage.sh`                      | Page builder + decisions readback called by the triage skill  |
+| `{devRoot}/.claude/triage/`                                           | Per-triage `items.json`, built page, URL, and read-back files |
 | `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
 
 ## Workspace Configuration

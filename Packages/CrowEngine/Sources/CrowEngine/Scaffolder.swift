@@ -75,6 +75,9 @@ public struct Scaffolder {
         let cascadeSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-cascade-epic")
         try fm.createDirectory(atPath: cascadeSkillsDir, withIntermediateDirectories: true)
 
+        let triageSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-triage")
+        try fm.createDirectory(atPath: triageSkillsDir, withIntermediateDirectories: true)
+
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
@@ -150,6 +153,18 @@ public struct Scaffolder {
         let cascadeScriptPath = (cascadeSkillsDir as NSString).appendingPathComponent("cascade.sh")
         try Self.bundledCascadeScript().write(toFile: cascadeScriptPath, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cascadeScriptPath)
+
+        // Always overwrite the triage skill, its page template, and its helper
+        // script (CROW-1325). The script builds the page from items.json and
+        // joins the decisions read back from the published artifact.
+        let triageSkillPath = (triageSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try CrowAttribution.expandSkillBody(Self.bundledTriageSkill(), agentKind: managerAgentKind)
+            .write(toFile: triageSkillPath, atomically: true, encoding: .utf8)
+        let triagePagePath = (triageSkillsDir as NSString).appendingPathComponent("page.html")
+        try Self.bundledTriagePage().write(toFile: triagePagePath, atomically: true, encoding: .utf8)
+        let triageScriptPath = (triageSkillsDir as NSString).appendingPathComponent("triage.sh")
+        try Self.bundledTriageScript().write(toFile: triageScriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: triageScriptPath)
 
         // Always overwrite the show-image skill (surfaces generated images in
         // Crow's Images panel). No attribution expansion — it has no agent
@@ -813,6 +828,66 @@ public struct Scaffolder {
         """
     }
 
+    /// The crow-triage SKILL.md template bundled with the app (CROW-1325).
+    static func bundledTriageSkill() -> String {
+        if let content = loadFromRepo("skills/crow-triage/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-triage-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        ---
+        name: crow-triage
+        description: Publish a Kick off / Later / Drop triage page for proposed work items and read the decisions back.
+        ---
+
+        # Crow Triage
+
+        ## Activation
+        This skill activates when user invokes `/crow-triage` command.
+
+        ## Important
+        The full skill was not bundled with this build. It needs `triage.sh` and
+        `page.html` beside this file, and the Artifact and ArtifactData tools.
+        """
+    }
+
+    /// The crow-triage page template bundled with the app (CROW-1325).
+    static func bundledTriagePage() -> String {
+        if let content = loadFromRepo("skills/crow-triage/page.html") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-triage-page.html", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        <title>__TRIAGE_TITLE__</title>
+        <p>crow-triage page template not bundled.</p>
+        <script type="application/json" id="triage-data">
+        __TRIAGE_DATA__
+        </script>
+        """
+    }
+
+    /// The crow-triage triage.sh helper bundled with the app (CROW-1325).
+    static func bundledTriageScript() -> String {
+        if let content = loadFromRepo("skills/crow-triage/triage.sh") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-triage-triage.sh", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        #!/bin/bash
+        echo '{"status":"error","message":"triage.sh not bundled"}'
+        exit 2
+        """
+    }
+
     /// Shared attribution footer instructions (issue #443).
     static func bundledAttributionFooter() -> String {
         if let content = loadFromRepo("skills/crow-attribution/FOOTER.md") {
@@ -843,6 +918,8 @@ public struct Scaffolder {
               "Bash(.claude/skills/crow-workspace/setup.sh *)",
               "Bash(bash .claude/skills/crow-cascade-epic/cascade.sh *)",
               "Bash(.claude/skills/crow-cascade-epic/cascade.sh *)",
+              "Bash(bash .claude/skills/crow-triage/triage.sh *)",
+              "Bash(.claude/skills/crow-triage/triage.sh *)",
               "Bash(gh issue view:*)",
               "Bash(gh issue create:*)",
               "Bash(gh issue edit:*)",

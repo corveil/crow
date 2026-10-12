@@ -190,6 +190,8 @@ parity:
 	@bash skills/crow-workspace/setup_session_test.sh
 	@echo "==> crow-cascade-epic wave planner / merge-gate watcher (CROW-1312)..."
 	@bash skills/crow-cascade-epic/cascade_test.sh
+	@echo "==> crow-triage page build / decisions readback (CROW-1325)..."
+	@bash skills/crow-triage/triage_test.sh
 	@echo "==> macos-sign-notarize helpers (CROW-1150)..."
 	@./scripts/macos-sign-notarize_test.sh
 	@echo "==> desktop sidecar helpers (CROW-1189)..."
