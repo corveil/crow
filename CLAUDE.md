@@ -216,7 +216,7 @@ crow todo talk --id <uuid> "..."                      → crow send to the item'
 ```
 
 - Items persist until acted on — unlike completed sessions, they are exempt from the 24h cleanup reaper.
-- `explore` and `ticket` both open a Manager and seed a brief. If the Manager is still starting, `seeded` is false and `todo talk` can finish it. `ticket` tells the agent to file the provider issue and attach it with `todo link --type ticket` (state → ticketed). There is no repo picker. A second `todo ticket` within 15 minutes is a no-op until that URL is linked — do not call it again from the filing Manager.
+- `explore` and `ticket` both open a Manager and seed a brief. The brief is written to `$TMPDIR/crow-explore-<session>.md`: a fresh Manager launches with that file as its prompt (argv, nothing pasted), and a Manager that is already up is typed one line, `Read and follow the instructions in <path>` (CROW-1327). `seeded` is false only when the file could not be written or the pane never appeared; `todo talk` (or that same one-liner) can finish it. `ticket` tells the agent to file the provider issue and attach it with `todo link --type ticket` (state → ticketed). There is no repo picker. A second `todo ticket` within 15 minutes is a no-op until that URL is linked — do not call it again from the filing Manager.
 - `work` needs a linked ticket (`todo link --type ticket`).
 - Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
 

@@ -210,9 +210,19 @@ private func openScratchManager(
             appState.sessions.contains { $0.id == existing && $0.kind == .manager }
         }
         if alive {
-            let seeded = await sendToManager(
-                sessionID: existing, text: brief,
-                appState: appState, waitForAgent: false)
+            // Re-Explore / Ticket on a live Manager: refresh the brief file and
+            // type only a one-line pointer to it — never the multi-line brief
+            // (CROW-1327).
+            let path = TodoRPC.explorePromptPath(sessionID: existing)
+            var seeded = false
+            if case .pointer(let line) = TodoRPC.briefDelivery(
+                managerAlive: true,
+                briefWritten: TodoRPC.writeBriefFile(brief, to: path),
+                path: path
+            ) {
+                seeded = await sendToManager(
+                    sessionID: existing, text: line, appState: appState)
+            }
             if item.state != .exploring {
                 item.state = .exploring
                 item.updatedAt = Date()
@@ -225,7 +235,7 @@ private func openScratchManager(
             ]
             if !seeded {
                 result["warning"] = .string(
-                    "Manager is still starting — use `crow todo talk` once it is ready")
+                    "Could not deliver the brief — use `crow todo talk --id \(item.id.uuidString) \"Read and follow the instructions in \(path)\"` once the Manager is ready")
             }
             return result
         }
@@ -242,9 +252,16 @@ private func openScratchManager(
         return (id, display)
     }
 
-    let seeded = await sendToManager(
-        sessionID: sessionID, text: brief,
-        appState: appState, waitForAgent: true)
+    // `createManagerSession` wrote the brief file and launches the agent with
+    // it as argv. Do not paste anything afterwards: a second, offset copy of
+    // the brief racing a slow SessionStart is what mangled it (CROW-1327).
+    let path = TodoRPC.explorePromptPath(sessionID: sessionID)
+    let delivery = TodoRPC.briefDelivery(
+        managerAlive: false,
+        briefWritten: FileManager.default.fileExists(atPath: path),
+        path: path)
+    let paneUp = await managerTerminal(sessionID: sessionID, appState: appState) != nil
+    let seeded = delivery == .launchArgv && paneUp
     item.links.append(TodoLink(type: .session, sessionID: sessionID, label: name))
     item.state = .exploring
     item.updatedAt = Date()
@@ -258,36 +275,37 @@ private func openScratchManager(
     ]
     if !seeded {
         result["warning"] = .string(
-            "Manager is still starting — use `crow todo talk` once it is ready")
+            "The Manager launched without its brief (\(path) was not written or the pane never appeared) — use `crow todo talk` once it is ready")
     }
     return result
 }
 
-/// Wait for the Manager pane (and, on a fresh launch, for the agent to
-/// announce via SessionStart or to own the pane), then deliver `text`.
-///
-/// Fresh Explore Managers seed the brief as argv on launch (job-style,
-/// CROW-1237) so this returns without pasting when UserPromptSubmit /
-/// `.working` already prove the agent started. Paste is the fallback for
-/// Talk, re-Explore, and harnesses that ignore a positional prompt.
-///
-/// After a paste: wait for acceptance, retry a bare Enter if the agent
-/// stayed idle ("words in the box"), then re-paste the full brief if
-/// Enter was not enough (paste eaten/offset). `seeded`/`sent` still mean
-/// "we delivered to a live pane" when no acceptance hook arrives.
+/// Poll for the Manager's first terminal; nil if it never appears.
+private func managerTerminal(sessionID: UUID, appState: AppState) async -> SessionTerminal? {
+    for _ in 0..<TodoRPC.managerTerminalPolls {
+        if let terminal = await MainActor.run(body: { appState.terminals[sessionID]?.first }) {
+            return terminal
+        }
+        try? await Task.sleep(nanoseconds: TodoRPC.managerTerminalPollNanos)
+    }
+    return nil
+}
+
+/// Deliver one short line (the brief pointer, or `todo talk` text) to an
+/// existing Manager. Waits briefly for the agent to own the pane, types the
+/// line, and retries a bare Enter once if the agent stayed idle ("words in
+/// the box"). Never re-sends the text: a second copy is how a Scratch brief
+/// landed offset and truncated (CROW-1327). Scratch briefs themselves are
+/// never routed through here — fresh Managers take them as argv, live ones
+/// get ``TodoRPC/briefPointer(path:)``.
 private func sendToManager(
     sessionID: UUID,
     text: String,
-    appState: AppState,
-    waitForAgent: Bool
+    appState: AppState
 ) async -> Bool {
-    var terminal: SessionTerminal?
-    for _ in 0..<TodoRPC.managerTerminalPolls {
-        terminal = await MainActor.run { appState.terminals[sessionID]?.first }
-        if terminal != nil { break }
-        try? await Task.sleep(nanoseconds: TodoRPC.managerTerminalPollNanos)
+    guard let terminal = await managerTerminal(sessionID: sessionID, appState: appState) else {
+        return false
     }
-    guard let terminal else { return false }
 
     func hookEventNames() async -> [String] {
         await MainActor.run {
@@ -299,10 +317,6 @@ private func sendToManager(
             appState.hookState(for: sessionID).activityState
         }
     }
-    func promptAccepted() async -> Bool {
-        TodoRPC.promptWasAccepted(
-            hookEventNames: await hookEventNames(), activity: await activity())
-    }
     func paneCommand() async -> String? {
         await MainActor.run { TerminalRouter.paneCurrentCommand(terminal) }
     }
@@ -311,10 +325,7 @@ private func sendToManager(
     var agentInPane = TodoRPC.paneLooksLikeAgent(await paneCommand() ?? "")
     let alreadyAnnounced = announced
     if !announced && !agentInPane {
-        let polls = waitForAgent
-            ? TodoRPC.agentAnnouncePolls
-            : TodoRPC.existingAgentAnnouncePolls
-        for _ in 0..<polls {
+        for _ in 0..<TodoRPC.existingAgentAnnouncePolls {
             announced = TodoRPC.agentHasAnnounced(hookEventNames: await hookEventNames())
             agentInPane = TodoRPC.paneLooksLikeAgent(await paneCommand() ?? "")
             if announced || agentInPane { break }
@@ -326,16 +337,6 @@ private func sendToManager(
         ? TodoRPC.alreadyUpSettleNanos
         : TodoRPC.composerSettleNanos)
 
-    // Seed-at-launch already running — don't paste a second copy.
-    if await promptAccepted() { return true }
-    if waitForAgent && composerReady {
-        for _ in 0..<4 {
-            if await promptAccepted() { return true }
-            try? await Task.sleep(nanoseconds: TodoRPC.agentAnnouncePollNanos)
-        }
-        if await promptAccepted() { return true }
-    }
-
     var payload = text
     if !payload.hasSuffix("\n") { payload += "\n" }
     await MainActor.run {
@@ -343,7 +344,6 @@ private func sendToManager(
     }
 
     try? await Task.sleep(nanoseconds: TodoRPC.submitConfirmNanos)
-    if await promptAccepted() { return true }
     if TodoRPC.shouldRetryEnter(
         activity: await activity(),
         agentAnnounced: composerReady,
@@ -351,19 +351,6 @@ private func sendToManager(
     ) {
         await MainActor.run {
             TerminalRouter.send(terminal, text: "\n")
-        }
-        try? await Task.sleep(nanoseconds: TodoRPC.submitConfirmNanos)
-        if await promptAccepted() { return true }
-        // Paste was eaten or offset — Enter on leftover composer text is
-        // not enough. Re-send the whole brief (CROW-1237).
-        if TodoRPC.shouldRetryEnter(
-            activity: await activity(),
-            agentAnnounced: composerReady,
-            promptAccepted: false
-        ) {
-            await MainActor.run {
-                TerminalRouter.send(terminal, text: payload)
-            }
         }
     }
     return true
@@ -411,7 +398,7 @@ private func talkTodo(
         throw RPCError.invalidParams("text is required")
     }
     let sent = await sendToManager(
-        sessionID: sessionID, text: text, appState: appState, waitForAgent: false)
+        sessionID: sessionID, text: text, appState: appState)
     guard sent else {
         throw RPCError.applicationError("The linked Manager has no terminal")
     }
