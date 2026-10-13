@@ -688,7 +688,7 @@ final class ManagerSessionController {
 
     /// Write the explore brief and wrap `baseCommand` so the agent starts
     /// with it as argv. Nil when there is no prompt or the write failed —
-    /// the caller then falls back to a composer paste.
+    /// the launch is then unseeded; the brief is never pasted (CROW-1327).
     nonisolated static func exploreSeedLaunchCommand(
         session: Session, baseCommand: String, prompt: String?,
         promptPath: String? = nil
@@ -699,14 +699,8 @@ final class ManagerSessionController {
         // Handoff passes its own file so it does not clobber the Explore seed
         // (CROW-1314). Explore / ticket launch keeps the original path.
         let path = promptPath ?? TodoRPC.explorePromptPath(sessionID: session.id)
-        do {
-            try prompt.write(toFile: path, atomically: true, encoding: .utf8)
-        } catch {
-            CrowLog.info("[Manager] failed to write explore prompt \(path): \(error.localizedDescription)")
-            return nil
-        }
-        guard FileManager.default.fileExists(atPath: path) else {
-            CrowLog.info("[Manager] explore prompt missing at \(path) after write")
+        guard TodoRPC.writeBriefFile(prompt, to: path) else {
+            CrowLog.info("[Manager] failed to write explore prompt \(path)")
             return nil
         }
         return TodoRPC.seedLaunchCommand(

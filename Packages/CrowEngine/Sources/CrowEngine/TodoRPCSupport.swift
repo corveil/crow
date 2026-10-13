@@ -183,6 +183,48 @@ public enum TodoRPC {
             .appendingPathComponent("crow-explore-\(sessionID.uuidString).md")
     }
 
+    /// Write a Manager brief to `path`. The file is the single source of
+    /// truth for the seed (CROW-1327): a fresh Manager reads it as argv, an
+    /// alive one is pointed at it. False when the write did not land.
+    @discardableResult
+    public static func writeBriefFile(_ brief: String, to path: String) -> Bool {
+        guard !brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        do {
+            try brief.write(toFile: path, atomically: true, encoding: .utf8)
+        } catch {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// The one line typed into an already-running Manager instead of the
+    /// multi-line brief (CROW-1327). A single short line survives an eaten or
+    /// offset prefix far better than a 20-line paste, and the agent reads the
+    /// full brief from disk. Newline-terminated so `TerminalRouter.send`
+    /// submits it.
+    public static func briefPointer(path: String) -> String {
+        "Read and follow the instructions in \(path)\n"
+    }
+
+    /// How a Scratch brief reaches its Manager (CROW-1327). Nothing ever
+    /// pastes the brief itself into a TUI.
+    public enum BriefDelivery: Equatable, Sendable {
+        /// Fresh Manager: the launch command already carries the file as argv.
+        /// No follow-up paste — a second copy is how the brief got mangled.
+        case launchArgv
+        /// Alive (or still-starting) Manager: type only this pointer line.
+        case pointer(String)
+        /// The brief file could not be written; there is nothing to point at.
+        case none
+    }
+
+    public static func briefDelivery(
+        managerAlive: Bool, briefWritten: Bool, path: String
+    ) -> BriefDelivery {
+        guard briefWritten else { return .none }
+        return managerAlive ? .pointer(briefPointer(path: path)) : .launchArgv
+    }
+
     /// Temp file the extra-Manager handoff brief is read from. Distinct from
     /// ``explorePromptPath(sessionID:)`` so switching agents does not overwrite
     /// the original Scratch/explore seed (CROW-1314).
@@ -231,19 +273,6 @@ public enum TodoRPC {
         // Cursor's unambiguous name is `cursor-agent`; the colliding `agent`
         // token is accepted only as an exact basename (not `ssh-agent`).
         return token == "agent"
-    }
-
-    /// Hook name that means the TUI accepted a prompt (argv or paste).
-    public static let userPromptSubmitEventName = "UserPromptSubmit"
-
-    public static func promptWasAccepted(
-        hookEventNames: [String], activity: AgentActivityState
-    ) -> Bool {
-        if hookEventNames.contains(userPromptSubmitEventName) { return true }
-        switch activity {
-        case .working, .waiting: return true
-        case .idle, .done: return false
-        }
     }
 
     /// The prompt seeded when Ticket opens a Manager (CROW-1289). Same
@@ -300,10 +329,9 @@ public enum TodoRPC {
     /// the long composer settle — the TUI is already focused.
     public static let alreadyUpSettleNanos: UInt64 = 200_000_000
 
-    /// Fresh Manager launch: wait up to 30s (60 × 500ms) for SessionStart.
-    public static let agentAnnouncePolls = 60
-    /// Existing Manager (Talk / re-Explore): shorter wait — the TUI is
-    /// usually already up, but Explore may have just spawned it.
+    /// Existing Manager (Talk / re-Explore): wait up to 8s for the TUI to
+    /// own the pane. Fresh Managers take their brief as argv and never wait
+    /// here (CROW-1327).
     public static let existingAgentAnnouncePolls = 16
     public static let agentAnnouncePollNanos: UInt64 = 500_000_000
 
@@ -326,8 +354,8 @@ public enum TodoRPC {
     /// Retry a bare Enter only when the agent is up and then stayed idle
     /// after the paste — "words in the box, agent idle". Skip when hooks
     /// never fired (don't double-submit an agent that accepted Enter but
-    /// has no hook pipeline) and when UserPromptSubmit / working already
-    /// proved the brief landed (CROW-1237).
+    /// has no hook pipeline) and when `.working` / `.waiting` already
+    /// proved the line landed (CROW-1237).
     public static func shouldRetryEnter(
         activity: AgentActivityState,
         agentAnnounced: Bool,

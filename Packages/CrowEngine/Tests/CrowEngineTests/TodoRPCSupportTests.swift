@@ -127,15 +127,6 @@ struct TodoRPCSupportTests {
         #expect(TodoRPC.paneLooksLikeAgent("codex"))
     }
 
-    @Test func promptWasAcceptedOnSubmitOrWorking() {
-        #expect(TodoRPC.promptWasAccepted(
-            hookEventNames: ["SessionStart", "UserPromptSubmit"], activity: .idle))
-        #expect(TodoRPC.promptWasAccepted(hookEventNames: ["SessionStart"], activity: .working))
-        #expect(TodoRPC.promptWasAccepted(hookEventNames: [], activity: .waiting))
-        #expect(!TodoRPC.promptWasAccepted(hookEventNames: ["SessionStart"], activity: .idle))
-        #expect(!TodoRPC.promptWasAccepted(hookEventNames: [], activity: .done))
-    }
-
     @Test func ticketBriefTellsTheAgentToFileAndLink() {
         let item = TodoItem(text: "cursor jumps", note: "only on iPad", tags: ["web"], priority: "p2")
         let brief = TodoRPC.ticketBrief(for: item)
@@ -221,4 +212,52 @@ struct TodoRPCSupportTests {
             session: session, baseCommand: "claude", prompt: "   ") == nil)
     }
 
+
+    // MARK: - Brief file is the single source of truth (CROW-1327)
+
+    /// A fresh Manager is seeded by the launch command alone; nothing is
+    /// pasted afterwards, so no second copy can land offset.
+    @Test func freshManagerSeedsViaArgvWithNoFollowUpPaste() throws {
+        for kind in [AgentKind.claudeCode, .cursor, .codex, .grok, .openCode] {
+            let item = TodoItem(text: "file this bug")
+            let brief = TodoRPC.ticketBrief(for: item)
+            let session = Session(name: "Scratch", kind: .manager, agentKind: kind)
+            let path = TodoRPC.explorePromptPath(sessionID: session.id)
+            defer { try? FileManager.default.removeItem(atPath: path) }
+            let cmd = try #require(ManagerSessionController.exploreSeedLaunchCommand(
+                session: session, baseCommand: "agent", prompt: brief))
+            #expect(cmd.contains(path))
+            // The file holds the complete brief, first line intact.
+            let body = try String(contentsOfFile: path, encoding: .utf8)
+            #expect(body == brief)
+            #expect(body.hasPrefix("You are filing a ticket"))
+            #expect(TodoRPC.briefDelivery(
+                managerAlive: false, briefWritten: true, path: path) == .launchArgv)
+        }
+    }
+
+    /// A live Manager is typed one short line pointing at the file — never
+    /// the multi-line brief.
+    @Test func aliveManagerGetsOnlyThePointerLine() throws {
+        let path = TodoRPC.explorePromptPath(sessionID: UUID())
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let brief = TodoRPC.exploreBrief(for: TodoItem(text: "why is this slow"))
+        #expect(TodoRPC.writeBriefFile(brief, to: path))
+        let delivery = TodoRPC.briefDelivery(managerAlive: true, briefWritten: true, path: path)
+        guard case .pointer(let line) = delivery else {
+            Issue.record("expected a pointer, got \(delivery)")
+            return
+        }
+        #expect(line == "Read and follow the instructions in \(path)\n")
+        #expect(line.filter(\.isNewline).count == 1)
+        #expect(!line.contains("Scratch item"))
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == brief)
+    }
+
+    @Test func unwrittenBriefDeliversNothing() {
+        #expect(TodoRPC.briefDelivery(managerAlive: false, briefWritten: false, path: "/x") == .none)
+        #expect(TodoRPC.briefDelivery(managerAlive: true, briefWritten: false, path: "/x") == .none)
+        #expect(!TodoRPC.writeBriefFile("   \n", to: NSTemporaryDirectory() + "crow-empty-\(UUID()).md"))
+        #expect(!TodoRPC.writeBriefFile("x", to: "/nonexistent-dir-\(UUID())/brief.md"))
+    }
 }

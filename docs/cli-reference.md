@@ -743,6 +743,8 @@ crow todo link --id <todo-uuid> --type session --session <session-uuid> --label 
 
 Create a Manager, seed the item as a Scratch explore brief, attach the session, and move state to `exploring`. Needs tmux.
 
+The brief is written to `$TMPDIR/crow-explore-<session>.md` and is the only copy (CROW-1327). A fresh Manager launches with that file as its prompt — nothing is pasted into the TUI afterwards. When the item's linked Manager is already running, the file is rewritten and only one line is typed: `Read and follow the instructions in <path>`. `seeded` is false only when the file could not be written or the Manager pane never appeared.
+
 ```bash
 crow todo explore --id <todo-uuid>
 crow todo explore --id <todo-uuid> --agent cursor
@@ -750,7 +752,7 @@ crow todo explore --id <todo-uuid> --agent cursor
 
 ### `crow todo ticket`
 
-Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore`. The agent chooses the repo, files the provider issue, and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`. A second call within 15 minutes, before that URL exists, returns `already_dispatched` and does not open another Manager.
+Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore` — written to the brief file and launched as argv, or pointed at with a one-line `Read and follow the instructions in <path>` when the Manager is already up. The agent chooses the repo, files the provider issue, and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`. A second call within 15 minutes, before that URL exists, returns `already_dispatched` and does not open another Manager.
 
 ```bash
 crow todo ticket --id <todo-uuid>
