@@ -161,10 +161,13 @@ final class ManagerSessionController {
     /// source. `internal` for unit testing (CROW-433).
     ///
     /// `cwd` is the Manager terminal's working directory. Extra Claude Managers
-    /// whose cwd is an isolated identity dir get `--add-dir {devRoot}` so tools
-    /// still see the real tree (CROW-1281). Nil cwd skips that suffix — tests
-    /// of the Remote Control `--name` label do not need it.
-    func managerCommand(for session: Session, cwd: String? = nil) -> String {
+    /// whose cwd is an isolated identity dir get `--add-dir=<devRoot>` so tools
+    /// still see the real tree (CROW-1281). The `=` form is required: Claude's
+    /// `--add-dir <directories...>` is variadic, so a following positional
+    /// (the Scratch brief) is parsed as another directory (CROW-1329). Nil cwd
+    /// skips that suffix — tests of the Remote Control `--name` label do not
+    /// need it. `devRoot` overrides the live pointer for tests.
+    func managerCommand(for session: Session, cwd: String? = nil, devRoot: String? = nil) -> String {
         let agentKind = session.agentKind
         let resolved = AgentRegistry.shared.agent(for: agentKind)
             ?? AgentRegistry.shared.defaultAgent
@@ -197,8 +200,8 @@ final class ManagerSessionController {
         }
         if let cwd,
            let extra = ManagerIdentity.additionalDirectory(
-                for: session, cwd: cwd, devRoot: ConfigStore.loadDevRoot()) {
-            cmd += " --add-dir \(ClaudeLaunchArgs.shellQuote(extra))"
+                for: session, cwd: cwd, devRoot: devRoot ?? ConfigStore.loadDevRoot()) {
+            cmd += " --add-dir=\(ClaudeLaunchArgs.shellQuote(extra))"
         }
         return cmd
     }
