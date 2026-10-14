@@ -50,10 +50,14 @@ func makeCommandRouter(
     corveilOrgCache: CorveilOrgListCache = CorveilOrgListCache(),
     soundLibrary: CustomSoundLibrary = .live,
     tuiRecorder: TuiRecorder? = nil,
+    // The auto-review watcher and `start-review` must share this chain.
+    // A second instance lets a manual start race an auto kickoff (CROW-406)
+    // and hides a wedged auto queue behind a still-working RPC (CROW-1323).
+    // The default exists so tests that don't exercise kickoff build a router
+    // without threading one through; production passes the daemon's instance.
+    reviewSerializer: ReviewKickoffSerializer = ReviewKickoffSerializer(),
     fallback: CommandRouter? = nil
 ) -> CommandRouter {
-    // Serializes review kickoffs (see start-review) — one per router instance.
-    let reviewSerializer = ReviewKickoffSerializer()
     // First-wins on a key collision. Groups are disjoint today; the uniquing
     // closure is the same one the pre-split merges used, so a future overlap
     // keeps the earlier registration rather than silently swapping bodies.

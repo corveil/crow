@@ -418,9 +418,9 @@ public enum CrowDaemon {
         // session completion/in-review, auto-cleanup teardown, review auto-kickoff
         // (CROW-581). Without a cockpit these stay nil and the corresponding paths
         // are inert no-ops — but auto-merge above keeps working.
-        // Serializes review kickoffs (auto-review + the start-review RPC share
-        // the internal createReviewSession dedupe; a dedicated serializer keeps a
-        // burst of pending review requests from racing duplicate clones).
+        // One chain for auto-review and the start-review RPC. Two instances
+        // let a manual start race an auto kickoff (CROW-406) and leave the
+        // RPC working while the auto queue is wedged (CROW-1323).
         let reviewSerializer = ReviewKickoffSerializer()
         if let sessionService {
             await MainActor.run {
@@ -526,6 +526,7 @@ public enum CrowDaemon {
             corveilAutoUpdateService: corveilAutoUpdateService,
             soundLibrary: soundLibrary,
             tuiRecorder: tuiRecorder,
+            reviewSerializer: reviewSerializer,
             fallback: engineFallback)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. By

@@ -169,7 +169,7 @@ func makeBoardHandlers(
             guard let url = params["url"]?.stringValue, !url.isEmpty else {
                 throw DaemonRPCError.invalidParams("url required")
             }
-            let task = await reviewSerializer.enqueue {
+            let task = await reviewSerializer.enqueue(url: url) {
                 await sessionService.createReviewSession(prURL: url, selectAfterCreate: false)
             }
             guard let id = await task.value else {
@@ -213,7 +213,7 @@ func makeBoardHandlers(
                 throw DaemonRPCError.invalidParams("urls must be well-formed http(s) URLs with no control characters")
             }
             for url in valid {
-                _ = await reviewSerializer.enqueue {
+                _ = await reviewSerializer.enqueue(url: url) {
                     await sessionService.createReviewSession(prURL: url, selectAfterCreate: false)
                 }
             }

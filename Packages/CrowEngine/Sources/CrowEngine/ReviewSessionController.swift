@@ -46,7 +46,7 @@ final class ReviewSessionController {
 
         // Parse org/repo and PR number from URL like "https://github.com/org/repo/pull/123"
         guard let parsed = Session.parseReviewPR(url: prURL) else {
-            CrowLog.info("[SessionService] Could not parse PR URL: \(prURL)")
+            Self.logKickoff("error", "\(prURL) could not parse PR URL")
             return nil
         }
         let owner = parsed.owner
@@ -56,7 +56,7 @@ final class ReviewSessionController {
 
         // Determine clone path
         guard let devRoot = ConfigStore.loadDevRoot() else {
-            CrowLog.info("[SessionService] No devRoot configured")
+            Self.logKickoff("error", "\(prURL) no devRoot")
             return nil
         }
 
@@ -91,13 +91,13 @@ final class ReviewSessionController {
         let prMetadata: PRMetadata
         do {
             guard let manager = providerManager else {
-                CrowLog.info("[SessionService] No providerManager wired; cannot prepare review for \(prURL)")
+                Self.logKickoff("error", "\(prURL) no providerManager")
                 return nil
             }
             let backend = manager.codeBackend(for: .github)!
             prMetadata = try await backend.fetchPRMetadata(prURL: prURL)
         } catch {
-            CrowLog.info("[SessionService] Failed to fetch PR metadata for \(prURL): \(error.localizedDescription)")
+            Self.logKickoff("error", "\(prURL) \(error.localizedDescription)")
             return nil
         }
 
@@ -131,7 +131,7 @@ final class ReviewSessionController {
                 // `.create` is unreachable here (it requires no existing
                 // session) — treat it as `.skip` rather than racing the live
                 // session with a second one for the same PR.
-                CrowLog.info("[SessionService] Skipping duplicate review session for \(prURL); reusing \(existing.id)")
+                Self.logKickoff("skip", "\(prURL) reusing \(existing.id)")
                 if selectAfterCreate { appState.selectedSessionID = existing.id }
                 return existing.id
             case .reReview(let staleID):
@@ -149,7 +149,7 @@ final class ReviewSessionController {
                 // new round starts in this same call; removing the label here
                 // would flash it off, and a poll during the clone would sweep
                 // it because the old session is already gone.
-                CrowLog.info("[SessionService] PR head advanced past review session \(staleID); completing it and starting a new round for \(prURL)")
+                Self.logKickoff("reReview", "\(prURL) retiring \(staleID)")
                 self.owner.completeSession(id: staleID, keepReviewingLabel: true)
             }
         }
@@ -160,22 +160,36 @@ final class ReviewSessionController {
         defer { ReviewingLabelService.release(prURL) }
 
         let prep: ReviewClonePrep
+        // Detached so the clone stays off the main actor. Cancellation does
+        // not cross `Task.detached` on its own — a kickoff timeout cancels
+        // *this* task, and without forwarding that cancel the wedged
+        // `git checkout` keeps running after the serializer has moved on
+        // (CROW-1323).
+        let cloneTask = Task.detached(priority: .userInitiated) {
+            try await Self.prepareReviewClone(
+                prURL: prURL,
+                repoSlug: repoSlug,
+                repoName: repoName,
+                prNumber: prNumber,
+                devRoot: devRoot,
+                env: env,
+                reviewAgentKind: reviewAgentKind,
+                reviewBlocking: reviewBlocking,
+                prMetadata: prMetadata
+            )
+        }
         do {
-            prep = try await Task.detached(priority: .userInitiated) {
-                try await Self.prepareReviewClone(
-                    prURL: prURL,
-                    repoSlug: repoSlug,
-                    repoName: repoName,
-                    prNumber: prNumber,
-                    devRoot: devRoot,
-                    env: env,
-                    reviewAgentKind: reviewAgentKind,
-                    reviewBlocking: reviewBlocking,
-                    prMetadata: prMetadata
-                )
-            }.value
+            prep = try await withTaskCancellationHandler {
+                try await cloneTask.value
+            } onCancel: {
+                cloneTask.cancel()
+            }
         } catch {
-            CrowLog.info("[SessionService] Failed to prepare review clone for \(prURL): \(error.localizedDescription)")
+            Self.logKickoff("error", "\(prURL) \(error.localizedDescription)")
+            return nil
+        }
+        if Task.isCancelled {
+            Self.logKickoff("error", "\(prURL) cancelled")
             return nil
         }
 
@@ -248,7 +262,7 @@ final class ReviewSessionController {
             appState.selectedSessionID = session.id
         }
 
-        CrowLog.info("[SessionService] Created review session '\(session.name)' for \(prURL)")
+        Self.logKickoff("create", "\(prURL) session \(session.id)")
         // The daemon labels the PR. The review clone runs untrusted code, so
         // it is never handed this write. A missing label permission is logged
         // inside the service and does not fail the session we just created.
@@ -258,6 +272,15 @@ final class ReviewSessionController {
             backend: providerManager?.codeBackend(for: .github)
         )
         return session.id
+    }
+
+    /// Kickoff decisions go to `crowd-automation.log`, not only stdout.
+    /// Desktop-launched `crowd` leaves stdout on a TTY nobody tails, which
+    /// is why a 10-hour wedge left no review-kickoff line (CROW-1323).
+    /// `decision` is `create`, `reReview`, `skip`, or `error`. Timeout is
+    /// logged by `ReviewKickoffSerializer`.
+    private static func logKickoff(_ decision: String, _ detail: String) {
+        CrowLog.automation("[ReviewKickoff] \(decision) \(detail)")
     }
 
     /// Metadata produced by the off-main-actor `prepareReviewClone` step.
