@@ -268,20 +268,12 @@ final class SessionDeletionController {
         return nil
     }
 
+    /// `git remote get-url` output is tiny, but the previous body never read
+    /// stderr at all — a chatty failure filled that pipe and `waitUntilExit`
+    /// never returned (same deadlock as CROW-1323). `runShellSync` drains
+    /// both pipes and detaches stdin.
     private func shellSync(_ args: String...) throws -> String {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = args
-        process.environment = ShellEnvironment.shared.env
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw NSError(domain: "SessionService", code: Int(process.terminationStatus))
-        }
-        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        try SessionService.runShellSync(Array(args))
     }
 
     // MARK: - Orphan Worktree Detection

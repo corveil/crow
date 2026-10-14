@@ -9,6 +9,69 @@ import CrowPersistence
 import CrowProvider
 import CrowTerminal
 
+/// Bytes captured from one pipe. The reader queue writes; the waiter reads
+/// only after `DispatchGroup.wait`, so the lock is just the compiler's
+/// happens-before, not a hot path.
+private final class PipeBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func set(_ data: Data) {
+        lock.lock()
+        self.data = data
+        lock.unlock()
+    }
+
+    func get() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
+/// Set from the cancellation handler, read from the drain queue.
+private final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func mark() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    var isSet: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+}
+
+/// Resumes a shell continuation at most once. Launch failure and the exit
+/// path can both reach it; a second resume would trap.
+private final class ShellResume: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+
+    func resume(_ continuation: CheckedContinuation<String, Error>, returning value: String) {
+        guard claim() else { return }
+        continuation.resume(returning: value)
+    }
+
+    func resume(_ continuation: CheckedContinuation<String, Error>, throwing error: Error) {
+        guard claim() else { return }
+        continuation.resume(throwing: error)
+    }
+
+    private func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if resumed { return false }
+        resumed = true
+        return true
+    }
+}
+
 /// Thin session orchestrator. Owns session CRUD + persist/hydrate wiring and the
 /// shared shell/terminal primitives, and delegates each larger concern to a
 /// focused, single-file collaborator (CROW-1113, mirroring the CROW-1094
@@ -158,6 +221,12 @@ public final class SessionService {
 
     /// Synchronous shell helper safe to call from any thread. Used by
     /// `performDiskCleanup` while running on a detached task.
+    ///
+    /// Stdout and stderr are drained on background queues *while* the child
+    /// runs. Reading only after `waitUntilExit()` deadlocks once the pipe
+    /// buffer fills (~64KB on macOS): the child blocks in `write()`, never
+    /// exits, and the waiter never reaches the read (CROW-1323). Stdin is
+    /// `/dev/null` so a git/gh prompt cannot inherit crowd's TTY and hang.
     nonisolated static func runShellSync(_ args: [String]) throws -> String {
         let process = Process()
         let stdoutPipe = Pipe()
@@ -167,15 +236,43 @@ public final class SessionService {
         process.environment = ShellEnvironment.shared.env
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
-        try process.run()
+        process.standardInput = FileHandle.nullDevice
+
+        let stdout = PipeBuffer()
+        let stderr = PipeBuffer()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stdout.set(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stderr.set(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+            group.leave()
+        }
+
+        do {
+            try process.run()
+        } catch {
+            // Readers are already blocked on the pipes. Close the write ends
+            // so they observe EOF instead of waiting for a child that never
+            // started.
+            try? stdoutPipe.fileHandleForWriting.close()
+            try? stderrPipe.fileHandleForWriting.close()
+            group.wait()
+            throw error
+        }
         process.waitUntilExit()
-        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        group.wait()
+
+        let out = String(data: stdout.get(), encoding: .utf8) ?? ""
+        let err = String(data: stderr.get(), encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else {
             throw NSError(domain: "SessionService", code: Int(process.terminationStatus),
-                          userInfo: [NSLocalizedDescriptionKey: stderr.isEmpty ? stdout : stderr])
+                          userInfo: [NSLocalizedDescriptionKey: err.isEmpty ? out : err])
         }
-        return stdout
+        return out
     }
 
     /// Run `/usr/bin/env <args...>` and return stdout. Marked `nonisolated` and
@@ -191,50 +288,88 @@ public final class SessionService {
         return try await Self.runShellAsync(env: resolvedEnv, args: args)
     }
 
-    /// Shared async Process runner. Hands ownership of the pipes/process to
-    /// the termination handler so reads happen after exit (no deadlock from
-    /// a full pipe blocking the child) and the continuation is resumed
-    /// exactly once.
+    /// Shared async Process runner.
+    ///
+    /// Drains stdout and stderr on background queues while the child runs,
+    /// and points stdin at `/dev/null`. The old `terminationHandler` read
+    /// *after* exit, which deadlocks when the child writes more than the
+    /// pipe buffer: it blocks in `write()`, never exits, and the handler
+    /// never fires (CROW-1323). The same hang happens if git or gh prompts
+    /// on the TTY crowd inherited.
+    ///
+    /// Cancellation terminates the child. The kickoff serializer's timeout
+    /// cancels the task that is awaiting this call; without `terminate()`
+    /// the wedged checkout would keep the pipe full after the timeout.
+    /// Resumes the continuation exactly once.
     nonisolated static func runShellAsync(env: [String: String], args: [String]) async throws -> String {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let process = Process()
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = args
-            process.environment = env
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
+        nonisolated(unsafe) let process = Process()
+        nonisolated(unsafe) let stdoutPipe = Pipe()
+        nonisolated(unsafe) let stderrPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = args
+        process.environment = env
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        process.standardInput = FileHandle.nullDevice
+        let cancelFlag = CancelFlag()
 
-            process.terminationHandler = { proc in
-                let stdout = String(
-                    data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-                    encoding: .utf8
-                ) ?? ""
-                let stderr = String(
-                    data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                    encoding: .utf8
-                ) ?? ""
-                if proc.terminationStatus == 0 {
-                    continuation.resume(returning: stdout)
-                } else {
-                    continuation.resume(throwing: NSError(
-                        domain: "SessionService",
-                        code: Int(proc.terminationStatus),
-                        userInfo: [NSLocalizedDescriptionKey: stderr.isEmpty ? stdout : stderr]
-                    ))
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                let gate = ShellResume()
+                let stdout = PipeBuffer()
+                let stderr = PipeBuffer()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let group = DispatchGroup()
+                    group.enter()
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        stdout.set(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+                        group.leave()
+                    }
+                    group.enter()
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        stderr.set(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                        group.leave()
+                    }
+
+                    do {
+                        try process.run()
+                    } catch {
+                        try? stdoutPipe.fileHandleForWriting.close()
+                        try? stderrPipe.fileHandleForWriting.close()
+                        group.wait()
+                        gate.resume(continuation, throwing: error)
+                        return
+                    }
+                    // Cancel can land before `run()` returns, when `isRunning`
+                    // is still false and `terminate()` would raise. The flag
+                    // closes that window: kill as soon as the process exists.
+                    if cancelFlag.isSet, process.isRunning {
+                        process.terminate()
+                    }
+                    process.waitUntilExit()
+                    group.wait()
+
+                    if cancelFlag.isSet {
+                        gate.resume(continuation, throwing: CancellationError())
+                        return
+                    }
+                    let out = String(data: stdout.get(), encoding: .utf8) ?? ""
+                    let err = String(data: stderr.get(), encoding: .utf8) ?? ""
+                    if process.terminationStatus == 0 {
+                        gate.resume(continuation, returning: out)
+                    } else {
+                        gate.resume(continuation, throwing: NSError(
+                            domain: "SessionService",
+                            code: Int(process.terminationStatus),
+                            userInfo: [NSLocalizedDescriptionKey: err.isEmpty ? out : err]
+                        ))
+                    }
                 }
             }
-
-            do {
-                try process.run()
-            } catch {
-                // Clear the termination handler so it can't fire after we
-                // resume here — Process invokes it on launch failure paths
-                // in some macOS versions, which would double-resume.
-                process.terminationHandler = nil
-                continuation.resume(throwing: error)
-            }
+        } onCancel: {
+            cancelFlag.mark()
+            // False before launch (`terminate()` raises) and after exit.
+            if process.isRunning { process.terminate() }
         }
     }
 

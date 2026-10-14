@@ -61,7 +61,11 @@ extension ReviewSessionController {
         if !fm.fileExists(atPath: (clonePath as NSString).appendingPathComponent(".git")) {
             CrowLog.info("[SessionService] Cloning \(repoSlug) into \(clonePath)")
             do {
+                try Task.checkCancellation()
                 _ = try await SessionService.runShellAsync(env: env, args: ["gh", "repo", "clone", repoSlug, clonePath])
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 throw NSError(
                     domain: "SessionService",
@@ -83,6 +87,15 @@ extension ReviewSessionController {
             )
         }
 
+        // Best-effort git. A non-zero exit is swallowed (the tree may already
+        // be usable). Cancellation is not: `try?` would swallow the kickoff
+        // timeout and keep going after the child was killed (CROW-1323).
+        func bestEffortGit(_ args: String...) async throws {
+            try Task.checkCancellation()
+            _ = try? await SessionService.runShellAsync(env: env, args: args)
+            try Task.checkCancellation()
+        }
+
         // Fetch and checkout the PR branch. These are best-effort: the existing
         // working tree may already be on the right branch, and a network blip
         // on `pull` shouldn't abort the launch — the agent can resume from the
@@ -96,13 +109,13 @@ extension ReviewSessionController {
         // stale head. Restoring before the pull keeps the tree clean; the strip
         // below re-applies afterward (#843 review round 6).
         if reviewAgentKind == .codex {
-            _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".codex"])
+            try await bestEffortGit("git", "-C", clonePath, "checkout", "--", ".codex")
         }
         // Same restore-before-pull for Cursor reviews (#829 review round 9):
         // the `.cursor/` strip below applies as an unstaged deletion of tracked
         // files, so `git pull` would refuse if the new head touches `.cursor/`.
         if reviewAgentKind == .cursor {
-            _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".cursor"])
+            try await bestEffortGit("git", "-C", clonePath, "checkout", "--", ".cursor")
         }
         // Same restore-before-pull for Grok reviews (#859, extended #861 rounds
         // 2-3, r12): Grok's strip below neutralizes *every* project source Grok
@@ -112,7 +125,7 @@ extension ReviewSessionController {
         // pull, or `git pull` refuses when the new head touches any.
         if reviewAgentKind == .grok {
             for path in [".grok", ".cursor", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"] {
-                _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
+                try await bestEffortGit("git", "-C", clonePath, "checkout", "--", path)
             }
         }
         // Same restore-before-pull for Antigravity reviews (#902 review): the
@@ -129,7 +142,7 @@ extension ReviewSessionController {
         // the SKILL's `gh pr checkout` may have restored a committed layer.
         if reviewAgentKind == .antigravity {
             for path in [".agents", ".gemini"] {
-                _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
+                try await bestEffortGit("git", "-C", clonePath, "checkout", "--", path)
             }
         }
         // Same restore-before-pull for Muse reviews (#1033): the strip below
@@ -137,12 +150,12 @@ extension ReviewSessionController {
         // first so `git pull` cannot refuse when the new head touches them.
         if reviewAgentKind == .muse {
             for path in [".muse", ".agents"] {
-                _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
+                try await bestEffortGit("git", "-C", clonePath, "checkout", "--", path)
             }
         }
-        _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
-        _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
-        _ = try? await SessionService.runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
+        try await bestEffortGit("git", "-C", clonePath, "fetch", "origin", headBranch)
+        try await bestEffortGit("git", "-C", clonePath, "checkout", headBranch)
+        try await bestEffortGit("git", "-C", clonePath, "pull", "origin", headBranch)
 
         // Defense-in-depth for Codex reviews (#843 review round 5): strip any
         // committed `.codex/` from the checked-out PR head before the agent

@@ -213,22 +213,19 @@ extension CrowDaemon {
         // poll old — and two callers deciding from two different heads is
         // exactly the divergence that let a round go on shadowing its PR. So
         // this stays a filter + a rate guard, and the service owns the verdict.
-        var autoReviewed: Set<String> = []
+        // SHA-keyed dedup lives in the queue: a new head is a fresh round; an
+        // unchanged head never re-kicks (also guards the in-flight clone window
+        // before the session's link/reviewSessionID land). The fingerprint is
+        // cleared when the kickoff returns nil, so a timeout or clone failure
+        // is retried on the next poll instead of being stuck until restart
+        // (CROW-1323). In-memory only — a daemon restart can re-ask, and
+        // `createReviewSession` still refuses to duplicate a live round.
+        let kickoffs = AutoReviewKickoffQueue(serializer: reviewSerializer)
         tracker.onReviewRequestsRefreshed = { requests in
             let patterns = (config()?.workspaces ?? []).flatMap { $0.autoReviewRepos }
             guard !patterns.isEmpty else { return }
-            for request in requests {
-                guard repoMatchesPatterns(request.repo, patterns: patterns) else { continue }
-                // SHA-keyed dedup: a new head is a fresh round; an unchanged head
-                // never re-kicks (also guards the in-flight clone window before
-                // the session's link/reviewSessionID land). In-memory only, so a
-                // daemon restart can re-ask — `createReviewSession` still refuses
-                // to duplicate a live round, so the worst case is one redundant
-                // metadata fetch, not a duplicate session.
-                let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
-                guard autoReviewed.insert(fingerprint).inserted else { continue }
-                let url = request.url
-                Task { _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) } }
+            kickoffs.schedule(requests: requests, patterns: patterns) { url in
+                await sessionService.createReviewSession(prURL: url, selectAfterCreate: false)
             }
         }
     }
