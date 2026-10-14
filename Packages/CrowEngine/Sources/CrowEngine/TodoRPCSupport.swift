@@ -234,8 +234,10 @@ public enum TodoRPC {
     }
 
     /// Wrap a Manager launch command so the explore brief is argv (job-style
-    /// `evalPromptLaunch`), not a TUI paste. Cursor/Grok need `--` so a brief
-    /// whose first character is `-` is not parsed as a flag.
+    /// `evalPromptLaunch`), not a TUI paste. Cursor, Grok, and Claude need `--`
+    /// before that positional: Cursor/Grok so a brief whose first character is
+    /// `-` is not a flag, Claude so a variadic `--add-dir` cannot swallow it
+    /// (CROW-1329).
     public static func seedLaunchCommand(
         baseCommand: String, promptPath: String, agentKind: AgentKind
     ) -> String {
@@ -246,8 +248,29 @@ public enum TodoRPC {
         )
     }
 
+    /// Whether the Scratch/handoff seed puts `--` before the brief.
+    ///
+    /// Opt-in per harness. `--` is a convention, and a parser that treats it
+    /// as a literal prompt word would corrupt the launch (`ShellLaunchArgs`).
+    ///
+    /// Manager prefixes audited for a variadic flag left open in front of the
+    /// positional brief (CROW-1329):
+    /// - **Claude** — `managerCommand` appends `--add-dir <directories...>`,
+    ///   which consumes every following positional. Verified on Claude Code
+    ///   2.1.296: `--add-dir /tmp BRIEF` stats `BRIEF` as a directory;
+    ///   `--add-dir /tmp -- BRIEF` and `--add-dir=/tmp BRIEF` do not. The
+    ///   command emits the `=` form as well as `--`.
+    /// - **Cursor** and **Grok** — already required `--` so a brief starting
+    ///   with `-` is not a flag (CROW-968 / CROW-1144). Their manager flags
+    ///   (`--trust`, `--force`, `--approve-mcps`, `--resume <id>`, `-c`) are
+    ///   not variadic.
+    /// - **Codex** ends in the boolean `--no-alt-screen`. **OpenCode**'s
+    ///   `--session` takes one string and is only present with its id.
+    ///   **Antigravity**'s manager suffix is empty. **Muse**'s manager flags
+    ///   are booleans (`--disable-approval`, `--trust-workspace`). None leave
+    ///   a variadic flag open, and `--` is still unverified for them.
     public static func seedsExplorePromptWithEndOfOptions(_ agentKind: AgentKind) -> Bool {
-        agentKind == .cursor || agentKind == .grok
+        agentKind == .claudeCode || agentKind == .cursor || agentKind == .grok
     }
 
     /// `#{pane_current_command}` looks like a coding-agent TUI, not the

@@ -1,7 +1,9 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowClaude
 import CrowIPC
+import CrowPersistence
 @testable import CrowEngine
 
 @Suite("Todo RPC support (CROW-1231)")
@@ -106,12 +108,50 @@ struct TodoRPCSupportTests {
         #expect(cursor.contains("-- "))
         #expect(TodoRPC.seedsExplorePromptWithEndOfOptions(.cursor))
         #expect(TodoRPC.seedsExplorePromptWithEndOfOptions(.grok))
-        #expect(!TodoRPC.seedsExplorePromptWithEndOfOptions(.claudeCode))
+        #expect(TodoRPC.seedsExplorePromptWithEndOfOptions(.claudeCode))
+        // Codex, OpenCode, Antigravity, and Muse manager prefixes do not
+        // leave a variadic flag open, and `--` is unverified for them.
+        #expect(!TodoRPC.seedsExplorePromptWithEndOfOptions(.codex))
+        #expect(!TodoRPC.seedsExplorePromptWithEndOfOptions(.openCode))
+        #expect(!TodoRPC.seedsExplorePromptWithEndOfOptions(.antigravity))
+        #expect(!TodoRPC.seedsExplorePromptWithEndOfOptions(.muse))
         let claude = TodoRPC.seedLaunchCommand(
             baseCommand: "claude --permission-mode auto",
             promptPath: path, agentKind: .claudeCode)
         #expect(claude.contains("_CROW_P=$(< '/tmp/crow-explore.md')"))
-        #expect(!claude.contains("-- $(printf"))
+        #expect(claude.contains("-- $(printf"))
+    }
+
+    /// Extra Claude Managers append variadic `--add-dir`. The seeded brief
+    /// must sit after `--`, and the flag must be the single-value `=` form,
+    /// so the brief is not a second directory (CROW-1329).
+    @Test @MainActor func claudeExtraManagerSeedKeepsBriefOutOfAddDir() throws {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-seed-add-dir-\(UUID().uuidString)")
+        let svc = SessionService(store: JSONStore(directory: tmp), appState: AppState())
+        let session = Session(name: "Manager 2", kind: .manager, agentKind: .claudeCode)
+        let root = "/Users/x/My Dev"
+        let cwd = ManagerIdentity.directory(devRoot: root, sessionID: session.id)
+        let base = svc.manager.managerCommand(for: session, cwd: cwd, devRoot: root)
+        let flag = "--add-dir=\(ClaudeLaunchArgs.shellQuote(root))"
+        #expect(base.contains(flag))
+        #expect(!base.contains("--add-dir \(ClaudeLaunchArgs.shellQuote(root))"))
+
+        let brief = "Start now.\n"
+        let cmd = try #require(ManagerSessionController.exploreSeedLaunchCommand(
+            session: session, baseCommand: base, prompt: brief))
+        defer { try? FileManager.default.removeItem(atPath: TodoRPC.explorePromptPath(sessionID: session.id)) }
+
+        let flagRange = try #require(cmd.range(of: flag))
+        let sep = try #require(cmd.range(of: " -- "))
+        let prompt = try #require(cmd.range(of: "$(printf"))
+        #expect(flagRange.upperBound <= sep.lowerBound)
+        #expect(sep.upperBound <= prompt.lowerBound)
+        let value = cmd[flagRange.upperBound..<sep.lowerBound]
+        #expect(!value.contains("$_CROW_P"))
+        #expect(!value.contains("$(printf"))
+        #expect(cmd.contains(TodoRPC.explorePromptPath(sessionID: session.id)))
     }
 
     @Test func paneLooksLikeAgentRejectsShellsAndAcceptsHarnessTokens() {

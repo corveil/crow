@@ -36,6 +36,10 @@ public enum ShellLaunchArgs {
     ///   unexpected argument '--bogus' found` with tip *"to pass '--bogus' as
     ///   a value, use '-- --bogus'"*. Enabled on the `.work` interactive-seed
     ///   path (`GrokLaunchArgs.interactiveSeedCommand`, CROW-1144).
+    /// - **Claude Code** (2.1.296, commander): `--add-dir <directories...>`
+    ///   consumes following positionals. `--add-dir /tmp -- BRIEF` leaves
+    ///   `BRIEF` as the prompt; so does `--add-dir=/tmp BRIEF`. Enabled on
+    ///   the Scratch seed path (CROW-1329), which also emits the `=` form.
     public static func evalPromptLaunch(
         prefix: String,
         promptPath: String,
