@@ -1,3 +1,4 @@
+import CrowCore
 import CrowTerminal
 import Crypto
 import Foundation
@@ -37,6 +38,20 @@ enum StaticAssets {
         // also serves it as the fallback for unauthenticated navigational GETs.
         router.get("/login") { req, _ in webResponse("login.html", webDir: webDir, request: req) }
         router.get("/theme.css") { req, _ in webResponse("theme.css", webDir: webDir, request: req) }
+        // Skins (CROW-1333): the catalog the Settings picker lists, and one
+        // skin's CSS generated from web/skins/<id>.json. Auth-exempt with
+        // theme.css so the login page paints in the chosen skin too.
+        router.get("/skins.json") { req, _ in
+            fileResponse(WebSkinCatalog.catalogJSON(webDir: webDir), name: "skins.json",
+                         request: req, revalidate: true)
+        }
+        router.get("/skins/:file") { req, context -> Response in
+            guard let file = context.parameters.get("file"), let id = skinID(fromCSSFile: file),
+                  let skin = WebSkinCatalog.skin(id: id, webDir: webDir) else {
+                return Response(status: .notFound)
+            }
+            return fileResponse(Data(skin.css().utf8), name: file, request: req, revalidate: true)
+        }
         router.get("/app.css") { req, _ in webResponse("app.css", webDir: webDir, request: req) }
         // Classic client scripts (CROW-1155). Each is an exact literal path with
         // the CROW-1024 revalidate policy; `webResponse` already sets `revalidate`.
@@ -87,6 +102,14 @@ enum StaticAssets {
             }
             return fileResponse(data, name: file)
         }
+    }
+
+    /// `corveil-classic.css` → `corveil-classic`; nil for anything that is not a
+    /// well-formed skin id plus `.css` (so no traversal reaches the catalog).
+    static func skinID(fromCSSFile file: String) -> String? {
+        guard file.hasSuffix(".css") else { return nil }
+        let id = String(file.dropLast(4))
+        return WebSkin.isValidID(id) ? id : nil
     }
 
     /// Whether `name` is a safe single path component for `/xterm/*`: non-empty,

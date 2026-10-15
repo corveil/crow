@@ -866,6 +866,7 @@ import CrowPersistence
         // login page references them and Chrome's install prompt fetches them
         // regardless of auth state.
         for path in ["/login", "/logout", "/health", "/brand.svg", "/theme.css",
+                     "/theme.js", "/skins.json", "/skins/graphite.css",
                      "/fonts/IBMPlexSans-Regular.woff2", "/fonts/OFL.txt",
                      "/manifest.webmanifest", "/icon-192.png", "/icon-512.png",
                      "/apple-touch-icon.png"] {

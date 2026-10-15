@@ -318,7 +318,7 @@ function mountGridTerm(sessionId, host) {
     disableStdin: true,
     fontSize: 11,
     fontFamily: DEFAULT_TERM_FONT,
-    theme: (typeof crowXtermTheme === 'function') ? crowXtermTheme() : { background: '#0A060B', foreground: '#FFF7FB' },
+    theme: (typeof crowXtermTheme === 'function') ? crowXtermTheme() : {},
     scrollback: 0,
     allowTransparency: true,
   });

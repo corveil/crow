@@ -208,7 +208,7 @@ async function openTuiPlayback(recordingId) {
       convertEol: true,
       fontFamily: (typeof DEFAULT_TERM_FONT === 'string') ? DEFAULT_TERM_FONT : '"IBM Plex Mono", ui-monospace, monospace',
       fontSize: 13,
-      theme: (typeof crowXtermTheme === 'function') ? crowXtermTheme() : { background: '#0A060B', foreground: '#FFF7FB' },
+      theme: (typeof crowXtermTheme === 'function') ? crowXtermTheme() : {},
     });
     tuiPlaybackTerm.open(document.getElementById('tui-playback-term'));
   }

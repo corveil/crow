@@ -682,7 +682,7 @@ body.mgr-reordering, body.mgr-reordering * { cursor: grabbing; }
   cursor: pointer;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-raised);
 }
 #back-to-sidebar:active { transform: translateY(1px); }
 body.update-banner-visible #back-to-sidebar {
@@ -958,7 +958,7 @@ button.scratch-link:hover { border-color: var(--blue); }
 .scratch-list { display: flex; flex-direction: column; gap: 16px; }
 .scratch-row {
   display: flex; flex-direction: column; padding: 0;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-card);
 }
 .scratch-row-body { padding: 16px 18px 12px; }
 .scratch-row .card-title { font-size: 15px; margin-top: 0; cursor: text; }
@@ -1183,7 +1183,7 @@ button.scratch-link:hover { border-color: var(--blue); }
 .ctx-menu {
   position: fixed; z-index: 1000; min-width: 190px; padding: 4px;
   background: var(--bg-card); border: 1px solid var(--border-strong);
-  border-radius: 8px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  border-radius: 8px; box-shadow: var(--shadow-popover);
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .ctx-item { padding: 6px 10px; border-radius: 5px; font-size: 12px; color: var(--text-primary); cursor: pointer; }
@@ -1287,7 +1287,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   /* fixed + inset:0 captures every click/keypress aimed at #app beneath it */
 }
 #session-scrim[hidden] { display: none; }
@@ -1297,7 +1297,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: 12px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-modal);
   padding: 22px 24px;
 }
 .scrim-title { color: var(--red); font-weight: 700; font-size: 16px; margin-bottom: 6px; }
@@ -1319,7 +1319,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.82);
+  background: var(--overlay-strong);
   cursor: zoom-out;
 }
 #lightbox[hidden] { display: none; }
@@ -1327,7 +1327,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   max-width: 92vw;
   max-height: 92vh;
   border-radius: 8px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-popover);
 }
 
 /* Session switcher overlay (CROW-976) — macOS-style task switcher */
@@ -1339,7 +1339,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   align-items: center;
   justify-content: center;
   padding: 32px 24px;
-  background: rgba(0, 0, 0, 0.72);
+  background: var(--overlay-strong);
   backdrop-filter: blur(10px);
 }
 .session-switcher[hidden] { display: none; }
@@ -1373,7 +1373,7 @@ button.scratch-link:hover { border-color: var(--blue); }
 .switcher-card:hover { border-color: var(--border-strong); }
 .switcher-card.highlighted {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 12px 32px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-popover);
   transform: scale(1.02);
 }
 .switcher-card-top {
@@ -1434,7 +1434,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   position: fixed;
   inset: 0;
   z-index: 2200;
-  background: rgba(0, 0, 0, 0.58);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1445,7 +1445,7 @@ button.scratch-link:hover { border-color: var(--blue); }
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: 12px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-modal);
   padding: 18px;
 }
 .text-prompt-title {
@@ -1535,7 +1535,7 @@ select.text-prompt-input { cursor: pointer; }
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: 12px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-modal);
   padding: 22px 24px 18px;
   animation: modal-slide-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
