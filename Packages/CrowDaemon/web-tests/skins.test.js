@@ -11,6 +11,11 @@
 //   * a skin crowd no longer has falls back to Corveil instead of sticking;
 //   * a failed fetch leaves crow.skin on the skin that is actually painted.
 //
+// CROW-1334 adds:
+//   * a browser that has not chosen follows the daemon-wide default;
+//   * a /skins.json revision change repaints open tabs (live reload), and a
+//     chosen skin that was removed falls back to the default.
+//
 // theme.js runs on its own here, as it does in <head> before anything else.
 const assert = require('assert');
 const fs = require('fs');
@@ -33,8 +38,14 @@ const CSS = {
   graphite: ':root[data-skin="graphite"]:not([data-theme="light"]) { --accent: #8AA4C8; }',
 };
 
-// `storage` seeds localStorage before theme.js runs; `systemDark` is the OS.
-function boot({ storage = {}, systemDark = false } = {}) {
+// Every booted window, closed at the end: theme.js polls /skins.json on a
+// timer, which would otherwise keep node alive.
+const windows = [];
+const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+// `storage` seeds localStorage before theme.js runs; `systemDark` is the OS;
+// `catalog` is what /skins.json returns (mutable, read on every fetch).
+function boot({ storage = {}, systemDark = false, catalog = CATALOG } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only', url: 'http://localhost/',
   });
@@ -44,15 +55,21 @@ function boot({ storage = {}, systemDark = false } = {}) {
   const fetched = [];
   window.fetch = (url) => {
     fetched.push(url);
-    if (url === '/skins.json') return Promise.resolve({ ok: true, json: () => Promise.resolve(CATALOG) });
+    if (url === '/skins.json') {
+      const snapshot = JSON.parse(JSON.stringify(catalog));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(snapshot) });
+    }
     const m = /^\/skins\/([a-z0-9-]+)\.css$/.exec(url);
     if (m && CSS[m[1]]) return Promise.resolve({ ok: true, text: () => Promise.resolve(CSS[m[1]]) });
     return Promise.resolve({ ok: false, status: 404 });
   };
   const events = [];
+  const skinEvents = [];
   window.addEventListener('crow-theme', (e) => events.push(e.detail));
+  window.addEventListener('crow-skins', (e) => skinEvents.push(e.detail));
   window.eval(THEME_JS);
-  return { window, fetched, events, root: window.document.documentElement };
+  windows.push(window);
+  return { window, fetched, events, skinEvents, root: window.document.documentElement };
 }
 
 const skinStyle = (window) => window.document.getElementById('crow-skin');
@@ -104,8 +121,10 @@ async function main() {
     const { window, root, fetched, events } = boot({ storage: { 'crow.color-scheme': 'light' } });
     await new Promise((r) => setTimeout(r, 0)); // let jsdom's own DOMContentLoaded pass
     events.length = 0;
+    await settle(); // the post-load /skins.json refresh
+    fetched.length = 0;
     await window.CrowTheme.setSkin('corveil-classic');
-    assert.deepStrictEqual(fetched, ['/skins.json', '/skins/corveil-classic.css']);
+    assert.deepStrictEqual(fetched, ['/skins/corveil-classic.css']);
     assert.strictEqual(root.getAttribute('data-skin'), 'corveil-classic');
     assert.strictEqual(skinStyle(window).textContent, CSS['corveil-classic']);
     assert.strictEqual(root.getAttribute('data-theme'), 'dark', 'Classic is dark only');
@@ -121,12 +140,18 @@ async function main() {
     await window.CrowTheme.setSkin('graphite');
     assert.strictEqual(root.getAttribute('data-theme'), 'light');
 
-    // Back to Corveil removes the injected CSS and the cache.
+    // Back to Corveil removes the injected CSS and the cache. Corveil is now
+    // stored as an explicit choice, so it outlasts a non-Corveil default.
     await window.CrowTheme.setSkin('corveil');
     assert.strictEqual(root.getAttribute('data-skin'), null);
     assert.strictEqual(skinStyle(window), null);
-    assert.strictEqual(window.localStorage.getItem('crow.skin'), null);
+    assert.strictEqual(window.localStorage.getItem('crow.skin'), 'corveil');
     assert.strictEqual(cacheOf(window), null);
+
+    // setSkin(null) goes back to following the default.
+    await window.CrowTheme.setSkin(null);
+    assert.strictEqual(window.localStorage.getItem('crow.skin'), null);
+    assert.strictEqual(window.CrowTheme.chosenSkin(), null);
   }
 
   // 6. A skin crowd no longer serves falls back to Corveil on the post-load refresh.
@@ -172,6 +197,71 @@ async function main() {
     assert.strictEqual(root.getAttribute('data-skin'), null);
   }
 
+  // 10. CROW-1334: no stored choice follows the daemon-wide default, and the
+  //    default is remembered so the next load paints it before any fetch.
+  {
+    const catalog = { ...CATALOG, default: 'graphite', revision: 'a' };
+    const { window, root } = boot({ catalog });
+    await settle();
+    assert.strictEqual(window.CrowTheme.chosenSkin(), null);
+    assert.strictEqual(window.CrowTheme.skin(), 'graphite');
+    assert.strictEqual(root.getAttribute('data-skin'), 'graphite');
+    assert.strictEqual(window.localStorage.getItem('crow.skin.default'), 'graphite');
+
+    const again = boot({
+      catalog,
+      storage: {
+        'crow.skin.default': 'graphite',
+        'crow.skin.cache': window.localStorage.getItem('crow.skin.cache'),
+      },
+    });
+    assert.strictEqual(again.root.getAttribute('data-skin'), 'graphite', 'default paints from cache, no flash');
+    assert.deepStrictEqual(again.fetched, []);
+
+    // A per-browser choice still wins over the default.
+    const chose = boot({ catalog, storage: { 'crow.skin': 'corveil-classic' } });
+    await settle();
+    assert.strictEqual(chose.root.getAttribute('data-skin'), 'corveil-classic');
+  }
+
+  // 11. CROW-1334 live reload: a revision change adds/removes skins and moves
+  //    the default without a reload; a removed chosen skin falls back.
+  {
+    const catalog = {
+      default: 'corveil', revision: 'r1',
+      skins: [...CATALOG.skins, { id: 'dusty', name: 'Dusty', light: false, builtin: false }],
+    };
+    CSS.dusty = ':root[data-skin="dusty"]:not([data-theme="light"]) { --accent: #7AA2F7; }';
+    const { window, root, skinEvents } = boot({ catalog, storage: { 'crow.skin': 'dusty' } });
+    await settle();
+    assert.strictEqual(root.getAttribute('data-skin'), 'dusty');
+    assert.strictEqual(skinEvents.length, 0, 'the first catalog read is not a change');
+
+    // Same revision: nothing happens.
+    await window.CrowTheme.refresh();
+    assert.strictEqual(skinEvents.length, 0);
+
+    // `crow skin remove --id dusty` + `crow skin default set graphite`.
+    catalog.skins = CATALOG.skins.slice();
+    catalog.default = 'graphite';
+    catalog.revision = 'r2';
+    await window.CrowTheme.refresh();
+    await settle();
+    assert.strictEqual(window.localStorage.getItem('crow.skin'), null, 'removed choice is dropped');
+    assert.strictEqual(window.CrowTheme.skin(), 'graphite');
+    assert.strictEqual(root.getAttribute('data-skin'), 'graphite');
+    assert.strictEqual(skinEvents.length, 1);
+    assert.strictEqual(skinEvents[0].default, 'graphite');
+
+    // An edited skin's CSS is refetched on the next revision.
+    CSS.graphite = ':root[data-skin="graphite"]:not([data-theme="light"]) { --accent: #123456; }';
+    catalog.revision = 'r3';
+    await window.CrowTheme.refresh();
+    await settle();
+    assert.strictEqual(skinStyle(window).textContent, CSS.graphite);
+  }
+
+  for (const w of windows) w.close();
   console.log('skins: ok');
 }
 

@@ -331,6 +331,27 @@ Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `
 
 Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
 
+### Skin Commands
+
+Web UI skins (CROW-1334). Built-ins ship with `crowd`; custom skins are JSON in `~/Library/Application Support/crow/skins/` (format + token list: `docs/web-skins.md`). Writes reach open browsers within ~10s — no restart.
+
+```
+crow skin list                                   → {"skins":[{id,name,builtin,modes:["dark","light"]}],"default":"corveil","store":"…"}
+crow skin get --id ID                            → {"skin":{...every token, resolved...},"builtin":bool,"warnings":[...]}
+crow skin create --from ID --name NAME [--id ID] [--set TOKEN=VALUE ...] [--set-light TOKEN=VALUE ...]
+                                                 → {"skin":{...},"path":"…","warnings":[...],"saved":true}
+crow skin add <file.json> [--id ID]              → validate + copy into the store (local-only, like `notifications add-sound`)
+crow skin export --id ID [--out FILE]            → the skin file, every token resolved (stdout unless --out)
+crow skin remove --id ID                         → {"removed":true,"id":"…","default_cleared":bool}
+crow skin default set ID                         → {"default":"…","saved":true}
+crow skin default clear                          → {"default":"corveil","saved":true}
+```
+
+- `TOKEN` may drop its dashes (`--set accent=#7AA2F7` sets `--accent`). `--id` defaults to the name slugged.
+- **Blocks:** an unknown token, a non-color where a color is required, `var()` in a `--term-*` token, an id that shadows a built-in (built-ins can't be removed either), or an existing custom id.
+- **Warns, doesn't block:** text on a background below 4.5:1, or the terminal scroll thumb below 3:1. Each warning reports the measured ratio; the CLI also echoes them to stderr.
+- The default applies to browsers that haven't picked a skin in Settings → General; a per-browser choice wins. Removing the default skin clears the default.
+
 ### Workspace Commands
 
 Manage `AppConfig.workspaces` — the Settings → Workspaces tab as CLI verbs. `--workspace` takes a name (case-insensitive) or a workspace UUID.

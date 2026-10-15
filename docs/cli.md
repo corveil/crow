@@ -128,6 +128,16 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow set-status`](#crow-set-status) | Set session status |
 | [`crow set-ticket`](#crow-set-ticket) | Set ticket metadata |
 | [`crow setup`](#crow-setup) | First-time setup for Crow |
+| [`crow skin`](#crow-skin) | List, make, install and remove web UI skins |
+| [`crow skin add`](#crow-skin-add) | Validate a skin file and install it as a custom skin |
+| [`crow skin create`](#crow-skin-create) | Make a custom skin from an existing one |
+| [`crow skin default`](#crow-skin-default) | Set or clear the daemon-wide default skin |
+| [`crow skin default clear`](#crow-skin-default-clear) | Reset the default skin to Corveil |
+| [`crow skin default set`](#crow-skin-default-set) | Make a skin the default for browsers that haven't chosen one |
+| [`crow skin export`](#crow-skin-export) | Write a skin as a self-contained skin file |
+| [`crow skin get`](#crow-skin-get) | Show one skin with every token resolved |
+| [`crow skin list`](#crow-skin-list) | List the skins crowd serves, built in and custom, and the default |
+| [`crow skin remove`](#crow-skin-remove) | Remove a custom skin (built-ins cannot be removed) |
 | [`crow start-review`](#crow-start-review) | Start a review session for a pull request |
 | [`crow telemetry`](#crow-telemetry) | View or change session-analytics collection |
 | [`crow telemetry get`](#crow-telemetry-get) | Show the current telemetry settings |
@@ -2018,6 +2028,156 @@ crow setup [--dev-root <dev-root>]
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--dev-root` | `<dev-root>` | no | Development root path |
+
+---
+
+## `crow skin`
+
+List, make, install and remove web UI skins.
+
+```
+crow skin <list|get|create|add|export|remove|default>
+```
+
+Subcommands: [`list`](#crow-skin-list), [`get`](#crow-skin-get), [`create`](#crow-skin-create), [`add`](#crow-skin-add), [`export`](#crow-skin-export), [`remove`](#crow-skin-remove), [`default`](#crow-skin-default).
+
+---
+
+## `crow skin add`
+
+Validate a skin file and install it as a custom skin.
+
+```
+crow skin add <path> [--id <id>]
+```
+
+Copies the file into ~/Library/Application Support/crow/skins/. It must be a skin JSON file (see docs/web-skins.md); a malformed or invalid one is rejected with the reason. --id installs it under another id. Local only: the daemon reads the path, so it is refused over remote /rpc.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| _(positional)_ | `<path>` | yes | Path to a skin .json file |
+| `--id` | `<id>` | no | Install under this id instead of the file's |
+
+---
+
+## `crow skin create`
+
+Make a custom skin from an existing one.
+
+```
+crow skin create --from <from> --name <name> [--id <id>] [--set <TOKEN=VALUE> ...] [--set-light <TOKEN=VALUE> ...]
+```
+
+Copies --from, renames it, and applies --set (dark) and --set-light (light) overrides. TOKEN may omit the leading dashes: `--set accent=#7AA2F7` sets `--accent`. --set-light on a dark-only source gives the new skin a light mode built on Corveil's light palette.
+
+```
+crow skin create --from corveil-classic --name "Dusty" --set accent=#7AA2F7
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--from` | `<from>` | yes | Skin to start from (an id from `skin list`) |
+| `--name` | `<name>` | yes | Display name |
+| `--id` | `<id>` | no | Skin id (default: the name, lowercased and dashed) |
+| `--set` | `<TOKEN=VALUE>` _(repeatable)_ | no | Dark-mode override (repeatable) |
+| `--set-light` | `<TOKEN=VALUE>` _(repeatable)_ | no | Light-mode override (repeatable) |
+
+---
+
+## `crow skin default`
+
+Set or clear the daemon-wide default skin.
+
+```
+crow skin default <set|clear>
+```
+
+A browser that has not picked a skin in Settings uses the default; one that has keeps its own choice.
+
+Subcommands: [`set`](#crow-skin-default-set), [`clear`](#crow-skin-default-clear).
+
+---
+
+## `crow skin default clear`
+
+Reset the default skin to Corveil.
+
+```
+crow skin default clear
+```
+
+---
+
+## `crow skin default set`
+
+Make a skin the default for browsers that haven't chosen one.
+
+```
+crow skin default set <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| _(positional)_ | `<id>` | yes | Skin id |
+
+---
+
+## `crow skin export`
+
+Write a skin as a self-contained skin file.
+
+```
+crow skin export --id <id> [--out <out>]
+```
+
+Every token is written out, resolved against Corveil, so the file is a complete starting point: edit it, then `crow skin add` it under a new --id. Prints to stdout unless --out is given.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Skin id |
+| `--out` | `<out>` | no | File to write (default: stdout) |
+
+---
+
+## `crow skin get`
+
+Show one skin with every token resolved.
+
+```
+crow skin get --id <id>
+```
+
+A skin file only holds the tokens it changes; the rest fall back to Corveil. `get` fills them in, so `skin` lists every token as it applies.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Skin id |
+
+---
+
+## `crow skin list`
+
+List the skins crowd serves, built in and custom, and the default.
+
+```
+crow skin list
+```
+
+---
+
+## `crow skin remove`
+
+Remove a custom skin (built-ins cannot be removed).
+
+```
+crow skin remove --id <id>
+```
+
+Browsers using it fall back to the default. If it was the default, the default is cleared back to Corveil (`default_cleared`).
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Custom skin id |
 
 ---
 

@@ -94,6 +94,7 @@ public struct WebSkin: Codable, Equatable, Sendable {
         case unknownToken(mode: String, token: String)
         case unsafeValue(mode: String, token: String)
         case terminalValueNotLiteral(mode: String, token: String)
+        case notAColor(mode: String, token: String, value: String)
 
         public var description: String {
             switch self {
@@ -107,6 +108,8 @@ public struct WebSkin: Codable, Equatable, Sendable {
                 return "\(mode): \(token) has a value that is not a plain CSS value"
             case .terminalValueNotLiteral(let mode, let token):
                 return "\(mode): \(token) must be a literal #hex or rgb()/rgba() color; xterm reads it from JS and cannot resolve var()"
+            case .notAColor(let mode, let token, let value):
+                return "\(mode): \(token) must be a color, got \"\(value)\""
             }
         }
     }
@@ -128,6 +131,9 @@ public struct WebSkin: Codable, Equatable, Sendable {
                     errors.append(.unsafeValue(mode: mode, token: token))
                 } else if token.hasPrefix("--term-"), !Self.isLiteralColor(value) {
                     errors.append(.terminalValueNotLiteral(mode: mode, token: token))
+                } else if !Self.nonColorTokens.contains(token), !Self.isColorValue(value) {
+                    errors.append(.notAColor(
+                        mode: mode, token: token, value: value.trimmingCharacters(in: .whitespaces)))
                 }
             }
         }
@@ -160,6 +166,60 @@ public struct WebSkin: Codable, Equatable, Sendable {
         return !lower.contains("/*") && !lower.contains("*/") && !lower.contains("url(")
             && !lower.contains("expression(") && !lower.contains("image(")
     }
+
+    /// Tokens whose value is not a color (CROW-1334). Every other token must
+    /// pass ``isColorValue(_:)``.
+    public static let nonColorTokens: Set<String> = [
+        "--shadow-raised", "--shadow-card", "--shadow-popover", "--shadow-modal",
+    ]
+
+    /// Whether `value` reads as a CSS color: a literal (``isLiteralColor(_:)``),
+    /// a color function (`hsl()`, `color-mix()`, `oklch()`, …), a `var()`, or a
+    /// named color. It catches the plain mistakes (`12px`, `bold`, a font stack)
+    /// without parsing CSS Color 4 in full; the browser still judges a
+    /// function's arguments.
+    public static func isColorValue(_ value: String) -> Bool {
+        let v = value.trimmingCharacters(in: .whitespaces)
+        if isLiteralColor(v) { return true }
+        let lower = v.lowercased()
+        if let open = lower.firstIndex(of: "("), lower.hasSuffix(")") {
+            return colorFunctions.contains(String(lower[..<open]).trimmingCharacters(in: .whitespaces))
+        }
+        return namedColors.contains(lower)
+    }
+
+    static let colorFunctions: Set<String> = [
+        "var", "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch",
+        "color", "color-mix", "light-dark",
+    ]
+
+    /// CSS named colors (CSS Color 4), plus `transparent` and `currentcolor`.
+    static let namedColors: Set<String> = Set([
+        "transparent", "currentcolor", "aliceblue", "antiquewhite", "aqua", "aquamarine",
+        "azure", "beige", "bisque", "black", "blanchedalmond", "blue", "blueviolet", "brown",
+        "burlywood", "cadetblue", "chartreuse", "chocolate", "coral", "cornflowerblue",
+        "cornsilk", "crimson", "cyan", "darkblue", "darkcyan", "darkgoldenrod", "darkgray",
+        "darkgreen", "darkgrey", "darkkhaki", "darkmagenta", "darkolivegreen", "darkorange",
+        "darkorchid", "darkred", "darksalmon", "darkseagreen", "darkslateblue", "darkslategray",
+        "darkslategrey", "darkturquoise", "darkviolet", "deeppink", "deepskyblue", "dimgray",
+        "dimgrey", "dodgerblue", "firebrick", "floralwhite", "forestgreen", "fuchsia",
+        "gainsboro", "ghostwhite", "gold", "goldenrod", "gray", "green", "greenyellow", "grey",
+        "honeydew", "hotpink", "indianred", "indigo", "ivory", "khaki", "lavender",
+        "lavenderblush", "lawngreen", "lemonchiffon", "lightblue", "lightcoral", "lightcyan",
+        "lightgoldenrodyellow", "lightgray", "lightgreen", "lightgrey", "lightpink",
+        "lightsalmon", "lightseagreen", "lightskyblue", "lightslategray", "lightslategrey",
+        "lightsteelblue", "lightyellow", "lime", "limegreen", "linen", "magenta", "maroon",
+        "mediumaquamarine", "mediumblue", "mediumorchid", "mediumpurple", "mediumseagreen",
+        "mediumslateblue", "mediumspringgreen", "mediumturquoise", "mediumvioletred",
+        "midnightblue", "mintcream", "mistyrose", "moccasin", "navajowhite", "navy", "oldlace",
+        "olive", "olivedrab", "orange", "orangered", "orchid", "palegoldenrod", "palegreen",
+        "paleturquoise", "palevioletred", "papayawhip", "peachpuff", "peru", "pink", "plum",
+        "powderblue", "purple", "rebeccapurple", "red", "rosybrown", "royalblue", "saddlebrown",
+        "salmon", "sandybrown", "seagreen", "seashell", "sienna", "silver", "skyblue",
+        "slateblue", "slategray", "slategrey", "snow", "springgreen", "steelblue", "tan", "teal",
+        "thistle", "tomato", "turquoise", "violet", "wheat", "white", "whitesmoke", "yellow",
+        "yellowgreen",
+    ])
 
     /// `#rgb`, `#rrggbb`, `#rrggbbaa`, or `rgb()`/`rgba()` with plain numbers —
     /// the forms xterm's `css.toColor` parses.

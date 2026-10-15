@@ -157,6 +157,7 @@ public enum ParityLedger {
         "corveil-detect-gateways",
         "corveil-link-gateway",
         "notifications-add-sound",
+        "skin-add",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -335,6 +336,15 @@ public enum ParityLedger {
         .write("notifications-set", cli: "notifications set"),
         .write("notifications-add-sound", cli: "notifications add-sound"),
         .write("notifications-remove-sound", cli: "notifications remove-sound"),
+        // Web UI skins (CROW-1334). `export` is `skin-get` written to a file by
+        // the CLI, so it has no RPC of its own.
+        .read("skin-list", cli: "skin list"),
+        .read("skin-get", cli: "skin get"),
+        .write("skin-create", cli: "skin create"),
+        .write("skin-add", cli: "skin add"),
+        .write("skin-remove", cli: "skin remove"),
+        .write("skin-default-set", cli: "skin default set"),
+        .write("skin-default-clear", cli: "skin default clear"),
         .read(
             "get-config",
             noCLI: """
@@ -526,6 +536,8 @@ public enum ParityLedger {
         .field("versionUpdate.intervalHours", read: "version get", write: "version set"),
 
         .field("sidebar.hideSessionDetails", read: "ui get", write: "ui set"),
+
+        .field("webDefaultSkin", read: "skin list", write: "skin default set"),
 
         .field("switcher.enabled", read: "ui get", write: "ui set"),
         .field("switcher.binding", read: "ui get", write: "ui set"),

@@ -518,6 +518,8 @@ public enum CrowDaemon {
         }
 
         let soundLibrary = CustomSoundLibrary.live
+        let skinSources = WebSkinSources(
+            webDir: options.webDir, store: .live, devRoot: options.devRoot)
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, tracker: tracker,
@@ -525,6 +527,7 @@ public enum CrowDaemon {
             rebuildScorecard: rebuildScorecard, versionUpdateService: versionUpdateService,
             corveilAutoUpdateService: corveilAutoUpdateService,
             soundLibrary: soundLibrary,
+            skinSources: skinSources,
             tuiRecorder: tuiRecorder,
             reviewSerializer: reviewSerializer,
             fallback: engineFallback)
@@ -633,7 +636,7 @@ public enum CrowDaemon {
             boundHost: options.host,
             devRoot: options.devRoot,
             serverVersion: buildInfo.version)
-        StaticAssets.mount(on: httpRouter, webDir: options.webDir)
+        StaticAssets.mount(on: httpRouter, webDir: options.webDir, skins: skinSources)
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).
         Artifacts.mount(on: httpRouter, boundHost: options.host)

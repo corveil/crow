@@ -216,7 +216,8 @@ struct ParityGateTests {
                     accessToken: "at", refreshToken: "rt",
                     registrationAccessToken: "rat", accessTokenExpiresAt: Date()),
                 health: CorveilConnectionHealth(
-                    lastRefreshAt: Date(), lastRefreshError: "probe", needsReconnect: true))
+                    lastRefreshAt: Date(), lastRefreshError: "probe", needsReconnect: true)),
+            webDefaultSkin: "graphite"
         )
     }
 
