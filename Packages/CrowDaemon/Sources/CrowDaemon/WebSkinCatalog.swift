@@ -60,14 +60,19 @@ enum WebSkinCatalog {
         return (try? encoder.encode(catalog)) ?? Data("{\"default\":\"corveil\",\"skins\":[]}".utf8)
     }
 
+    // Lists the directory rather than `Bundle.urls(forResourcesWithExtension:)`,
+    // which returns `[NSURL]` on Linux Foundation and breaks the Linux crowd build.
     private static func skinFiles(webDir: String?) -> [URL] {
-        if let webDir {
-            let dir = URL(fileURLWithPath: webDir).appendingPathComponent("skins")
-            if let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
-                return names.filter { $0.hasSuffix(".json") }.sorted().map { dir.appendingPathComponent($0) }
-            }
+        if let webDir, let files = jsonFiles(in: URL(fileURLWithPath: webDir).appendingPathComponent("skins")) {
+            return files
         }
-        return (Bundle.module.urls(forResourcesWithExtension: "json", subdirectory: "web/skins") ?? [])
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        // Same lookup StaticAssets uses for web files, which builds on Linux.
+        guard let dir = Bundle.module.url(forResource: "skins", withExtension: nil, subdirectory: "web") else { return [] }
+        return jsonFiles(in: dir) ?? []
+    }
+
+    private static func jsonFiles(in dir: URL) -> [URL]? {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
+        return names.filter { $0.hasSuffix(".json") }.sorted().map { dir.appendingPathComponent($0) }
     }
 }
