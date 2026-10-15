@@ -885,7 +885,13 @@ import CrowPersistence
         var gated = ["/", "/index.html", "/rpc",
                      "/config/web-password", "/config/manager-gateway",
                      "/sounds", "/sounds/chime.wav"]
-        gated.append(contentsOf: StaticAssets.uiJavaScriptFiles.map { "/" + $0 })
+        // theme.js is the one client script the login page needs before sign-in
+        // (CROW-1333: it paints the chosen skin), so it is exempt on purpose and
+        // pinned in `exemptsLoginLogoutHealthBrandAndInstallAssets`. Every other
+        // script stays gated.
+        gated.append(contentsOf: StaticAssets.uiJavaScriptFiles
+            .filter { $0 != "theme.js" }
+            .map { "/" + $0 })
         for path in gated {
             #expect(!MW.isAuthExempt(path: path), "\(path) must be gated")
         }

@@ -8,7 +8,8 @@
 //   * switching skins fetches /skins/<id>.css, caches it, repaints and fires
 //     `crow-theme` (which is what recolors live terminals);
 //   * a dark-only skin pins data-theme="dark" whatever the scheme preference;
-//   * a skin crowd no longer has falls back to Corveil instead of sticking.
+//   * a skin crowd no longer has falls back to Corveil instead of sticking;
+//   * a failed fetch leaves crow.skin on the skin that is actually painted.
 //
 // theme.js runs on its own here, as it does in <head> before anything else.
 const assert = require('assert');
@@ -24,6 +25,7 @@ const CATALOG = {
     { id: 'corveil', name: 'Corveil', light: true },
     { id: 'corveil-classic', name: 'Corveil Classic', light: false },
     { id: 'graphite', name: 'Graphite', light: true },
+    { id: 'broken', name: 'Broken', light: true }, // listed, but its CSS 404s
   ],
 };
 const CSS = {
@@ -138,6 +140,29 @@ async function main() {
     for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
     assert.strictEqual(root.getAttribute('data-skin'), null);
     assert.strictEqual(window.CrowTheme.skin(), 'corveil');
+  }
+
+  // 8. A failed CSS fetch does not record the skin: crow.skin stays on what is painted.
+  {
+    const { window, root } = boot();
+    await new Promise((r) => setTimeout(r, 0));
+    await window.CrowTheme.setSkin('graphite');
+    await assert.rejects(window.CrowTheme.setSkin('broken'));
+    assert.strictEqual(window.CrowTheme.skin(), 'graphite');
+    assert.strictEqual(window.localStorage.getItem('crow.skin'), 'graphite');
+    assert.strictEqual(root.getAttribute('data-skin'), 'graphite');
+    assert.strictEqual(cacheOf(window).id, 'graphite');
+  }
+
+  // 9. A slower, older switch never overwrites a newer one.
+  {
+    const { window, root } = boot();
+    await new Promise((r) => setTimeout(r, 0));
+    const first = window.CrowTheme.setSkin('corveil-classic');
+    const second = window.CrowTheme.setSkin('graphite');
+    await Promise.all([first, second]);
+    assert.strictEqual(window.CrowTheme.skin(), 'graphite');
+    assert.strictEqual(root.getAttribute('data-skin'), 'graphite');
   }
 
   // 7. A malformed stored id is treated as Corveil, not spliced into a selector.

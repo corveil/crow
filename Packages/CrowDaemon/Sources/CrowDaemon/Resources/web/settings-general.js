@@ -169,6 +169,10 @@
         if (s.id === active) o.selected = true;
         sel.appendChild(o);
       }
+      // The catalog is what tells theme.js whether this skin has a light
+      // palette when nothing is cached yet, so re-sync Light now rather than
+      // waiting for the next crow-theme.
+      syncThemeFromSkin();
     }).catch(() => { /* keep the placeholder; the current skin still applies */ });
 
     sel.onchange = () => {
@@ -178,10 +182,13 @@
         .finally(() => { sel.disabled = false; });
     };
     // Re-sync the Theme control off the event the skin switch fires.
-    const onTheme = () => {
-      if (!sel.isConnected) { window.removeEventListener('crow-theme', onTheme); return; }
+    function syncThemeFromSkin() {
       const help = themeSelect.parentNode && themeSelect.parentNode.querySelector('.st-help');
       if (help) syncThemeAvailability(themeSelect, help);
+    }
+    const onTheme = () => {
+      if (!sel.isConnected) { window.removeEventListener('crow-theme', onTheme); return; }
+      syncThemeFromSkin();
     };
     window.addEventListener('crow-theme', onTheme);
     return field;

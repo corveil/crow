@@ -176,21 +176,28 @@
     return catalogRequest;
   }
 
-  // Fetch, cache and paint `id`. A skin crowd no longer has falls back to
-  // Corveil instead of leaving a stale palette in place.
+  // Fetch, cache and paint `id`, and only then record it as the choice: a
+  // failed fetch leaves crow.skin on the skin that is actually painted. A skin
+  // crowd no longer has falls back to Corveil instead of leaving a stale
+  // palette in place. `skinRequest` drops a response a newer switch overtook.
+  var skinRequest = 0;
   function loadSkin(id) {
+    var request = ++skinRequest;
     if (id === DEFAULT_SKIN) {
+      write(SKIN_KEY, null);
       write(SKIN_CACHE_KEY, null);
       paintSkin(DEFAULT_SKIN, '');
       apply(preference());
       return Promise.resolve(DEFAULT_SKIN);
     }
     return skins().then(function (c) {
+      if (request !== skinRequest) return skin();
       var entry = null;
       for (var i = 0; i < c.skins.length; i++) if (c.skins[i].id === id) entry = c.skins[i];
-      if (!entry) return setSkin(DEFAULT_SKIN);
+      if (!entry) return loadSkin(DEFAULT_SKIN);
       return fetchText('/skins/' + encodeURIComponent(id) + '.css').then(function (css) {
-        if (skin() !== id) return skin(); // changed again while this was in flight
+        if (request !== skinRequest) return skin(); // a newer switch won
+        write(SKIN_KEY, id);
         write(SKIN_CACHE_KEY, JSON.stringify({ id: id, name: entry.name, light: entry.light !== false, css: css }));
         paintSkin(id, css);
         apply(preference());
@@ -201,7 +208,6 @@
 
   function setSkin(id) {
     if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) id = DEFAULT_SKIN;
-    write(SKIN_KEY, id === DEFAULT_SKIN ? null : id);
     return loadSkin(id);
   }
 
