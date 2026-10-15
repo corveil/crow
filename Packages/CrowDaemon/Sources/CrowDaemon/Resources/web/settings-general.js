@@ -156,29 +156,48 @@
     placeholder.value = current;
     placeholder.selected = true;
     sel.appendChild(placeholder);
-    const field = S.field('Skin', sel, 'The palette for this browser. Saved in this browser.');
+    const field = S.field('Skin', sel,
+      'The palette for this browser. Saved in this browser; Default follows the skin set with `crow skin default`.');
     if (!window.CrowTheme) { sel.disabled = true; return field; }
 
-    CrowTheme.skins().then((catalog) => {
-      if (!catalog.skins.length) return;
+    // The first option follows the daemon-wide default (`crow skin default`,
+    // CROW-1334); picking a named skin pins this browser to it. Custom skins
+    // sit beside the built-ins.
+    const label = (s) => s.light === false ? s.name + ' (dark only)' : s.name;
+    const render = (catalog) => {
+      if (!catalog || !catalog.skins.length) return;
       sel.textContent = '';
-      const active = CrowTheme.skin();
+      const chosen = CrowTheme.chosenSkin();
+      const def = catalog.skins.find((s) => s.id === catalog.default) || catalog.skins[0];
+      const follow = el('option', null, 'Default (' + label(def) + ')');
+      follow.value = '';
+      follow.selected = !chosen;
+      sel.appendChild(follow);
       for (const s of catalog.skins) {
-        const o = el('option', null, s.light === false ? s.name + ' (dark only)' : s.name);
+        const o = el('option', null, s.builtin === false ? label(s) + ' — custom' : label(s));
         o.value = s.id;
-        if (s.id === active) o.selected = true;
+        if (s.id === chosen) o.selected = true;
         sel.appendChild(o);
       }
       // The catalog is what tells theme.js whether this skin has a light
       // palette when nothing is cached yet, so re-sync Light now rather than
       // waiting for the next crow-theme.
       syncThemeFromSkin();
-    }).catch(() => { /* keep the placeholder; the current skin still applies */ });
+    };
+    CrowTheme.skins().then(render)
+      .catch(() => { /* keep the placeholder; the current skin still applies */ });
+    // A skin added, removed or made default elsewhere (`crow skin …`) reaches
+    // this page through theme.js's poll; re-list so the picker matches.
+    const onSkins = (e) => {
+      if (!sel.isConnected) { window.removeEventListener('crow-skins', onSkins); return; }
+      render(e.detail);
+    };
+    window.addEventListener('crow-skins', onSkins);
 
     sel.onchange = () => {
       sel.disabled = true;
-      CrowTheme.setSkin(sel.value)
-        .catch(() => { sel.value = CrowTheme.skin(); }) // crowd unreachable: show what still applies
+      CrowTheme.setSkin(sel.value || null)
+        .catch(() => { sel.value = CrowTheme.chosenSkin() || ''; }) // crowd unreachable: show what still applies
         .finally(() => { sel.disabled = false; });
     };
     // Re-sync the Theme control off the event the skin switch fires.

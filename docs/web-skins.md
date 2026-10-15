@@ -1,6 +1,6 @@
 # Web UI skins
 
-CROW-1333. The browser UI `crowd` serves is painted from a fixed set of CSS
+CROW-1333 (built-ins), CROW-1334 (custom skins and `crow skin`). The browser UI `crowd` serves is painted from a fixed set of CSS
 variables. A **skin** fills those variables; **Theme** (System / Light / Dark)
 picks which half of the skin applies. Both are chosen in Settings → General and
 saved per browser, not in daemon config.
@@ -14,6 +14,49 @@ saved per browser, not in daemon config.
 | `graphite` | Graphite | light + dark | Neutral grays, one muted slate-blue accent, system UI font. |
 
 They live in `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/skins/<id>.json`.
+
+## Make a skin
+
+Custom skins are the same JSON files, kept in
+`~/Library/Application Support/crow/skins/<id>.json` (the platform's
+Application Support directory on Linux). They show up in the Settings picker
+next to the built-ins, marked *custom*, and in `crow skin list`. The fastest
+way to make one is to start from an existing skin:
+
+```bash
+crow skin create --from corveil-classic --name "Dusty" --set accent=#7AA2F7
+crow skin create --from graphite --name "Warm" --set accent=#D9A55B --set-light accent=#8A5A14
+```
+
+`--set` writes the dark palette and `--set-light` the light one; a token may
+drop its leading dashes. To edit by hand, export a complete file (every token,
+resolved against Corveil), change it, and add it back under a new id:
+
+```bash
+crow skin export --id graphite --out ~/skins/mine.json
+$EDITOR ~/skins/mine.json            # set "id" and "name", change tokens
+crow skin add ~/skins/mine.json
+```
+
+Rules for a custom skin:
+
+- Its id may not be a built-in's, and built-ins cannot be removed.
+- Every key must be a token from the table below; every token except the four
+  `--shadow-*` must hold a color (a literal, `var()`, a color function such as
+  `color-mix()`/`hsl()`, or a named color). An invalid skin is refused.
+- **Contrast is a warning, not a gate.** Text and status tokens below 4.5:1 on
+  the four surfaces, `--on-accent`/`--on-green`/`--on-red` below 4.5:1 on their
+  fills, `--term-fg` below 4.5:1 on `--term-bg`, and the terminal scroll thumb
+  below 3:1 are reported with the measured ratio, and the skin is saved anyway.
+
+Changes are live: crowd re-reads the store on every request, and open tabs
+poll `/skins.json`'s `revision` every ~10 seconds (and when the tab becomes
+visible). A browser whose skin is removed falls back to the default.
+
+`crow skin default set <id>` makes a skin the default for every browser that
+hasn't picked one (`webDefaultSkin` in `config.json`); the picker's first
+entry, **Default (…)**, follows it. `crow skin default clear` returns it to
+Corveil. The full verb reference is in `docs/cli-reference.md`.
 
 ## Format
 
@@ -77,7 +120,9 @@ at 4.5:1 or better on `--bg-deep`, `--bg-surface`, `--bg-card` and `--bg-elev`;
 
 ## How it is served and applied
 
-- `GET /skins.json` — `{"default":"corveil","skins":[{id,name,light}]}`.
+- `GET /skins.json` — `{"default":"corveil","revision":"…","skins":[{id,name,light,builtin}]}`.
+  `default` is the daemon-wide default; `revision` changes whenever a skin is
+  added, edited or removed or the default moves.
 - `GET /skins/<id>.css` — the skin as CSS, scoped to `:root[data-skin="<id>"]`
   (dark rules add `:not([data-theme="light"])`, light rules
   `[data-theme="light"]`), so it outranks `theme.css` only where it sets a value.
@@ -85,8 +130,10 @@ at 4.5:1 or better on `--bg-deep`, `--bg-surface`, `--bg-card` and `--bg-elev`;
 - `theme.js` (blocking, in `<head>`) stores `crow.skin` and caches the last
   CSS in `crow.skin.cache`. On load it injects the cached CSS and stamps
   `data-skin` synchronously, so a reload never flashes Corveil; after
-  `DOMContentLoaded` it refetches in case the file changed. A skin `crowd` no
-  longer offers falls back to Corveil.
+  `DOMContentLoaded` it refetches in case the file changed, then polls the
+  catalog's `revision`. A chosen skin `crowd` no longer offers is dropped and
+  the browser follows the default; no stored choice means the default too
+  (remembered in `crow.skin.default` so it paints before the fetch).
 - Switching fires `crow-theme`; terminals re-read `crowXtermTheme()` on it, so
   live terminals recolor with no reload.
 

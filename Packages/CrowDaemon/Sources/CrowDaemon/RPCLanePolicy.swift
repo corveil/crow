@@ -127,6 +127,14 @@ enum RPCLanePolicy {
         "notifications-set": .fixed(.config),
         "notifications-add-sound": .fixed(.config),
         "notifications-remove-sound": .fixed(.config),
+        // Skin writes (CROW-1334) share the config lane: `default-*` and
+        // `remove` write `webDefaultSkin`, and serializing the store writes with
+        // them keeps a create racing a remove of the same id from interleaving.
+        "skin-create": .fixed(.config),
+        "skin-add": .fixed(.config),
+        "skin-remove": .fixed(.config),
+        "skin-default-set": .fixed(.config),
+        "skin-default-clear": .fixed(.config),
         "workspace-add": .fixed(.config),
         "workspace-edit": .fixed(.config),
         "workspace-remove": .fixed(.config),

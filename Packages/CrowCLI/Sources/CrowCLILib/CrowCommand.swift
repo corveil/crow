@@ -49,6 +49,7 @@ public struct CrowCommand: ParsableCommand {
             Terminal.self,
             Automation.self,
             Notifications.self,
+            Skin.self,
             Defaults.self,
             Agents.self,
             Workspace.self,

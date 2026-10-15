@@ -49,6 +49,10 @@ func makeCommandRouter(
     // Injectable so a test can observe the invalidation; one per router otherwise.
     corveilOrgCache: CorveilOrgListCache = CorveilOrgListCache(),
     soundLibrary: CustomSoundLibrary = .live,
+    // Built-in + custom web UI skins (CROW-1334). The default serves the
+    // bundled built-ins only and no store, so a router built by a test can't
+    // touch the user's Application Support; production passes `.live`.
+    skinSources: WebSkinSources = WebSkinSources(),
     tuiRecorder: TuiRecorder? = nil,
     // The auto-review watcher and `start-review` must share this chain.
     // A second instance lets a manual start race an auto kickoff (CROW-406)
@@ -95,6 +99,7 @@ func makeCommandRouter(
             soundLibrary: soundLibrary)
     ) { existing, _ in existing }
     handlers.merge(makeWorkspaceHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
+    handlers.merge(makeSkinHandlers(sources: skinSources, devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeMCPTokenHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeCorveilHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(

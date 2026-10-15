@@ -31,7 +31,11 @@ enum StaticAssets {
         "settings-jobs.js", "settings-about.js", "settings.js",
     ]
 
-    static func mount(on router: Router<CrowHTTPContext>, webDir: String? = nil) {
+    /// `skins` adds the operator's custom skins and daemon-wide default
+    /// (CROW-1334); nil serves the built-ins under `webDir` alone.
+    static func mount(on router: Router<CrowHTTPContext>, webDir: String? = nil,
+                      skins: WebSkinSources? = nil) {
+        let skinSources = skins ?? WebSkinSources(webDir: webDir)
         router.get("/") { req, _ in webResponse("index.html", webDir: webDir, request: req) }
         router.get("/index.html") { req, _ in webResponse("index.html", webDir: webDir, request: req) }
         // Login page (CROW-593) — reachable without auth; the auth middleware
@@ -42,15 +46,15 @@ enum StaticAssets {
         // skin's CSS generated from web/skins/<id>.json. Auth-exempt with
         // theme.css so the login page paints in the chosen skin too.
         router.get("/skins.json") { req, _ in
-            fileResponse(WebSkinCatalog.catalogJSON(webDir: webDir), name: "skins.json",
+            fileResponse(WebSkinCatalog.catalogJSON(skinSources), name: "skins.json",
                          request: req, revalidate: true)
         }
         router.get("/skins/:file") { req, context -> Response in
             guard let file = context.parameters.get("file"), let id = skinID(fromCSSFile: file),
-                  let skin = WebSkinCatalog.skin(id: id, webDir: webDir) else {
+                  let listed = WebSkinCatalog.skin(id: id, sources: skinSources) else {
                 return Response(status: .notFound)
             }
-            return fileResponse(Data(skin.css().utf8), name: file, request: req, revalidate: true)
+            return fileResponse(Data(listed.skin.css().utf8), name: file, request: req, revalidate: true)
         }
         router.get("/app.css") { req, _ in webResponse("app.css", webDir: webDir, request: req) }
         // Classic client scripts (CROW-1155). Each is an exact literal path with

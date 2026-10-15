@@ -261,6 +261,8 @@ enum RPCWebSocketHandler {
     /// `set-config` — Settings → Notifications is a core web surface. Gating
     /// only the CLI's path to it would be inconsistent, not safer.
     /// `notifications-add-sound` *is* gated: it copies a host filesystem path.
+    /// `skin-add` (CROW-1334) is gated for the same reason; the other `skin-*`
+    /// verbs carry validated values, not paths, and are not.
     ///
     /// The tmux-maintenance methods (`restart-manager`, `restart-tmux-server`,
     /// `reload-tmux-config`, `launch-agent`, `retry-readiness`) are also NOT gated,
@@ -397,6 +399,11 @@ enum RPCWebSocketHandler {
             // paths. The web Settings upload uses `POST /sounds` instead, which
             // carries bytes rather than a path.
             return "notifications-add-sound is local-only"
+        case "skin-add":
+            // Reads a skin file from a path on the daemon host (CROW-1334), for
+            // the same reason as `notifications-add-sound`. `skin-create` and the
+            // other skin verbs carry values, not paths, and stay un-gated.
+            return "skin-add is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

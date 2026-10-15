@@ -98,6 +98,23 @@ func resolvedSoundFilePath(_ value: String) throws -> String {
     return url.path
 }
 
+/// Resolve a path argument the daemon will read (`crow skin add`) to an
+/// absolute path of a readable regular file. `~` is expanded here because the
+/// daemon resolves the path, not your shell.
+func resolvedReadableFilePath(_ value: String) throws -> String {
+    var path = value.trimmingCharacters(in: .whitespaces)
+    if path == "~" || path.hasPrefix("~/") {
+        path = NSString(string: path).expandingTildeInPath
+    }
+    let url = URL(fileURLWithPath: path).standardizedFileURL
+    var isDir: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue,
+          FileManager.default.isReadableFile(atPath: url.path) else {
+        throw ValidationError("'\(value)' is not a readable file.")
+    }
+    return url.path
+}
+
 /// Validate that at least one optional field is provided for set-ticket.
 ///
 /// - Throws: `ValidationError` if all four fields are nil.

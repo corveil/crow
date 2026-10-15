@@ -133,6 +133,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// clear the connection. See ``CorveilConnection``.
     public var corveilConnection: CorveilConnection?
 
+    /// The web UI skin a browser uses until it picks its own (CROW-1334). A skin
+    /// id, built in or custom; `nil`/absent means Corveil. A per-browser choice
+    /// in Settings → General still wins. Written by `crow skin default`.
+    public var webDefaultSkin: String?
+
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
     /// excluded by any workspace (or the global default) is hidden from the review
@@ -199,7 +204,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         webAuth: WebAuthConfig? = nil,
         mcpTokens: [MCPTokenRecord] = [],
         logSync: LogSyncConfig? = nil,
-        corveilConnection: CorveilConnection? = nil
+        corveilConnection: CorveilConnection? = nil,
+        webDefaultSkin: String? = nil
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -229,6 +235,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.mcpTokens = mcpTokens
         self.logSync = logSync
         self.corveilConnection = corveilConnection
+        self.webDefaultSkin = webDefaultSkin
     }
 
     public init(from decoder: Decoder) throws {
@@ -285,6 +292,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         mcpTokens = try container.decodeIfPresent([MCPTokenRecord].self, forKey: .mcpTokens) ?? []
         logSync = try container.decodeIfPresent(LogSyncConfig.self, forKey: .logSync)
         corveilConnection = try container.decodeIfPresent(CorveilConnection.self, forKey: .corveilConnection)
+        webDefaultSkin = try container.decodeIfPresent(String.self, forKey: .webDefaultSkin)
     }
 
     /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
@@ -308,7 +316,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection
+        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection, webDefaultSkin
     }
 
     /// Resolve the agent that should drive a newly-created session of the

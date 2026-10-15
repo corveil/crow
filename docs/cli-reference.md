@@ -1632,6 +1632,75 @@ crow notifications remove-sound Office-Bell
 
 ---
 
+## Skin Commands
+
+Web UI skins (CROW-1334) — the palettes Settings → General offers. Built-ins ship with `crowd`; custom skins are JSON files in `~/Library/Application Support/crow/skins/` in the same format (see [`docs/web-skins.md`](web-skins.md)). Every write reaches open browsers within ~10 seconds, without a `crowd` restart. Validation errors (unknown token, a non-color where a color is required, `var()` in a `--term-*` token) block a write; contrast problems only warn — they come back under `warnings` with the measured ratio and are echoed to stderr.
+
+### `crow skin list`
+
+```bash
+crow skin list
+# {"skins":[{"id":"corveil","name":"Corveil","builtin":true,"modes":["dark","light"]}, ...],"default":"corveil","store":"…/crow/skins"}
+```
+
+`default` is what a browser that hasn't picked a skin uses.
+
+### `crow skin get`
+
+Every token, resolved against Corveil (a skin file only holds what it changes), plus `builtin` and any contrast `warnings`.
+
+```bash
+crow skin get --id graphite
+```
+
+### `crow skin create`
+
+Copy a skin under a new name and apply overrides. `--set` is the dark palette, `--set-light` the light one; `TOKEN` may drop its leading dashes. `--id` defaults to the name, lowercased and dashed. `--set-light` on a dark-only source gives the new skin a light mode built on Corveil's light palette.
+
+```bash
+crow skin create --from corveil-classic --name "Dusty" --set accent=#7AA2F7
+crow skin create --from graphite --name "Graphite Warm" --id graphite-warm \
+  --set accent=#D9A55B --set-light accent=#8A5A14
+```
+
+A custom skin's id may not be a built-in's.
+
+### `crow skin add`
+
+Validate a skin file and copy it into the store. A malformed or invalid file is rejected with the reason (`missing required key "id"`, `dark: --accent must be a color, got "12px"`, …). Local-only — the daemon reads a path on the host.
+
+```bash
+crow skin add ~/skins/dusk.json
+crow skin add ~/skins/dusk.json --id dusk-2
+```
+
+### `crow skin export`
+
+Write a skin as a complete skin file — every token, resolved — to stdout or `--out`. A good starting point for hand-editing; `add` it back under a new `--id`.
+
+```bash
+crow skin export --id graphite --out ~/skins/graphite.json
+```
+
+### `crow skin remove`
+
+Delete a custom skin. Built-ins are refused. Browsers using it fall back to the default; if it *was* the default, the default is cleared (`default_cleared: true`).
+
+```bash
+crow skin remove --id dusty
+```
+
+### `crow skin default set | clear`
+
+The daemon-wide default skin (`webDefaultSkin` in `config.json`). A per-browser choice in Settings still wins; the picker's first entry, **Default (…)**, follows this.
+
+```bash
+crow skin default set graphite
+crow skin default clear
+```
+
+---
+
 ## Workspace Commands
 
 Read and write `AppConfig.workspaces` — the same list the web Settings → Workspaces tab edits. Writes land under the shared config lock, and the daemon's config poll broadcasts a `configReloaded` event, so an open web tab refreshes within a couple of seconds.

@@ -5,7 +5,11 @@
 // round-trips through daemon config. Settings → General writes them.
 //
 //   crow.color-scheme  system | light | dark
-//   crow.skin          a skin id from /skins.json; absent means Corveil
+//   crow.skin          a skin id from /skins.json; absent means the daemon's
+//                      default (CROW-1334), which is Corveil unless
+//                      `crow skin default set` named another
+//   crow.skin.default  the last default /skins.json reported, so a browser that
+//                      has not chosen paints the default before the fetch
 //   crow.skin.cache    {id, name, light, css} — the last CSS crowd generated
 //                      for that skin. Applied synchronously here so a reload
 //                      never flashes Corveil first, then refreshed from the
@@ -14,15 +18,23 @@
 // Corveil is theme.css itself and has no generated CSS. Any other skin's CSS
 // is scoped to :root[data-skin="<id>"], so the attribute and the <style> must
 // agree; a stale cache for another id is ignored rather than painted.
+//
+// Live reload (CROW-1334). /skins.json carries a `revision` that changes when a
+// skin is added, edited or removed, or the default moves. This page polls it
+// while visible; on a change it refetches the active skin's CSS, and a stored
+// choice crowd no longer offers is dropped so the browser follows the default.
 
 (function () {
   var KEY = 'crow.color-scheme';
   var SKIN_KEY = 'crow.skin';
   var SKIN_CACHE_KEY = 'crow.skin.cache';
+  var SKIN_DEFAULT_KEY = 'crow.skin.default';
+  var POLL_MS = 10000;
   var DEFAULT_SKIN = 'corveil';
   var STYLE_ID = 'crow-skin';
   var catalog = null; // last /skins.json, once fetched
   var catalogRequest = null; // the in-flight fetch, shared by concurrent callers
+  var ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
   function read(key) {
     try { return localStorage.getItem(key); } catch (_) { return null; } // private mode / denied storage
@@ -40,9 +52,35 @@
     return 'system';
   }
 
-  function skin() {
+  // The skin this browser picked in Settings, or null to follow the default.
+  function chosenSkin() {
     var v = read(SKIN_KEY);
-    return (v && /^[a-z0-9][a-z0-9-]{0,63}$/.test(v)) ? v : DEFAULT_SKIN;
+    return (v && ID_RE.test(v)) ? v : null;
+  }
+
+  // The daemon-wide default, as last reported by /skins.json.
+  function defaultSkin() {
+    if (catalog && typeof catalog.default === 'string' && ID_RE.test(catalog.default)) return catalog.default;
+    var v = read(SKIN_DEFAULT_KEY);
+    return (v && ID_RE.test(v)) ? v : DEFAULT_SKIN;
+  }
+
+  function skin() {
+    return chosenSkin() || defaultSkin();
+  }
+
+  function rememberCatalog(c) {
+    catalog = (c && Array.isArray(c.skins)) ? c : { default: DEFAULT_SKIN, skins: [] };
+    var d = (typeof catalog.default === 'string' && ID_RE.test(catalog.default)) ? catalog.default : DEFAULT_SKIN;
+    write(SKIN_DEFAULT_KEY, d === DEFAULT_SKIN ? null : d);
+    return catalog;
+  }
+
+  function listed(id) {
+    if (id === DEFAULT_SKIN) return true;
+    if (!catalog) return true; // unknown yet: assume it still exists
+    for (var i = 0; i < catalog.skins.length; i++) if (catalog.skins[i].id === id) return true;
+    return false;
   }
 
   function skinCache() {
@@ -165,10 +203,7 @@
     if (catalog) return Promise.resolve(catalog);
     if (typeof fetch !== 'function') return Promise.resolve({ default: DEFAULT_SKIN, skins: [] });
     if (!catalogRequest) {
-      catalogRequest = fetchJSON('/skins.json').then(function (c) {
-        catalog = (c && Array.isArray(c.skins)) ? c : { default: DEFAULT_SKIN, skins: [] };
-        return catalog;
-      }, function (err) {
+      catalogRequest = fetchJSON('/skins.json').then(rememberCatalog, function (err) {
         catalogRequest = null; // let a later call retry
         throw err;
       });
@@ -176,15 +211,21 @@
     return catalogRequest;
   }
 
-  // Fetch, cache and paint `id`, and only then record it as the choice: a
-  // failed fetch leaves crow.skin on the skin that is actually painted. A skin
-  // crowd no longer has falls back to Corveil instead of leaving a stale
-  // palette in place. `skinRequest` drops a response a newer switch overtook.
+  // Fetch, cache and paint `id`, and only then record `choice` as this
+  // browser's pick (a skin id, or null to follow the default): a failed fetch
+  // leaves crow.skin on the skin that is actually painted. `choice` undefined
+  // repaints without touching the pick — the live-reload path, which must not
+  // pin a browser that follows the default. A skin crowd no longer has falls
+  // back to the default (then Corveil) instead of leaving a stale palette in
+  // place. `skinRequest` drops a response a newer switch overtook.
   var skinRequest = 0;
-  function loadSkin(id) {
+  function record(choice) {
+    if (choice !== undefined) write(SKIN_KEY, choice);
+  }
+  function loadSkin(id, choice) {
     var request = ++skinRequest;
     if (id === DEFAULT_SKIN) {
-      write(SKIN_KEY, null);
+      record(choice);
       write(SKIN_CACHE_KEY, null);
       paintSkin(DEFAULT_SKIN, '');
       apply(preference());
@@ -194,10 +235,16 @@
       if (request !== skinRequest) return skin();
       var entry = null;
       for (var i = 0; i < c.skins.length; i++) if (c.skins[i].id === id) entry = c.skins[i];
-      if (!entry) return loadSkin(DEFAULT_SKIN);
+      if (!entry) {
+        // Gone: drop it as a pick, and paint the default (or Corveil, if the
+        // default is what went missing).
+        if (choice === id || chosenSkin() === id) write(SKIN_KEY, null);
+        var fallback = defaultSkin() === id ? DEFAULT_SKIN : defaultSkin();
+        return loadSkin(fallback);
+      }
       return fetchText('/skins/' + encodeURIComponent(id) + '.css').then(function (css) {
         if (request !== skinRequest) return skin(); // a newer switch won
-        write(SKIN_KEY, id);
+        record(choice);
         write(SKIN_CACHE_KEY, JSON.stringify({ id: id, name: entry.name, light: entry.light !== false, css: css }));
         paintSkin(id, css);
         apply(preference());
@@ -206,9 +253,52 @@
     });
   }
 
+  // Pick a skin for this browser; null (or '') goes back to following the
+  // daemon's default.
   function setSkin(id) {
-    if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) id = DEFAULT_SKIN;
-    return loadSkin(id);
+    var choice = (typeof id === 'string' && ID_RE.test(id)) ? id : null;
+    return loadSkin(choice || defaultSkin(), choice);
+  }
+
+  // Re-read /skins.json; when its revision moved, repaint from it and tell
+  // listeners (the Settings picker) with `crow-skins`.
+  var lastRevision = null;
+  var seenCatalog = false;
+  function refreshCatalog() {
+    if (typeof fetch !== 'function') return Promise.resolve(null);
+    return fetch('/skins.json', { credentials: 'same-origin', cache: 'no-cache' }).then(function (r) {
+      if (!r.ok) throw new Error('/skins.json ' + r.status);
+      return r.json();
+    }).then(function (c) {
+      var revision = (c && typeof c.revision === 'string') ? c.revision : null;
+      var first = !seenCatalog;
+      if (!first && revision === lastRevision) return catalog;
+      seenCatalog = true;
+      lastRevision = revision;
+      rememberCatalog(c);
+      catalogRequest = null;
+      var chosen = chosenSkin();
+      if (chosen && !listed(chosen)) write(SKIN_KEY, null);
+      var id = skin();
+      var done = (first && id === DEFAULT_SKIN && !document.documentElement.hasAttribute('data-skin'))
+        ? Promise.resolve(id) : loadSkin(id);
+      return done.then(function () {
+        if (!first) {
+          try { window.dispatchEvent(new CustomEvent('crow-skins', { detail: catalog })); } catch (_) {}
+        }
+        return catalog;
+      });
+    });
+  }
+
+  var pollTimer = null;
+  function poll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(function () {
+      pollTimer = null;
+      if (document.visibilityState === 'hidden') return; // resumes on visibilitychange
+      refreshCatalog().catch(function () {}).then(poll);
+    }, POLL_MS);
   }
 
   window.CrowTheme = {
@@ -220,8 +310,11 @@
     apply: apply,
     resolved: resolved,
     skin: skin,
+    chosenSkin: chosenSkin,
+    defaultSkin: defaultSkin,
     skins: skins,
     setSkin: setSkin,
+    refresh: refreshCatalog,
     lightAvailable: skinSupportsLight,
   };
   window.crowXtermTheme = xtermTheme;
@@ -247,8 +340,13 @@
   // visit (that one paint is the default skin; every later one is not).
   document.addEventListener('DOMContentLoaded', function () {
     apply(preference());
-    if (skin() !== DEFAULT_SKIN && typeof fetch === 'function') {
-      loadSkin(skin()).catch(function () { /* offline / crowd restarting: keep the cache */ });
+    if (typeof fetch === 'function') {
+      refreshCatalog().catch(function () { /* offline / crowd restarting: keep the cache */ }).then(poll);
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') {
+          refreshCatalog().catch(function () {}).then(poll);
+        }
+      });
     }
   });
 })();
