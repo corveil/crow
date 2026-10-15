@@ -866,6 +866,7 @@ import CrowPersistence
         // login page references them and Chrome's install prompt fetches them
         // regardless of auth state.
         for path in ["/login", "/logout", "/health", "/brand.svg", "/theme.css",
+                     "/theme.js", "/skins.json", "/skins/graphite.css",
                      "/fonts/IBMPlexSans-Regular.woff2", "/fonts/OFL.txt",
                      "/manifest.webmanifest", "/icon-192.png", "/icon-512.png",
                      "/apple-touch-icon.png"] {
@@ -884,7 +885,13 @@ import CrowPersistence
         var gated = ["/", "/index.html", "/rpc",
                      "/config/web-password", "/config/manager-gateway",
                      "/sounds", "/sounds/chime.wav"]
-        gated.append(contentsOf: StaticAssets.uiJavaScriptFiles.map { "/" + $0 })
+        // theme.js is the one client script the login page needs before sign-in
+        // (CROW-1333: it paints the chosen skin), so it is exempt on purpose and
+        // pinned in `exemptsLoginLogoutHealthBrandAndInstallAssets`. Every other
+        // script stays gated.
+        gated.append(contentsOf: StaticAssets.uiJavaScriptFiles
+            .filter { $0 != "theme.js" }
+            .map { "/" + $0 })
         for path in gated {
             #expect(!MW.isAuthExempt(path: path), "\(path) must be gated")
         }

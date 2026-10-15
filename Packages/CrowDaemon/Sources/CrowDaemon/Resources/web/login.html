@@ -12,27 +12,10 @@
   <meta name="theme-color" content="#0A060B">
   <!-- Standalone: the auth gate blocks app.css/app.js until you're in, so this
        page inlines its layout and loads only the exempt theme + fonts (CROW-593,
-       CROW-1316). The boot script sets data-theme before theme.css paints. -->
-  <script>
-    (function () {
-      var pref = 'system';
-      try { pref = localStorage.getItem('crow.color-scheme') || 'system'; } catch (e) {}
-      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      var theme = (pref === 'light' || pref === 'dark') ? pref : (dark ? 'dark' : 'light');
-      document.documentElement.setAttribute('data-theme', theme);
-      var meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) meta.setAttribute('content', theme === 'light' ? '#FAF9F5' : '#0A060B');
-      if (pref === 'system' && window.matchMedia) {
-        var mq = window.matchMedia('(prefers-color-scheme: dark)');
-        var sync = function () {
-          var next = mq.matches ? 'dark' : 'light';
-          document.documentElement.setAttribute('data-theme', next);
-          if (meta) meta.setAttribute('content', next === 'light' ? '#FAF9F5' : '#0A060B');
-        };
-        if (mq.addEventListener) mq.addEventListener('change', sync);
-      }
-    })();
-  </script>
+       CROW-1316). theme.js, the skin catalog and skin CSS are exempt too
+       (CROW-1333), so it sets data-theme and paints this browser's chosen skin
+       before theme.css, exactly as the app page does. -->
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/theme.css">
   <style>
     * { box-sizing: border-box; }

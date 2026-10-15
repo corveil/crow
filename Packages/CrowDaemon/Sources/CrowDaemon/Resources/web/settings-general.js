@@ -18,7 +18,9 @@
     S.cfg.terminal = S.cfg.terminal || {};
 
     body.appendChild(S.group('Appearance'));
-    body.appendChild(appearanceField());
+    const theme = appearanceField();
+    body.appendChild(skinField(theme.select));
+    body.appendChild(theme.field);
 
     body.appendChild(S.group('Development Root'));
     body.appendChild(S.textField('Path', { path: S.devRoot }, 'path',
@@ -125,8 +127,71 @@
     sel.onchange = () => {
       if (window.CrowTheme) CrowTheme.setPreference(sel.value);
     };
-    return S.field('Theme', sel,
-      'Follows this device’s appearance unless you choose Light or Dark. Saved in this browser.');
+    const help = el('div', 'st-help');
+    const field = S.field('Theme', sel);
+    field.appendChild(help);
+    syncThemeAvailability(sel, help);
+    return { field, select: sel, help };
+  }
+
+  // A dark-only skin (CROW-1333) pins dark, so Light is disabled while it is
+  // selected and the help says why. The stored preference is left alone: it
+  // comes back when the user picks a skin that has a light palette.
+  function syncThemeAvailability(sel, help) {
+    const lightOK = !window.CrowTheme || CrowTheme.lightAvailable();
+    for (const o of sel.options) {
+      if (o.value === 'light') o.disabled = !lightOK;
+    }
+    help.textContent = lightOK
+      ? 'Follows this device’s appearance unless you choose Light or Dark. Saved in this browser.'
+      : 'This skin is dark only, so Crow stays dark here. Saved in this browser.';
+  }
+
+  // Skin (CROW-1333): the palette, from crowd's /skins.json. Per browser, like
+  // Theme. Switching repaints everything, live terminals included, with no reload.
+  function skinField(themeSelect) {
+    const sel = el('select', 'st-select');
+    const current = (window.CrowTheme && CrowTheme.skin()) || 'corveil';
+    const placeholder = el('option', null, current === 'corveil' ? 'Corveil' : current);
+    placeholder.value = current;
+    placeholder.selected = true;
+    sel.appendChild(placeholder);
+    const field = S.field('Skin', sel, 'The palette for this browser. Saved in this browser.');
+    if (!window.CrowTheme) { sel.disabled = true; return field; }
+
+    CrowTheme.skins().then((catalog) => {
+      if (!catalog.skins.length) return;
+      sel.textContent = '';
+      const active = CrowTheme.skin();
+      for (const s of catalog.skins) {
+        const o = el('option', null, s.light === false ? s.name + ' (dark only)' : s.name);
+        o.value = s.id;
+        if (s.id === active) o.selected = true;
+        sel.appendChild(o);
+      }
+      // The catalog is what tells theme.js whether this skin has a light
+      // palette when nothing is cached yet, so re-sync Light now rather than
+      // waiting for the next crow-theme.
+      syncThemeFromSkin();
+    }).catch(() => { /* keep the placeholder; the current skin still applies */ });
+
+    sel.onchange = () => {
+      sel.disabled = true;
+      CrowTheme.setSkin(sel.value)
+        .catch(() => { sel.value = CrowTheme.skin(); }) // crowd unreachable: show what still applies
+        .finally(() => { sel.disabled = false; });
+    };
+    // Re-sync the Theme control off the event the skin switch fires.
+    function syncThemeFromSkin() {
+      const help = themeSelect.parentNode && themeSelect.parentNode.querySelector('.st-help');
+      if (help) syncThemeAvailability(themeSelect, help);
+    }
+    const onTheme = () => {
+      if (!sel.isConnected) { window.removeEventListener('crow-theme', onTheme); return; }
+      syncThemeFromSkin();
+    };
+    window.addEventListener('crow-theme', onTheme);
+    return field;
   }
 
   // Path + Verify + Reinstall skill for the Corveil CLI (CROW-1011).

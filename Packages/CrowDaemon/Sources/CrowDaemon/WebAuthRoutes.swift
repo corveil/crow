@@ -80,8 +80,10 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
     /// Paths served without the web-auth gate: the login/logout endpoints, the
     /// health probe, the brand asset the login page needs before auth, theme.css
     /// and the bundled fonts (CROW-1316 — the pre-auth login page paints with
-    /// them), the web app manifest + its install icons (CROW-1073 — Chrome's
-    /// install prompt fetches them regardless of auth state), and the MCP
+    /// them), theme.js and the skin catalog + skin CSS (CROW-1333 — the login
+    /// page applies the browser's chosen skin the same way the app does), the
+    /// web app manifest + its install icons (CROW-1073 — Chrome's install
+    /// prompt fetches them regardless of auth state), and the MCP
     /// endpoint. Every other path (incl. `/auth/check`, `/`, `/rpc`, the secret
     /// POSTs) is gated.
     ///
@@ -105,10 +107,19 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
             || name.hasSuffix(".ttf") || name.hasSuffix(".otf")
     }
 
+    /// `/skins/<id>.css` (CROW-1333): one well-formed skin id, nothing else
+    /// under that prefix.
+    static func isSkinCSS(path: String) -> Bool {
+        let prefix = "/skins/"
+        guard path.hasPrefix(prefix) else { return false }
+        return StaticAssets.skinID(fromCSSFile: String(path.dropFirst(prefix.count))) != nil
+    }
+
     static func isAuthExempt(path: String) -> Bool {
         if isBundledFont(path: path) { return true }
         return path == "/login" || path == "/logout" || path == "/health" || path == "/brand.svg"
-            || path == "/theme.css"
+            || path == "/theme.css" || path == "/theme.js" || path == "/skins.json"
+            || isSkinCSS(path: path)
             || path == "/manifest.webmanifest" || path == "/icon-192.png"
             || path == "/icon-512.png" || path == "/apple-touch-icon.png"
             || path == "/mcp"

@@ -323,9 +323,7 @@ function scrollbarTheme() {
 // --term-* tokens; scrollbarTheme() adds the thumb. Re-applied on `crow-theme`
 // so a Settings / system switch repaints the live grid.
 function terminalTheme() {
-  const base = (typeof crowXtermTheme === 'function') ? crowXtermTheme() : {
-    background: '#0A060B', foreground: '#FFF7FB', cursor: '#FF2D7A',
-  };
+  const base = (typeof crowXtermTheme === 'function') ? crowXtermTheme() : {};
   return { ...base, ...scrollbarTheme() };
 }
 window.addEventListener('crow-theme', () => {
