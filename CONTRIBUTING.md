@@ -12,7 +12,7 @@ Open a [GitHub Issue](https://github.com/corveil/crow/issues/new?template=bug_re
 - Xcode and Zig versions
 - Steps to reproduce
 - Expected vs actual behavior
-- Relevant stderr logs (see [Debugging](README.md#debugging))
+- Relevant stderr logs (see [Troubleshooting](docs/troubleshooting.md))
 
 ## Suggesting Features
 
@@ -20,7 +20,7 @@ Open a [GitHub Issue](https://github.com/corveil/crow/issues/new?template=featur
 
 ## Development Setup
 
-See [README.md](README.md#detailed-setup) for full build instructions. The short version:
+See the [README](README.md#build-from-source) for full build instructions and [docs/development.md](docs/development.md) for dev loops. The short version:
 
 ```bash
 git clone https://github.com/corveil/crow.git
