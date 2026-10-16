@@ -489,6 +489,79 @@ struct SessionServiceReviewPromptTests {
         #expect(prompt == "/crow-review-pr \(Self.prURL)")
     }
 
+    // MARK: - Workspace review instructions (CROW-1340)
+
+    private static let instructionsFixtureSkillBody = """
+    # Crow Review PR
+    Review PR $ARGUMENTS.
+
+    - Missing tests for new code
+
+    \(ReviewWorkspaceInstructions.placeholder)
+    ### Step 4: Run Static Analysis
+    """
+
+    private static let reviewInstructions = "Flag any new table without RLS.\n\n- Force-unwraps are fine in tests."
+
+    /// Every inlined-SKILL agent receives the workspace's instructions verbatim,
+    /// under the section heading, before the next step.
+    @Test func buildReviewPromptInlineBranchesCarryTheWorkspaceReviewInstructions() {
+        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity, .muse] {
+            let prompt = SessionService.buildReviewPrompt(
+                prURL: Self.prURL,
+                prTitle: Self.prTitle,
+                repoSlug: Self.repoSlug,
+                prNumber: Self.prNumber,
+                agentKind: agentKind,
+                skillBody: Self.instructionsFixtureSkillBody,
+                reviewInstructions: Self.reviewInstructions
+            )
+
+            #expect(prompt.contains(ReviewWorkspaceInstructions.heading), "\(agentKind.rawValue) lost the section")
+            #expect(prompt.contains(Self.reviewInstructions + "\n\n### Step 4:"), "\(agentKind.rawValue) mangled the text")
+            #expect(!prompt.contains(ReviewWorkspaceInstructions.placeholder))
+            #expect(prompt.contains(Self.prURL))
+        }
+    }
+
+    /// A repo no workspace claims (or an unset field) renders the brief as it read
+    /// before the field existed: the placeholder line simply vanishes.
+    @Test func buildReviewPromptWithoutReviewInstructionsIsUnchanged() {
+        let beforeThisField = Self.instructionsFixtureSkillBody
+            .replacingOccurrences(of: ReviewWorkspaceInstructions.placeholder + "\n", with: "")
+        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity, .muse] {
+            for unset: String? in [nil, "  \n "] {
+                let prompt = SessionService.buildReviewPrompt(
+                    prURL: Self.prURL, prTitle: Self.prTitle, repoSlug: Self.repoSlug,
+                    prNumber: Self.prNumber, agentKind: agentKind,
+                    skillBody: Self.instructionsFixtureSkillBody, reviewInstructions: unset)
+                let legacy = SessionService.buildReviewPrompt(
+                    prURL: Self.prURL, prTitle: Self.prTitle, repoSlug: Self.repoSlug,
+                    prNumber: Self.prNumber, agentKind: agentKind, skillBody: beforeThisField)
+                #expect(prompt == legacy, "\(agentKind.rawValue) changed with no instructions set")
+            }
+        }
+    }
+
+    /// Claude's prompt file stays the terse slash command: `/crow-review-pr`
+    /// loads the copied SKILL.md, which `prepareReviewClone` renders through
+    /// `expandSkillBody` with the same instructions. Both halves are pinned here.
+    @Test func claudeGetsTheReviewInstructionsThroughTheCopiedSkill() {
+        let prompt = SessionService.buildReviewPrompt(
+            prURL: Self.prURL, prTitle: Self.prTitle, repoSlug: Self.repoSlug,
+            prNumber: Self.prNumber, agentKind: .claudeCode,
+            skillBody: Self.instructionsFixtureSkillBody, reviewInstructions: Self.reviewInstructions)
+        #expect(prompt == "/crow-review-pr \(Self.prURL)")
+
+        let copiedSkill = CrowAttribution.expandSkillBody(
+            Self.instructionsFixtureSkillBody, agentKind: .claudeCode,
+            reviewInstructions: Self.reviewInstructions)
+        #expect(copiedSkill.contains(ReviewWorkspaceInstructions.heading))
+        #expect(copiedSkill.contains(Self.reviewInstructions))
+        // The copy keeps `$ARGUMENTS` for Claude's skill engine to fill.
+        #expect(copiedSkill.contains("Review PR $ARGUMENTS."))
+    }
+
     // MARK: - initialPromptFileName (CROW-439)
 
     /// `launchAgent` uses `SessionService.initialPromptFileName(for:)` as its

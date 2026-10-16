@@ -22,20 +22,20 @@ extension SessionService {
     /// (see `ReviewSessionController.buildReviewPrompt`).
     nonisolated static func buildReviewPrompt(
         prURL: String, prTitle: String, repoSlug: String, prNumber: Int,
-        agentKind: AgentKind, skillBody: String? = nil
+        agentKind: AgentKind, skillBody: String? = nil, reviewInstructions: String? = nil
     ) -> String {
         ReviewSessionController.buildReviewPrompt(
             prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber,
-            agentKind: agentKind, skillBody: skillBody)
+            agentKind: agentKind, skillBody: skillBody, reviewInstructions: reviewInstructions)
     }
 
     /// Inlined-SKILL substitutions for slash-command-less review agents
     /// (see `ReviewSessionController.cursorReviewPrompt`).
     nonisolated static func cursorReviewPrompt(
-        skillBody: String, prURL: String, agentKind: AgentKind = .cursor
+        skillBody: String, prURL: String, agentKind: AgentKind = .cursor, reviewInstructions: String? = nil
     ) -> String {
         ReviewSessionController.cursorReviewPrompt(
-            skillBody: skillBody, prURL: prURL, agentKind: agentKind)
+            skillBody: skillBody, prURL: prURL, agentKind: agentKind, reviewInstructions: reviewInstructions)
     }
 
     nonisolated static func shouldRefuseReviewHandoff(

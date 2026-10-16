@@ -98,18 +98,26 @@ public enum CrowAttribution {
     /// pre-expands with the workspace's own set before its Claude/inlined branches
     /// diverge; `ReviewVerdictPolicy.expand` is idempotent, so this second pass is
     /// a no-op there rather than a conflicting re-render.
+    ///
+    /// `reviewInstructions` fills the `crow-review-pr` workspace-instructions
+    /// placeholder (CROW-1340) and is substituted **last**, after every rewrite
+    /// above, so the operator's text reaches the agent verbatim. Its `nil`
+    /// default removes the placeholder line — the same "nothing reaches disk
+    /// unexpanded" guarantee the verdict policy gets.
     public static func expandSkillBody(
         _ skillBody: String,
         agentKind: AgentKind,
-        reviewBlocking: [ReviewSeverity] = ReviewSeverity.defaultBlocking
+        reviewBlocking: [ReviewSeverity] = ReviewSeverity.defaultBlocking,
+        reviewInstructions: String? = nil
     ) -> String {
         let name = agentDisplayName(for: agentKind)
         let policyExpanded = ReviewVerdictPolicy.expand(skillBody, blocking: reviewBlocking)
-        return policyExpanded
+        let attributed = policyExpanded
             .replacingOccurrences(of: shellAgentDisplayNameExpression, with: name)
             .replacingOccurrences(of: "$\(agentDisplayNameEnvironmentKey)", with: name)
             .replacingOccurrences(of: skillAgentPlaceholder, with: name)
             .replacingOccurrences(of: "via Claude Code", with: "via \(name)")
+        return ReviewWorkspaceInstructions.expand(attributed, instructions: reviewInstructions)
     }
 
     /// Shared attribution rules copied into `.claude/skills/crow-attribution/FOOTER.md`.

@@ -104,6 +104,37 @@ struct ReReviewPromptTests {
         #expect(!prompt.contains("git diff"))
     }
 
+    /// CROW-1340: a re-review round restates the workspace's review instructions
+    /// on one line — the prompt is typed into a terminal, where `\n` is Return.
+    @Test func restatesWorkspaceReviewInstructionsOnOneLine() {
+        let prompt = QuickActionPrompts.build(
+            action: .reReview,
+            codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
+            prURL: "https://github.com/corveil/crow/pull/753",
+            prNumber: 753,
+            lastReviewedHeadSha: nil,
+            reviewInstructions: "Check RLS on every new table.\n\nForce-unwraps are fine in tests."
+        )
+        #expect(prompt.contains("review instructions still apply"))
+        #expect(prompt.contains("do not change the verdict rules"))
+        #expect(prompt.contains("Check RLS on every new table. / Force-unwraps are fine in tests."))
+        #expect(prompt.hasSuffix("\n"))
+        #expect(!prompt.dropLast().contains("\n"))
+    }
+
+    @Test func unsetReviewInstructionsLeaveTheReReviewPromptUnchanged() {
+        let backend = FakeCodeBackend(provider: .github, cliName: "gh")
+        let url = "https://github.com/corveil/crow/pull/753"
+        let legacy = QuickActionPrompts.build(
+            action: .reReview, codeBackend: backend, prURL: url, prNumber: 753, lastReviewedHeadSha: nil)
+        for unset: String? in [nil, " \n "] {
+            #expect(QuickActionPrompts.build(
+                action: .reReview, codeBackend: backend, prURL: url, prNumber: 753,
+                lastReviewedHeadSha: nil, reviewInstructions: unset) == legacy)
+        }
+        #expect(!legacy.contains("review instructions"))
+    }
+
     @Test func gitlabUsesGlabCli() {
         let prompt = QuickActionPrompts.build(
             action: .reReview,

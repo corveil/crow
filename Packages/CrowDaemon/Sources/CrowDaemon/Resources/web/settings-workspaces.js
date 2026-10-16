@@ -170,6 +170,14 @@
     ta.value = d.customInstructions || '';
     ta.oninput = () => { d.customInstructions = ta.value; S.markDirty(); };
     body.appendChild(S.field('Custom instructions', ta, 'Free-text appended to session prompts.'));
+    // Review sessions only (CROW-1340). Separate from Custom instructions, which
+    // reach work sessions only; neither leaks into the other's prompts. A blank
+    // value reads back as unset (WorkspaceInfo decodes "" to nil).
+    const rta = el('textarea', 'st-textarea');
+    rta.value = d.reviewInstructions || '';
+    rta.oninput = () => { d.reviewInstructions = rta.value; S.markDirty(); };
+    body.appendChild(S.field('Review instructions', rta,
+      'Free-text added to review-session prompts for PRs in this workspace\'s repos. Adds to the review rubric; does not change the verdict rule.'));
 
     body.appendChild(S.group('AI gateway'));
     if (!S.isLocal) {

@@ -323,6 +323,10 @@ public enum CrowDaemon {
                 appState: appState, providerManager: providerManager,
                 settingsProvider: {
                     ConfigStore.loadConfig(devRoot: options.devRoot)?.autoRespond ?? AutoRespondSettings()
+                },
+                reviewInstructionsProvider: { slug in
+                    ConfigStore.loadConfig(devRoot: options.devRoot)?
+                        .workspace(forRepoSlug: slug)?.reviewInstructions
                 })
             return (service, coordinator)
         }

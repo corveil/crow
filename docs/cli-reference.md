@@ -1861,6 +1861,8 @@ Notes:
 | `--clear-jira-status-map`    | Drop every Crow→Jira status mapping                                         |
 | `--custom-instructions`      | Free text appended to this workspace's session prompts                      |
 | `--custom-instructions-file` | Read `--custom-instructions` from a file; `-` reads stdin                   |
+| `--review-instructions`      | Free text added to this workspace's **review**-session prompts (`""` clears) |
+| `--review-instructions-file` | Read `--review-instructions` from a file; `-` reads stdin                   |
 | `--always-include`           | Repo always listed in the prompt table (repeatable)                         |
 | `--clear-always-include`     | Empty the always-include list                                               |
 | `--auto-review-repo`         | Repo whose review requests auto-create a session (repeatable)               |

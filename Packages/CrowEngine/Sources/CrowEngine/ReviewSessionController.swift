@@ -79,9 +79,16 @@ final class ReviewSessionController {
         // landing mid-clone would otherwise render a policy the session was never
         // launched under. Nil (no workspace claims the repo, or it never set the
         // field) means Crow's default, not "nothing blocks".
-        let reviewBlocking = ConfigStore.loadConfig(devRoot: devRoot)?
-            .workspace(forRepoSlug: repoSlug)?
+        //
+        // The workspace's review instructions (CROW-1340) ride the same lookup and
+        // the same sampling point, for the same reasons. Only `reviewInstructions`
+        // is read — `customInstructions` is work-session guidance and must never
+        // reach a reviewer.
+        let reviewWorkspace = ConfigStore.loadConfig(devRoot: devRoot)?
+            .workspace(forRepoSlug: repoSlug)
+        let reviewBlocking = reviewWorkspace?
             .effectiveReviewBlockingSeverities ?? ReviewSeverity.defaultBlocking
+        let reviewInstructions = reviewWorkspace?.reviewInstructions
         let env = ShellEnvironment.shared.env
 
         // Fetch PR metadata via the GitHub CodeBackend (ADR 0005) before
@@ -175,6 +182,7 @@ final class ReviewSessionController {
                 env: env,
                 reviewAgentKind: reviewAgentKind,
                 reviewBlocking: reviewBlocking,
+                reviewInstructions: reviewInstructions,
                 prMetadata: prMetadata
             )
         }
