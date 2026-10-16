@@ -1,8 +1,100 @@
 # Crow
 
-Crow manages AI-powered development sessions. It runs as a background daemon (`crowd`) with a **browser-based UI**, orchestrating git worktrees, Claude Code instances, and GitHub/GitLab/Jira issue tracking. Each session pairs a git worktree, a tmux-backed Claude Code terminal (streamed to xterm.js in your browser), and ticket metadata — all tracked in a persistent store.
+Crow is a self-hosted daemon and web UI for running AI coding agents — Claude Code, Codex, Cursor, OpenCode and others — in parallel, each in its own git worktree, driven by your GitHub, GitLab or Jira board.
 
-> **Note:** Crow began as a native macOS (AppKit) app. As of [ADR 0009](docs/adr/0009-crowd-sole-authority-clients-only.md) and [ADR 0010](docs/adr/0010-retire-the-macos-app.md), that app was **retired**: `crowd` is the sole authority and every UI is a pure client. The browser is the primary UI; an optional thin **[desktop window](#desktop-app-native-window-over-crowd)** (Tauri) over the same web UI is available if you prefer a native window. The daemon still runs on a macOS host because it drives `git`, `tmux`, and Claude Code locally.
+**Why.** One coding agent in one terminal is easy. Five at once is not: each needs its own branch and checkout so they don't trample each other, someone has to remember which terminal belongs to which ticket, and every PR needs watching for review comments, failed checks and merge conflicts. Crow does that bookkeeping. Pick a ticket and it creates the worktree, launches the agent with the ticket as context, moves the ticket across your board, and tracks the PR until it merges. It can also review PRs, answer review feedback, and rebase stale branches on its own.
+
+**Who it's for.** Developers who already work with a coding agent and want to run several tickets at once without losing track of them. Crow runs on your own machine (or a box you control) and drives the `git`, `gh`/`glab` and agent CLIs you've already installed and logged into — it isn't a hosted service.
+
+![The Crow UI: a sidebar of active sessions, each tied to an issue and a PR, next to the selected session's live agent terminal](docs/crow-screenshot.jpeg)
+
+## Install
+
+There is no stable release yet. [Prereleases](https://github.com/corveil/crow/releases) carry macOS builds, but until a stable release is published, **building from source is the supported way to install Crow**. When one ships, a download path will go here, above the source build.
+
+### Build from source
+
+You need the [prerequisites](#prerequisites) below — at minimum a Swift 6 toolchain, `git`, `tmux` and a coding agent.
+
+```bash
+# 1. Clone
+git clone https://github.com/corveil/crow.git
+cd crow
+
+# 2. Build the `crow` CLI and the `crowd` daemon (Swift toolchain only).
+#    `make build` also builds the optional native desktop app — see "Desktop app" below.
+make daemon
+
+# 3. Authenticate the GitHub CLI (GitHub workspaces only) — the write `project` scope is required
+gh auth login
+gh auth refresh -s project,read:org,repo
+
+# 4. Configure your development root + workspaces
+.build/debug/crow setup
+
+# 5. Run the daemon — it serves the web UI
+.build/debug/crowd
+```
+
+`crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` on startup — open that URL in your browser. The first screen guides you through any remaining setup.
+
+> **Note:** The required GitHub scope is the **write** `project` scope — `read:project` is insufficient because Crow updates ticket status via the `updateProjectV2ItemFieldValue` GraphQL mutation. See [docs/getting-started.md](docs/getting-started.md#3-github-authentication) for details.
+
+### Put `crow` + `crowd` on your PATH
+
+The Manager terminal and the `/crow-workspace` skill call bare `crow ...`, so a build you can only launch by full path will break those workflows. Install the binaries so they're invokable from anywhere:
+
+```bash
+make install                       # symlinks crow + crowd into ~/.local/bin
+```
+
+If `~/.local/bin` isn't already on your `PATH`, add this to `~/.zshrc` (then restart your shell):
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Use a different directory with `BINDIR`, e.g. `make install BINDIR=/usr/local/bin`.
+
+`make install` creates **symlinks** into `.build/debug/`, so a later `make build` updates them in place — no need to re-run it. Re-run `make install` only when you switch to a release build (`make daemon CONFIG=release && make install CONFIG=release`) or after `make clean` (which removes `.build/` and leaves the symlinks dangling until the next build). Remove the symlinks with `make uninstall`.
+
+To start `crowd` automatically at login, see `crow autostart install` in the [CLI reference](docs/cli-reference.md#autostart).
+
+### Remote access
+
+`crowd` binds `127.0.0.1:8787` by default, so it's reachable only from the machine it runs on. To reach it from another device, front it with an HTTPS reverse proxy (e.g. [`tailscale serve`](https://tailscale.com/kb/1242/tailscale-serve)) and set a **web password** under **Settings → Web Access** or with `crow web-password set`. Non-loopback requests are blocked until a password is set and the connection is HTTPS.
+
+The password and the AI gateways are **local-only** surfaces: they're settable from a local browser or the `crow` CLI (which talks over the Unix socket), and refused for remote web clients — a remote session must not be able to change the password gating remote access, or read gateway credentials. See [CLI Reference → Gateway Commands](docs/cli-reference.md#gateway-commands).
+
+## Prerequisites
+
+### System Requirements
+
+`crowd` is the only process you run, and it drives `git`, `tmux`, and the coding agents on the host — so it needs a Unix-like host:
+
+- **macOS 14.0+** (Sonoma or later), or **Linux** (x86_64 or arm64). Windows isn't supported.
+- A **Swift 6 toolchain** — bundled with Xcode Command Line Tools on macOS, or installed from [swift.org/install](https://www.swift.org/install/) on Linux
+- A modern **web browser** for the UI
+
+### Build Dependencies
+
+| Tool  | Version | Purpose                     | Install                  |
+| ----- | ------- | --------------------------- | ------------------------ |
+| Swift | 6.0+    | Compiler — Xcode CLT (macOS) or the swift.org toolchain (Linux) | `xcode-select --install` · [swift.org/install](https://www.swift.org/install/) |
+| Rust  | 1.77+   | Only for the optional [desktop app](#desktop-app-native-window-over-crowd) | [rustup.rs](https://rustup.rs) |
+
+### Runtime Dependencies
+
+| Tool     | Purpose                                                       | Install                                               |
+| -------- | ------------------------------------------------------------- | ----------------------------------------------------- |
+| `git`    | Worktree management                                           | Ships with Xcode CLT                                  |
+| `tmux`   | Terminal backend for managed sessions (≥ 3.3)                 | `brew install tmux`                                   |
+| `claude` | Claude Code — the default coding agent                        | [claude.ai/download](https://claude.ai/download)      |
+| `gh`     | GitHub CLI — issues, PRs, project boards. **Only for GitHub workspaces** | `brew install gh`                          |
+| `glab`   | GitLab CLI. **Only for GitLab workspaces**                    | `brew install glab`                                   |
+| `acli`   | Atlassian CLI. **Only for workspaces that track tickets in Jira** | [developer.atlassian.com/cloud/acli](https://developer.atlassian.com/cloud/acli/guides/install-acli/) |
+
+> Install commands above are macOS/Homebrew; on Linux use your distribution's package manager (e.g. `apt install git tmux`; `gh`/`glab` have their own apt repos). `claude` is the default coding agent — **Codex**, **Cursor**, **OpenCode**, **Grok Build**, **Antigravity**, and **Muse Code** are also supported and selectable per session (Settings → General, or `crow agents set`); install whichever agents you use. An uninstalled agent still appears in the picker, greyed out. What each one can and can't do is in the [agent harness matrix](docs/agent-harness-matrix.md).
 
 ## Architecture at a glance
 
@@ -23,9 +115,9 @@ flowchart TB
 
     subgraph host["Host + backends"]
         TMUX["tmux cockpit"]
-        AGENTS["Coding agents<br/>Claude Code · OpenCode · Cursor · Codex"]
+        AGENTS["Coding agents<br/>Claude Code · Codex · Cursor · OpenCode · …"]
         GIT["git worktrees"]
-        PROV["GitHub · GitLab · Jira · Corveil"]
+        PROV["GitHub · GitLab · Jira"]
     end
 
     WEB -- "WebSocket: /rpc + /terminal" --> HTTP
@@ -43,161 +135,53 @@ flowchart TB
 
 `crowd` is the single source of truth — the only store writer, the only spawner, and the owner of terminal + agent lifecycle. Every UI is a **pure client**: it subscribes to `crowd`'s state over the `/rpc` + `/terminal` WebSocket surface, sends JSON-RPC, and renders. The **web UI** is the same either way — a browser tab or the **Tauri desktop window**, which just wraps that web UI in a native window and can spawn `crowd` as a sidecar on launch. Multiple clients (browser tabs, the desktop window, the `crow` CLI, any future UI) attach to one running system at once. Full detail in [docs/architecture.md](docs/architecture.md).
 
-## Prerequisites
-
-### System Requirements
-
-`crowd` is the only process you run, and it drives `git`, `tmux`, and the coding agents on the host — so it needs a Unix-like host:
-
-- **macOS 14.0+** (Sonoma or later), or **Linux** (x86_64 or arm64)
-- A **Swift 6 toolchain** — bundled with Xcode Command Line Tools on macOS, or installed from [swift.org/install](https://www.swift.org/install/) on Linux
-- A modern **web browser** for the UI
-
-> The optional native [desktop app](#desktop-app-native-window-over-crowd) (Tauri) is macOS-only today; on Linux, use the browser UI. On Linux the terminal is streamed to the browser over a WebSocket (the macOS-native terminal surface compiles away).
-
-### Build Dependencies
-
-| Tool  | Version | Purpose                     | Install                  |
-| ----- | ------- | --------------------------- | ------------------------ |
-| Swift | 6.0+    | Compiler — Xcode CLT (macOS) or the swift.org toolchain (Linux) | `xcode-select --install` · [swift.org/install](https://www.swift.org/install/) |
-| Rust  | 1.77+ (arm64) | Compiler for the optional [desktop app](#desktop-app-native-window-over-crowd) (macOS) | [rustup.rs](https://rustup.rs) |
-| Node  | 18+     | Only for `npm run tauri dev` (optional) | `brew install node`      |
-
-### Runtime Dependencies
-
-| Tool     | Purpose                                                       | Install                                               |
-| -------- | ------------------------------------------------------------- | ----------------------------------------------------- |
-| `gh`     | GitHub CLI — issue tracking, PR status, project boards        | `brew install gh`                                     |
-| `git`    | Worktree management                                           | Ships with Xcode CLT                                  |
-| `claude` | Claude Code — AI coding assistant                             | [claude.ai/download](https://claude.ai/download)      |
-| `tmux`   | Terminal backend for managed sessions (≥ 3.3)                 | `brew install tmux`                                   |
-| `glab`   | GitLab CLI (optional, for GitLab repos)                       | `brew install glab`                                   |
-| `acli`   | Atlassian CLI (optional, for Jira task tracking)              | [developer.atlassian.com/cloud/acli](https://developer.atlassian.com/cloud/acli/guides/install-acli/) |
-
-> Install commands above are macOS/Homebrew; on Linux use your distribution's package manager (e.g. `apt install git tmux`; `gh`/`glab` have their own apt repos). `git` ships with Xcode CLT on macOS. `claude` is the default coding agent — **OpenCode**, **Cursor**, **Codex**, **Grok Build**, **Antigravity**, and **Muse Code** are also supported and selectable per session (Settings → General, or `crow agents set`); install whichever agents you use. An uninstalled agent still appears in the picker, greyed out.
-
-## Quick Start
-
-```bash
-# 1. Clone
-git clone https://github.com/corveil/crow.git
-cd crow
-
-# 2. Build the `crow` CLI and the `crowd` daemon (Swift toolchain only).
-#    `make build` also builds the optional native desktop app — see "Desktop app" below.
-make daemon
-
-# 3. Authenticate GitHub CLI — the write `project` scope is required
-gh auth login
-gh auth refresh -s project,read:org,repo
-
-# 4. Configure your development root + workspaces
-.build/debug/crow setup
-
-# 5. Run the daemon — it serves the web UI
-.build/debug/crowd
-```
-
-`crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` on startup — open that URL in your browser. The first screen guides you through any remaining setup.
-
-For local daemon development, `make daemon-run` runs `crowd` serving the frozen web UI baked into the compiled bundle — the same asset source as `make run`. Web UI edits (`index.html`/`app.css`/the classic client scripts) need a rebuild to be picked up:
-
-```bash
-make daemon-run                      # stable daemon at http://127.0.0.1:8787
-bash scripts/daemon-run.sh --watch   # ...and rebuild + restart crowd on Swift or web-asset changes
-```
-
-`--watch` restarts the daemon on every change (Swift can't hot-swap), so leave it off when you want a daemon that stays up across edits.
-
-> **Note:** The required GitHub scope is the **write** `project` scope — `read:project` is insufficient because Crow updates ticket status via the `updateProjectV2ItemFieldValue` GraphQL mutation. See [docs/getting-started.md](docs/getting-started.md#3-github-authentication) for details.
-
-### Install (put `crow` + `crowd` on your PATH)
-
-The Manager terminal and the `/crow-workspace` skill call bare `crow ...`, so a build you can only launch by full path will break those workflows. Install the binaries so they're invokable from anywhere:
-
-```bash
-make install                       # symlinks crow + crowd into ~/.local/bin
-```
-
-If `~/.local/bin` isn't already on your `PATH`, add this to `~/.zshrc` (then restart your shell):
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Use a different directory with `BINDIR`, e.g. `make install BINDIR=/usr/local/bin`.
-
-`make install` creates **symlinks** into `.build/debug/`, so a later `make build` updates them in place — no need to re-run it. Re-run `make install` only when you switch to a release build (`make daemon CONFIG=release && make install CONFIG=release`) or after `make clean` (which removes `.build/` and leaves the symlinks dangling until the next build). Remove the symlinks with `make uninstall`.
-
-### Remote access
-
-`crowd` binds `127.0.0.1:8787` by default, so it's reachable only from the machine it runs on. To reach it from another device, front it with an HTTPS reverse proxy (e.g. [`tailscale serve`](https://tailscale.com/kb/1242/tailscale-serve)) and set a **web password** under **Settings → Web Access** or with `crow web-password set`. Non-loopback requests are blocked until a password is set and the connection is HTTPS (CROW-593).
-
-The password and the AI gateways are **local-only** surfaces: they're settable from a local browser or the `crow` CLI (which talks over the Unix socket), and refused for remote web clients — a remote session must not be able to change the password gating remote access, or read gateway credentials. See [CLI Reference → Gateway Commands](docs/cli-reference.md#gateway-commands).
+> **History:** Crow began as a native macOS (AppKit) app. Per [ADR 0009](docs/adr/0009-crowd-sole-authority-clients-only.md) and [ADR 0010](docs/adr/0010-retire-the-macos-app.md) that app was retired: `crowd` is the sole authority and every UI is a pure client.
 
 ## Desktop app (native window over crowd)
 
-Prefer a native window to a browser tab? `crow-desktop/` is a thin **Tauri** shell that opens a "Crow" window pointed at the same web UI. It doesn't reimplement anything — `crowd` stays the sole authority; the window is just another pure client. Requires the **Rust arm64 toolchain** (see [Build Dependencies](#build-dependencies)).
+Prefer a native window to a browser tab? `crow-desktop/` is a thin **Tauri** shell that opens a "Crow" window pointed at the same web UI. It doesn't reimplement anything — `crowd` stays the sole authority; the window is just another pure client. It needs a Rust toolchain.
 
 ```bash
-make build     # crow CLI + crowd daemon (Swift) AND the Crow desktop app (Tauri)
-make run       # build, then open the Crow window
+make run       # build crowd + the desktop app, then open the Crow window
 ```
 
-`make run` is the modern equivalent of the old `make && ./.build/debug/CrowApp`. On launch the window looks for a `crowd` already listening on `127.0.0.1:8787`:
+On launch the window looks for a `crowd` already listening on `127.0.0.1:8787`. If it finds one, it **reuses** it and leaves it running when you quit. If not, it spawns its own `crowd` — `.build/debug/crowd` in a debug build, the bundled sidecar inside `Crow.app` in a release build — and stops it on quit.
 
-- **Found** (and it identifies as crowd) → it **reuses** that daemon and leaves it running when you quit the window.
-- **None** → it spawns its own `crowd` from `.build/debug/crowd` (debug) or from
-  the bundled sidecar inside `Crow.app` (release) and stops that one on quit.
+**Platforms:** prebuilt for macOS only. The shell's macOS-specific code is `cfg`-gated, so it is meant to compile on Linux with `cargo`, but `make` doesn't build it there and it isn't tested or released for Linux — on Linux, use the browser. Windows isn't supported, because `crowd` needs a Unix host with tmux.
 
-Once built, the binary is self-contained — run it directly without `make`:
-
-```bash
-crow-desktop/src-tauri/target/debug/Crow
-```
-
-> **Toolchain note:** a plain terminal can run under Rosetta (x86_64) and shadow the arm64 Rust with an old x86_64 one. `make app`/`make run` pin the Homebrew + rustup arm64 paths for you; if you invoke `cargo` or `npm` directly, prefix `PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"`.
-
-### Iterating with the window open
-
-The `make run` window spawns `crowd` as a sidecar that serves the web UI from the compiled bundle (frozen assets), so web/UI edits (`index.html`/`app.css`/the classic client scripts) need a `make daemon` rebuild to show up — the same asset source across every dev path. The rebuild re-copies the assets into the bundle and `crowd` reads them per request, so a plain ⌘R picks them up (no daemon restart needed for web-only edits; a Swift change does need a restart, since Swift can't hot-swap).
-
-Run a standalone `crowd` separately only when you want a daemon that **outlives the window** or is shared by several clients (a browser tab + the window at once). Because the window reuses a crowd already on `:8787` and leaves it running on quit, they compose cleanly:
-
-```bash
-# Terminal 1 — a stable daemon, web served from the compiled bundle
-make daemon-run
-
-# Terminal 2 — the window attaches to it (reuses :8787, doesn't own its lifecycle)
-make run          # or, once built: crow-desktop/src-tauri/target/debug/Crow
-```
-
-Quitting the window leaves your `crowd` running. `daemon-run --watch` rebuilds **and restarts** it on Swift *or* web-asset edits — the window keeps its `:8787` target, so just ⌘R once it's back up. (`--watch` always restarts; Swift can't hot-swap, and even a web edit tears the daemon down — the same reason the Tauri dev loop churns.) For a web-only tweak you can skip the churn: a **manual** `make daemon` against the already-running daemon just re-copies the assets, which it serves on the next ⌘R with no restart.
-
-- `CROW_HTTP_PORT=NNNN` — match a crowd started on a non-default port so the window reuses it instead of spawning a second daemon on 8787 (which would contend on the same store + tmux cockpit).
-- `CROWD_BIN=/path/to/crowd` — override which `crowd` binary the window spawns when none is already running.
-
-### `npm run tauri dev` (editing the Tauri shell)
-
-When you're changing the **desktop shell itself** (`crow-desktop/src-tauri/`), use Tauri's dev loop, which recompiles and relaunches the Rust on save:
-
-```bash
-cd crow-desktop
-PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH" npm run tauri dev
-```
-
-Handy for Rust/window work, but each relaunch re-runs the launch logic and tears down a `crowd` it spawned — so it churns the daemon. When you're iterating on `crowd` or the web UI (not the Rust shell), prefer plain `make run` (or the `make daemon-run` + `make run` split above).
+Working on the desktop shell or the web UI? See [docs/development.md](docs/development.md).
 
 ## Documentation
 
+**Using Crow**
+
 - [**Getting Started**](docs/getting-started.md) — Clone, build, authenticate, and run
-- [**CLI Reference**](docs/cli-reference.md) — Every `crow` subcommand and its flags, with examples and gotchas
-- [**CLI (generated)**](docs/cli.md) — The same surface generated from the commands themselves; regenerate with `make docs`
-- [**Architecture**](docs/architecture.md) — Packages, key components, data flow
 - [**Configuration**](docs/configuration.md) — File locations, workspace config, directory layout, session lifecycle
 - [**Automation**](docs/automation.md) — Auto-create, auto-respond, auto-complete, and the Settings → Automation tab
+- [**Web UI skins**](docs/web-skins.md) — The built-in color skins and how to make your own
 - [**MCP**](docs/mcp.md) — Crow's read-only MCP server: pointing Cowork or an off-box bot at the board
 - [**Troubleshooting**](docs/troubleshooting.md) — Build and runtime errors
+
+**CLI**
+
+- [**CLI Reference**](docs/cli.md) — The canonical reference: every `crow` subcommand and flag, generated from the commands themselves (`make docs`), so it can't drift
+- [**CLI Guide**](docs/cli-reference.md) — The companion guide: what each verb is for, JSON response shapes, worked examples and gotchas. A test keeps it covering every verb in the reference
+
+**Agents and session logs**
+
+- [**Agent harness matrix**](docs/agent-harness-matrix.md) — What each supported coding agent can and can't do under Crow, and why
+- [**Session-log collector**](docs/session-log-collector.md) — Uploading agent transcripts to Corveil, per workspace
+- [**Session backfill**](docs/session-backfill.md) — Uploading transcripts that predate the collector
+- [**Harness transcript locations**](docs/harness-transcript-locations.md) — Where each agent writes its transcripts on disk
+
+**Development**
+
+- [**Development**](docs/development.md) — Dev loops for `crowd`, the web UI and the desktop shell; adding packages; tests
+- [**Architecture**](docs/architecture.md) — Packages, key components, data flow
+- [**Architecture Decision Records**](docs/adr/README.md) — Why Crow is built the way it is
+- [**macOS release signing**](docs/macos-release-signing.md) — How release builds are signed and notarized
+- [**Harness gap audit**](docs/agent-harness-gap-audit.md) — Version-pinned audit behind the harness matrix
+- [**Terminal runtime research**](docs/terminal-runtime-research.md) — Archived: the original Ghostty-era terminal investigation
 
 ## Usage
 
@@ -206,7 +190,7 @@ Handy for Rust/window work, but each relaunch re-runs the launch logic and tears
 The left rail groups your work:
 
 - **Tickets** — Assigned issues grouped by project board status (Backlog, Ready, In Progress, In Review, Done in last 24h). Click a status to filter.
-- **Manager** — A persistent Claude Code terminal for orchestrating work. Use `/crow-workspace` here to create new sessions. Launches in `--permission-mode auto` by default so orchestration commands (`crow`, `gh`, `git`) skip per-call approval (Claude Code ≥ 2.1.257 can still prompt once on a Read outside `{devRoot}`; CROW-1176 / CROW-1215); opt out via Settings → Automation → Manager Terminal.
+- **Manager** — A persistent Claude Code terminal for orchestrating work. Use `/crow-workspace` here to create new sessions. Launches in `--permission-mode auto` by default so orchestration commands (`crow`, `gh`, `git`) skip per-call approval (recent Claude Code versions can still prompt once for a file read outside your dev root); opt out via Settings → Automation → Manager Terminal.
 - **Active Sessions** — One per work context. Shows repo, branch, issue/PR badges with pipeline and review status.
 - **Completed Sessions** — Sessions whose PRs have been merged or issues closed.
 
@@ -297,7 +281,7 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 - **Auto-start review sessions** for opted-in workspaces when a PR becomes reviewable
 - **Auto-respond** to changes-requested reviews and failed CI checks (off by default)
 - **Auto-merge** Crow-authored PRs labeled `crow:merge` via `gh pr merge --auto --squash` (off by default; only acts on PRs whose commits carry a `Crow-Session:` trailer matching a known session). Crow lazily creates the `crow:merge` label on first observation; to pre-seed it manually: `gh label create crow:merge --color 0E8A16 --description "Crow: enable auto-merge once mergeable"`
-- **Scriptable** — `crow automation get|set` drives every toggle on the tab: the five auto-permission modes, remote control, commit attribution, both label watchers, and the three auto-respond toggles. Same config as the UI, live within a board poll, no `crowd` restart. The tab's ticket/review board filters are `AppConfig.defaults` fields and belong to `crow defaults set` ([CLI reference](docs/cli-reference.md#automation-commands))
+- **Scriptable** — `crow automation get|set` drives every toggle on the tab: the five auto-permission modes, remote control, commit attribution, both label watchers, and the auto-respond toggles. Same config as the UI, live within a board poll, no `crowd` restart. The tab's ticket/review board filters are global defaults and belong to `crow defaults set` ([CLI reference](docs/cli-reference.md#automation-commands))
 
 ### Review Board
 
@@ -316,13 +300,13 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 
 ### Workspaces
 
-- A workspace maps a folder under your dev root to a forge (GitHub or GitLab), a ticket source (GitHub, GitLab, Jira, or Corveil), the repos it always lists or auto-reviews, and free-text instructions appended to its session prompts
+- A workspace maps a folder under your dev root to a forge (GitHub or GitLab), a ticket source (GitHub, GitLab, or Jira), the repos it always lists or auto-reviews, and free-text instructions appended to its session prompts
 - Manage from Settings → Workspaces or from the CLI with `crow workspace list|get|add|edit|remove` — both write the same config, and an open browser tab picks up a CLI change within a couple of seconds
 - Renaming or removing a workspace is guarded: sessions are tied to it only by their worktree path and jobs only by its name, so both refuse while references exist and report what `--force` would orphan. See [docs/cli-reference.md](docs/cli-reference.md#workspace-commands).
 
 ### Notifications
 
-- Ten event categories — task complete, agent waiting, review requested, changes requested, CI failing, plus the five automation events Crow emits when it acts on your behalf
+- Events for task complete, agent waiting, review requested, changes requested and CI failing, plus the automation events Crow emits when it acts on your behalf (auto-created workspace, auto-merge enabled or blocked, branch rebased, rebase conflicts or stuck) and a config reload. `crow notifications get` lists them all
 - Cascading control: a master mute, global sound / system-notification toggles, then per-event toggles and a sound picked from 14 built-in sounds
 - Manage from Settings → Notifications or from the CLI with `crow notifications get|set` — both write the same config, and an open browser tab picks up a CLI change within a couple of seconds
 
@@ -337,25 +321,9 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 - Deleting a session on a protected branch (main, master, develop) only removes the session metadata — the repo folder and branch are preserved
 - The delete confirmation dialog reflects this, showing "Remove Session" instead of "Delete Everything"
 
-## Development
-
-### Adding a New Package
-
-1. Create the package under `Packages/`
-2. Add it to the root `Package.swift` dependencies and target (or to a package that a root target already pulls in)
-3. Import in the targets that need it
-
-### Testing
-
-```bash
-make test     # or: swift test --package-path Packages/<name>
-```
-
-Tests use the [Swift Testing](https://developer.apple.com/documentation/testing/) framework (`@Test` macros). Test files live under `Packages/*/Tests/`.
-
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, suggesting features, and submitting pull requests.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, suggesting features, and submitting pull requests, and [docs/development.md](docs/development.md) for dev loops, adding packages, and running tests.
 
 ## License
 
