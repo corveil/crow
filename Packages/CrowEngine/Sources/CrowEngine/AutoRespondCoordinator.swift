@@ -22,11 +22,24 @@ public final class AutoRespondCoordinator {
     /// than a stored value so updates from Settings UI take effect on the
     /// next transition without explicit wiring.
     private let settingsProvider: () -> AutoRespondSettings
+    /// Resolves a PR's `owner/repo` slug to the claiming workspace's
+    /// ``WorkspaceInfo/reviewInstructions`` (CROW-1340), so an in-place
+    /// re-review round restates them. A closure for the same reason as
+    /// `settingsProvider` — read at send time, so a Settings edit applies to the
+    /// next round. Defaults to "none", which keeps the re-review prompt
+    /// byte-identical for every caller that doesn't wire it.
+    private let reviewInstructionsProvider: (String) -> String?
 
-    public init(appState: AppState, providerManager: ProviderManager, settingsProvider: @escaping () -> AutoRespondSettings) {
+    public init(
+        appState: AppState,
+        providerManager: ProviderManager,
+        settingsProvider: @escaping () -> AutoRespondSettings,
+        reviewInstructionsProvider: @escaping (String) -> String? = { _ in nil }
+    ) {
         self.appState = appState
         self.providerManager = providerManager
         self.settingsProvider = settingsProvider
+        self.reviewInstructionsProvider = reviewInstructionsProvider
     }
 
     public func handle(_ transitions: [PRStatusTransition]) {
@@ -112,12 +125,20 @@ public final class AutoRespondCoordinator {
         // is new rather than replaying the delta from round 1 every time. Falls
         // back to the session's creation head on the first re-review.
         let diffAnchorSha = session?.lastReRequestedHeadSha ?? session?.lastReviewedHeadSha
+        // Resolved by repo slug, like the kickoff (a review clone's path names no
+        // workspace), and only for a review session's re-review.
+        let reviewInstructions: String? = {
+            guard action == .reReview, session?.kind == .review,
+                  let parsed = Session.parseReviewPR(url: prLink.url) else { return nil }
+            return reviewInstructionsProvider("\(parsed.owner)/\(parsed.repo)")
+        }()
         let prompt = QuickActionPrompts.build(
             action: action,
             codeBackend: resolveCodeBackend(forSessionID: sessionID),
             prURL: prLink.url,
             prNumber: prNumber,
-            lastReviewedHeadSha: diffAnchorSha
+            lastReviewedHeadSha: diffAnchorSha,
+            reviewInstructions: reviewInstructions
         )
         CrowLog.info("[QuickAction] Sending \(action.rawValue) prompt to terminal \(terminal.id.uuidString) (\(prompt.count) chars)")
         TerminalRouter.send(terminal, text: prompt)
@@ -205,7 +226,10 @@ public enum AutoRespondPrompts {
 /// `addressChanges` and `fixChecks` cases delegate to `AutoRespondPrompts`
 /// so the auto and manual paths share a single source of truth.
 public enum QuickActionPrompts {
-    static func build(action: QuickAction, codeBackend: CodeBackend, prURL: String, prNumber: Int?, lastReviewedHeadSha: String? = nil) -> String {
+    static func build(
+        action: QuickAction, codeBackend: CodeBackend, prURL: String, prNumber: Int?,
+        lastReviewedHeadSha: String? = nil, reviewInstructions: String? = nil
+    ) -> String {
         let prRef = prNumber.map { "PR #\($0)" } ?? "the PR"
         let cli = codeBackend.cliName
 
@@ -257,7 +281,8 @@ public enum QuickActionPrompts {
                 codeBackend: codeBackend,
                 prURL: prURL,
                 prNumber: prNumber,
-                lastReviewedHeadSha: lastReviewedHeadSha
+                lastReviewedHeadSha: lastReviewedHeadSha,
+                reviewInstructions: reviewInstructions
             )
         }
     }
@@ -275,7 +300,15 @@ public enum QuickActionPrompts {
     ///
     /// `lastReviewedHeadSha` scopes the diff to what changed since the previous
     /// review when known; falls back to the full PR when it's `nil`.
-    static func reReviewPrompt(codeBackend: CodeBackend, prURL: String, prNumber: Int?, lastReviewedHeadSha: String?) -> String {
+    ///
+    /// `reviewInstructions` is the claiming workspace's
+    /// ``WorkspaceInfo/reviewInstructions`` (CROW-1340), restated on one line
+    /// (``ReviewWorkspaceInstructions/singleLine(_:)``) because this prompt is
+    /// typed into a live terminal. `nil` or blank appends nothing.
+    static func reReviewPrompt(
+        codeBackend: CodeBackend, prURL: String, prNumber: Int?, lastReviewedHeadSha: String?,
+        reviewInstructions: String? = nil
+    ) -> String {
         let prRef = prNumber.map { "PR #\($0)" } ?? "the PR"
         let cli = codeBackend.cliName
 
@@ -303,7 +336,13 @@ public enum QuickActionPrompts {
             reviewHint = "Post a fresh verdict with `\(cli) pr review \(prURL) --request-changes` or `--approve` (never `--comment`), following the crow-review-pr skill's format and verdict rules."
         }
 
-        return "The author pushed new changes to \(prRef) (\(prURL)) since your last review. Re-review it. \(syncHint) \(sinceHint) \(reviewHint) You are the reviewer: do NOT modify code, commit, or push — never touch the branch under review; only read, review, and post the review.\n"
+        // Same precedence as the kickoff section: the instructions add to the
+        // rubric and never relax the verdict rule or the posting requirement.
+        let instructionsHint = ReviewWorkspaceInstructions.singleLine(reviewInstructions).map {
+            " This workspace's review instructions still apply — they add to the review rubric and do not change the verdict rules or the requirement to post a verdict: \($0)"
+        } ?? ""
+
+        return "The author pushed new changes to \(prRef) (\(prURL)) since your last review. Re-review it. \(syncHint) \(sinceHint) \(reviewHint) You are the reviewer: do NOT modify code, commit, or push — never touch the branch under review; only read, review, and post the review.\(instructionsHint)\n"
     }
 
     /// Extract the trailing numeric segment from a PR/MR URL (e.g.

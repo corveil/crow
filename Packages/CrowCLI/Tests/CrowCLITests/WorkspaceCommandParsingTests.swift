@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 import CrowCore
 import CrowIPC
 import Testing
@@ -261,6 +262,51 @@ import Testing
     #expect(throws: (any Error).self) {
         let cmd = try WorkspaceEdit.parse([
             "--workspace", "Acme", "--custom-instructions", "a", "--custom-instructions-file", "/x",
+        ])
+        try cmd.validate()
+    }
+}
+
+// MARK: - review instructions (CROW-1340)
+
+@Test func workspaceEditSendsReviewInstructionsWithoutCustomInstructions() throws {
+    let cmd = try WorkspaceEdit.parse([
+        "--workspace", "Acme", "--review-instructions", "Check RLS on every new table.",
+    ])
+    try cmd.validate()
+    #expect(cmd.fields.hasAnyField)
+    let params = try cmd.fields.paramsJSON()
+    #expect(params["review_instructions"] == .string("Check RLS on every new table."))
+    #expect(params["custom_instructions"] == nil)
+}
+
+@Test func workspaceEditClearsReviewInstructionsWithEmptyString() throws {
+    let cmd = try WorkspaceEdit.parse(["--workspace", "Acme", "--review-instructions", ""])
+    #expect(try cmd.fields.paramsJSON()["review_instructions"] == .string(""))
+}
+
+@Test func workspaceReadsReviewInstructionsFromAFile() throws {
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("crow-review-instructions-\(UUID().uuidString).md").path
+    try "Flag missing migrations.\n".write(toFile: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let cmd = try WorkspaceEdit.parse(["--workspace", "Acme", "--review-instructions-file", path])
+    #expect(try cmd.fields.paramsJSON()["review_instructions"] == .string("Flag missing migrations.\n"))
+}
+
+@Test func workspaceRejectsBothReviewInstructionsSources() {
+    #expect(throws: (any Error).self) {
+        let cmd = try WorkspaceEdit.parse([
+            "--workspace", "Acme", "--review-instructions", "a", "--review-instructions-file", "/x",
+        ])
+        try cmd.validate()
+    }
+}
+
+@Test func workspaceRejectsTwoInstructionFilesReadingStdin() {
+    #expect(throws: (any Error).self) {
+        let cmd = try WorkspaceEdit.parse([
+            "--workspace", "Acme", "--custom-instructions-file", "-", "--review-instructions-file", "-",
         ])
         try cmd.validate()
     }

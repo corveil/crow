@@ -47,13 +47,21 @@ extension ReviewSessionController {
     /// for the session's workspace (CROW-963). It defaults to the bundled body
     /// (which renders the default policy downstream), keeping existing callers
     /// and tests unchanged.
+    ///
+    /// `reviewInstructions` is the workspace's ``WorkspaceInfo/reviewInstructions``
+    /// (CROW-1340). Only the inlined branch renders it here; Claude's terse
+    /// slash-command prompt carries nothing extra, because `/crow-review-pr`
+    /// loads the copied SKILL.md, which `prepareReviewClone` renders with the
+    /// same instructions. One rendering, two delivery paths — the same split the
+    /// verdict policy uses, so the two families cannot disagree.
     nonisolated static func buildReviewPrompt(
         prURL: String,
         prTitle: String,
         repoSlug: String,
         prNumber: Int,
         agentKind: AgentKind,
-        skillBody: String? = nil
+        skillBody: String? = nil,
+        reviewInstructions: String? = nil
     ) -> String {
         switch agentKind {
         case .cursor, .openCode, .codex, .grok, .antigravity, .muse:
@@ -73,7 +81,8 @@ extension ReviewSessionController {
             return cursorReviewPrompt(
                 skillBody: skillBody ?? Scaffolder.bundledReviewSkill(),
                 prURL: prURL,
-                agentKind: agentKind
+                agentKind: agentKind,
+                reviewInstructions: reviewInstructions
             )
         default:
             // Claude Code (and any future agent with a compatible slash-
@@ -115,11 +124,16 @@ extension ReviewSessionController {
     /// Split out from `buildReviewPrompt` so unit tests can verify the
     /// substitutions against a known input without depending on the
     /// scaffolder's file-resolution fallback.
-    nonisolated static func cursorReviewPrompt(skillBody: String, prURL: String, agentKind: AgentKind = .cursor) -> String {
+    nonisolated static func cursorReviewPrompt(
+        skillBody: String, prURL: String, agentKind: AgentKind = .cursor, reviewInstructions: String? = nil
+    ) -> String {
+        // The `$ARGUMENTS` substitution runs before the instructions are
+        // rendered (inside `expandSkillBody`, last), so it can't rewrite them.
         CrowAttribution.expandSkillBody(
             MarkdownFrontmatter.stripped(skillBody)
                 .replacingOccurrences(of: "$ARGUMENTS", with: prURL),
-            agentKind: agentKind
+            agentKind: agentKind,
+            reviewInstructions: reviewInstructions
         )
     }
 }

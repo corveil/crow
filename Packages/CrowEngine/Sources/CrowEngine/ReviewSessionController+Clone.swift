@@ -28,6 +28,7 @@ extension ReviewSessionController {
         env: [String: String],
         reviewAgentKind: AgentKind,
         reviewBlocking: [ReviewSeverity] = ReviewSeverity.defaultBlocking,
+        reviewInstructions: String? = nil,
         prMetadata: PRMetadata
     ) async throws -> ReviewClonePrep {
         let prTitle = prMetadata.title
@@ -253,7 +254,7 @@ extension ReviewSessionController {
         // substitution will yield an empty string and the agent will idle if
         // the file isn't there.
         let promptPath = (clonePath as NSString).appendingPathComponent(".crow-review-prompt.md")
-        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber, agentKind: reviewAgentKind, skillBody: policySkillBody)
+        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber, agentKind: reviewAgentKind, skillBody: policySkillBody, reviewInstructions: reviewInstructions)
         try reviewPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
         guard fm.fileExists(atPath: promptPath) else {
             throw NSError(
@@ -267,7 +268,10 @@ extension ReviewSessionController {
         // Substitute `{{CROW_AGENT_DISPLAY_NAME}}` before writing so the attribution footer is a
         // literal string regardless of how the agent quotes the body (issue #447 — single-quoted
         // heredocs in gh/glab calls don't expand shell variables). The verdict policy is already
-        // rendered into `policySkillBody` above (CROW-963).
+        // rendered into `policySkillBody` above (CROW-963). The workspace review
+        // instructions (CROW-1340) are rendered by `expandSkillBody` itself, last,
+        // so this copy and the inlined prompt above carry the same verbatim text —
+        // this copy is how Claude's `/crow-review-pr` sees them.
         //
         // This copy keeps its YAML frontmatter — Claude Code's skill engine needs the
         // `name`/`description` block to load it at all. Only the *inlined* prompt written
@@ -275,7 +279,8 @@ extension ReviewSessionController {
         // to hoist that strip up to `policySkillBody`, which would break this file.
         let cloneSkillsDir = (clonePath as NSString).appendingPathComponent(".claude/skills/crow-review-pr")
         try? fm.createDirectory(atPath: cloneSkillsDir, withIntermediateDirectories: true)
-        let resolvedSkillContent = CrowAttribution.expandSkillBody(policySkillBody, agentKind: reviewAgentKind)
+        let resolvedSkillContent = CrowAttribution.expandSkillBody(
+            policySkillBody, agentKind: reviewAgentKind, reviewInstructions: reviewInstructions)
         try? resolvedSkillContent.write(
             toFile: (cloneSkillsDir as NSString).appendingPathComponent("SKILL.md"),
             atomically: true, encoding: .utf8

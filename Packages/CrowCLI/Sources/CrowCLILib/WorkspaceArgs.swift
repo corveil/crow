@@ -66,6 +66,13 @@ struct WorkspaceFieldArgs: ParsableArguments {
             help: "Read --custom-instructions from a file; '-' reads stdin")
     var customInstructionsFile: String?
 
+    @Option(name: .customLong("review-instructions"),
+            help: "Free text added to this workspace's review-session prompts (\"\" clears)")
+    var reviewInstructions: String?
+    @Option(name: .customLong("review-instructions-file"),
+            help: "Read --review-instructions from a file; '-' reads stdin")
+    var reviewInstructionsFile: String?
+
     @Option(name: .customLong("always-include"), parsing: .singleValue,
             help: "Repo always listed in the prompt table (repeatable; replaces the whole list)")
     var alwaysInclude: [String] = []
@@ -119,6 +126,7 @@ struct WorkspaceFieldArgs: ParsableArguments {
         provider != nil || host != nil || taskProvider != nil
             || jiraSite != nil || jiraProjectKey != nil || jiraJQL != nil
             || customInstructions != nil || customInstructionsFile != nil
+            || reviewInstructions != nil || reviewInstructionsFile != nil
             || !alwaysInclude.isEmpty || !autoReviewRepos.isEmpty || !excludeReviewRepos.isEmpty
             || !sessionEnv.isEmpty || !reviewBlockingSeverities.isEmpty
             || uploadSessionLogs != nil
@@ -134,6 +142,15 @@ struct WorkspaceFieldArgs: ParsableArguments {
         guard customInstructions == nil || customInstructionsFile == nil else {
             throw ValidationError(
                 "--custom-instructions and --custom-instructions-file are mutually exclusive.")
+        }
+        guard reviewInstructions == nil || reviewInstructionsFile == nil else {
+            throw ValidationError(
+                "--review-instructions and --review-instructions-file are mutually exclusive.")
+        }
+        // Both file flags can read stdin, but stdin can only be read once.
+        guard !(customInstructionsFile == "-" && reviewInstructionsFile == "-") else {
+            throw ValidationError(
+                "--custom-instructions-file and --review-instructions-file cannot both read stdin ('-').")
         }
     }
 
@@ -154,6 +171,11 @@ struct WorkspaceFieldArgs: ParsableArguments {
         if let customInstructionsFile {
             params["custom_instructions"] = .string(
                 try JobScheduleArgs.readPromptText(customInstructionsFile))
+        }
+        if let reviewInstructions { params["review_instructions"] = .string(reviewInstructions) }
+        if let reviewInstructionsFile {
+            params["review_instructions"] = .string(
+                try JobScheduleArgs.readPromptText(reviewInstructionsFile))
         }
 
         if !alwaysInclude.isEmpty { params["always_include"] = .array(alwaysInclude.map { .string($0) }) }

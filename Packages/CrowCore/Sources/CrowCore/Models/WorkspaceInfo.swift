@@ -16,6 +16,15 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     public var autoReviewRepos: [String] // repos where review requests auto-create a review session
     public var excludeReviewRepos: [String] // repos whose review requests are hidden from the review board
     public var customInstructions: String? // free-text instructions appended to session prompts
+    /// Standing guidance for this workspace's **review** sessions (CROW-1340),
+    /// rendered into the `crow-review-pr` brief as a `Workspace Review
+    /// Instructions` section by ``ReviewWorkspaceInstructions``.
+    ///
+    /// Deliberately separate from ``customInstructions``: implementation guidance
+    /// ("always add tests", branch naming) rarely suits a reviewer, so neither
+    /// field ever reaches the other's sessions. `nil` (or blank) renders nothing,
+    /// so the review prompt is byte-identical to a workspace that never set it.
+    public var reviewInstructions: String?
     /// Which `crow-review-pr` finding severities force `gh pr review
     /// --request-changes` for this workspace (CROW-963).
     ///
@@ -120,6 +129,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         autoReviewRepos: [String] = [],
         excludeReviewRepos: [String] = [],
         customInstructions: String? = nil,
+        reviewInstructions: String? = nil,
         reviewBlockingSeverities: [ReviewSeverity]? = nil,
         taskProvider: String? = nil,
         jiraProjectKey: String? = nil,
@@ -139,6 +149,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.autoReviewRepos = autoReviewRepos
         self.excludeReviewRepos = excludeReviewRepos
         self.customInstructions = customInstructions
+        self.reviewInstructions = reviewInstructions
         self.reviewBlockingSeverities = reviewBlockingSeverities.map(ReviewSeverity.canonicalize)
         self.taskProvider = taskProvider
         self.jiraProjectKey = jiraProjectKey
@@ -161,6 +172,10 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         autoReviewRepos = try container.decodeIfPresent([String].self, forKey: .autoReviewRepos) ?? []
         excludeReviewRepos = try container.decodeIfPresent([String].self, forKey: .excludeReviewRepos) ?? []
         customInstructions = try container.decodeIfPresent(String.self, forKey: .customInstructions)
+        // Blank → nil: the web form saves an emptied textarea as `""`, and that
+        // must mean "unset", not "render an empty section" (CROW-1340).
+        reviewInstructions = try container.decodeIfPresent(String.self, forKey: .reviewInstructions)
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         // Decoded as `[String]`, never as `[ReviewSeverity]` (CROW-963). A direct
         // enum decode throws on an unrecognized value, and a throwing
         // `WorkspaceInfo` decode makes `ConfigStore.loadConfig` return nil — at
@@ -201,7 +216,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     // ignores. That is how `sessionEnv` was being dropped (CROW-809).
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
-        case reviewBlockingSeverities
+        case reviewInstructions, reviewBlockingSeverities
         case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, sessionEnv, uploadSessionLogs, gateway
     }
 

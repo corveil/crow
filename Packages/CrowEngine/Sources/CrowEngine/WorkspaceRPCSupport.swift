@@ -42,7 +42,7 @@ public enum WorkspaceRPC {
     public static let fieldKeys = [
         "name", "provider", "host", "task_provider",
         "jira_site", "jira_project_key", "jira_jql", "jira_status_map",
-        "custom_instructions", "session_env",
+        "custom_instructions", "review_instructions", "session_env",
         "always_include", "auto_review_repos", "exclude_review_repos",
         "review_blocking_severities", "upload_session_logs",
         "clear_always_include", "clear_auto_review_repos", "clear_exclude_review_repos",
@@ -365,6 +365,13 @@ public enum WorkspaceRPC {
         if let instructions = try patchString(params, "custom_instructions") {
             workspace.customInstructions = blankToNil(instructions)
         }
+        // Review instructions (CROW-1340): a separate field, never merged with
+        // `custom_instructions` — one reaches work sessions, the other review
+        // sessions, and neither the other. Trimmed of newlines too, since they
+        // often come from `--review-instructions-file`; blank clears.
+        if let instructions = try patchString(params, "review_instructions") {
+            workspace.reviewInstructions = ReviewWorkspaceInstructions.normalized(instructions)
+        }
 
         if try flag(params, "clear_always_include") { workspace.alwaysInclude = [] }
         if let repos = try patchStringList(params, "always_include") { workspace.alwaysInclude = repos }
@@ -502,6 +509,7 @@ public enum WorkspaceRPC {
         object["task_provider_explicit"] = .bool(workspace.taskProvider != nil)
         object["host"] = workspace.host.map { .string($0) } ?? .null
         object["custom_instructions"] = workspace.customInstructions.map { .string($0) } ?? .null
+        object["review_instructions"] = workspace.reviewInstructions.map { .string($0) } ?? .null
         object["jira_site"] = workspace.jiraSite.map { .string($0) } ?? .null
         object["jira_project_key"] = workspace.jiraProjectKey.map { .string($0) } ?? .null
         object["jira_jql"] = workspace.jiraJQL.map { .string($0) } ?? .null

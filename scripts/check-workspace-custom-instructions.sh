@@ -110,14 +110,16 @@ if [ -f "$review_left" ] && [ -f "$review_right" ] && ! diff -q "$review_left" "
 fi
 
 # The review skill's verdict policy is rendered at launch by
-# `ReviewVerdictPolicy.expand` (CROW-963). If a placeholder is dropped or
+# `ReviewVerdictPolicy.expand` (CROW-963), and the workspace review instructions
+# by `ReviewWorkspaceInstructions.expand` (CROW-1340). If a placeholder is dropped or
 # renamed, the corresponding block silently reverts to whatever static text
 # replaced it — and the per-workspace setting stops reaching the agent.
 for placeholder in \
     "{{CROW_REVIEW_VERDICT_RULE}}" \
     "{{CROW_REVIEW_GRADING_GUIDANCE}}" \
     "{{CROW_REVIEW_VERDICT_TABLE}}" \
-    "{{CROW_REVIEW_VERDICT_NOTES}}"; do
+    "{{CROW_REVIEW_VERDICT_NOTES}}" \
+    "{{CROW_REVIEW_WORKSPACE_INSTRUCTIONS}}"; do
     require "skills/crow-review-pr/SKILL.md" "$placeholder"
     require "Resources/crow-review-pr-SKILL.md.template" "$placeholder"
 done

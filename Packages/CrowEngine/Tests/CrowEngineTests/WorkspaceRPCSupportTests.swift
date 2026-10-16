@@ -177,6 +177,23 @@ struct WorkspaceRPCSupportTests {
         #expect(target.customInstructions == nil)
     }
 
+    /// CROW-1340: `review_instructions` is its own field — writing it never
+    /// touches `custom_instructions`, blank clears it, and `workspace get` echoes it.
+    @Test func applyPatchWritesReviewInstructionsIndependently() throws {
+        var target = WorkspaceInfo(name: "Acme", customInstructions: "work only")
+        #expect(WorkspaceRPC.hasAnyField(["review_instructions": .string("x")]))
+
+        try WorkspaceRPC.applyPatch(["review_instructions": .string("Check RLS.")], to: &target)
+        #expect(target.reviewInstructions == "Check RLS.")
+        #expect(target.customInstructions == "work only")
+        #expect(WorkspaceRPC.workspaceJSON(target).objectValue?["review_instructions"] == .string("Check RLS."))
+
+        try WorkspaceRPC.applyPatch(["review_instructions": .string(" \n ")], to: &target)
+        #expect(target.reviewInstructions == nil)
+        #expect(target.customInstructions == "work only")
+        #expect(WorkspaceRPC.workspaceJSON(target).objectValue?["review_instructions"] == .null)
+    }
+
     /// `id` and `gateway` are the two fields a patch must never touch:
     /// `SettingsSecrets.preservingSecrets` matches stored gateways to workspaces
     /// by id, so rebuilding the struct would mint a new UUID and silently drop

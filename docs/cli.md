@@ -2886,7 +2886,7 @@ Subcommands: [`list`](#crow-workspace-list), [`get`](#crow-workspace-get), [`add
 Create a workspace.
 
 ```
-crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities]
+crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--review-instructions <review-instructions>] [--review-instructions-file <review-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities]
 ```
 
 Only --name is required; every other field takes its documented default and can be set later with `crow workspace edit`. The name becomes a directory under the dev root, so it cannot contain / or :, cannot be "." or "..", and must not collide with an existing workspace (case-insensitively).
@@ -2910,6 +2910,8 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 | `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
 | `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
 | `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
+| `--review-instructions` | `<review-instructions>` | no | Free text added to this workspace's review-session prompts ("" clears) |
+| `--review-instructions-file` | `<review-instructions-file>` | no | Read --review-instructions from a file; '-' reads stdin |
 | `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |
 | `--clear-always-include` | — | no | Empty the always-include list |
 | `--auto-review-repo` | `<auto-review-repo>` _(repeatable)_ | no | Repo whose review requests auto-create a session (repeatable; replaces the whole list) |
@@ -2929,7 +2931,7 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 Change fields on an existing workspace.
 
 ```
-crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities] [--force]
+crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--review-instructions <review-instructions>] [--review-instructions-file <review-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities] [--force]
 ```
 
 Only the provided flags change. A repeatable list flag replaces the whole list rather than appending, matching `crow job edit`; use the matching --clear-* flag to empty one. The --jira-status-* flags patch individually — each sets one mapping and leaves the other four alone.
@@ -2956,6 +2958,8 @@ An edit whose values already hold is reported as "saved": false and skips the wr
 | `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
 | `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
 | `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
+| `--review-instructions` | `<review-instructions>` | no | Free text added to this workspace's review-session prompts ("" clears) |
+| `--review-instructions-file` | `<review-instructions-file>` | no | Read --review-instructions from a file; '-' reads stdin |
 | `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |
 | `--clear-always-include` | — | no | Empty the always-include list |
 | `--auto-review-repo` | `<auto-review-repo>` _(repeatable)_ | no | Repo whose review requests auto-create a session (repeatable; replaces the whole list) |
