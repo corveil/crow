@@ -277,7 +277,6 @@ struct OpenCodeHookConfigWriterTests {
         // V2 decodes the default export's `{ id, setup }`; no V1 entrypoint,
         // and no `$` (V2 removed it).
         #expect(v2.contains("export default {"))
-        #expect(v2.contains("id: \"crow-hooks\""))
         #expect(v2.contains("async setup(ctx)"))
         #expect(!v2.contains("export const CrowHooks"))
         #expect(!v2.contains("await $`"))
@@ -357,5 +356,21 @@ struct OpenCodeHookConfigWriterTests {
             contentsOf: tmp.appendingPathComponent("plugins/crow-hooks.js"), encoding: .utf8)
         #expect(content.contains("export default {"))
         #expect(content.contains("const SESSION = \"\""))
+    }
+
+    @Test func v2GlobalAndProjectPluginsHaveDistinctIDs() {
+        // V2 keeps the first plugin per id and fails duplicates, loading the
+        // global dir first — a shared id would let the self-suppressing global
+        // body win and leave the session dark.
+        let project = OpenCodeHookConfigWriter.pluginSource(
+            crowPath: "/bin/crow", sessionID: UUID(), generation: .v2)
+        let global = OpenCodeHookConfigWriter.pluginSource(
+            crowPath: "/bin/crow", sessionID: nil, generation: .v2)
+        let id = #/id: "([^"]+)",/#
+        let projectID = try? #require(project.firstMatch(of: id)).1
+        let globalID = try? #require(global.firstMatch(of: id)).1
+        #expect(projectID == "crow-hooks")
+        #expect(globalID == "crow-hooks-global")
+        #expect(projectID != globalID)
     }
 }

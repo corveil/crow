@@ -554,7 +554,11 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   `node:child_process` (V2 removed `$`), subscribes with `ctx.event.subscribe`
   (filtered to the plugin's own location on the shared server), and uses
   `ctx.tool.hook("execute.before"/"execute.after")` and the `permission.asked`
-  bus event. It **fails closed**: a missing or dead event stream emits
+  bus event. The two scopes carry **distinct plugin ids** (`crow-hooks` per
+  project, `crow-hooks-global` for the fallback): V2 registers plugins by id,
+  keeps the first and fails duplicates, and loads the global config dir first,
+  so a shared id would let the self-suppressing global body win and leave the
+  session dark. It **fails closed**: a missing or dead event stream emits
   `BridgeUnavailable` → `.waiting` + a notification — never `Stop`, which would
   complete a job.
 - **Grok** — per-worktree `.grok/hooks/crow.json`, written per session with

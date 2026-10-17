@@ -82,24 +82,21 @@ struct OpenCodeV2PluginRuntimeTests {
         const EVENTS = \(events);
         const SESSIONS = \(sessions);
         const HOOKS = {};
-        // Wait until the fake crow's log stops growing — spawns are slow when
-        // the suite runs in parallel, so a fixed sleep is flaky.
-        const { statSync } = await import("node:fs");
-        const size = () => { try { return statSync(\(jsString(log))).size; } catch (_) { return 0; } };
-        async function quiet() {
-          let last = -1, stable = 0;
-          for (let i = 0; i < 200 && stable < 6; i++) {
-            await new Promise((r) => setTimeout(r, 50));
-            const now = size();
-            stable = now === last ? stable + 1 : 0;
-            last = now;
-          }
+        // Every scenario ends with `BridgeUnavailable` (the fake stream ends,
+        // or the API is missing), so wait for that line — deterministic even
+        // when the suite's parallel spawns are slow — then for the tool hooks.
+        const { readFileSync } = await import("node:fs");
+        const lines = () => {
+          try { return readFileSync(\(jsString(log)), "utf8").split("\\n").filter(Boolean); }
+          catch (_) { return []; }
+        };
+        async function until(pred) {
+          for (let i = 0; i < 400 && !pred(lines()); i++) await new Promise((r) => setTimeout(r, 25));
         }
         const cleanup = await plugin.setup(\(ctx));
-        await quiet();
+        await until((l) => l.includes("BridgeUnavailable"));
         if (\(exerciseToolHooks) && HOOKS["execute.before"]) await HOOKS["execute.before"]({ tool: "bash" });
         if (\(exerciseToolHooks) && HOOKS["execute.after"]) await HOOKS["execute.after"]({ tool: "bash" });
-        await quiet();
         if (typeof cleanup === "function") cleanup();
         """.write(to: harness, atomically: true, encoding: .utf8)
 
