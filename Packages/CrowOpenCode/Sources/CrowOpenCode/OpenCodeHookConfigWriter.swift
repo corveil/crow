@@ -106,9 +106,36 @@ import CrowCore
 /// `permission.ask` hook fires exactly when OpenCode requests a decision; we
 /// only observe it (never set `output.status`), so the user's/agent's choice
 /// still stands.
+///
+/// **Two plugin generations (CROW-1332).** OpenCode 2 replaced the plugin API —
+/// V1 implementations "do not run in V2" — and replaces the `opencode` binary in
+/// place. Every write therefore probes the installed binary
+/// (`OpenCodePluginGeneration`) and emits the matching body into the same
+/// `crow-hooks.js`: `pluginSourceV1` below for `< 2.0.0`, `pluginSourceV2` for
+/// `≥ 2.0.0`. The vocabulary Crow receives is the same either way.
 public struct OpenCodeHookConfigWriter: HookConfigWriter {
 
-    public init() {}
+    private let generationResolver: @Sendable () -> OpenCodePluginGeneration
+
+    /// `generation` overrides the per-write probe (tests). The default probes
+    /// the binary `OpenCodeAgent` would launch, on every write — the probe is
+    /// cached per binary fingerprint, so this costs a `stat` once warm and
+    /// still catches an `opencode upgrade --major` under a running `crowd`.
+    public init(generation: (@Sendable () -> OpenCodePluginGeneration)? = nil) {
+        self.generationResolver = generation ?? { Self.detectInstalledGeneration() }
+    }
+
+    /// Probe the `opencode` Crow would launch and log the verdict. A failed
+    /// probe keeps the V1 body (see `OpenCodePluginGeneration.forVersion`) and
+    /// says so, rather than silently guessing.
+    static func detectInstalledGeneration() -> OpenCodePluginGeneration {
+        let binary = OpenCodeAgent().launchBinary()
+        let (generation, version) = OpenCodePluginGeneration.detect(binary: binary)
+        if version == nil {
+            CrowLog.info("[OpenCode] could not read `\(binary ?? "opencode") --version`; writing the V1 state plugin")
+        }
+        return generation
+    }
 
     // MARK: - HookConfigWriter Conformance (per-project plugin)
 
@@ -121,7 +148,8 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
         let pluginsDir = Self.worktreePluginsDir(worktreePath)
         try FileManager.default.createDirectory(atPath: pluginsDir, withIntermediateDirectories: true)
         let pluginPath = (pluginsDir as NSString).appendingPathComponent(Self.pluginFileName)
-        let content = Self.pluginSource(crowPath: crowPath, sessionID: sessionID)
+        let content = Self.pluginSource(
+            crowPath: crowPath, sessionID: sessionID, generation: generationResolver())
         try content.write(to: URL(fileURLWithPath: pluginPath), atomically: true, encoding: .utf8)
         // The plugin embeds the absolute `crow` path and the session UUID and
         // lives inside the user's git worktree, where an agent's `git add -A`
@@ -166,11 +194,23 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
     /// overwrite it wholesale on every launch. The global plugin carries no
     /// session UUID and self-suppresses when a per-project plugin is present
     /// (see the type doc), so it only ever fires for hand-started sessions.
-    public static func installGlobalConfig(configHome: String, crowPath: String) throws {
+    ///
+    /// `generation` defaults to probing the installed binary, like the
+    /// per-project write. The global file is written once per `crowd` launch,
+    /// so an upgrade under a running daemon leaves it stale until the next
+    /// restart — acceptable for a fallback that only covers hand-started
+    /// sessions; every Crow-launched session rewrites its per-project plugin.
+    public static func installGlobalConfig(
+        configHome: String,
+        crowPath: String,
+        generation: OpenCodePluginGeneration? = nil
+    ) throws {
         let pluginsDir = globalPluginsDir(configHome)
         try FileManager.default.createDirectory(atPath: pluginsDir, withIntermediateDirectories: true)
         let pluginPath = (pluginsDir as NSString).appendingPathComponent(pluginFileName)
-        let content = pluginSource(crowPath: crowPath, sessionID: nil)
+        let content = pluginSource(
+            crowPath: crowPath, sessionID: nil,
+            generation: generation ?? detectInstalledGeneration())
         try content.write(to: URL(fileURLWithPath: pluginPath), atomically: true, encoding: .utf8)
     }
 
@@ -231,7 +271,21 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
     /// resolution, per-project scope). When nil the emit omits it and the
     /// server resolves by cwd match (global fallback scope), and the plugin
     /// self-suppresses if a per-project plugin exists in the cwd.
-    static func pluginSource(crowPath: String, sessionID: UUID? = nil) -> String {
+    static func pluginSource(
+        crowPath: String,
+        sessionID: UUID? = nil,
+        generation: OpenCodePluginGeneration = .v1
+    ) -> String {
+        switch generation {
+        case .v1: return pluginSourceV1(crowPath: crowPath, sessionID: sessionID)
+        case .v2: return pluginSourceV2(crowPath: crowPath, sessionID: sessionID)
+        }
+    }
+
+    /// The V1 function plugin (OpenCode `< 2.0.0`). See the type doc for the
+    /// event mapping, the `session.status` latch (CROW-1000) and the child
+    /// filter (CROW-1082).
+    static func pluginSourceV1(crowPath: String, sessionID: UUID?) -> String {
         let crow = jsStringLiteral(crowPath)
         let session = jsStringLiteral(sessionID?.uuidString ?? "")
         let scopeNote = sessionID != nil
@@ -391,6 +445,217 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
               await emit($, cwd, "PostToolUse", { tool_name: (input && input.tool) || "unknown" });
             },
           };
+        };
+
+        """
+    }
+
+    /// The V2 object plugin (OpenCode `≥ 2.0.0`, CROW-1332). Same Crow
+    /// vocabulary as V1; every V2 fact below was read from the `v2.0.32`
+    /// source, not the migration guide.
+    ///
+    /// **Shape.** V2 decodes the module's *default export* as `{ id, setup }`
+    /// (`packages/core/src/plugin/module.ts`); `Plugin.define` is an identity
+    /// helper (`packages/plugin/src/promise/plugin.ts`), so a plain object needs
+    /// no `@opencode/plugin` import and still loads as plain `.js`
+    /// (`PluginSourceDirectory.discover` admits `.js` and `.ts` in
+    /// `.opencode/{plugin,plugins}/`). `$` is gone — V2 says to bring your own
+    /// process API — so the bridge spawns `crow` with `node:child_process`,
+    /// which both Bun and Node hosts provide.
+    ///
+    /// **Done is `session.execution.*`, not `session.idle`.** The V2 migration
+    /// guide's example still keys off `session.idle`, but nothing in V2 core
+    /// publishes `session.status` or `session.idle` — the schemas survive only
+    /// in the public-event inventory. The V2 TUI derives running/idle from
+    /// `session.execution.started` and `session.execution.succeeded | failed |
+    /// interrupted` (`packages/client/src/solid/data.ts`), so the plugin does too:
+    ///
+    ///   session.created (root)            → SessionStart
+    ///   session.execution.started         → UserPromptSubmit
+    ///   session.execution.succeeded       → Stop
+    ///   session.execution.failed          → Stop
+    ///   session.execution.interrupted     → Stop  (reason `user` / `inactivity`)
+    ///   session.execution.interrupted     → (none) reason `superseded` — a new
+    ///                                       execution replaces it, so a `.done`
+    ///                                       here would complete a job mid-turn;
+    ///                                       reason `shutdown` — the server is
+    ///                                       going away, not the turn finishing
+    ///   permission.asked                  → PermissionRequest (bus event; V2's
+    ///                                       `permission.evaluate` hook fires for
+    ///                                       every evaluation, including allows)
+    ///   tool hook execute.before / after  → PreToolUse / PostToolUse
+    ///
+    /// **Event shape.** V2 payloads are `{ id, type, created, data, location? }`
+    /// — `data`, not V1's `properties`. A plugin's `ctx.event.subscribe()` is
+    /// filtered to its own location (`bus.ts` `local`), so a per-worktree plugin
+    /// on the shared background server sees its worktree's sessions, not every
+    /// session the server owns.
+    ///
+    /// **Child sessions (CROW-1082 on V2).** `session.created` carries
+    /// `data.parentID`; children are recorded there and their execution events
+    /// dropped, so a subagent finishing never parks the parent on `.done`. V2
+    /// reloads a plugin when its file changes — and Crow rewrites this file on
+    /// every launch — so the in-memory set can miss a child created before the
+    /// reload. An execution event for an id the plugin has never seen is
+    /// therefore resolved with `ctx.session.get({ sessionID })` before it may
+    /// move the card. Whether a parent's execution always spans its children's
+    /// on V2 is still needs-eval (the PR lists it).
+    ///
+    /// **Fail closed.** If `ctx.event.subscribe` is missing, throws, or its
+    /// stream ends without Crow aborting it, the plugin emits
+    /// `BridgeUnavailable`, which `OpenCodeSignalSource` maps to `.waiting` with
+    /// a notification — the session asks for attention instead of sitting on a
+    /// card that looks healthy. It deliberately does **not** emit `Stop` or
+    /// `Notification`: both can reach `.done`, and `.done` completes a job
+    /// (ADR 0015). A module V2 cannot load at all never runs, so that case is
+    /// covered by the version gate in front of this body.
+    static func pluginSourceV2(crowPath: String, sessionID: UUID?) -> String {
+        let crow = jsStringLiteral(crowPath)
+        let session = jsStringLiteral(sessionID?.uuidString ?? "")
+        let scopeNote = sessionID != nil
+            ? "session-scoped (UUID baked in below)"
+            : "global fallback (resolves by cwd; defers to a per-project plugin)"
+        return """
+        // Crow ↔ OpenCode hook bridge — auto-generated by Crow (safe to delete).
+        // Plugin API: OpenCode 2 (`export default { id, setup }`).
+        // Scope: \(scopeNote).
+        // Forwards OpenCode lifecycle events to the running Crow app so session
+        // cards reflect agent state. Regenerated on every Crow launch.
+        import { spawn } from "node:child_process";
+        import { existsSync } from "node:fs";
+
+        const CROW = \(crow);
+        const SESSION = \(session);
+
+        // Spawn `crow hook-event`, piping a JSON payload ({ cwd, ... }) on
+        // stdin. Resolves once crow exits, so events reach Crow in order.
+        // Fire-and-forget: a failure (e.g. Crow not running) never disrupts
+        // OpenCode.
+        function emit(cwd, event, extra) {
+          return new Promise((resolve) => {
+            try {
+              const args = SESSION
+                ? ["hook-event", "--session", SESSION, "--agent", "opencode", "--event", event]
+                : ["hook-event", "--agent", "opencode", "--event", event];
+              const child = spawn(CROW, args, { stdio: ["pipe", "ignore", "ignore"] });
+              child.on("error", () => resolve());
+              child.on("close", () => resolve());
+              child.stdin.on("error", () => {});
+              child.stdin.end(JSON.stringify(Object.assign({ cwd }, extra || {})));
+            } catch (_) {
+              resolve();
+            }
+          });
+        }
+
+        export default {
+          id: "crow-hooks",
+          async setup(ctx) {
+            const location = (ctx && ctx.location) || {};
+            const cwd = location.directory || process.cwd();
+            // Global fallback only: defer to a session-scoped Crow plugin in
+            // this worktree, or every event would emit twice.
+            if (!SESSION) {
+              try {
+                if (existsSync(cwd + "/.opencode/plugins/crow-hooks.js")) return;
+              } catch (_) {
+                // Unreadable — fall through and emit.
+              }
+            }
+
+            // Fail closed: the bridge is how Crow sees `.done`. If it can't
+            // observe the session, say so as an attention state — never as
+            // Stop/Notification, which can mark a job finished.
+            const unavailable = (reason) =>
+              emit(cwd, "BridgeUnavailable", { message: "OpenCode state bridge unavailable: " + reason });
+            if (!ctx || !ctx.event || typeof ctx.event.subscribe !== "function") {
+              await unavailable("this OpenCode build has no ctx.event.subscribe");
+              return;
+            }
+
+            // true = root session, false = subagent child. Children are dropped
+            // so a subagent's end never marks the parent done (CROW-1082).
+            const roots = new Map();
+            async function isRoot(id) {
+              if (!id) return false;
+              if (roots.has(id)) return roots.get(id);
+              // Unseen id: this plugin reloaded after the session was created
+              // (Crow rewrites this file on every launch). Ask the server.
+              try {
+                const res = await ctx.session.get({ sessionID: id });
+                const info = (res && res.data) || res || {};
+                const root = !info.parentID;
+                roots.set(id, root);
+                return root;
+              } catch (_) {
+                // Lookup failed: count it as the root, uncached, so the card
+                // still moves; the next event retries the lookup.
+                return true;
+              }
+            }
+
+            async function handle(event) {
+              const data = (event && event.data) || {};
+              switch (event && event.type) {
+                case "session.created": {
+                  if (data.parentID) {
+                    roots.set(data.sessionID, false);
+                    break;
+                  }
+                  roots.set(data.sessionID, true);
+                  await emit(cwd, "SessionStart", { source: "startup" });
+                  break;
+                }
+                case "session.execution.started":
+                  if (await isRoot(data.sessionID)) await emit(cwd, "UserPromptSubmit");
+                  break;
+                case "session.execution.succeeded":
+                case "session.execution.failed":
+                  if (await isRoot(data.sessionID)) await emit(cwd, "Stop");
+                  break;
+                case "session.execution.interrupted":
+                  // `superseded`: a new execution replaces this one, so the turn
+                  // is still running. `shutdown`: the server is stopping, not
+                  // the turn finishing.
+                  if (data.reason === "superseded" || data.reason === "shutdown") break;
+                  if (await isRoot(data.sessionID)) await emit(cwd, "Stop");
+                  break;
+                case "permission.asked":
+                  // The agent is blocked on a user decision. Observe only.
+                  await emit(cwd, "PermissionRequest");
+                  break;
+              }
+            }
+
+            const controller = new AbortController();
+            void (async () => {
+              try {
+                for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+                  try {
+                    await handle(event);
+                  } catch (_) {
+                    // One bad event must not stop the bridge.
+                  }
+                }
+                if (!controller.signal.aborted) await unavailable("event stream ended");
+              } catch (_) {
+                if (!controller.signal.aborted) await unavailable("event stream failed");
+              }
+            })();
+
+            // Tool hooks are additive (working-state detail); a build without
+            // them still reports done via the event stream above.
+            try {
+              await ctx.tool.hook("execute.before", (event) =>
+                emit(cwd, "PreToolUse", { tool_name: (event && event.tool) || "unknown" }));
+              await ctx.tool.hook("execute.after", (event) =>
+                emit(cwd, "PostToolUse", { tool_name: (event && event.tool) || "unknown" }));
+            } catch (_) {
+              // Hook registration unavailable — keep the event bridge.
+            }
+
+            return () => controller.abort();
+          },
         };
 
         """

@@ -7,10 +7,12 @@ import CrowCore
 /// Crow-canonical PascalCase name in the `--event` argument, so this source
 /// shares Claude/Codex/Cursor's vocabulary verbatim: `SessionStart`,
 /// `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `Notification`,
-/// `PermissionRequest`. `UserPromptSubmit` and `Stop` are the two edges of
-/// OpenCode's `session.status` event (`busy` and `idle` respectively, CROW-1000);
-/// the plugin emits no other canonical names today, and the extra cases are kept
-/// for cross-agent parity and to absorb events a future plugin revision adds
+/// `PermissionRequest`. `UserPromptSubmit` and `Stop` are the two edges of a
+/// turn: OpenCode 1's `session.status` (`busy` / `idle`, CROW-1000), or OpenCode
+/// 2's `session.execution.started` / `.succeeded|failed|interrupted`
+/// (CROW-1332). The one OpenCode-only name is `BridgeUnavailable`, the V2
+/// plugin's fail-closed signal (below); the extra cases are kept for
+/// cross-agent parity and to absorb events a future plugin revision adds
 /// without code changes.
 ///
 /// The mapping is intentionally identical to `CursorSignalSource` — OpenCode
@@ -26,8 +28,10 @@ public struct OpenCodeSignalSource: StateSignalSource {
         currentLastTopLevelStopAt: Date?
     ) -> AgentStateTransition {
         // Same blanket-clear policy as Claude/Codex/Cursor: every event
-        // except `PermissionRequest` clears the pending notification.
+        // except `PermissionRequest` (and the bridge-failure signal, which sets
+        // its own) clears the pending notification.
         let blanketClear = event.eventName != "PermissionRequest"
+            && event.eventName != "BridgeUnavailable"
         var transition = AgentStateTransition(
             notification: blanketClear ? .clear : .leave
         )
@@ -78,6 +82,19 @@ public struct OpenCodeSignalSource: StateSignalSource {
                     notificationType: "permission_prompt"
                 ))
             }
+            transition.newActivityState = .waiting
+            transition.toolActivity = .clear
+
+        case "BridgeUnavailable":
+            // The V2 plugin loaded but cannot observe the session (no event
+            // stream, or it died) — so no `Stop` will ever arrive (CROW-1332).
+            // Ask for attention instead of leaving a card that looks healthy.
+            // Never `.done`: for a job, `.done` is completion (ADR 0015), and a
+            // bridge failure is not the agent finishing.
+            transition.notification = .set(HookNotification(
+                message: event.message ?? "OpenCode state bridge unavailable",
+                notificationType: "bridge_unavailable"
+            ))
             transition.newActivityState = .waiting
             transition.toolActivity = .clear
 

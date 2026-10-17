@@ -438,6 +438,10 @@ describes what the UI claims, not what Crow can do.
   fallback) and the headless-`run` auto-approve (probed with `opencode run
   --help`: `--auto`, else `--dangerously-skip-permissions`). Each flag is omitted
   when its probe doesn't advertise it (#547). Reviews never auto-approve.
+  OpenCode 2 still defines `--auto` ("Auto-approve permissions that are not
+  explicitly denied") with `--dangerously-skip-permissions` hidden, so the same
+  `--help` probes apply unchanged; since CROW-1332 their cache is keyed on the
+  binary's mtime + size, so a v1 verdict doesn't outlive an in-place upgrade.
 - **Grok:** `--always-approve` + hard `--deny` (`GrokLaunchArgs.autoPermissionSuffix`,
   CROW-1037) on `.work` (coder-view Auto) and `.job` (jobs Auto). Grok's
   `--permission-mode auto` is a *classifier* that still gates `gh pr create` even
@@ -539,6 +543,20 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   **fallback only**: it carries no UUID and **self-suppresses** (its plugin body
   returns no hooks) whenever a per-project `crow-hooks.js` exists, so the two
   never double-fire.
+  **OpenCode 2 (CROW-1332).** V2 replaces the `opencode` binary in place and
+  "V1 plugin implementations do not run in V2", so the writer **probes the
+  installed binary on every write** (`OpenCodePluginGeneration`; the probe cache
+  is keyed on the binary's path + mtime + size, so `opencode upgrade --major`
+  under a running `crowd` re-probes) and writes the matching body into the same
+  `crow-hooks.js`: the V1 function plugin below `2.0.0`, a V2
+  `export default { id, setup(ctx) }` object plugin at or above it. An
+  unreadable version keeps the V1 body. The V2 body spawns `crow` with
+  `node:child_process` (V2 removed `$`), subscribes with `ctx.event.subscribe`
+  (filtered to the plugin's own location on the shared server), and uses
+  `ctx.tool.hook("execute.before"/"execute.after")` and the `permission.asked`
+  bus event. It **fails closed**: a missing or dead event stream emits
+  `BridgeUnavailable` → `.waiting` + a notification — never `Stop`, which would
+  complete a job.
 - **Grok** — per-worktree `.grok/hooks/crow.json`, written per session with
   `hook-event --session <UUID>`, resolved by **UUID** (#859,
   `GrokHookConfigWriter`). Grok's hook schema is byte-compatible with Claude's
@@ -698,6 +716,20 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   re-announces via `SessionStart`. Scoped to the premature-`.done` failure: a
   child's tool hooks still map to working state, which is correct because the
   parent *is* working.
+- **OpenCode 2 done signal is `session.execution.*`** (CROW-1332). Read from the
+  `v2.0.32` source, not measured against a running binary: nothing in V2 core
+  publishes `session.status` or `session.idle` (the schemas survive only in the
+  public-event inventory, and the migration guide's `session.idle` example is
+  stale) — the V2 TUI derives running/idle from `session.execution.started` and
+  `session.execution.succeeded | failed | interrupted`. The V2 plugin maps
+  `started` → `UserPromptSubmit` and the three endings → `Stop`, except
+  `interrupted` with reason `superseded` (a new execution replaces it — the turn
+  is still running) or `shutdown` (the server stopping). V2 payloads are
+  `{ type, data }`; `session.created`'s `data.parentID` marks children, and an
+  unseen id is resolved via `ctx.session.get` because V2 reloads the plugin
+  whenever Crow rewrites it. ⚠️ **needs-eval:** whether a parent's execution
+  always spans its children's on V2, and the whole mapping against a live
+  2.x TUI.
 
 > **Apply-order caveat (#903).** Since `crow hook-event` became fire-and-forget,
 > `PreToolUse` being non-async only guarantees the daemon *accepts* it ahead of

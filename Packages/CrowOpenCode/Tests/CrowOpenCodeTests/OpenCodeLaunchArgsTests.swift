@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CrowOpenCode
 
@@ -145,5 +146,21 @@ struct OpenCodeLaunchArgsTests {
         #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(2, 0, 0)))
         // Unknown version → never assume absent; fall through to the probe.
         #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: nil))
+    }
+
+    @Test func probeCacheKeyChangesWhenTheBinaryIsReplaced() throws {
+        // CROW-1332: `opencode upgrade --major` swaps the binary at the same
+        // path; the probe cache must not keep the v1 verdict.
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        try "v1".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: path)
+        let before = OpenCodeLaunchArgs.cacheKey(binary: path)
+        try "v2 binary".write(toFile: path, atomically: true, encoding: .utf8)
+        #expect(OpenCodeLaunchArgs.cacheKey(binary: path) != before)
+        // Unstat-able path: keys on the path alone (never throws).
+        #expect(OpenCodeLaunchArgs.cacheKey(binary: "/nonexistent/opencode") == "/nonexistent/opencode")
     }
 }

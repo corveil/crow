@@ -6,9 +6,11 @@ import CrowCore
 /// of the run-then-continue dispatch form and capability probes (#547).
 public enum OpenCodeLaunchArgs {
     private static let cacheLock = NSLock()
-    /// Guarded by `cacheLock`. Keyed by binary path; not invalidated on in-place
-    /// upgrades during a Crow session — acceptable because a wrong answer only
-    /// omits an optional flag, never breaks launch.
+    /// Guarded by `cacheLock`. Keyed by `cacheKey(binary:)` — the path plus the
+    /// file's mtime and size — so an in-place upgrade under a running `crowd`
+    /// re-probes. That matters since OpenCode 2 (CROW-1332): `opencode upgrade
+    /// --major` replaces the binary at the same path, and a stale v1 answer
+    /// would keep the v1 plugin (dark on v2) and a v1 `--help` verdict.
     private nonisolated(unsafe) static var tuiAutoFlagCache: [String: Bool] = [:]
     private nonisolated(unsafe) static var runHelpCache: [String: String] = [:]
     private nonisolated(unsafe) static var versionCache: [String: SemVer?] = [:]
@@ -94,8 +96,9 @@ public enum OpenCodeLaunchArgs {
     /// `--help` probe, so a flip in either direction is caught without a code
     /// change.
     public static func tuiSupportsAuto(binary: String) -> Bool {
+        let key = cacheKey(binary: binary)
         cacheLock.lock()
-        if let cached = tuiAutoFlagCache[binary] {
+        if let cached = tuiAutoFlagCache[key] {
             cacheLock.unlock()
             return cached
         }
@@ -112,7 +115,7 @@ public enum OpenCodeLaunchArgs {
         }
 
         cacheLock.lock()
-        tuiAutoFlagCache[binary] = supports
+        tuiAutoFlagCache[key] = supports
         cacheLock.unlock()
         return supports
     }
@@ -121,8 +124,9 @@ public enum OpenCodeLaunchArgs {
     /// `nil` (and caches it) when the binary can't be run or its output has no
     /// `MAJOR.MINOR.PATCH` — callers then fall back to the `--help` probe.
     static func installedVersion(binary: String) -> SemVer? {
+        let key = cacheKey(binary: binary)
         cacheLock.lock()
-        if let cached = versionCache[binary] {
+        if let cached = versionCache[key] {
             cacheLock.unlock()
             return cached
         }
@@ -132,7 +136,7 @@ public enum OpenCodeLaunchArgs {
             .flatMap { parseVersion($0) }
 
         cacheLock.lock()
-        versionCache[binary] = version
+        versionCache[key] = version
         cacheLock.unlock()
         return version
     }
@@ -140,8 +144,9 @@ public enum OpenCodeLaunchArgs {
     /// Cached `opencode run --help` text for the installed binary. Only call
     /// when an auto-approve suffix is actually needed.
     public static func runHelpText(binary: String) -> String {
+        let key = cacheKey(binary: binary)
         cacheLock.lock()
-        if let cached = runHelpCache[binary] {
+        if let cached = runHelpCache[key] {
             cacheLock.unlock()
             return cached
         }
@@ -150,9 +155,21 @@ public enum OpenCodeLaunchArgs {
         let help = (try? runHelp(binary: binary, subcommand: "run")) ?? ""
 
         cacheLock.lock()
-        runHelpCache[binary] = help
+        runHelpCache[key] = help
         cacheLock.unlock()
         return help
+    }
+
+    /// Probe-cache key: the binary path plus its (symlink-resolved) mtime and
+    /// size. A binary that can't be stat'ed keys on the path alone.
+    static func cacheKey(binary: String) -> String {
+        let resolved = (binary as NSString).resolvingSymlinksInPath
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: resolved) else {
+            return binary
+        }
+        let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
+        return "\(binary)|\(resolved)|\(mtime)|\(size)"
     }
 
     /// Reset cached probes (tests only).
