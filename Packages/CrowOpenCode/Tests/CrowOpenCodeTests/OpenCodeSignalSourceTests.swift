@@ -120,4 +120,28 @@ struct OpenCodeSignalSourceTests {
             Issue.record("unknown events should still clear pending notification")
         }
     }
+
+    @Test func bridgeUnavailableWaitsWithNotificationAndNeverCompletes() {
+        // CROW-1332: the V2 plugin's fail-closed signal. A bridge that can't
+        // see the session must ask for attention — never reach `.done`, which
+        // completes a job (ADR 0015).
+        let e = AgentHookEvent(
+            sessionID: UUID(), eventName: "BridgeUnavailable",
+            message: "OpenCode state bridge unavailable: event stream ended",
+            summary: "BridgeUnavailable")
+        let t = source.transition(
+            for: e,
+            currentActivityState: .working,
+            currentNotificationType: nil,
+            currentLastTopLevelStopAt: nil
+        )
+        #expect(t.newActivityState == .waiting)
+        if case .set(let n) = t.notification {
+            #expect(n.notificationType == "bridge_unavailable")
+            #expect(n.message.contains("event stream ended"))
+        } else {
+            Issue.record("expected a bridge_unavailable notification")
+        }
+        if case .set = t.lastTopLevelStopAt { Issue.record("must not record a Stop") }
+    }
 }

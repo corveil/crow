@@ -23,7 +23,9 @@ import CrowCore
 ///     into the worktree's `.opencode/plugins/` with the session UUID baked in
 ///     (a global fallback in `~/.config/opencode/plugins/` covers hand-started
 ///     sessions and self-suppresses when the per-project plugin is present).
-///     See that type for details.
+///     OpenCode 2 needs a different plugin API, so the writer probes the
+///     installed binary and writes the V1 or V2 body (CROW-1332). See that
+///     type for details.
 ///
 /// OpenCode has no `--rc`/`--name`/`--permission-mode` analog. The closest
 /// permission knob is `--auto` / `--dangerously-skip-permissions`, probed via
