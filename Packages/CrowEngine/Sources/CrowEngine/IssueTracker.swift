@@ -375,10 +375,11 @@ public final class IssueTracker {
         // CROW-1219: local git + store only — does not create a checkout, and
         // does not need GitHub. Runs even when the poll is rate-limited so
         // `primaryWorktree(for:)` / merge labels recover without waiting on
-        // `gh`. Sync on MainActor (no await) so a second refresh cannot
-        // double-append.
+        // `gh`. The `git` inference runs off MainActor (CROW-1346); the
+        // re-check-then-append back on MainActor is what keeps an
+        // overlapping refresh from double-appending.
         if let devRoot = ConfigStore.loadDevRoot() {
-            _ = MissingWorktreeRecovery.recoverAll(
+            _ = await MissingWorktreeRecovery.recoverAll(
                 appState: appState, store: store, devRoot: devRoot)
         }
 

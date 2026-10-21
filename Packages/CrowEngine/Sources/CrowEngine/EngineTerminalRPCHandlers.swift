@@ -50,7 +50,7 @@ func makeEngineTerminalHandlers(
             }
             let rawCommand = params["command"]?.stringValue
             let isManaged = params["managed"]?.boolValue ?? false
-            return await MainActor.run {
+            let result: [String: JSONValue] = await MainActor.run {
                 // Resolve claude binary path if command references claude; also
                 // inject --rc --name when remote control is enabled so the session
                 // appears in claude.ai's Remote Control panel under the Crow
@@ -162,19 +162,6 @@ func makeEngineTerminalHandlers(
                 }
                 capturedAppState.terminals[sessionID, default: []].append(terminal)
                 capturedStore.mutate { $0.terminals.append(terminal) }
-                // CROW-1219: if this is a managed agent terminal and the
-                // session still has no worktree row, the cwd we just
-                // persisted is enough to reconstruct one. Poll recovery
-                // covers already-running sessions; this catches the
-                // bootstrap race at create time.
-                if isManaged {
-                    _ = MissingWorktreeRecovery.recoverIfNeeded(
-                        sessionID: sessionID,
-                        appState: capturedAppState,
-                        store: capturedStore,
-                        devRoot: devRoot
-                    )
-                }
                 if trackReadiness {
                     TerminalRouter.trackReadiness(for: terminal)
                 }
@@ -188,6 +175,21 @@ func makeEngineTerminalHandlers(
                 if launchFailed { result["launch_failed"] = .bool(true) }
                 return result
             }
+            // CROW-1219: if this is a managed agent terminal and the session
+            // still has no worktree row, the cwd we just persisted is enough
+            // to reconstruct one. Poll recovery covers already-running
+            // sessions; this catches the bootstrap race at create time. It is
+            // outside the `MainActor.run` above because inference shells out
+            // to `git` off-actor (CROW-1346).
+            if isManaged {
+                _ = await MissingWorktreeRecovery.recoverIfNeeded(
+                    sessionID: sessionID,
+                    appState: capturedAppState,
+                    store: capturedStore,
+                    devRoot: devRoot
+                )
+            }
+            return result
         },
 
         // CROW-1295: a session whose tmux window was pruned has no terminal to

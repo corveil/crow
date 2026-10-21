@@ -28,6 +28,8 @@ public enum WorktreeInference {
     /// HEAD is detached / option-shaped, or the main clone would sit outside
     /// `devRoot`. Does not invent a row for a path that is not already a
     /// checkout — the git tree must exist.
+    ///
+    /// Runs synchronous `git` subprocesses; never call from MainActor.
     public static func infer(cwd: String, devRoot: String) -> Result? {
         let worktreePath = (cwd as NSString).standardizingPath
         guard !worktreePath.isEmpty else { return nil }
@@ -78,8 +80,9 @@ public enum WorktreeInference {
     /// is itself the main clone (or not a shape we understand).
     ///
     /// Asks git for `--git-common-dir` rather than parsing `gitdir:` by hand:
-    /// the poll path can afford a subprocess, and git's own answer is the
-    /// source of truth for "where is the shared dir".
+    /// callers run inference off MainActor (CROW-1346), so a subprocess is
+    /// affordable, and git's own answer is the source of truth for "where is
+    /// the shared dir". Blocks on `git` — never call from MainActor.
     public static func resolveMainClone(worktreePath: String) -> String? {
         let raw = git([
             "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir",

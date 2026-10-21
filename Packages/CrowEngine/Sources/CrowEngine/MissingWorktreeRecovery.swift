@@ -12,19 +12,24 @@ import CrowPersistence
 /// is enough to reconstruct repo, path, and branch. This never creates a git
 /// worktree; `add-worktree` already treats an existing `{path}/.git` as
 /// metadata-only, and that is the failure mode here too.
+///
+/// `WorktreeInference.infer` runs several synchronous `git` subprocesses, so
+/// it must never run on MainActor (CROW-1346, regressing CROW-1179). The
+/// shape is snapshot → infer off-actor → re-check and persist on MainActor.
 enum MissingWorktreeRecovery {
+    /// An eligible session and the managed-terminal cwd to infer from,
+    /// captured on MainActor so inference can run without touching `AppState`.
+    struct Candidate: Sendable {
+        let sessionID: UUID
+        let cwd: String
+    }
+
     /// Scan every session and persist a primary worktree for each eligible
     /// work session that still has none. Returns the rows that were added.
     @MainActor
-    static func recoverAll(appState: AppState, store: JSONStore, devRoot: String) -> [SessionWorktree] {
-        var added: [SessionWorktree] = []
-        for session in appState.sessions {
-            if let wt = inferredWorktree(session: session, appState: appState, devRoot: devRoot) {
-                added.append(wt)
-            }
-        }
-        persist(added, appState: appState, store: store)
-        return added
+    static func recoverAll(appState: AppState, store: JSONStore, devRoot: String) async -> [SessionWorktree] {
+        let candidates = appState.sessions.compactMap { candidate(session: $0, appState: appState) }
+        return await recover(candidates, appState: appState, store: store, devRoot: devRoot)
     }
 
     /// Recover a single session — the `new-terminal` hook. No-ops when the
@@ -35,49 +40,83 @@ enum MissingWorktreeRecovery {
         appState: AppState,
         store: JSONStore,
         devRoot: String
-    ) -> SessionWorktree? {
-        guard let session = appState.sessions.first(where: { $0.id == sessionID }) else {
+    ) async -> SessionWorktree? {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+              let candidate = candidate(session: session, appState: appState) else {
             return nil
         }
-        guard let wt = inferredWorktree(session: session, appState: appState, devRoot: devRoot) else {
-            return nil
-        }
-        persist([wt], appState: appState, store: store)
-        return wt
+        return await recover([candidate], appState: appState, store: store, devRoot: devRoot).first
     }
 
     @MainActor
-    private static func inferredWorktree(
-        session: Session,
-        appState: AppState,
-        devRoot: String
-    ) -> SessionWorktree? {
-        // Jobs, reviews, and Managers get their rows at creation (or, for
-        // Managers, never). Explore is still `kind == .work`; a missing row
-        // there is the same bootstrap gap, and inferring is harmless because
-        // we only register a checkout that already exists.
-        guard session.kind == .work else { return nil }
-        guard appState.worktrees(for: session.id).isEmpty else { return nil }
-
+    private static func candidate(session: Session, appState: AppState) -> Candidate? {
+        guard isEligible(session: session, appState: appState) else { return nil }
         let terminals = appState.terminals(for: session.id)
         guard let cwd = terminals.first(where: { $0.isManaged && !$0.cwd.isEmpty })?.cwd else {
             return nil
         }
-        guard let inferred = WorktreeInference.infer(cwd: cwd, devRoot: devRoot) else {
-            return nil
+        return Candidate(sessionID: session.id, cwd: cwd)
+    }
+
+    @MainActor
+    private static func isEligible(session: Session, appState: AppState) -> Bool {
+        // Jobs, reviews, and Managers get their rows at creation (or, for
+        // Managers, never). Explore is still `kind == .work`; a missing row
+        // there is the same bootstrap gap, and inferring is harmless because
+        // we only register a checkout that already exists.
+        session.kind == .work && appState.worktrees(for: session.id).isEmpty
+    }
+
+    @MainActor
+    private static func recover(
+        _ candidates: [Candidate],
+        appState: AppState,
+        store: JSONStore,
+        devRoot: String
+    ) async -> [SessionWorktree] {
+        guard !candidates.isEmpty else { return [] }
+        let inferred = await infer(candidates, devRoot: devRoot)
+
+        // Back on MainActor. Another refresh or a `new-terminal` hook may have
+        // recovered (or `add-worktree` registered) the same session while we
+        // were suspended, so re-check before appending. The check and the
+        // append below run with no suspension point between them, which is
+        // what keeps overlapping recoveries from double-appending.
+        var added: [SessionWorktree] = []
+        for (sessionID, result) in inferred {
+            guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+                  isEligible(session: session, appState: appState) else {
+                continue
+            }
+            CrowLog.info(
+                "[Crow] inferred missing worktree for session \(sessionID.uuidString) "
+                    + "at \(result.worktreePath) (\(result.branch))"
+            )
+            added.append(SessionWorktree(
+                sessionID: sessionID,
+                repoName: result.repoName,
+                repoPath: result.repoPath,
+                worktreePath: result.worktreePath,
+                branch: result.branch,
+                isPrimary: true
+            ))
         }
-        CrowLog.info(
-            "[Crow] inferred missing worktree for session \(session.id.uuidString) "
-                + "at \(inferred.worktreePath) (\(inferred.branch))"
-        )
-        return SessionWorktree(
-            sessionID: session.id,
-            repoName: inferred.repoName,
-            repoPath: inferred.repoPath,
-            worktreePath: inferred.worktreePath,
-            branch: inferred.branch,
-            isPrimary: true
-        )
+        persist(added, appState: appState, store: store)
+        return added
+    }
+
+    /// Run the `git` subprocesses on a detached task so they never block
+    /// MainActor, whatever isolation the caller has.
+    private static func infer(
+        _ candidates: [Candidate],
+        devRoot: String
+    ) async -> [(UUID, WorktreeInference.Result)] {
+        await Task.detached(priority: .utility) {
+            candidates.compactMap { candidate in
+                WorktreeInference.infer(cwd: candidate.cwd, devRoot: devRoot)
+                    .map { (candidate.sessionID, $0) }
+            }
+        }.value
     }
 
     @MainActor
