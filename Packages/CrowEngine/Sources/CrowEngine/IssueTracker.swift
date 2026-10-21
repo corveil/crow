@@ -382,6 +382,11 @@ public final class IssueTracker {
             _ = await MissingWorktreeRecovery.recoverAll(
                 appState: appState, store: store, devRoot: devRoot)
         }
+        // Recovery can suspend, so another refresh may have taken the poll
+        // lock meanwhile. Re-check before taking it, or two polls could
+        // fetch + apply concurrently and the first `defer` would clear the
+        // flag under the second (the CROW-1179 tear).
+        guard !isRefreshing else { return }
 
         guard shouldPoll() else {
             if let suspendedUntil {

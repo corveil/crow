@@ -163,27 +163,51 @@ struct MissingWorktreeRecoveryTests {
 
     @Test("a worktree registered during inference wins over the inferred one")
     func registrationDuringInferenceIsRespected() async throws {
-        let fixture = try await makeRepoWithWorktree()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-
+        // The gated inferer holds recoverAll inside its off-actor window, so
+        // the manual row deterministically lands after the snapshot and
+        // before the re-check — the window an `add-worktree` RPC would hit.
         let (appState, store, session) = seed(
             kind: .work,
-            terminals: [managed(cwd: fixture.worktree.path)]
+            terminals: [managed(cwd: "/dev/root/corveil/repo-1-x")]
         )
+        let gate = GatedInferer()
         async let added = MissingWorktreeRecovery.recoverAll(
-            appState: appState, store: store, devRoot: fixture.root.path)
-        // Typically lands while recoverAll is suspended on the off-actor `git`
-        // calls — the window an `add-worktree` RPC would hit. Whichever side of
-        // the snapshot it falls on, the manual row must be the only one.
-        await Task.yield()
+            appState: appState, store: store, devRoot: "/dev/root", inferer: gate.infer)
+        await gate.waitUntilEntered()
         appState.worktrees[session.id] = [
             SessionWorktree(
-                sessionID: session.id, repoName: "manual", repoPath: fixture.mainClone.path,
-                worktreePath: fixture.worktree.path, branch: "feature/manual", isPrimary: true)
+                sessionID: session.id, repoName: "manual", repoPath: "/dev/root/corveil/repo",
+                worktreePath: "/dev/root/corveil/repo-1-x", branch: "feature/manual", isPrimary: true)
         ]
+        gate.release()
 
         #expect(await added.isEmpty)
         #expect(appState.worktrees(for: session.id).map(\.branch) == ["feature/manual"])
+        #expect(store.data.worktrees.isEmpty)
+    }
+
+    @Test("inference runs off MainActor and does not block a MainActor hop")
+    func inferenceDoesNotBlockMainActor() async {
+        // CROW-1346 pin, mirroring BoardPollOffMainActorTests: while
+        // inference is in flight, MainActor must stay free.
+        let (appState, store, session) = seed(
+            kind: .work,
+            terminals: [managed(cwd: "/dev/root/corveil/repo-1-x")]
+        )
+        let gate = GatedInferer()
+        async let added = MissingWorktreeRecovery.recoverAll(
+            appState: appState, store: store, devRoot: "/dev/root", inferer: gate.infer)
+        await gate.waitUntilEntered()
+        #expect(!gate.sawMainThread, "inference ran on the main thread (CROW-1346)")
+
+        let hopStart = Date()
+        await MainActor.run {}
+        #expect(Date().timeIntervalSince(hopStart) < 0.1)
+
+        gate.release()
+        let rows = await added
+        #expect(rows.count == 1)
+        #expect(appState.primaryWorktree(for: session.id)?.branch == "feature/gated")
     }
 
     // MARK: - Helpers
@@ -214,6 +238,35 @@ struct MissingWorktreeRecoveryTests {
 
     private func managed(cwd: String) -> SessionTerminal {
         SessionTerminal(sessionID: UUID(), name: "Claude Code", cwd: cwd, isManaged: true)
+    }
+
+    /// An inferer that blocks inside the off-actor window until released,
+    /// and records whether it was entered on the main thread.
+    private final class GatedInferer: @unchecked Sendable {
+        private let entered = DispatchSemaphore(value: 0)
+        private let proceed = DispatchSemaphore(value: 0)
+        private nonisolated(unsafe) var _sawMain = false
+
+        var sawMainThread: Bool { _sawMain }
+
+        var infer: MissingWorktreeRecovery.Inferer {
+            { [self] cwd, _ in
+                if Thread.isMainThread { _sawMain = true }
+                entered.signal()
+                proceed.wait()
+                return WorktreeInference.Result(
+                    repoName: "repo", repoPath: "/dev/root/corveil/repo",
+                    worktreePath: cwd, branch: "feature/gated")
+            }
+        }
+
+        func waitUntilEntered() async {
+            await Task.detached { self.blockUntilEntered() }.value
+        }
+
+        private func blockUntilEntered() { entered.wait() }
+
+        func release() { proceed.signal() }
     }
 
     private struct Fixture: Sendable {

@@ -24,12 +24,22 @@ enum MissingWorktreeRecovery {
         let cwd: String
     }
 
+    /// `(cwd, devRoot) -> Result?`. Production uses `WorktreeInference.infer`;
+    /// tests inject one to control timing and observe the calling thread.
+    typealias Inferer = @Sendable (_ cwd: String, _ devRoot: String) -> WorktreeInference.Result?
+
     /// Scan every session and persist a primary worktree for each eligible
     /// work session that still has none. Returns the rows that were added.
     @MainActor
-    static func recoverAll(appState: AppState, store: JSONStore, devRoot: String) async -> [SessionWorktree] {
+    static func recoverAll(
+        appState: AppState,
+        store: JSONStore,
+        devRoot: String,
+        inferer: @escaping Inferer = WorktreeInference.infer(cwd:devRoot:)
+    ) async -> [SessionWorktree] {
         let candidates = appState.sessions.compactMap { candidate(session: $0, appState: appState) }
-        return await recover(candidates, appState: appState, store: store, devRoot: devRoot)
+        return await recover(
+            candidates, appState: appState, store: store, devRoot: devRoot, inferer: inferer)
     }
 
     /// Recover a single session — the `new-terminal` hook. No-ops when the
@@ -39,13 +49,16 @@ enum MissingWorktreeRecovery {
         sessionID: UUID,
         appState: AppState,
         store: JSONStore,
-        devRoot: String
+        devRoot: String,
+        inferer: @escaping Inferer = WorktreeInference.infer(cwd:devRoot:)
     ) async -> SessionWorktree? {
         guard let session = appState.sessions.first(where: { $0.id == sessionID }),
               let candidate = candidate(session: session, appState: appState) else {
             return nil
         }
-        return await recover([candidate], appState: appState, store: store, devRoot: devRoot).first
+        return await recover(
+            [candidate], appState: appState, store: store, devRoot: devRoot, inferer: inferer
+        ).first
     }
 
     @MainActor
@@ -72,10 +85,11 @@ enum MissingWorktreeRecovery {
         _ candidates: [Candidate],
         appState: AppState,
         store: JSONStore,
-        devRoot: String
+        devRoot: String,
+        inferer: @escaping Inferer
     ) async -> [SessionWorktree] {
         guard !candidates.isEmpty else { return [] }
-        let inferred = await infer(candidates, devRoot: devRoot)
+        let inferred = await infer(candidates, devRoot: devRoot, inferer: inferer)
 
         // Back on MainActor. Another refresh or a `new-terminal` hook may have
         // recovered (or `add-worktree` registered) the same session while we
@@ -109,11 +123,12 @@ enum MissingWorktreeRecovery {
     /// MainActor, whatever isolation the caller has.
     private static func infer(
         _ candidates: [Candidate],
-        devRoot: String
+        devRoot: String,
+        inferer: @escaping Inferer
     ) async -> [(UUID, WorktreeInference.Result)] {
         await Task.detached(priority: .utility) {
             candidates.compactMap { candidate in
-                WorktreeInference.infer(cwd: candidate.cwd, devRoot: devRoot)
+                inferer(candidate.cwd, devRoot)
                     .map { (candidate.sessionID, $0) }
             }
         }.value
