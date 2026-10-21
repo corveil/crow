@@ -13,15 +13,15 @@ import CrowGit
 struct MissingWorktreeRecoveryTests {
 
     @Test("registers a primary worktree from the managed terminal cwd")
-    func registersFromManagedCwd() throws {
-        let fixture = try makeRepoWithWorktree()
+    func registersFromManagedCwd() async throws {
+        let fixture = try await makeRepoWithWorktree()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let (appState, store, session) = seed(
             kind: .work,
             terminals: [managed(cwd: fixture.worktree.path)]
         )
-        let added = MissingWorktreeRecovery.recoverAll(
+        let added = await MissingWorktreeRecovery.recoverAll(
             appState: appState, store: store, devRoot: fixture.root.path)
 
         #expect(added.count == 1)
@@ -35,8 +35,8 @@ struct MissingWorktreeRecoveryTests {
     }
 
     @Test("does not invent a second worktree when one already exists")
-    func skipsWhenWorktreeExists() throws {
-        let fixture = try makeRepoWithWorktree()
+    func skipsWhenWorktreeExists() async throws {
+        let fixture = try await makeRepoWithWorktree()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let existing = SessionWorktree(
@@ -49,7 +49,7 @@ struct MissingWorktreeRecoveryTests {
             terminals: [managed(cwd: fixture.worktree.path)]
         )
 
-        let added = MissingWorktreeRecovery.recoverAll(
+        let added = await MissingWorktreeRecovery.recoverAll(
             appState: appState, store: store, devRoot: fixture.root.path)
         #expect(added.isEmpty)
         #expect(appState.worktrees(for: session.id).count == 1)
@@ -57,8 +57,8 @@ struct MissingWorktreeRecoveryTests {
     }
 
     @Test("skips job, review, and manager sessions")
-    func skipsNonWorkKinds() throws {
-        let fixture = try makeRepoWithWorktree()
+    func skipsNonWorkKinds() async throws {
+        let fixture = try await makeRepoWithWorktree()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         for kind: SessionKind in [.job, .review, .manager] {
@@ -66,7 +66,7 @@ struct MissingWorktreeRecoveryTests {
                 kind: kind,
                 terminals: [managed(cwd: fixture.worktree.path)]
             )
-            let added = MissingWorktreeRecovery.recoverAll(
+            let added = await MissingWorktreeRecovery.recoverAll(
                 appState: appState, store: store, devRoot: fixture.root.path)
             #expect(added.isEmpty, "kind \(kind.rawValue) should stay worktree-less")
             #expect(appState.worktrees(for: session.id).isEmpty)
@@ -74,8 +74,8 @@ struct MissingWorktreeRecoveryTests {
     }
 
     @Test("ignores an unmanaged terminal")
-    func skipsUnmanagedTerminal() throws {
-        let fixture = try makeRepoWithWorktree()
+    func skipsUnmanagedTerminal() async throws {
+        let fixture = try await makeRepoWithWorktree()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let (appState, store, session) = seed(
@@ -87,36 +87,36 @@ struct MissingWorktreeRecoveryTests {
             ]
         )
 
-        let added = MissingWorktreeRecovery.recoverAll(
+        let added = await MissingWorktreeRecovery.recoverAll(
             appState: appState, store: store, devRoot: fixture.root.path)
         #expect(added.isEmpty)
         #expect(appState.worktrees(for: session.id).isEmpty)
     }
 
     @Test("recoverIfNeeded is a no-op when the session already has a worktree")
-    func recoverIfNeededIsIdempotent() throws {
-        let fixture = try makeRepoWithWorktree()
+    func recoverIfNeededIsIdempotent() async throws {
+        let fixture = try await makeRepoWithWorktree()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let (appState, store, session) = seed(
             kind: .work,
             terminals: [managed(cwd: fixture.worktree.path)]
         )
-        let first = MissingWorktreeRecovery.recoverIfNeeded(
+        let first = await MissingWorktreeRecovery.recoverIfNeeded(
             sessionID: session.id, appState: appState, store: store, devRoot: fixture.root.path)
         #expect(first != nil)
-        let second = MissingWorktreeRecovery.recoverIfNeeded(
+        let second = await MissingWorktreeRecovery.recoverIfNeeded(
             sessionID: session.id, appState: appState, store: store, devRoot: fixture.root.path)
         #expect(second == nil)
         #expect(appState.worktrees(for: session.id).count == 1)
     }
 
     @Test("an explore work session is still recovered")
-    func recoversExploreWorkSession() throws {
+    func recoversExploreWorkSession() async throws {
         // Explore is a tag on `.work`, not a separate kind. A missing row is
         // the same bootstrap gap; inferring a checkout that already exists is
         // not inventing a second tree.
-        let fixture = try makeRepoWithWorktree()
+        let fixture = try await makeRepoWithWorktree()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let appState = AppState()
@@ -130,10 +130,84 @@ struct MissingWorktreeRecoveryTests {
                 cwd: fixture.worktree.path, isManaged: true)
         ]
 
-        let added = MissingWorktreeRecovery.recoverAll(
+        let added = await MissingWorktreeRecovery.recoverAll(
             appState: appState, store: store, devRoot: fixture.root.path)
         #expect(added.count == 1)
         #expect(appState.primaryWorktree(for: session.id)?.isPrimary == true)
+    }
+
+    @Test("overlapping recoverAll calls append exactly one worktree")
+    func overlappingRecoverAllDoesNotDoubleAppend() async throws {
+        // Both calls snapshot the session as eligible before either persists
+        // (each suspends for off-actor inference); the MainActor re-check is
+        // what keeps the second from appending a duplicate (CROW-1346).
+        let fixture = try await makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let (appState, store, session) = seed(
+            kind: .work,
+            terminals: [managed(cwd: fixture.worktree.path)]
+        )
+        async let first = MissingWorktreeRecovery.recoverAll(
+            appState: appState, store: store, devRoot: fixture.root.path)
+        async let second = MissingWorktreeRecovery.recoverAll(
+            appState: appState, store: store, devRoot: fixture.root.path)
+        async let single = MissingWorktreeRecovery.recoverIfNeeded(
+            sessionID: session.id, appState: appState, store: store, devRoot: fixture.root.path)
+        let total = await first.count + second.count + (single == nil ? 0 : 1)
+
+        #expect(total == 1)
+        #expect(appState.worktrees(for: session.id).count == 1)
+        #expect(store.data.worktrees.filter { $0.sessionID == session.id }.count == 1)
+    }
+
+    @Test("a worktree registered during inference wins over the inferred one")
+    func registrationDuringInferenceIsRespected() async throws {
+        // The gated inferer holds recoverAll inside its off-actor window, so
+        // the manual row deterministically lands after the snapshot and
+        // before the re-check — the window an `add-worktree` RPC would hit.
+        let (appState, store, session) = seed(
+            kind: .work,
+            terminals: [managed(cwd: "/dev/root/corveil/repo-1-x")]
+        )
+        let gate = GatedInferer()
+        async let added = MissingWorktreeRecovery.recoverAll(
+            appState: appState, store: store, devRoot: "/dev/root", inferer: gate.infer)
+        await gate.waitUntilEntered()
+        appState.worktrees[session.id] = [
+            SessionWorktree(
+                sessionID: session.id, repoName: "manual", repoPath: "/dev/root/corveil/repo",
+                worktreePath: "/dev/root/corveil/repo-1-x", branch: "feature/manual", isPrimary: true)
+        ]
+        gate.release()
+
+        #expect(await added.isEmpty)
+        #expect(appState.worktrees(for: session.id).map(\.branch) == ["feature/manual"])
+        #expect(store.data.worktrees.isEmpty)
+    }
+
+    @Test("inference runs off MainActor and does not block a MainActor hop")
+    func inferenceDoesNotBlockMainActor() async {
+        // CROW-1346 pin, mirroring BoardPollOffMainActorTests: while
+        // inference is in flight, MainActor must stay free.
+        let (appState, store, session) = seed(
+            kind: .work,
+            terminals: [managed(cwd: "/dev/root/corveil/repo-1-x")]
+        )
+        let gate = GatedInferer()
+        async let added = MissingWorktreeRecovery.recoverAll(
+            appState: appState, store: store, devRoot: "/dev/root", inferer: gate.infer)
+        await gate.waitUntilEntered()
+        #expect(!gate.sawMainThread, "inference ran on the main thread (CROW-1346)")
+
+        let hopStart = Date()
+        await MainActor.run {}
+        #expect(Date().timeIntervalSince(hopStart) < 0.1)
+
+        gate.release()
+        let rows = await added
+        #expect(rows.count == 1)
+        #expect(appState.primaryWorktree(for: session.id)?.branch == "feature/gated")
     }
 
     // MARK: - Helpers
@@ -166,13 +240,49 @@ struct MissingWorktreeRecoveryTests {
         SessionTerminal(sessionID: UUID(), name: "Claude Code", cwd: cwd, isManaged: true)
     }
 
-    private struct Fixture {
+    /// An inferer that blocks inside the off-actor window until released,
+    /// and records whether it was entered on the main thread.
+    private final class GatedInferer: @unchecked Sendable {
+        private let entered = DispatchSemaphore(value: 0)
+        private let proceed = DispatchSemaphore(value: 0)
+        private nonisolated(unsafe) var _sawMain = false
+
+        var sawMainThread: Bool { _sawMain }
+
+        var infer: MissingWorktreeRecovery.Inferer {
+            { [self] cwd, _ in
+                if Thread.isMainThread { _sawMain = true }
+                entered.signal()
+                proceed.wait()
+                return WorktreeInference.Result(
+                    repoName: "repo", repoPath: "/dev/root/corveil/repo",
+                    worktreePath: cwd, branch: "feature/gated")
+            }
+        }
+
+        func waitUntilEntered() async {
+            await Task.detached { self.blockUntilEntered() }.value
+        }
+
+        private func blockUntilEntered() { entered.wait() }
+
+        func release() { proceed.signal() }
+    }
+
+    private struct Fixture: Sendable {
         let root: URL
         let mainClone: URL
         let worktree: URL
     }
 
-    private func makeRepoWithWorktree() throws -> Fixture {
+    /// Builds the fixture on a detached task: this suite is `@MainActor`, and
+    /// running `git` here would stall every other test's MainActor hop — the
+    /// exact failure CROW-1346 fixed in production code.
+    private func makeRepoWithWorktree() async throws -> Fixture {
+        try await Task.detached { try Self.buildRepoWithWorktree() }.value
+    }
+
+    private nonisolated static func buildRepoWithWorktree() throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("crow-1219-\(UUID().uuidString)")
         let mainClone = root.appendingPathComponent("corveil/shell-crm")
@@ -192,7 +302,7 @@ struct MissingWorktreeRecoveryTests {
         return Fixture(root: root, mainClone: mainClone, worktree: worktree)
     }
 
-    private func git(_ args: [String]) throws -> String {
+    private nonisolated static func git(_ args: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
