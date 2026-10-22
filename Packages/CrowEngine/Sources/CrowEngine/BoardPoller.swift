@@ -187,6 +187,12 @@ final class BoardPoller {
         /// (CROW-945). Empty when `listMonitoredPRs` failed or degraded.
         let viewerLogin: String
         let rateLimit: GitHubRateLimit?
+        /// False when `listMonitoredPRs` failed but `listAssigned` succeeded
+        /// (CROW-1349). The issue halves are real; `viewerPRs`,
+        /// `reviewRequests` and `reviewedPRs` are empty because they are
+        /// *unknown*, not because GitHub reported none — so the apply hop
+        /// keeps the previous PR-side snapshot rather than blanking it.
+        var prDataAvailable: Bool = true
     }
 
     /// Side effects the GitHub fetch must not apply itself — they mutate
@@ -398,7 +404,13 @@ final class BoardPoller {
         do {
             monitored = try await monitoredAsync
         } catch {
-            return (nil, githubEvents(from: error, operation: "listMonitoredPRs"))
+            // Keep the issue listing (CROW-1349). Dropping it here used to
+            // stop every issue-side rule — closed-issue auto-complete, the
+            // ticket board, in-review sync — for as long as the PR query kept
+            // failing (a two-hour GitHub 502 on 2026-10-22).
+            return partialResponseWithoutPRs(
+                assigned: assigned,
+                events: githubEvents(from: error, operation: "listMonitoredPRs"))
         }
 
         var events: [GitHubBackendEvent] = []
@@ -431,6 +443,35 @@ final class BoardPoller {
             reviewedPRs: monitored.reviewedPRs,
             viewerLogin: monitored.viewerLogin,
             rateLimit: assigned.rateLimit ?? monitored.rateLimit
+        )
+        return (response, events)
+    }
+
+    /// The issue-only response for a cycle where `listMonitoredPRs` threw.
+    /// Scope / SAML warnings are only ever *raised* from the issue half: the
+    /// PR half's state is unknown this cycle, so clearing a warning it may
+    /// have set would be a guess.
+    nonisolated static func partialResponseWithoutPRs(
+        assigned: AssignedListing,
+        events prEvents: [GitHubBackendEvent]
+    ) -> (ConsolidatedGitHubResponse, [GitHubBackendEvent]) {
+        var events = prEvents
+        if let scope = assigned.missingScope {
+            events.append(.reportScopeWarning(scope))
+        }
+        if assigned.samlRestricted {
+            events.append(.reportSAMLWarning)
+        }
+        let response = ConsolidatedGitHubResponse(
+            openIssues: assigned.open,
+            closedIssues: assigned.closed,
+            closedTotalCount: assigned.closedTotalCount,
+            viewerPRs: [],
+            reviewRequests: [],
+            reviewedPRs: [],
+            viewerLogin: "",
+            rateLimit: assigned.rateLimit,
+            prDataAvailable: false
         )
         return (response, events)
     }
@@ -833,6 +874,28 @@ final class BoardPoller {
         )
     }
 
+    /// Copy last cycle's PR badge (number, URL, state, checks) onto issues
+    /// fetched in a cycle with no PR data (CROW-1349). Only GitHub issues
+    /// with no PR fields of their own are touched, so GitLab / Jira
+    /// enrichment from this cycle always wins.
+    nonisolated static func carryOverPRFields(
+        _ issues: [AssignedIssue],
+        from previous: [AssignedIssue]
+    ) -> [AssignedIssue] {
+        let previousByID = Dictionary(previous.map { ($0.id, $0) }, uniquingKeysWith: { lhs, _ in lhs })
+        return issues.map { issue in
+            guard issue.provider == .github, issue.state == "open", issue.prURL == nil,
+                  let old = previousByID[issue.id], old.prURL != nil else { return issue }
+            var issue = issue
+            issue.prNumber = old.prNumber
+            issue.prURL = old.prURL
+            issue.prState = old.prState
+            issue.checksState = old.checksState
+            issue.failedCheckNames = old.failedCheckNames
+            return issue
+        }
+    }
+
     /// Match viewer's open PRs onto assigned issues by
     /// `closingIssuesReferences` (repo + number). Pure over the GitHub
     /// payload so it can run off MainActor with the rest of the fetch.
@@ -928,6 +991,11 @@ final class BoardPoller {
 
         var staleFetch = StalePRFetchResult(prs: [], complete: true)
         if let ghResult {
+            // When `listMonitoredPRs` failed (`prDataAvailable == false`) the
+            // open set is empty, so every session PR becomes a candidate. That
+            // is still one batched `prStates` call on GitHub, and it is what
+            // gives auto-complete positive PR evidence during the outage
+            // (CROW-1349); if it fails too, `complete == false` holds it off.
             let openPRURLs = Set(ghResult.viewerPRs.map(\.url))
             let staleCandidateURLs = snapshot.sessionPRURLs.filter { !openPRURLs.contains($0) }
             if !staleCandidateURLs.isEmpty {

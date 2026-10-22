@@ -427,8 +427,9 @@ public final class IssueTracker {
         // stamp reverts, then post-merge fixes — in that order, so a
         // revert never double-counts as a fix (heuristic rule 4). Runs
         // after the apply hop so attributions are already written; the
-        // fetches themselves hop off MainActor.
-        if fetch.ghResult != nil {
+        // fetches themselves hop off MainActor. Skipped when the PR query
+        // failed: attributions weren't updated, so there is nothing new.
+        if fetch.ghResult?.prDataAvailable == true {
             await captureReworkSignals()
         }
 
@@ -439,7 +440,7 @@ public final class IssueTracker {
         // lookups to at most once per repo. Runs before the missing-link
         // reconcile (they touch disjoint sets: canonicalize fixes links that
         // exist but are aliased; reconcile attaches links that are missing).
-        if let ghResult = fetch.ghResult {
+        if let ghResult = fetch.ghResult, ghResult.prDataAvailable {
             let knownPRURLs = Set((ghResult.viewerPRs + fetch.staleFetch.prs).map { $0.url })
             await reconciler.canonicalizeAliasedPRLinks(knownPRURLs: knownPRURLs)
         }
@@ -476,12 +477,16 @@ public final class IssueTracker {
 
     /// One MainActor hop: warnings, `assignedIssues`, PR maps, rate-limit,
     /// auto-create, auto-complete. No provider I/O.
-    private func applyFetchedBoard(_ fetch: BoardPoller.BoardPollFetch, config: AppConfig) {
+    /// Internal (not private) so tests can drive one apply hop directly.
+    func applyFetchedBoard(_ fetch: BoardPoller.BoardPollFetch, config: AppConfig) {
         for event in fetch.githubEvents {
             applyGitHubBackendEvent(event)
         }
 
-        let allIssues = fetch.issues
+        var allIssues = fetch.issues
+        if fetch.ghResult?.prDataAvailable == false {
+            allIssues = BoardPoller.carryOverPRFields(allIssues, from: appState.assignedIssues)
+        }
         appState.assignedIssues = allIssues
         appState.doneIssuesLast24h = fetch.doneCount
 
@@ -494,6 +499,11 @@ public final class IssueTracker {
         guard let ghResult = fetch.ghResult else { return }
 
         if let rl = ghResult.rateLimit { appState.githubRateLimit = rl }
+
+        guard ghResult.prDataAvailable else {
+            applyIssuesWithoutPRData(ghResult, allIssues: allIssues, staleFetch: fetch.staleFetch)
+            return
+        }
 
         // Session PR link detection runs against open PRs only — we only
         // ever want to attach a fresh link when there's an open PR.
@@ -598,6 +608,41 @@ public final class IssueTracker {
         )
 
         clearRateLimitWarning()
+    }
+
+    /// The issue-side half of `applyFetchedBoard` for a cycle where
+    /// `listMonitoredPRs` failed (CROW-1349). The PR-side state — session PR
+    /// links, PR statuses, attributions, the review board — keeps its previous
+    /// snapshot: empty arrays here mean "unknown", and applying them would
+    /// blank the review board and read as every PR disappearing.
+    ///
+    /// Auto-complete still runs. Issue-only sessions complete on a closed
+    /// issue as usual; PR-linked sessions decide only from the stale-PR
+    /// follow-up's explicit lookups, and only when it returned cleanly, so
+    /// missing PR data never completes a session. The rate-limit warning is
+    /// not cleared, since the PR query may be the call that hit the limit.
+    private func applyIssuesWithoutPRData(
+        _ ghResult: BoardPoller.ConsolidatedGitHubResponse,
+        allIssues: [AssignedIssue],
+        staleFetch: BoardPoller.StalePRFetchResult
+    ) {
+        let knownPRs = Self.dedupedByURL(staleFetch.prs)
+        completion.syncInReviewSessions(issues: allIssues)
+        completion.autoCompleteFinishedSessions(
+            openIssues: allIssues.filter { $0.state == "open" },
+            closedIssueURLs: Set(ghResult.closedIssues.map(\.url)),
+            viewerPRs: knownPRs,
+            prDataComplete: staleFetch.complete
+        )
+        // Review rounds: the previous requested queue stands in for this
+        // cycle's, so a PR still awaiting review is never read as done.
+        let reviews = appState.reviewRequests
+        completion.autoCompleteFinishedReviews(
+            openReviewPRURLs: Set(reviews.map(\.url)),
+            prsByURL: Dictionary(knownPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords),
+            reviewRequestsByPRURL: Dictionary(reviews.map { ($0.url, $0) }, uniquingKeysWith: { lhs, _ in lhs }),
+            prDataComplete: staleFetch.complete
+        )
     }
 
     /// Rework-signal fetches (#694) stay after the apply hop so a revert
