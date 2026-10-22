@@ -849,7 +849,7 @@ final class BoardPoller {
                     openIssues[idx].prNumber = pr.number
                     openIssues[idx].prURL = pr.url
                     // Surface PR health inline on the board (#751): PRRecord
-                    // already carries these from monitoredPRsQuery, so no
+                    // already carries these from monitoredViewerPRsQuery, so no
                     // extra fetch. A draft PR reports "draft"; otherwise the
                     // normalized state lowercased ("open"/"merged"/"closed").
                     openIssues[idx].prState = pr.isDraft ? "draft" : pr.state.lowercased()

@@ -5,7 +5,7 @@ import CrowCore
 ///
 /// Extracted from `GitHubCodeBackend` (CROW-1253). Symbols stay on
 /// `GitHubCodeBackend` via this extension so `@testable` tests keep
-/// `GitHubCodeBackend.parseMonitoredPRsResponse` / `monitoredPRsQuery`
+/// `GitHubCodeBackend.parseMonitoredPRsResponse` / `monitoredViewerPRsQuery`
 /// / `parsePRNode` and so `listMonitoredPRs` / `prStates` keep calling
 /// the same statics. Query shape, `PRRecord` field meaning, SAML
 /// degrade-not-fail, and Reviews-board grouping are unchanged.
@@ -120,23 +120,26 @@ extension GitHubCodeBackend {
 
     // MARK: - Queries + parsers
 
-    static let monitoredPRsQuery = """
-    query($reviewQuery: String!, $reviewedQuery: String!, $completedQuery: String!) {
+    /// The board's monitored-PR fetch is two GraphQL documents, sent
+    /// concurrently by `listMonitoredPRs` (CROW-1351). As one document it ran
+    /// 7–11 s and 502'd past GitHub's ~10 s budget: fields resolve serially
+    /// inside a request, and `mergeable`/`mergeStateStatus` alone put a ~5 s
+    /// floor under the viewer half. Split, the slower half finishes in ~5–6 s.
+    /// Splitting costs no extra rate limit, because GitHub counts cost per
+    /// connection, not per request.
+    ///
+    /// Neither half selects `timelineItems`: label events on every row were
+    /// the slowest part of the searches and feed only the `crow:reviewing`
+    /// actor. `reviewingLabelEventsQuery` fetches them for the rows that carry
+    /// the label, which is what the `id` on every node is for.
+    static let monitoredViewerPRsQuery = """
+    query {
       viewerPRs: viewer {
         pullRequests(first: 50, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
           nodes {
-            number url state mergeable mergeStateStatus reviewDecision isDraft headRefName headRefOid baseRefName
+            id number url state mergeable mergeStateStatus reviewDecision isDraft headRefName headRefOid baseRefName
             repository { nameWithOwner autoMergeAllowed }
             labels(first: 20) { nodes { name color } }
-            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
-              nodes {
-                ... on LabeledEvent {
-                  createdAt
-                  actor { login }
-                  label { name }
-                }
-              }
-            }
             closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } }
             statusCheckRollup {
               state
@@ -167,23 +170,21 @@ extension GitHubCodeBackend {
           }
         }
       }
+      viewer { login }
+      rateLimit { remaining limit resetAt cost }
+    }
+    """
+
+    static let monitoredReviewSearchesQuery = """
+    query($reviewQuery: String!, $reviewedQuery: String!, $completedQuery: String!) {
       reviewPRs: search(type: ISSUE, query: $reviewQuery, first: 50) {
         nodes {
           ... on PullRequest {
-            number title url isDraft updatedAt headRefName headRefOid baseRefName state
+            id number title url isDraft updatedAt headRefName headRefOid baseRefName state
             mergedAt closedAt
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
-            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
-              nodes {
-                ... on LabeledEvent {
-                  createdAt
-                  actor { login }
-                  label { name }
-                }
-              }
-            }
             reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
@@ -191,20 +192,11 @@ extension GitHubCodeBackend {
       reviewedPRs: search(type: ISSUE, query: $reviewedQuery, first: 50) {
         nodes {
           ... on PullRequest {
-            number title url isDraft updatedAt headRefName headRefOid baseRefName state
+            id number title url isDraft updatedAt headRefName headRefOid baseRefName state
             mergedAt closedAt
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
-            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
-              nodes {
-                ... on LabeledEvent {
-                  createdAt
-                  actor { login }
-                  label { name }
-                }
-              }
-            }
             reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
@@ -212,20 +204,11 @@ extension GitHubCodeBackend {
       completedPRs: search(type: ISSUE, query: $completedQuery, first: 50) {
         nodes {
           ... on PullRequest {
-            number title url isDraft updatedAt headRefName headRefOid baseRefName state
+            id number title url isDraft updatedAt headRefName headRefOid baseRefName state
             mergedAt closedAt
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
-            timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
-              nodes {
-                ... on LabeledEvent {
-                  createdAt
-                  actor { login }
-                  label { name }
-                }
-              }
-            }
             reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
@@ -235,42 +218,91 @@ extension GitHubCodeBackend {
     }
     """
 
+    /// Label events for just the monitored rows that carry `crow:reviewing`,
+    /// by node id. Same `last: 30` window as `reviewingLabelActorQuery`.
+    /// `nodes(ids:)` takes at most 100 ids.
+    static let reviewingLabelEventsQuery = """
+    query($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on PullRequest {
+          id
+          timelineItems(last: 30, itemTypes: [LABELED_EVENT]) {
+            nodes {
+              ... on LabeledEvent {
+                createdAt
+                actor { login }
+                label { name }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    static let reviewingLabelEventsMaxIDs = 100
+
     static func parseMonitoredPRsResponse(_ output: String) throws -> MonitoredPRListing {
-        guard let data = output.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any] else {
+        guard let dataObj = decodeStrictGraphQLData(output) else {
             throw ProviderError.commandFailed("listMonitoredPRs: failed to parse GraphQL response")
         }
-        let viewerLogin = (dataObj["viewer"] as? [String: Any])?["login"] as? String ?? ""
-        let viewerPRs = parseViewerPRs(dataObj["viewerPRs"] as? [String: Any])
-        let reviewRequests = parseReviewRequests(
-            dataObj["reviewPRs"] as? [String: Any],
-            viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
-        )
-        let reviewed = parseReviewedPRs(
-            open: dataObj["reviewedPRs"] as? [String: Any],
-            completed: dataObj["completedPRs"] as? [String: Any],
-            viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
-        )
-        let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
-        return MonitoredPRListing(
-            viewerPRs: viewerPRs,
-            reviewRequests: reviewRequests,
-            reviewedPRs: reviewed,
-            viewerLogin: viewerLogin,
-            rateLimit: rate
-        )
+        return parseMonitoredPRsData(dataObj)
     }
 
-    /// Recover the accessible-org PRs/reviews GitHub returned alongside a SAML
-    /// `errors` entry. Mirrors `GitHubTaskBackend.recoverPartialIssues`: extract
-    /// the leading JSON object from the merged `gh` blob, parse what resolved,
-    /// and mark `samlRestricted`. Degrades to an empty listing (never throws)
-    /// when no body is recoverable.
-    static func recoverPartialMonitoredPRs(fromSAMLBlob blob: String) -> MonitoredPRListing {
-        guard let dataObj = GitHubTaskBackend.decodeGraphQLData(blob) else {
-            return MonitoredPRListing(viewerPRs: [], reviewRequests: [], viewerLogin: "", samlRestricted: true)
+    /// One half of the monitored-PR fetch as `gh` returned it. `samlRestricted`
+    /// means the output is a SAML error blob, not a clean response.
+    struct MonitoredHalf: Sendable {
+        let output: String
+        let samlRestricted: Bool
+    }
+
+    /// Fold both halves into the one `data` object the parsers read.
+    ///
+    /// A SAML half recovers whatever accessible-org rows GitHub returned
+    /// alongside the `errors` entry and degrades to `[:]` when there is no body.
+    /// That mirrors `GitHubTaskBackend.recoverPartialIssues`: degrade, don't fail.
+    /// A clean half that won't parse throws, because the board must not read a
+    /// half it never received as "nothing there".
+    ///
+    /// The keys are disjoint apart from `viewer` and `rateLimit`. For
+    /// `rateLimit`, the lower `remaining` wins, since it is the later reading
+    /// of the same budget, and `cost` is summed so it still reports what this
+    /// poll spent.
+    static func mergeMonitoredHalves(_ halves: [MonitoredHalf]) throws -> [String: Any] {
+        var merged: [String: Any] = [:]
+        var rateLimit: [String: Any]?
+        var totalCost = 0
+        for half in halves {
+            let dataObj: [String: Any]
+            if half.samlRestricted {
+                dataObj = GitHubTaskBackend.decodeGraphQLData(half.output) ?? [:]
+            } else if let clean = decodeStrictGraphQLData(half.output) {
+                dataObj = clean
+            } else {
+                throw ProviderError.commandFailed("listMonitoredPRs: failed to parse GraphQL response")
+            }
+            for (key, value) in dataObj where key != "rateLimit" && key != "viewer" {
+                merged[key] = value
+            }
+            if let viewer = dataObj["viewer"] as? [String: Any],
+               ((viewer["login"] as? String) ?? "").isEmpty == false {
+                merged["viewer"] = viewer
+            }
+            if let rate = dataObj["rateLimit"] as? [String: Any] {
+                totalCost += (rate["cost"] as? Int) ?? 0
+                let remaining = (rate["remaining"] as? Int) ?? .max
+                let current = (rateLimit?["remaining"] as? Int) ?? .max
+                if rateLimit == nil || remaining < current { rateLimit = rate }
+            }
         }
+        if var rateLimit {
+            rateLimit["cost"] = totalCost
+            merged["rateLimit"] = rateLimit
+        }
+        return merged
+    }
+
+    static func parseMonitoredPRsData(_ dataObj: [String: Any], samlRestricted: Bool = false) -> MonitoredPRListing {
         let viewerLogin = (dataObj["viewer"] as? [String: Any])?["login"] as? String ?? ""
         let viewerPRs = parseViewerPRs(dataObj["viewerPRs"] as? [String: Any])
         let reviewRequests = parseReviewRequests(
@@ -289,8 +321,85 @@ extension GitHubCodeBackend {
             reviewedPRs: reviewed,
             viewerLogin: viewerLogin,
             rateLimit: rate,
-            samlRestricted: true
+            samlRestricted: samlRestricted
         )
+    }
+
+    private static func decodeStrictGraphQLData(_ output: String) -> [String: Any]? {
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["data"] as? [String: Any]
+    }
+
+    // MARK: - Monitored-row label events (CROW-1351)
+
+    /// Where the monitored rows live in the merged `data` object.
+    private static func monitoredNodePaths() -> [[String]] {
+        [["viewerPRs", "pullRequests"], ["reviewPRs"], ["reviewedPRs"], ["completedPRs"]]
+    }
+
+    /// Node ids of the monitored rows that carry `crow:reviewing` right now.
+    /// Deduped (one PR can sit in several searches) and capped at what
+    /// `nodes(ids:)` accepts.
+    static func reviewingLabelNodeIDs(in dataObj: [String: Any]) -> [String] {
+        var seen: Set<String> = []
+        var ids: [String] = []
+        for path in monitoredNodePaths() {
+            for node in LenientJSON.nodes(object(at: path, in: dataObj)) {
+                guard let id = node["id"] as? String, !id.isEmpty else { continue }
+                let labelled = LenientJSON.nodes(node, "labels").contains {
+                    (($0["name"] as? String) ?? "").caseInsensitiveCompare(ReviewingLabel.name) == .orderedSame
+                }
+                if labelled, seen.insert(id).inserted { ids.append(id) }
+            }
+        }
+        return Array(ids.prefix(reviewingLabelEventsMaxIDs))
+    }
+
+    /// `timelineItems` objects from a `reviewingLabelEventsQuery` response,
+    /// keyed by node id. Returns `[:]` for a response that won't parse.
+    static func parseReviewingLabelTimelines(_ output: String) -> [String: Any] {
+        guard let dataObj = decodeStrictGraphQLData(output) else { return [:] }
+        var timelines: [String: Any] = [:]
+        for node in LenientJSON.objects(dataObj["nodes"]) {
+            guard let id = node["id"] as? String, let timeline = node["timelineItems"] else { continue }
+            timelines[id] = timeline
+        }
+        return timelines
+    }
+
+    /// Put each fetched `timelineItems` back on its row, so the parsers read
+    /// it exactly as they did when the monitored query selected it inline.
+    static func injectReviewingLabelTimelines(_ timelines: [String: Any], into dataObj: [String: Any]) -> [String: Any] {
+        guard !timelines.isEmpty else { return dataObj }
+        var result = dataObj
+        for path in monitoredNodePaths() {
+            guard var connection = object(at: path, in: result),
+                  let nodes = connection["nodes"] as? [Any] else { continue }
+            connection["nodes"] = nodes.map { element -> Any in
+                guard var node = element as? [String: Any],
+                      let id = node["id"] as? String,
+                      let timeline = timelines[id] else { return element }
+                node["timelineItems"] = timeline
+                return node
+            }
+            result = setting(connection, at: path, in: result)
+        }
+        return result
+    }
+
+    private static func object(at path: [String], in dataObj: [String: Any]) -> [String: Any]? {
+        var current: [String: Any]? = dataObj
+        for key in path { current = current?[key] as? [String: Any] }
+        return current
+    }
+
+    private static func setting(_ value: [String: Any], at path: [String], in dataObj: [String: Any]) -> [String: Any] {
+        guard let key = path.first else { return value }
+        var copy = dataObj
+        let child = (dataObj[key] as? [String: Any]) ?? [:]
+        copy[key] = setting(value, at: Array(path.dropFirst()), in: child)
+        return copy
     }
 
     static func parseViewerPRs(_ viewerObj: [String: Any]?) -> [PRRecord] {
@@ -707,7 +816,7 @@ extension GitHubCodeBackend {
     }
 
     /// Recover the accessible-repo PR states GitHub returned alongside a SAML
-    /// `errors` entry. Symmetric with `recoverPartialMonitoredPRs`: `prStates`
+    /// `errors` entry. Symmetric with `mergeMonitoredHalves`: `prStates`
     /// batches every stale ref into one aliased query, so one SAML-restricted
     /// repo made `gh` exit non-zero and took every *other* ref's state down
     /// with it (#894). GitHub nullifies only the offending `prN` alias and

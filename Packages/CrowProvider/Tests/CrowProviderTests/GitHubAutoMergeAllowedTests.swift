@@ -74,7 +74,7 @@ struct GitHubAutoMergeAllowedTests {
     @Test func bothQueriesSelectTheField() {
         // Adding the field to only one of the two GraphQL queries would make the
         // verdict depend on which fetch happened to see the PR last.
-        #expect(GitHubCodeBackend.monitoredPRsQuery.contains("autoMergeAllowed"))
+        #expect(GitHubCodeBackend.monitoredViewerPRsQuery.contains("autoMergeAllowed"))
     }
 
     @Test func gitHubDeclaresTheDirectMergeCapability() {

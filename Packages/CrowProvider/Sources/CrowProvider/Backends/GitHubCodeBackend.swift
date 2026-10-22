@@ -111,32 +111,69 @@ public struct GitHubCodeBackend: CodeBackend {
         // GitHub states that no single query expresses: `state:open` for PRs
         // parked with their author, and a closed-since window for PRs that
         // merged or closed. Both ride in the *same* GraphQL document as the
-        // query above, so they are two more search nodes on an existing request
+        // search above, so they are two more search nodes on an existing request
         // rather than extra HTTP round trips. `sort:updated-desc` matters at
         // `first: 50`: a review bumps the PR's `updatedAt`, so the rows these
         // groups want sort to the front instead of relying on relevance order.
         let reviewedQuery = "reviewed-by:@me state:open type:pr sort:updated-desc"
         let completedQuery = Self.completedReviewsQuery(now: Date())
-        let output: String
-        do {
-            output = try await shellRunner.run(
-                "gh", "api", "graphql",
-                "-f", "query=\(Self.monitoredPRsQuery)",
-                "-F", "reviewQuery=\(reviewQuery)",
-                "-F", "reviewedQuery=\(reviewedQuery)",
-                "-F", "completedQuery=\(completedQuery)"
+        // Two requests in flight at once, not one (CROW-1351): see
+        // `monitoredViewerPRsQuery`. Both must land; a half that fails outright
+        // fails the cycle, as the single request did, because an empty review
+        // half would read as "nothing is asking me" downstream.
+        async let viewerHalf = fetchMonitoredHalf([
+            "-f", "query=\(Self.monitoredViewerPRsQuery)",
+        ])
+        async let searchHalf = fetchMonitoredHalf([
+            "-f", "query=\(Self.monitoredReviewSearchesQuery)",
+            "-F", "reviewQuery=\(reviewQuery)",
+            "-F", "reviewedQuery=\(reviewedQuery)",
+            "-F", "completedQuery=\(completedQuery)",
+        ])
+        let halves = try await [viewerHalf, searchHalf]
+        var dataObj = try Self.mergeMonitoredHalves(halves)
+
+        // Label events only for rows carrying `crow:reviewing` — usually none,
+        // so usually no request. Best-effort: they feed only the display-only
+        // `reviewingBy`, so a failure leaves that nil rather than failing the
+        // poll.
+        let ids = Self.reviewingLabelNodeIDs(in: dataObj)
+        if !ids.isEmpty,
+           let output = try? await shellRunner.run(
+               args: ["gh", "api", "graphql", "-f", "query=\(Self.reviewingLabelEventsQuery)"]
+                   + ids.flatMap { ["-f", "ids[]=\($0)"] },
+               env: [:],
+               cwd: nil
+           ) {
+            dataObj = Self.injectReviewingLabelTimelines(
+                Self.parseReviewingLabelTimelines(output),
+                into: dataObj
             )
+        }
+        return Self.parseMonitoredPRsData(
+            dataObj,
+            samlRestricted: halves.contains { $0.samlRestricted }
+        )
+    }
+
+    /// Run one half of the monitored-PR fetch. A SAML rejection comes back as
+    /// the error blob, flagged, so the accessible-org rows GitHub still
+    /// returned can be recovered. Any other failure throws, classified.
+    private func fetchMonitoredHalf(_ fields: [String]) async throws -> MonitoredHalf {
+        do {
+            let output = try await shellRunner.run(
+                args: ["gh", "api", "graphql"] + fields,
+                env: [:],
+                cwd: nil
+            )
+            return MonitoredHalf(output: output, samlRestricted: false)
         } catch ShellRunnerError.nonZeroExit(_, let stderr) {
             let err = GitHubTaskBackend.classifyGraphQLError(stderr)
             if case .samlRestricted(let blob) = err {
-                // An org's SAML enforcement blocked the token. Recover the
-                // accessible-org PRs/reviews GitHub still returned and flag the
-                // listing degraded instead of failing the whole cycle.
-                return Self.recoverPartialMonitoredPRs(fromSAMLBlob: blob)
+                return MonitoredHalf(output: blob, samlRestricted: true)
             }
             throw err
         }
-        return try Self.parseMonitoredPRsResponse(output)
     }
 
     // MARK: - prStates
