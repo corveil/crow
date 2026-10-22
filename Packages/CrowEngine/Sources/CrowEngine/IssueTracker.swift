@@ -748,23 +748,12 @@ public final class IssueTracker {
         return nil
     }
 
-    /// `ProviderError` has no `LocalizedError` conformance, so
-    /// `localizedDescription` on one is the useless "The operation couldn't be
-    /// completed. (CrowProvider.ProviderError error N.)" — and every
-    /// `setTaskStatus` failure is a typed `ProviderError` (see
-    /// `GitHubTaskBackend.classifyGraphQLError`). Pull the payload out by hand
-    /// so the sentence a CLI user reads is the real `gh`/`glab` error.
+    /// Every `setTaskStatus` failure is a typed `ProviderError` (see
+    /// `GitHubTaskBackend.classifyGraphQLError`), whose `errorDescription`
+    /// (CROW-1352) is the real `gh`/`glab` error, trimmed and log-safe — the
+    /// sentence a CLI user reads.
     static func providerFailureDetail(_ error: ProviderError) -> String {
-        let raw: String
-        switch error {
-        case .invalidURL(let url): raw = "invalid ticket URL: \(url)"
-        case .commandFailed(let output): raw = output
-        case .unimplemented(let msg): raw = msg
-        case .insufficientScope(let scope): raw = "GitHub token missing '\(scope)' scope"
-        case .rateLimited(let output): raw = "rate limited: \(output)"
-        case .samlRestricted(let output): raw = "SAML-restricted: \(output)"
-        }
-        return String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+        error.errorDescription ?? ""
     }
 
     // MARK: - Mark Issue Done
