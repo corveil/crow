@@ -404,4 +404,10 @@ public enum ProviderError: Error {
     /// call sites can recover the accessible-org data instead of dropping the
     /// whole cycle. See `GitHubTaskBackend.recoverPartialIssues`.
     case samlRestricted(String)
+    /// GitHub answered with a gateway error (`HTTP 502` / `HTTP 504`, or its
+    /// "couldn't respond to your request in time" timeout) — typically a
+    /// GraphQL query brushing GitHub's ~10s server limit. Intermittent, so the
+    /// poll paths retry it before giving up (#1350). The associated value is
+    /// the merged `gh` output.
+    case transientGateway(String)
 }

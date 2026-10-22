@@ -31,9 +31,15 @@ public struct GitHubCodeBackend: CodeBackend {
     ]
 
     private let shellRunner: ShellRunner
+    /// Backoff for transient gateway errors on `listMonitoredPRs` (#1350).
+    private let transientRetryDelays: [Duration]
 
-    public init(shellRunner: ShellRunner) {
+    public init(
+        shellRunner: ShellRunner,
+        transientRetryDelays: [Duration] = GitHubTaskBackend.transientRetryDelays
+    ) {
         self.shellRunner = shellRunner
+        self.transientRetryDelays = transientRetryDelays
     }
 
     // MARK: - linkedPR / ensureMergeLabel
@@ -158,21 +164,21 @@ public struct GitHubCodeBackend: CodeBackend {
 
     /// Run one half of the monitored-PR fetch. A SAML rejection comes back as
     /// the error blob, flagged, so the accessible-org rows GitHub still
-    /// returned can be recovered. Any other failure throws, classified.
+    /// returned can be recovered. A gateway error is retried per half (#1350),
+    /// so a 502 on one half doesn't re-send the other. Any other failure — or
+    /// a gateway error that outlasts the retries — throws, classified.
     private func fetchMonitoredHalf(_ fields: [String]) async throws -> MonitoredHalf {
         do {
-            let output = try await shellRunner.run(
-                args: ["gh", "api", "graphql"] + fields,
-                env: [:],
-                cwd: nil
-            )
-            return MonitoredHalf(output: output, samlRestricted: false)
-        } catch ShellRunnerError.nonZeroExit(_, let stderr) {
-            let err = GitHubTaskBackend.classifyGraphQLError(stderr)
-            if case .samlRestricted(let blob) = err {
-                return MonitoredHalf(output: blob, samlRestricted: true)
+            let output = try await GitHubTaskBackend.runGraphQLRetryingTransient(delays: transientRetryDelays) {
+                try await shellRunner.run(
+                    args: ["gh", "api", "graphql"] + fields,
+                    env: [:],
+                    cwd: nil
+                )
             }
-            throw err
+            return MonitoredHalf(output: output, samlRestricted: false)
+        } catch ProviderError.samlRestricted(let blob) {
+            return MonitoredHalf(output: blob, samlRestricted: true)
         }
     }
 
