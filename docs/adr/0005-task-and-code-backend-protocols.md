@@ -93,7 +93,7 @@ Method-by-method state as of the #454 PR. "Site" is where the implementation liv
 |---|---|---|---|
 | `linkedPR` | ✅ | ✅ | shipped #411 |
 | `ensureMergeLabel` | ✅ (cap-gated) | throws (no cap) | shipped #411; `.autoMergeLabel` gates |
-| `listMonitoredPRs` | ✅ (#454) | partial | GitHub returns viewer PRs + review-requested in one GraphQL call; GitLab returns review-requested only (no `viewerPRs` analogue today) |
+| `listMonitoredPRs` | ✅ (#454) | partial | GitHub returns viewer PRs + the review searches in two concurrent GraphQL calls (CROW-1351); GitLab returns review-requested only (no `viewerPRs` analogue today) |
 | `prStates` | ✅ (#454, batched) | ✅ (#454, per-MR) | `.batchedPRStates` declared only by GitHub |
 | `fetchCrowAuthoredCommits` | ✅ (#454) | ✅ (#454) | callers filter by `Crow-Session:` trailer |
 | `findRecentPRsForBranches` | ✅ (#454, batched) | ✅ (#454, per-candidate) | reconcile path |

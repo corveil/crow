@@ -24,7 +24,7 @@ import Foundation
 /// These helpers filter rather than fail: unresolvable elements are dropped,
 /// resolvable ones survive. Same partial-recovery philosophy as
 /// `GitHubTaskBackend.recoverPartialIssues` and
-/// `GitHubCodeBackend.recoverPartialMonitoredPRs`, applied one level down —
+/// `GitHubCodeBackend.mergeMonitoredHalves`, applied one level down —
 /// those two recover a partial *response*, this recovers a partial *array*.
 ///
 /// Note: single-object casts (`node["repository"] as? [String: Any]`) do **not**

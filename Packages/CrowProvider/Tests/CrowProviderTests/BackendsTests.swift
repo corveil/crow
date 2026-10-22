@@ -333,8 +333,10 @@ final class BackendsTests: XCTestCase {
         },"errors":[{"type":"FORBIDDEN","path":["viewerPRs","pullRequests","nodes",0],"message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}
         gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise.
         """
-        let fake = FakeShellRunner()
-        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: blob))]
+        let fake = MonitoredPRsShellRunner(
+            viewer: .failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: blob)),
+            searches: .success(#"{"data":{"reviewPRs":{"nodes":[]},"viewer":{"login":"me"}}}"#)
+        )
         let backend = GitHubCodeBackend(shellRunner: fake)
         let listing = try await backend.listMonitoredPRs()
         XCTAssertTrue(listing.samlRestricted)
@@ -2306,13 +2308,13 @@ final class BackendsTests: XCTestCase {
     /// parser, so they share one selection — a copy that drifts would silently
     /// blind the board for whichever group it feeds.
     func testMonitoredPRsQueryAsksForEachReviewsCommit() {
-        let selections = GitHubCodeBackend.monitoredPRsQuery
+        let selections = GitHubCodeBackend.monitoredReviewSearchesQuery
             .components(separatedBy: "reviews(last: 20)").count - 1
-        XCTAssertEqual(selections, 3, GitHubCodeBackend.monitoredPRsQuery)
-        let withCommit = GitHubCodeBackend.monitoredPRsQuery
+        XCTAssertEqual(selections, 3, GitHubCodeBackend.monitoredReviewSearchesQuery)
+        let withCommit = GitHubCodeBackend.monitoredReviewSearchesQuery
             .components(separatedBy: "reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }")
             .count - 1
-        XCTAssertEqual(withCommit, 3, GitHubCodeBackend.monitoredPRsQuery)
+        XCTAssertEqual(withCommit, 3, GitHubCodeBackend.monitoredReviewSearchesQuery)
     }
 
     /// THE CROW-990 GAP 2 REGRESSION GUARD. Merged and closed PRs come from    /// their own search because the other two are `state:open` — with the
@@ -2547,10 +2549,10 @@ final class BackendsTests: XCTestCase {
 
     /// The query declares all three search variables, and `listMonitoredPRs`
     /// passes all three. A mismatch is a runtime GraphQL error, not a compile
-    /// error, so pin the contract here — including that the third search rides
-    /// in the *same* document, which is what keeps this one HTTP round trip.
+    /// error, so pin the contract here — including that the three searches ride
+    /// in the *same* document, which keeps them one HTTP round trip.
     func testMonitoredPRsQueryDeclaresAllSearchVariables() {
-        let q = GitHubCodeBackend.monitoredPRsQuery
+        let q = GitHubCodeBackend.monitoredReviewSearchesQuery
         XCTAssertTrue(q.contains("$reviewQuery: String!"))
         XCTAssertTrue(q.contains("$reviewedQuery: String!"))
         XCTAssertTrue(q.contains("$completedQuery: String!"))
