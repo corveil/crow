@@ -26,9 +26,13 @@ public struct GitHubTaskBackend: TaskBackend {
     public let capabilities: Set<TaskCapability> = [.batchedQuery, .projectBoardStatus]
 
     private let shellRunner: ShellRunner
+    /// Sleeps between attempts on a transient gateway error (#1350). Injected
+    /// so tests don't wait out real delays.
+    private let transientRetryDelays: [Duration]
 
-    public init(shellRunner: ShellRunner) {
+    public init(shellRunner: ShellRunner, transientRetryDelays: [Duration] = Self.transientRetryDelays) {
         self.shellRunner = shellRunner
+        self.transientRetryDelays = transientRetryDelays
     }
 
     // MARK: - TaskBackend
@@ -226,21 +230,51 @@ public struct GitHubTaskBackend: TaskBackend {
     // MARK: - Helpers
 
     private func runIssuesQuery(query: String, openQuery: String, closedQuery: String) async throws -> String {
-        do {
-            return try await shellRunner.run(
+        try await Self.runGraphQLRetryingTransient(delays: transientRetryDelays) {
+            try await shellRunner.run(
                 "gh", "api", "graphql",
                 "-f", "query=\(query)",
                 "-F", "openQuery=\(openQuery)",
                 "-F", "closedQuery=\(closedQuery)"
             )
-        } catch ShellRunnerError.nonZeroExit(_, let output) {
-            throw Self.classifyGraphQLError(output)
+        }
+    }
+
+    /// Default backoff for `runGraphQLRetryingTransient`: two retries, 1s then
+    /// 2s. A 502 tends to arrive ~11s in (GitHub's server limit), so the worst
+    /// case is three ~11s attempts plus 3s of sleep — well under the 60s poll
+    /// interval, so a slow GitHub can't stack overlapping polls.
+    public static let transientRetryDelays: [Duration] = [.seconds(1), .seconds(2)]
+
+    /// Run one `gh api graphql` invocation, classifying a non-zero exit with
+    /// `classifyGraphQLError`. A `.transientGateway` result is retried once per
+    /// entry in `delays`, sleeping that long first; any other classification —
+    /// or a gateway error that outlasts the retries — is thrown as-is (#1350).
+    ///
+    /// Only the poll paths (`listAssigned`, `listMonitoredPRs`) use this:
+    /// they are idempotent reads, and failing them blanks the board for a cycle.
+    static func runGraphQLRetryingTransient(
+        delays: [Duration],
+        _ attempt: () async throws -> String
+    ) async throws -> String {
+        var remaining = delays[...]
+        while true {
+            do {
+                return try await attempt()
+            } catch ShellRunnerError.nonZeroExit(_, let output) {
+                let err = classifyGraphQLError(output)
+                guard case .transientGateway = err, let delay = remaining.popFirst() else {
+                    throw err
+                }
+                try await Task.sleep(for: delay)
+            }
         }
     }
 
     /// Classify a `gh api graphql` stderr blob into a typed error. Rate-limit
     /// and scope failures get their own cases so callers can route them to
-    /// dedicated UI; everything else collapses to `.commandFailed`.
+    /// dedicated UI, and gateway errors get one so the poll can retry them;
+    /// everything else collapses to `.commandFailed`.
     static func classifyGraphQLError(_ stderr: String) -> ProviderError {
         // Check SAML first: GitHub returns partial `data` alongside the SAML
         // `errors` entry, so we carry the whole blob to recover accessible-org
@@ -254,6 +288,12 @@ public struct GitHubTaskBackend: TaskBackend {
         }
         if stderr.contains("INSUFFICIENT_SCOPES") || stderr.contains("read:project") {
             return .insufficientScope("read:project")
+        }
+        // Checked last: these are bare HTTP-status markers, and the typed
+        // GraphQL errors above are the more specific diagnosis when present.
+        if stderr.contains("HTTP 502") || stderr.contains("HTTP 504")
+            || stderr.contains("couldn't respond to your request in time") {
+            return .transientGateway(stderr)
         }
         return .commandFailed(stderr)
     }

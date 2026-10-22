@@ -144,5 +144,17 @@ struct BoardPollOffMainActorTests {
             operation: "listAssigned"
         )
         #expect(rate == [.rateLimited(stderr: "rate limit exceeded")])
+
+        // #1350: a gateway error that outlasted the backend's retries logs
+        // gh's own status line (via `errorDescription`, CROW-1352), not the
+        // nginx HTML body.
+        let gateway = BoardPoller.githubEvents(
+            from: ProviderError.transientGateway("<html>502 Bad Gateway</html>\ngh: HTTP 502\n"),
+            operation: "listMonitoredPRs"
+        )
+        #expect(gateway == [.failed(
+            operation: "listMonitoredPRs",
+            message: "GitHub gateway error: gh: HTTP 502"
+        )])
     }
 }

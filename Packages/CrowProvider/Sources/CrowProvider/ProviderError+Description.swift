@@ -26,6 +26,8 @@ extension ProviderError: LocalizedError {
             return "rate limited: \(Self.logSafe(output))"
         case .samlRestricted(let output):
             return "SAML-restricted: \(Self.logSafe(output))"
+        case .transientGateway(let output):
+            return "GitHub gateway error: \(Self.logSafe(output))"
         }
     }
 
