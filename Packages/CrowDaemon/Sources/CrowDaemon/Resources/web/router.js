@@ -50,6 +50,8 @@ function parseRoute(hash) {
   if (!seg.length) return { view: 'home' };
   if (seg[0] === 'sessions' && seg[1]) {
     if (seg.length === 2) return { view: 'session', sessionId: seg[1] };
+    // SPIKE (chat view): #/sessions/:id/chat
+    if (seg.length === 3 && seg[2] === 'chat') return { view: 'session', sessionId: seg[1], chat: true };
     if (seg.length === 4 && seg[2] === 't') {
       return { view: 'session', sessionId: seg[1], terminalId: seg[3] };
     }
@@ -70,6 +72,7 @@ function parseRoute(hash) {
 function routeToHash(route) {
   if (!route) return '#/';
   if (route.view === 'session' && route.sessionId) {
+    if (route.chat) return '#/sessions/' + encodeURIComponent(route.sessionId) + '/chat';
     return '#/sessions/' + encodeURIComponent(route.sessionId)
       + (route.terminalId ? '/t/' + encodeURIComponent(route.terminalId) : '');
   }
@@ -163,6 +166,7 @@ async function applyRoute(route) {
       return;
     }
     pendingTerminalId = route.terminalId || null;
+    if (typeof setChatViewActive === 'function') setChatViewActive(!!route.chat);
     await selectSession(route.sessionId, { fromRoute: true });
     return;
   }

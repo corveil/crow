@@ -1,0 +1,121 @@
+import Foundation
+import Testing
+@testable import CrowCore
+
+/// SPIKE (chat view). Fixture lines are hand-written to the shapes Claude Code
+/// 2.1.x and Codex 0.16x persist — never read from a live `~/.claude` (ADR 0012).
+@Suite struct ChatTranscriptTests {
+    static let claudeFixture = #"""
+    {"type":"permission-mode","permissionMode":"auto"}
+    {"type":"user","isSidechain":false,"timestamp":"T1","message":{"role":"user","content":"Fix the flaky test"}}
+    {"type":"assistant","isSidechain":false,"timestamp":"T2","message":{"id":"m1","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"x"}]}}
+    {"type":"assistant","isSidechain":false,"timestamp":"T3","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Looking at it.\n"}]}}
+    {"type":"assistant","isSidechain":false,"timestamp":"T4","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"swift test --filter Flaky","description":"run it"}}],"stop_reason":"tool_use"}}
+    {"type":"user","isSidechain":false,"timestamp":"T5","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"FAIL: expected 1 got 2","is_error":true}]}}
+    {"type":"assistant","isSidechain":true,"timestamp":"T6","message":{"role":"assistant","content":[{"type":"text","text":"subagent chatter"}]}}
+    {"type":"user","isMeta":true,"timestamp":"T7","message":{"role":"user","content":"<system-reminder>meta</system-reminder>"}}
+    {"type":"assistant","isSidechain":false,"timestamp":"T8","message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file_path":"/a/b.swift"}}]}}
+    {"type":"user","isSidechain":false,"timestamp":"T9","message":{"role":"user","content":[{"tool_use_id":"toolu_2","type":"tool_result","content":[{"type":"text","text":"line1"},{"type":"image","source":{}}]}]}}
+    {"type":"assistant","isSidechain":false,"timestamp":"T10","message":{"id":"m3","role":"assistant","content":[{"type":"text","text":"Fixed."}],"stop_reason":"end_turn"}}
+    {"type":"system","subtype":"turn_duration","durationMs":4200,"timestamp":"T11"}
+    {"type":"user","isSidechain":false,"timestamp":"T12","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"}}
+    {"type":"user","isSidechain":false,"timestamp":"T13","message":{"role":"user","content":"<bash-input>ls</bash-input>"}}
+    not json at all
+    {"type":"system","subtype":"compact_boundary","timestamp":"T14"}
+    """#
+
+    @Test func claudeFixtureReducesToChatEvents() {
+        let events = ChatTranscript.parse(Data(Self.claudeFixture.utf8), format: .claude)
+        #expect(events.map(\.kind) == [
+            .user, .assistant, .toolCall, .toolResult, .toolCall, .toolResult,
+            .assistant, .turnEnd, .notice, .user, .notice,
+        ])
+        #expect(events[0].text == "Fix the flaky test")
+        #expect(events[1].text == "Looking at it.")
+        #expect(events[2].toolName == "Bash")
+        #expect(events[2].text == "swift test --filter Flaky")
+        #expect(events[2].toolID == "toolu_1")
+        #expect(events[3].toolID == "toolu_1")
+        #expect(events[3].isError)
+        #expect(events[4].text == "/a/b.swift")
+        #expect(events[5].text == "line1\n[image]")
+        #expect(events[7].durationMs == 4200)
+        #expect(events[8].text == "/compact")
+        #expect(events[9].text == "! ls")
+        #expect(events[10].text == "Conversation compacted")
+    }
+
+    @Test func toolResultsAreClipped() {
+        let long = String(repeating: "x", count: ChatTranscript.maxToolResultChars + 50)
+        let line = #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":"\#(long)"}]}}"#
+        let events = ChatTranscript.parse(Data(line.utf8), format: .claude)
+        #expect(events.count == 1)
+        #expect(events[0].text.count == ChatTranscript.maxToolResultChars + 1) // + "…"
+    }
+
+    static let codexFixture = #"""
+    {"timestamp":"C0","type":"session_meta","payload":{"id":"abc"}}
+    {"timestamp":"C1","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>"}]}}
+    {"timestamp":"C2","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n<cwd>/x</cwd>"}]}}
+    {"timestamp":"C3","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"list files"}]}}
+    {"timestamp":"C3b","type":"event_msg","payload":{"type":"user_message","message":"list files"}}
+    {"timestamp":"C4","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"zzz"}}
+    {"timestamp":"C5","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg --files\",\"workdir\":\"/x\"}","call_id":"call_1"}}
+    {"timestamp":"C6","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Chunk ID: f9adb6\nWall time: 0.3 seconds\nProcess exited with code 0\nOutput:\na.swift\nb.swift"}}
+    {"timestamp":"C7","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_2","name":"apply_patch","input":"*** Begin Patch\n*** Add File: c.swift"}}
+    {"timestamp":"C8","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_2","output":"{\"output\":\"Success.\",\"metadata\":{}}"}}
+    {"timestamp":"C9","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Two files."}]}}
+    {"timestamp":"C10","type":"event_msg","payload":{"type":"task_complete","duration_ms":3761}}
+    """#
+
+    @Test func codexFixtureReducesToChatEvents() {
+        let events = ChatTranscript.parse(Data(Self.codexFixture.utf8), format: .codex)
+        #expect(events.map(\.kind) == [.user, .toolCall, .toolResult, .toolCall, .toolResult, .assistant, .turnEnd])
+        #expect(events[0].text == "list files")
+        #expect(events[1].toolName == "exec_command")
+        #expect(events[1].text == "rg --files")
+        #expect(events[2].toolID == "call_1")
+        #expect(events[2].text == "a.swift\nb.swift")
+        #expect(events[3].text == "*** Begin Patch")
+        #expect(events[4].text == "Success.")
+        #expect(events[6].durationMs == 3761)
+    }
+
+    @Test func readTailsByCursorAndHoldsBackPartialLine() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat-transcript-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("t.jsonl")
+        let first = #"{"type":"user","message":{"content":"one"}}"# + "\n"
+        let partial = #"{"type":"user","message":{"content":"tw"#
+        try Data((first + partial).utf8).write(to: file)
+
+        let page1 = try ChatTranscript.read(path: file.path, format: .claude, cursor: nil)
+        #expect(page1.events.map(\.text) == ["one"])
+        #expect(page1.cursor == first.utf8.count)
+        #expect(!page1.truncated)
+
+        // The writer finishes the line and appends another.
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((#"o"}}"# + "\n" + #"{"type":"user","message":{"content":"three"}}"# + "\n").utf8))
+        try handle.close()
+
+        let page2 = try ChatTranscript.read(path: file.path, format: .claude, cursor: page1.cursor)
+        #expect(page2.events.map(\.text) == ["two", "three"])
+
+        let page3 = try ChatTranscript.read(path: file.path, format: .claude, cursor: page2.cursor)
+        #expect(page3.events.isEmpty)
+        #expect(page3.cursor == page2.cursor)
+
+        // A cursor past EOF (file replaced) restarts from the top.
+        let page4 = try ChatTranscript.read(path: file.path, format: .claude, cursor: page2.cursor + 10_000)
+        #expect(page4.events.map(\.text) == ["one", "two", "three"])
+    }
+
+    @Test func toolInputSummaryFallsBackToCompactJSON() {
+        let s = ChatTranscript.toolInputSummary(name: "Custom", input: ["b": 1, "a": "x"])
+        #expect(s == #"{"a":"x","b":1}"#)
+    }
+}

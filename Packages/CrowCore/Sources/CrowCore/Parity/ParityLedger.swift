@@ -217,6 +217,13 @@ public enum ParityLedger {
         // Terminals
         .write("new-terminal", cli: "new-terminal"),
         .read("list-terminals", cli: "list-terminals"),
+        .read(
+            "get-session-transcript",
+            noCLI: """
+            SPIKE (chat view, feature/crow-chat-view-spike): polled by the web \
+            Chat view only. A CLI verb would need CLAUDE.md + reference docs for \
+            a surface that may not survive the spike.
+            """),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),
         .write("relaunch-agent", cli: "relaunch-agent"),
