@@ -25,7 +25,8 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
                 "session_id": .string(idStr),
                 "agent_kind": .string(ctx.kind.rawValue),
                 "terminal_id": ctx.terminalID.map { .string($0.uuidString) } ?? .null,
-                "driver_enabled": .bool(ChatDriverRegistry.enabled && ctx.kind == .claudeCode),
+                "driver_enabled": .bool(ChatDriverRegistry.enabled && ctx.kind == .claudeCode
+                    && ctx.sessionKind != .review),
                 "driver": driver.map(driverJSON) ?? .null,
             ]
             // A driven session's conversation is the driver's, not the TUI's.
@@ -67,6 +68,11 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
                 let ctx = try chatContext(capturedAppState, id)
                 guard ctx.kind == .claudeCode else {
                     throw RPCError.applicationError("Chat driver supports Claude Code only")
+                }
+                // `claude -p` skips the workspace-trust dialog, and a review
+                // clone's `.claude/` is the PR author's: never drive one headless.
+                guard ctx.sessionKind != .review else {
+                    throw RPCError.applicationError("Chat driver is not available for review sessions")
                 }
                 let driver = try ChatDriverRegistry.shared.start(
                     sessionID: id, cwd: ctx.cwd, appState: capturedAppState)
@@ -115,6 +121,7 @@ private struct ChatContext {
     var conversationID: String?
     var cwd: String
     var terminalID: UUID?
+    var sessionKind: SessionKind
 }
 
 @MainActor
@@ -125,7 +132,8 @@ private func chatContext(_ appState: AppState, _ id: UUID) throws -> ChatContext
     let terms = appState.terminals(for: id)
     let agentTerm = terms.first(where: { $0.isManaged }) ?? terms.first
     let cwd = agentTerm?.cwd ?? appState.primaryWorktree(for: id)?.worktreePath ?? ""
-    return ChatContext(kind: s.agentKind, conversationID: s.harnessConversationID, cwd: cwd, terminalID: agentTerm?.id)
+    return ChatContext(kind: s.agentKind, conversationID: s.harnessConversationID, cwd: cwd, terminalID: agentTerm?.id,
+                       sessionKind: s.kind)
 }
 
 private func driverJSON(_ d: ClaudeStreamDriver) -> JSONValue {
