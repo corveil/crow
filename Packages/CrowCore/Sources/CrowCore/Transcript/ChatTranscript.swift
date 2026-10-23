@@ -296,7 +296,7 @@ public enum ChatTranscript {
     // MARK: - Helpers
 
     /// One-line summary of a tool's input: the field a human would look at.
-    static func toolInputSummary(name: String, input: Any?) -> String {
+    public static func toolInputSummary(name: String, input: Any?) -> String {
         if let s = input as? String { return clip(firstLine(s), maxToolInputChars) }
         guard let dict = input as? [String: Any] else { return "" }
         let preferred = ["command", "cmd", "file_path", "path", "pattern", "url", "query",

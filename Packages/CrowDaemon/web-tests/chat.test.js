@@ -7,8 +7,10 @@ const { loadClientSource } = require('./load-client');
 const epilogue = `
 ;globalThis.__t = {
   parseRoute, routeToHash,
-  newChatState, applyChatPage, ensureChatDom,
+  newChatState, applyChatPage, ensureChatDom, sendChatMessage,
   set selectedId(v){ selectedId = v; },
+  set chatState(v){ chatState = v; },
+  set rpc(v){ rpc = v; },
 };
 `;
 
@@ -31,7 +33,7 @@ window.setTimeout = () => 0;
 window.requestAnimationFrame = () => 0;
 const realGet = window.document.getElementById.bind(window.document);
 window.document.getElementById = (id) => realGet(id)
-  || (['chat-view', 'chat-log', 'chat-status', 'chat-send', 'chat-input', 'chat-jump'].includes(id)
+  || (['chat-view', 'chat-log', 'chat-status', 'chat-driver', 'chat-send', 'chat-input', 'chat-jump'].includes(id)
     ? null : window.document.createElement('div'));
 
 const ctx = dom.getInternalVMContext();
@@ -113,5 +115,36 @@ T.applyChatPage(st2, { supported: false, reason: 'Chat view is not supported for
 check('unsupported shows the reason', doc.getElementById('chat-status').textContent.includes('cursor'));
 check('no terminal → composer disabled', doc.getElementById('chat-send').disabled === true);
 
-if (failed) { console.log(failed + ' failed'); process.exit(1); }
-console.log('all passed');
+console.log('headless driver');
+const calls = [];
+const RUNNING = { supported: true, reset: false, cursor: 1, terminal_id: 'TERM', driver_enabled: true,
+  driver: { running: true, conversation_id: 'c1', pending: [] }, events: [] };
+T.rpc = async (m, p) => { calls.push([m, p]); return m === 'get-session-transcript' ? RUNNING : {}; };
+const st3 = T.newChatState(SID);
+T.chatState = st3;
+T.applyChatPage(st3, { supported: true, reset: true, cursor: 1, path: '/d.jsonl', terminal_id: 'TERM',
+  driver_enabled: true, driver: null, events: [] });
+const startBtn = doc.querySelector('#chat-driver .chat-driver-btn');
+check('offers Start headless when enabled', startBtn && startBtn.textContent === 'Start headless');
+T.applyChatPage(st3, { supported: true, reset: false, cursor: 1, terminal_id: 'TERM', driver_enabled: true,
+  driver: { running: true, conversation_id: 'c1',
+    pending: [{ request_id: 'req-1', tool_name: 'Write', summary: '/w/a.txt' }] },
+  events: [] });
+const card = doc.querySelector('.chat-permission');
+check('permission card shows the tool', card && card.textContent.includes('Write') && card.textContent.includes('/w/a.txt'));
+check('status says waiting on approval', doc.getElementById('chat-status').textContent.includes('approval'));
+card.querySelector('.chat-driver-btn.primary').click();
+check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-permission'
+  && p.request_id === 'req-1' && p.allow === true && p.session_id === SID));
+(async () => {
+  calls.length = 0;
+  st3.driverBusy = false;
+  doc.getElementById('chat-input').value = 'hello';
+  await T.sendChatMessage();
+  await new Promise((r) => setImmediate(r));
+  const sends = calls.filter(([m]) => m === 'chat-driver-send' || m === 'send');
+  check('composer routes to the driver, not the TUI', sends.length === 1 && sends[0][0] === 'chat-driver-send'
+    && sends[0][1].text === 'hello');
+  if (failed) { console.log(failed + ' failed'); process.exit(1); }
+  console.log('all passed');
+})();

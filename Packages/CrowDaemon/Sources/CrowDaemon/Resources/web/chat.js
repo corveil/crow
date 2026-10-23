@@ -31,6 +31,10 @@ function newChatState(sessionId) {
     // tool_id → the <details> a later tool_result is appended into.
     toolNodes: new Map(),
     inflight: false,
+    // Phase 2: opt-in headless Claude driver (ClaudeStreamDriver.swift).
+    driverEnabled: false,
+    driver: null,
+    driverBusy: false,
   };
 }
 
@@ -210,6 +214,8 @@ function applyChatPage(st, res) {
   st.supported = res.supported !== false;
   st.reason = res.reason || null;
   st.terminalId = res.terminal_id || st.terminalId;
+  st.driverEnabled = !!res.driver_enabled;
+  st.driver = res.driver || null;
   if (res.reset) {
     if (log) log.innerHTML = '';
     st.toolNodes = new Map();
@@ -344,13 +350,22 @@ function renderChatStatus(stArg) {
   status.textContent = '';
   const send = document.getElementById('chat-send');
   const input = document.getElementById('chat-input');
-  const canSend = !!(st && st.terminalId) && !chatSending;
-  if (send) send.disabled = !canSend;
-  if (input) input.disabled = !(st && st.terminalId);
+  const hasTarget = !!(st && (st.terminalId || chatDriverRunning(st)));
+  if (send) send.disabled = !hasTarget || chatSending;
+  if (input) {
+    input.disabled = !hasTarget;
+    input.placeholder = st && chatDriverRunning(st) ? 'Message headless Claude…' : 'Message the agent…';
+  }
   if (!st) return;
+  renderChatDriver(st, status);
   if (!st.supported || (st.reason && st.cursor == null)) {
-    status.textContent = st.reason || 'Chat view is not available for this session.';
+    status.appendChild(el('span', null, st.reason || 'Chat view is not available for this session.'));
     status.classList.add('warn');
+    return;
+  }
+  if (st.driver && st.driver.pending && st.driver.pending.length) {
+    status.classList.add('busy');
+    status.appendChild(el('span', null, 'Waiting for your approval'));
     return;
   }
   // No structured "busy" signal reaches the browser yet, so infer it: anything
@@ -371,8 +386,12 @@ async function sendChatMessage() {
   chatSending = true;
   renderChatStatus();
   try {
-    // Trailing newline = Enter after the bracketed paste (TmuxInput.sendText).
-    await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n' });
+    if (chatDriverRunning(st)) {
+      await rpc('chat-driver-send', { session_id: st.sessionId, text });
+    } else {
+      // Trailing newline = Enter after the bracketed paste (TmuxInput.sendText).
+      await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n' });
+    }
     input.value = '';
     autosizeChatInput(input);
     const log = document.getElementById('chat-log');
@@ -384,5 +403,71 @@ async function sendChatMessage() {
   } finally {
     chatSending = false;
     renderChatStatus();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: headless driver controls. Rendered above the status line: a start
+// button when crowd has CROW_CHAT_DRIVER=1, then a banner + permission cards
+// while the driver runs. Approvals are the one thing the TUI path cannot offer
+// here — in tmux, a permission prompt is only answerable in the terminal.
+// ---------------------------------------------------------------------------
+function chatDriverRunning(st) {
+  return !!(st && st.driver && st.driver.running);
+}
+
+function renderChatDriver(st, status) {
+  let bar = document.getElementById('chat-driver');
+  if (!bar) {
+    bar = el('div', 'chat-driver');
+    bar.id = 'chat-driver';
+    if (status.parentNode) status.parentNode.insertBefore(bar, status);
+  }
+  bar.innerHTML = '';
+  bar.hidden = !(st.driverEnabled || st.driver);
+  if (bar.hidden) return;
+  if (!chatDriverRunning(st)) {
+    bar.appendChild(el('span', 'chat-driver-label', 'Experimental: run Claude headless (no TUI) for this session.'));
+    const start = el('button', 'chat-driver-btn', st.driverBusy ? 'Starting…' : 'Start headless');
+    start.type = 'button';
+    start.disabled = st.driverBusy;
+    start.onclick = () => chatDriverAction(st, 'chat-driver-start', {});
+    bar.appendChild(start);
+    return;
+  }
+  bar.appendChild(el('span', 'chat-driver-label', 'Headless Claude · new conversation'));
+  const stop = el('button', 'chat-driver-btn', 'Stop');
+  stop.type = 'button';
+  stop.onclick = () => chatDriverAction(st, 'chat-driver-stop', {});
+  bar.appendChild(stop);
+  for (const p of (st.driver.pending || [])) {
+    const card = el('div', 'chat-permission');
+    const what = el('div', 'chat-permission-what');
+    what.appendChild(el('span', 'chat-tool-name', p.tool_name));
+    what.appendChild(el('span', 'chat-tool-input', p.summary || ''));
+    card.appendChild(what);
+    const allow = el('button', 'chat-driver-btn primary', 'Allow');
+    allow.type = 'button';
+    allow.onclick = () => chatDriverAction(st, 'chat-driver-permission', { request_id: p.request_id, allow: true });
+    const deny = el('button', 'chat-driver-btn', 'Deny');
+    deny.type = 'button';
+    deny.onclick = () => chatDriverAction(st, 'chat-driver-permission', { request_id: p.request_id, allow: false });
+    card.appendChild(allow);
+    card.appendChild(deny);
+    bar.appendChild(card);
+  }
+}
+
+async function chatDriverAction(st, method, extra) {
+  if (st.driverBusy) return;
+  st.driverBusy = true;
+  renderChatStatus(st);
+  try {
+    await rpc(method, Object.assign({ session_id: st.sessionId }, extra));
+  } catch (e) {
+    alertModal('Chat driver: ' + ((e && e.message) || e));
+  } finally {
+    st.driverBusy = false;
+    refreshChat();
   }
 }

@@ -3,9 +3,12 @@ import CrowIPC
 import Foundation
 
 /// SPIKE (chat view): `get-session-transcript` — the session's agent transcript
-/// reduced to chat events (`ChatTranscript`), tailed by byte cursor.
+/// reduced to chat events (`ChatTranscript`), tailed by byte cursor — plus the
+/// opt-in Phase 2 `chat-driver-*` verbs (`ClaudeStreamDriver`).
 ///
-/// Read-only. The agent keeps running in tmux; input still goes through `send`.
+/// The transcript read is read-only: a tmux agent keeps running and input still
+/// goes through `send`. The driver verbs refuse unless crowd was started with
+/// `CROW_CHAT_DRIVER=1`.
 @MainActor
 func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handler] {
     let capturedAppState = appState
@@ -16,35 +19,30 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
             }
             let cursorParam = params["cursor"]?.intValue
             let clientPath = params["path"]?.stringValue
-            let resolved = try await MainActor.run { () -> (AgentKind, String?, String, UUID?) in
-                guard let s = capturedAppState.sessions.first(where: { $0.id == id }) else {
-                    throw RPCError.applicationError("Session not found")
-                }
-                let terms = capturedAppState.terminals(for: id)
-                let agentTerm = terms.first(where: { $0.isManaged }) ?? terms.first
-                let cwd = agentTerm?.cwd
-                    ?? capturedAppState.primaryWorktree(for: id)?.worktreePath
-                    ?? ""
-                return (s.agentKind, s.harnessConversationID, cwd, agentTerm?.id)
-            }
-            let (kind, conversationID, cwd, terminalID) = resolved
+            let ctx = try await MainActor.run { try chatContext(capturedAppState, id) }
+            let driver = await MainActor.run { ChatDriverRegistry.shared.driver(for: id) }
             var base: [String: JSONValue] = [
                 "session_id": .string(idStr),
-                "agent_kind": .string(kind.rawValue),
-                "terminal_id": terminalID.map { .string($0.uuidString) } ?? .null,
+                "agent_kind": .string(ctx.kind.rawValue),
+                "terminal_id": ctx.terminalID.map { .string($0.uuidString) } ?? .null,
+                "driver_enabled": .bool(ChatDriverRegistry.enabled && ctx.kind == .claudeCode),
+                "driver": driver.map(driverJSON) ?? .null,
             ]
+            // A driven session's conversation is the driver's, not the TUI's.
+            let conversationID = driver?.conversationID ?? ctx.conversationID
             // File I/O stays off the MainActor (#892).
             guard let source = HarnessTranscriptLocator.chatSource(
-                kind: kind, conversationID: conversationID, cwd: cwd) else {
-                base["supported"] = .bool(kind == .claudeCode || kind == .codex)
+                kind: ctx.kind, conversationID: conversationID, cwd: ctx.cwd) else {
+                let known = ctx.kind == .claudeCode || ctx.kind == .codex
+                base["supported"] = .bool(known)
                 base["events"] = .array([])
-                base["reason"] = .string(kind == .claudeCode || kind == .codex
+                base["reason"] = .string(known
                     ? "No transcript found yet for this session."
-                    : "Chat view is not supported for \(kind.rawValue) yet.")
+                    : "Chat view is not supported for \(ctx.kind.rawValue) yet.")
                 return base
             }
             // A different file than the client was tailing (`/clear`, a resume
-            // that forked the conversation): ignore its cursor and start over.
+            // that forked the conversation, a driver taking over): start over.
             let reset = clientPath != nil && clientPath != source.path
             let cursor = reset ? nil : cursorParam
             let page = try ChatTranscript.read(path: source.path, format: source.format, cursor: cursor)
@@ -57,8 +55,91 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
             base["events"] = .array(page.events.map(eventJSON))
             return base
         },
+
+        "chat-driver-start": { @Sendable params in
+            guard ChatDriverRegistry.enabled else {
+                throw RPCError.applicationError("Chat driver is off (start crowd with CROW_CHAT_DRIVER=1)")
+            }
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw RPCError.invalidParams("session_id required")
+            }
+            return try await MainActor.run {
+                let ctx = try chatContext(capturedAppState, id)
+                guard ctx.kind == .claudeCode else {
+                    throw RPCError.applicationError("Chat driver supports Claude Code only")
+                }
+                let driver = try ChatDriverRegistry.shared.start(
+                    sessionID: id, cwd: ctx.cwd, appState: capturedAppState)
+                return ["started": .bool(true), "log_path": .string(driver.logURL.path)]
+            }
+        },
+
+        "chat-driver-send": { @Sendable params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                  let text = params["text"]?.stringValue, !text.isEmpty else {
+                throw RPCError.invalidParams("session_id and text required")
+            }
+            guard let driver = await MainActor.run(body: { ChatDriverRegistry.shared.driver(for: id) }) else {
+                throw RPCError.applicationError("No chat driver running for this session")
+            }
+            try driver.sendUser(text)
+            return ["sent": .bool(true)]
+        },
+
+        "chat-driver-permission": { @Sendable params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                  let requestID = params["request_id"]?.stringValue,
+                  let allow = params["allow"]?.boolValue else {
+                throw RPCError.invalidParams("session_id, request_id and allow required")
+            }
+            guard let driver = await MainActor.run(body: { ChatDriverRegistry.shared.driver(for: id) }) else {
+                throw RPCError.applicationError("No chat driver running for this session")
+            }
+            try driver.respondPermission(requestID: requestID, allow: allow)
+            return ["ok": .bool(true)]
+        },
+
+        "chat-driver-stop": { @Sendable params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw RPCError.invalidParams("session_id required")
+            }
+            let stopped = await MainActor.run { ChatDriverRegistry.shared.stop(sessionID: id) }
+            return ["stopped": .bool(stopped)]
+        },
     ]
     return handlers
+}
+
+private struct ChatContext {
+    var kind: AgentKind
+    var conversationID: String?
+    var cwd: String
+    var terminalID: UUID?
+}
+
+@MainActor
+private func chatContext(_ appState: AppState, _ id: UUID) throws -> ChatContext {
+    guard let s = appState.sessions.first(where: { $0.id == id }) else {
+        throw RPCError.applicationError("Session not found")
+    }
+    let terms = appState.terminals(for: id)
+    let agentTerm = terms.first(where: { $0.isManaged }) ?? terms.first
+    let cwd = agentTerm?.cwd ?? appState.primaryWorktree(for: id)?.worktreePath ?? ""
+    return ChatContext(kind: s.agentKind, conversationID: s.harnessConversationID, cwd: cwd, terminalID: agentTerm?.id)
+}
+
+private func driverJSON(_ d: ClaudeStreamDriver) -> JSONValue {
+    .object([
+        "running": .bool(d.isRunning),
+        "conversation_id": d.conversationID.map { .string($0) } ?? .null,
+        "pending": .array(d.pendingPermissions.map { p in
+            .object([
+                "request_id": .string(p.requestID),
+                "tool_name": .string(p.toolName),
+                "summary": .string(p.summary),
+            ])
+        }),
+    ])
 }
 
 private func eventJSON(_ e: ChatEvent) -> JSONValue {
@@ -72,4 +153,64 @@ private func eventJSON(_ e: ChatEvent) -> JSONValue {
     if let v = e.timestamp { o["ts"] = .string(v) }
     if let v = e.durationMs { o["duration_ms"] = .int(v) }
     return .object(o)
+}
+
+/// SPIKE: one `ClaudeStreamDriver` per session, daemon-lifetime only (not
+/// persisted — a crowd restart drops the process; the conversation survives on
+/// disk and could be `--resume`d).
+@MainActor
+final class ChatDriverRegistry {
+    static let shared = ChatDriverRegistry()
+    nonisolated static var enabled: Bool {
+        ProcessInfo.processInfo.environment["CROW_CHAT_DRIVER"] == "1"
+    }
+
+    private var drivers: [UUID: ClaudeStreamDriver] = [:]
+
+    func driver(for sessionID: UUID) -> ClaudeStreamDriver? { drivers[sessionID] }
+
+    func start(sessionID: UUID, cwd: String, appState: AppState) throws -> ClaudeStreamDriver {
+        if let existing = drivers[sessionID], existing.isRunning { return existing }
+        let claude = AgentRegistry.shared.agent(for: .claudeCode)?.launchBinary() ?? "claude"
+        // A fresh conversation, deliberately: resuming the TUI's conversation
+        // while that TUI is still live would interleave two writers on one
+        // transcript.
+        let (exe, args) = ClaudeStreamDriver.defaultCommand(claudePath: claude, resumeID: nil)
+        let log = FileManager.default.temporaryDirectory
+            .appendingPathComponent("crow-chat-driver", isDirectory: true)
+            .appendingPathComponent("\(sessionID.uuidString).ndjson")
+        let driver = ClaudeStreamDriver(
+            sessionID: sessionID, cwd: cwd, logURL: log, executable: exe, arguments: args
+        ) { [weak appState] event in
+            Task { @MainActor in
+                guard let appState else { return }
+                ChatDriverRegistry.shared.apply(event, sessionID: sessionID, appState: appState)
+            }
+        }
+        try driver.start()
+        drivers[sessionID] = driver
+        return driver
+    }
+
+    @discardableResult
+    func stop(sessionID: UUID) -> Bool {
+        guard let d = drivers.removeValue(forKey: sessionID) else { return false }
+        d.stop()
+        return true
+    }
+
+    /// Driver events → the same `AgentActivityState` the hook path drives, so the
+    /// sidebar dot and notifications don't care which transport ran the turn.
+    func apply(_ event: ClaudeStreamDriver.Event, sessionID: UUID, appState: AppState) {
+        let state = appState.hookState(for: sessionID)
+        switch event {
+        case .turnStarted: state.activityState = .working
+        case .permissionRequested: state.activityState = .waiting
+        case .turnEnded: state.activityState = .done
+        case .exited:
+            drivers[sessionID] = nil
+            state.activityState = .idle
+        case .conversationStarted: break
+        }
+    }
 }

@@ -224,6 +224,34 @@ public enum ParityLedger {
             Chat view only. A CLI verb would need CLAUDE.md + reference docs for \
             a surface that may not survive the spike.
             """),
+        .write(
+            "chat-driver-start",
+            noCLI: """
+            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
+            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
+            supported surface; no CLI until the spike is kept.
+            """),
+        .write(
+            "chat-driver-send",
+            noCLI: """
+            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
+            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
+            supported surface; no CLI until the spike is kept.
+            """),
+        .write(
+            "chat-driver-permission",
+            noCLI: """
+            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
+            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
+            supported surface; no CLI until the spike is kept.
+            """),
+        .write(
+            "chat-driver-stop",
+            noCLI: """
+            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
+            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
+            supported surface; no CLI until the spike is kept.
+            """),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),
         .write("relaunch-agent", cli: "relaunch-agent"),

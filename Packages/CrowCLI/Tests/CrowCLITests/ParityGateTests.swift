@@ -339,6 +339,11 @@ struct ParityGateTests {
     /// `.noCLI(…)` row lost among 85.
     static let knownWriteExemptions: Set<String> = [
         "batch-start-review",
+        // SPIKE (chat view Phase 2) — web-only, opt-in headless driver.
+        "chat-driver-permission",
+        "chat-driver-send",
+        "chat-driver-start",
+        "chat-driver-stop",
         "run-job",
         "run-setup",
         "set-config",
