@@ -1,13 +1,15 @@
 const { JSDOM } = require('jsdom');
 const vm = require('vm');
-const { loadClientSource } = require('./load-client');
+const fs = require('fs');
+const { loadClientSource, WEB } = require('./load-client');
 
 // SPIKE (chat view): #/sessions/:id/chat routing, and the transcript renderer
 // that turns `get-session-transcript` pages into bubbles + collapsed tool rows.
 const epilogue = `
 ;globalThis.__t = {
   parseRoute, routeToHash,
-  newChatState, applyChatPage, ensureChatDom, sendChatMessage,
+  newChatState, applyChatPage, ensureChatDom, sendChatMessage, buildChatMarkdown,
+  set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
   set rpc(v){ rpc = v; },
@@ -37,6 +39,9 @@ window.document.getElementById = (id) => realGet(id)
     ? null : window.document.createElement('div'));
 
 const ctx = dom.getInternalVMContext();
+// chat.js loads markdown-it lazily via a <script> tag, which jsdom's
+// outside-only mode won't execute — evaluate the vendored file directly.
+vm.runInContext(fs.readFileSync(WEB + 'markdown-it.min.js', 'utf8'), ctx, { filename: 'markdown-it.min.js' });
 try { vm.runInContext(loadClientSource() + epilogue, ctx, { filename: 'app.js' }); }
 catch (e) { console.log('[load warn]', e.message); }
 const T = ctx.__t;
@@ -59,6 +64,8 @@ check('chat wins over a terminal id', T.routeToHash({ view: 'session', sessionId
 check('plain session route unchanged', T.routeToHash({ view: 'session', sessionId: SID }) === '#/sessions/' + SID);
 
 console.log('renderer');
+T.chatMd = T.buildChatMarkdown();
+check('markdown-it loaded', !!window.markdownit);
 T.selectedId = SID;
 T.ensureChatDom();
 const doc = window.document;
@@ -78,7 +85,7 @@ check('no HTML injection', log.querySelector('img') === null
   && log.querySelector('.chat-user').textContent.includes('<img'));
 check('inline code + bold', log.querySelector('.chat-assistant code').textContent === 'swift test'
   && log.querySelector('.chat-assistant strong').textContent === 'tests');
-check('fenced block drops the language tag', log.querySelector('.chat-code').textContent === 'swift test');
+check('fenced block renders as code', log.querySelector('.chat-assistant pre code').textContent === 'swift test\n');
 const tool = log.querySelector('details.chat-tool');
 check('tool call is collapsed', tool && !tool.open && tool.querySelector('.chat-tool-name').textContent === 'Bash');
 check('cursor + terminal captured', st.cursor === 100 && st.terminalId === 'TERM' && st.path === '/p.jsonl');
@@ -114,6 +121,28 @@ const st2 = T.newChatState(SID);
 T.applyChatPage(st2, { supported: false, reason: 'Chat view is not supported for cursor yet.', events: [] });
 check('unsupported shows the reason', doc.getElementById('chat-status').textContent.includes('cursor'));
 check('no terminal → composer disabled', doc.getElementById('chat-send').disabled === true);
+
+console.log('markdown + links');
+T.applyChatPage(st, { supported: true, reset: true, cursor: 9, path: '/m.jsonl', events: [
+  { kind: 'assistant', text: '## Plan\n\n- one\n- two\n\nSee [the PR](https://github.com/corveil/crow/pull/1) or https://example.com/x.\n\n[bad](javascript:alert(1)) <script>alert(1)</script> ![pic](https://example.com/p.png)' },
+  { kind: 'tool_call', tool_name: 'Bash', tool_id: 't9', text: 'gh pr create' },
+  { kind: 'tool_result', tool_id: 't9', text: 'Created https://github.com/corveil/crow/pull/2 ok' },
+  { kind: 'notice', text: 'Docs: https://example.com/d' },
+] });
+const mdB = log.querySelector('.chat-assistant');
+check('heading + list render', mdB.querySelector('h2') && mdB.querySelectorAll('li').length === 2);
+const links = [...mdB.querySelectorAll('a')];
+check('markdown link is clickable in a new tab', links.some((a) => a.href === 'https://github.com/corveil/crow/pull/1'
+  && a.target === '_blank' && /noopener/.test(a.rel)));
+check('bare URL is linkified', links.some((a) => a.href === 'https://example.com/x'));
+check('javascript: link is not a link', !links.some((a) => /^javascript:/i.test(a.getAttribute('href') || ''))
+  && mdB.textContent.includes('[bad]'));
+check('raw HTML stays text', !mdB.querySelector('script') && mdB.textContent.includes('<script>'));
+check('image becomes a link, not an <img>', !mdB.querySelector('img') && links.some((a) => a.href === 'https://example.com/p.png'));
+const resA = log.querySelector('.chat-tool-result a');
+check('URL in tool output is clickable', resA && resA.href === 'https://github.com/corveil/crow/pull/2'
+  && log.querySelector('.chat-tool-result').textContent === 'Created https://github.com/corveil/crow/pull/2 ok');
+check('URL in a notice is clickable', log.querySelector('.chat-notice a').href === 'https://example.com/d');
 
 console.log('headless driver');
 const calls = [];

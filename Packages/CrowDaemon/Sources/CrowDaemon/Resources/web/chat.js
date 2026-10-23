@@ -188,6 +188,70 @@ function chatNearBottom(log) {
   return log.scrollHeight - log.scrollTop - log.clientHeight < 80;
 }
 
+// ---------------------------------------------------------------------------
+// Markdown (markdown-it 14.1.0, vendored at /markdown-it.min.js). Loaded on the
+// first Chat open only — the terminal view never fetches it. `html: false`
+// escapes any raw HTML in the source (transcripts carry text other people
+// wrote: tool output, PR bodies in review sessions), and links are limited to
+// http(s)/mailto, matching the header's link chips.
+// ---------------------------------------------------------------------------
+let chatMd = null;
+let chatMdReady = null;
+
+function loadChatMarkdown() {
+  if (chatMdReady) return chatMdReady;
+  chatMdReady = new Promise((resolve) => {
+    if (typeof window.markdownit === 'function') { resolve(); return; }
+    const tag = document.createElement('script');
+    tag.src = '/markdown-it.min.js';
+    tag.onload = () => resolve();
+    tag.onerror = () => resolve(); // fall back to the minimal renderer
+    document.head.appendChild(tag);
+  }).then(() => { chatMd = buildChatMarkdown(); });
+  return chatMdReady;
+}
+
+function buildChatMarkdown() {
+  if (typeof window.markdownit !== 'function') return null;
+  const md = window.markdownit({ html: false, linkify: true, breaks: true });
+  md.validateLink = (url) => /^(https?:|mailto:)/i.test(String(url).trim());
+  const linkOpen = md.renderer.rules.link_open
+    || ((tokens, idx, opts, env, self) => self.renderToken(tokens, idx, opts));
+  md.renderer.rules.link_open = (tokens, idx, opts, env, self) => {
+    tokens[idx].attrSet('target', '_blank');
+    tokens[idx].attrSet('rel', 'noopener noreferrer');
+    return linkOpen(tokens, idx, opts, env, self);
+  };
+  // CSP (img-src 'self') blocks remote images anyway; show them as links.
+  md.renderer.rules.image = (tokens, idx) => {
+    const t = tokens[idx];
+    const src = t.attrGet('src') || '';
+    const alt = md.utils.escapeHtml(t.content || src);
+    if (!md.validateLink(src)) return alt;
+    return '<a href="' + md.utils.escapeHtml(src) + '" target="_blank" rel="noopener noreferrer">' + alt + '</a>';
+  };
+  return md;
+}
+
+// Plain text with bare URLs made clickable — for tool output and notices,
+// which are not markdown.
+function appendLinkified(parent, text) {
+  const matches = chatMd && chatMd.linkify.test(text) ? (chatMd.linkify.match(text) || []) : [];
+  let last = 0;
+  for (const m of matches) {
+    if (!/^(https?:|mailto:)/i.test(m.url)) continue;
+    if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const a = el('a', null, m.text);
+    a.href = m.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    parent.appendChild(a);
+    last = m.lastIndex;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  return parent;
+}
+
 async function refreshChat() {
   const st = chatState;
   if (!st || st.inflight) return;
@@ -197,6 +261,7 @@ async function refreshChat() {
     if (st.cursor != null) params.cursor = st.cursor;
     if (st.path) params.path = st.path;
     const res = await rpc('get-session-transcript', params);
+    await loadChatMarkdown();
     if (chatState !== st) return; // session switched mid-flight
     applyChatPage(st, res || {});
   } catch (e) {
@@ -262,7 +327,7 @@ function appendChatEvent(st, log, ev) {
     }
     case 'tool_result': {
       const host = ev.tool_id && st.toolNodes.get(ev.tool_id);
-      const pre = el('pre', 'chat-tool-result' + (ev.is_error ? ' error' : ''), ev.text || '(no output)');
+      const pre = appendLinkified(el('pre', 'chat-tool-result' + (ev.is_error ? ' error' : '')), ev.text || '(no output)');
       if (host) {
         host.appendChild(pre);
         if (ev.is_error) host.classList.add('error');
@@ -286,7 +351,7 @@ function appendChatEvent(st, log, ev) {
         ev.duration_ms ? ('Done · ' + formatChatDuration(ev.duration_ms)) : 'Done'));
       break;
     case 'notice':
-      log.appendChild(el('div', 'chat-notice', ev.text || ''));
+      log.appendChild(appendLinkified(el('div', 'chat-notice'), ev.text || ''));
       break;
     default:
       return;
@@ -306,10 +371,19 @@ function chatBubble(role, text) {
   return b;
 }
 
-// Deliberately tiny markdown: fenced code blocks, inline `code`, **bold**.
-// Builds DOM nodes (never innerHTML) — transcripts carry attacker-reachable
-// text (tool output, PR bodies in review sessions).
 function renderChatMarkdown(root, text) {
+  if (chatMd) {
+    root.classList.add('md');
+    // Safe as innerHTML: html:false escapes source HTML, validateLink gates hrefs.
+    root.innerHTML = chatMd.render(text);
+    return;
+  }
+  renderChatMarkdownFallback(root, text);
+}
+
+// Fallback when markdown-it failed to load: fenced code, inline `code`,
+// **bold** — built as DOM nodes, never innerHTML.
+function renderChatMarkdownFallback(root, text) {
   const parts = text.split(/```/);
   parts.forEach((part, i) => {
     if (i % 2 === 1) {
