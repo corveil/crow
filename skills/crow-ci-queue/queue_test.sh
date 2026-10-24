@@ -264,6 +264,16 @@ check "an added PR is queued" "true" "$(pr 40 .added)"
 check "a held PR is not ready" "held by the operator" "$(pr 12 '.reasons | join(",")')"
 check "next skips the held PR" "16" "$(r .next)"
 check "--repo narrows status" "0" "$(jq -r '.ignored | length' <<< "$st")"
+# An added PR without crow:merge is not queued: it would go green and sit,
+# blocking the queue. It is reported as added, outside the queue.
+mkpr 40 "{\"labels\": [\"ci:full\"], \"created\": \"2026-10-23T10:59:00Z\", \"timeline\": [$(on 2026-10-23T10:59:30Z)]}"
+st=$(q status --repo o/r)
+check "an added PR without crow:merge is not queued" "16 12 15 17" "$(r '[.queue[].number] | map(tostring) | join(" ")')"
+check "it is in manual_merge, marked added" "40 true" "$(r '.manual_merge[] | select(.number == 40) | "\(.number) \(.added)"')"
+check "and is never stripped" "[]" "$(r '.to_strip | map(select(. == 40)) | tostring')"
+out=$(q advance --repo o/r --pr 40); rc=$?
+check "advance --pr on it exits 2" "2" "$rc"
+contains "and says it needs crow:merge" "$out" "#40 has no crow:merge"
 echo '{"repo": "o/r", "hold": ["twelve"]}' > "$TMP/queues/o-r.json"
 out=$(q status); rc=$?
 check "a malformed queue file exits 2" "2" "$rc"

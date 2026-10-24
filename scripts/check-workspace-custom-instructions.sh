@@ -336,6 +336,7 @@ for f in skills/crow-ci-queue/SKILL.md Resources/crow-ci-queue-SKILL.md.template
         '**A failed holder keeps its label**' \
         '**Only Crow session PRs are touched,** and only a session' \
         '**PRs without `crow:merge` stay outside the queue.**' \
+        'An `add` PR must carry `crow:merge`, like every queued PR' \
         '**The queue never merges.**' \
         '**Decision (CROW-1365): strip it again and report it.**' \
         'normalize --repo {repo} --keep {holder}' \

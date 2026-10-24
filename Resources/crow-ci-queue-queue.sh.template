@@ -18,8 +18,8 @@
 #   10 HEARTBEAT — nothing needs a decision yet; re-arm
 #   2  usage error
 #
-# The queue is every open PR linked (type pr) from an active or inReview Crow
-# work session, plus any a queue file adds, in repos that follow the CI Gate
+# The queue: open PRs carrying crow:merge that a live work session links from
+# its own branch, or that a queue file adds, in repos with the CI Gate
 # convention (ADR 0082, CIGateConvention.swift). Needs jq 1.6+. Reads GitHub
 # via `gh` and Crow via `crow`; override with GH_BIN / CROW_BIN (tests do).
 
@@ -402,7 +402,7 @@ def build($repo; $entries; $cfg; $labeled):
       queue: $queue,
       to_strip: [$queue[] | select(.full_label) | .number],
       held: [$prs[] | select(.held) | .number],
-      manual_merge: [$manual[] | {number, title, url, full_label, run_state: (.run.state // null), reasons, session}],
+      manual_merge: [$manual[] | {number, title, url, full_label, run_state: (.run.state // null), reasons, session, added}],
       done: [$prs[] | select(.state != "OPEN") | {number, state}],
       # Open PRs with ci:full that no live session (or queue file) owns:
       # Dependabot, teammates. Reported, never touched. null = unreadable.

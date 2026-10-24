@@ -93,7 +93,7 @@ Add `--repo owner/name` when the operator named one. `status` is read-only. It r
   - `queue[]`: every other open queued PR, in order. The queue file's `order` comes first, then oldest first.
   - `next`: the first ready PR in `queue`, or `null`.
   - `to_strip`: the queued PRs other than the holder that carry `ci:full`.
-  - `manual_merge`: open session PRs without `crow:merge`, each with `full_label` and `run_state`. Never stripped or labeled.
+  - `manual_merge`: open session PRs without `crow:merge`, each with `full_label`, `run_state`, and `added` (true when the queue file's `add` named it). Never stripped or labeled.
   - `held`, `done` (merged or closed), `foreign_labeled` (PRs with `ci:full` that no live session owns), and `unreadable`.
 - `ignored[]`: PR links that aren't queued, with the reason. Examples: a repo without the convention, a non-GitHub URL, a linked PR whose head branch isn't its session's branch.
 
@@ -311,11 +311,11 @@ Optional, one per repo, at `{devRoot}/.claude/ci-queues/{owner}-{name}.json`. Wr
 
 | Field | Effect |
 |---|---|
-| `add` | Queue these PRs even though no live session links them (the operator's "add #N"). They're stripped and labeled like session PRs. |
+| `add` | Queue these PRs even though no live session links them (the operator's "add #N"). An `add` PR must carry `crow:merge`, like every queued PR: then it's stripped and labeled like a session PR. Without it, the PR shows up under `manual_merge` with `added: true` and is left alone. Tell the operator it isn't queued yet. `crow:merge` is the PR author's merge intent, so add it only when the operator says to. |
 | `order` | These go first, in this order; everything else follows oldest first ("move #N first"). |
-| `hold` | Never labeled by `advance`, and stripped by `normalize` if it carries `ci:full` ("hold #N", "skip #N"; "release #N" removes it). |
+| `hold` | Never labeled by `advance`, and a held queued PR is stripped by `normalize` if it carries `ci:full` ("hold #N", "skip #N"; "release #N" removes it). A held PR without `crow:merge` is in `manual_merge` and left alone anyway. |
 
-A malformed queue file makes every subcommand exit `2` and name the file. That's on purpose: a queue file that's silently ignored would reorder or release PRs the operator held. Changes take effect at the next `normalize` / `advance`, so after editing, run **the loop** if there's no holder. A watcher already armed picks up `add` for contention on its next poll.
+A malformed queue file makes every subcommand exit `2` and name the file. That's on purpose: a queue file that's silently ignored would reorder or release PRs the operator held. Changes take effect at the next `normalize` / `advance`, so after editing, run **the loop** if there's no holder. A watcher already armed picks up an `add` PR that carries `crow:merge` for contention on its next poll.
 
 ## Stopping the queue
 
@@ -335,7 +335,7 @@ These come from the reference run that this skill packages.
 
 - **False failure right after labeling.** The unlabeled run on the same head commit fails `CI Gate` closed, often seconds before the label. Only suites created at or after the latest `ci:full` label event count. A lone `CI Gate` red with every job skipped is never read as a failure.
 - **Races with auto-rebase.** The head is re-read on every poll and never cached. `update-branch` saying "already up-to-date" isn't trusted: a fresh head and a fresh compare decide.
-- **Contention scope.** Only queued PRs count: a session's own PR with `crow:merge`, plus `add`. Other PRs with `ci:full` are reported.
+- **Contention scope.** Only queued PRs count: a session's own PR with `crow:merge`, plus an `add` PR with `crow:merge`. Other PRs with `ci:full` are reported.
 - **Approval after the update** is re-checked before labeling.
 - **Timing is stateless.** Green-for, failed-for, and label age are measured from GitHub's own timestamps. A re-armed watcher picks up where the last one stopped.
 - **Fail closed.** If Crow's session list or a queued PR can't be read, `normalize` and `advance` change nothing, and `watch` never invents an event. The watch line says what went unchecked.
