@@ -84,6 +84,7 @@ for skill in \
     crow-create-ticket \
     crow-cascade-epic \
     crow-triage \
+    crow-ci-queue \
     crow-show-image; do
     require_frontmatter "skills/${skill}/SKILL.md" "$skill"
     require_frontmatter "Resources/${skill}-SKILL.md.template" "$skill"
@@ -301,6 +302,47 @@ for f in skills/crow-triage/page.html Resources/crow-triage-page.html.template; 
 done
 require settings.json 'Bash(bash .claude/skills/crow-triage/triage.sh *)'
 for f in skills/crow-triage/SKILL.md Resources/crow-triage-SKILL.md.template; do
+    if [ -f "$f" ] && grep -Fq '\|' "$f"; then
+        echo "DRIFT: $f has a table-escaped pipe (\\|) — move that command into a fenced block" >&2
+        grep -Fn '\|' "$f" | head -5 >&2
+        fail=1
+    fi
+done
+
+# CROW-1365: /crow-ci-queue ships a skill + helper script. Both halves of each
+# must stay byte-identical, and the skill must keep the policy it exists to
+# encode: one holder, update before label, a failed holder keeps its label,
+# the strip-and-report answer to the approver re-adding ci:full, foreign PRs
+# untouched, no merging, and a background watcher instead of polling.
+for pair in \
+    "skills/crow-ci-queue/SKILL.md:Resources/crow-ci-queue-SKILL.md.template" \
+    "skills/crow-ci-queue/queue.sh:Resources/crow-ci-queue-queue.sh.template"; do
+    left="${pair%%:*}"
+    right="${pair#*:}"
+    if [ ! -f "$right" ]; then
+        echo "MISSING FILE: $right" >&2
+        fail=1
+    elif [ -f "$left" ] && ! diff -q "$left" "$right" >/dev/null; then
+        echo "DRIFT: $left and $right differ — an edit must land in both halves" >&2
+        diff -u "$right" "$left" | head -40 >&2 || true
+        fail=1
+    fi
+done
+# shellcheck disable=SC2016  # backticks in the needles are literal, not command substitution
+for f in skills/crow-ci-queue/SKILL.md Resources/crow-ci-queue-SKILL.md.template; do
+    require "$f" \
+        '**One holder per repo.**' \
+        '**Update before label.**' \
+        '**A failed holder keeps its label**' \
+        '**Only Crow session PRs are touched.**' \
+        '**The queue never merges.**' \
+        '**Decision (CROW-1365): strip it again and report it.**' \
+        'normalize --repo {repo} --keep {holder}' \
+        'watch --repo {repo} --pr {holder} --ack-failure {sha}' \
+        '`run_in_background: true`'
+done
+require settings.json 'Bash(bash .claude/skills/crow-ci-queue/queue.sh *)'
+for f in skills/crow-ci-queue/SKILL.md Resources/crow-ci-queue-SKILL.md.template; do
     if [ -f "$f" ] && grep -Fq '\|' "$f"; then
         echo "DRIFT: $f has a table-escaped pipe (\\|) — move that command into a fenced block" >&2
         grep -Fn '\|' "$f" | head -5 >&2
