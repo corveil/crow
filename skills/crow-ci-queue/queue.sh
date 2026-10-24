@@ -127,7 +127,7 @@ PR_QUERY='query($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       number url title state isDraft createdAt mergedAt
       author { login }
-      baseRefName headRefOid reviewDecision mergeable mergeStateStatus
+      baseRefName headRefName headRefOid reviewDecision mergeable mergeStateStatus
       labels(first: 50) { nodes { name } }
       timelineItems(last: 50, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
         nodes {
@@ -158,6 +158,12 @@ def bad: ["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIR
 # check named exactly "CI Gate" or carries ci:full. No repo names.
 def convention($entries): any($entries[]; .facts != null and (.facts.has_gate or .facts.full_label));
 def convention_repos: [.[] | select(.kind == "pr")] | group_by(.repo) | map(select(convention(.)) | .[0].repo);
+# A PR linked from a session belongs to it only when its head branch is the
+# session branch, so a PR of a teammate that a coder linked is left alone.
+# Unknown on either side (an older crowd, an unreadable PR) counts as own:
+# an unreadable PR must still block normalize and advance.
+def own: .added or .session == null or (.session.branch // null) == null or .facts == null
+         or .facts.head_ref == .session.branch;
 '
 
 # Raw GraphQL PR → the facts everything else reads.
@@ -210,7 +216,7 @@ FACTS_JQ='
 | {
     number: $p.number, url: $p.url, title: $p.title, state: $p.state,
     draft: ($p.isDraft // false), created_at: $p.createdAt, merged_at: ($p.mergedAt // null),
-    author: ($p.author.login // null), base: $p.baseRefName, head: $p.headRefOid,
+    author: ($p.author.login // null), base: $p.baseRefName, head: $p.headRefOid, head_ref: $p.headRefName,
     review: $p.reviewDecision, mergeable: $p.mergeable, merge_state: $p.mergeStateStatus,
     labels: $labels,
     full_label: $full,
@@ -220,6 +226,8 @@ FACTS_JQ='
     unlabeled_at: ($off.createdAt // null), unlabeled_by: ($off.actor.login // null),
     has_gate: $has_gate,
     head_runs: ($suites | length),
+    head_workflows: ([$suites[].workflowRun.workflow.name] | unique),
+    gated_workflows: $gated,
     run: $run,
     reasons: [
       (if $p.state != "OPEN" then ($p.state | ascii_downcase) else empty end),
@@ -251,9 +259,11 @@ fetch_pr() { # fetch_pr <owner/name> <number> → facts (exit 0), or {"error": �
 
 labeled_open() { # labeled_open <owner/name> → JSON array of the open PRs carrying ci:full, or fail
   local out
-  out=$("$GH_BIN" pr list -R "$1" --state open --label "ci:full" --limit 100 --json number,title,url,author 2>/dev/null) || return 1
+  out=$("$GH_BIN" pr list -R "$1" --state open --label "ci:full" --limit 100 \
+    --json number,title,url,author,headRefName,labels 2>/dev/null) || return 1
   jq_true 'type == "array"' <<< "$out" || return 1
-  jq -c 'map({number, title, url, author: (.author.login // null)})' <<< "$out"
+  jq -c 'map({number, title, url, author: (.author.login // null), head_ref: (.headRefName // null),
+              merge_label: any(.labels[]?; (.name // "" | ascii_downcase) == "crow:merge")})' <<< "$out"
 }
 
 behind_by() { # behind_by <owner/name> <base> <sha> → commits the head is behind its base, or fail
@@ -305,13 +315,13 @@ load_cfgs() {
 session_pr_lines() {
   local sid
   jq -c '.[] | select(.kind == "work" and (.status == "active" or .status == "inReview") and .links != null)
-         | {id, name, status} as $s | .links[]? | select(.type == "pr") | {url, session: $s}' <<< "$SESSIONS"
+         | {id, name, status, branch} as $s | .links[]? | select(.type == "pr") | {url, session: $s}' <<< "$SESSIONS"
   # A crowd that doesn't inline `links` in list-sessions: ask per session.
   while IFS= read -r sid; do
     [[ -n "$sid" ]] || continue
     # shellcheck disable=SC2016  # $s / $id are jq variables
     "$CROW_BIN" list-links --session "$sid" 2>/dev/null \
-      | jq -c --argjson s "$(jq -c --arg id "$sid" '.[] | select(.id == $id) | {id, name, status}' <<< "$SESSIONS")" \
+      | jq -c --argjson s "$(jq -c --arg id "$sid" '.[] | select(.id == $id) | {id, name, status, branch}' <<< "$SESSIONS")" \
           '.links[]? | select(.type == "pr") | {url, session: $s}' 2>/dev/null || true
   done < <(jq -r '.[] | select(.kind == "work" and (.status == "active" or .status == "inReview") and .links == null) | .id' <<< "$SESSIONS")
 }
@@ -330,16 +340,25 @@ tracked_prs() {
            else {repo: ("\($m.o)/\($m.n)" | ascii_downcase), number: ($m.num | tonumber)} end)'
 }
 
-queued_numbers() { # queued_numbers <owner/name> → JSON array of the PR numbers queued in that repo
+# The PRs tracked in one repo, without reading GitHub: [{number, branch, added}],
+# where branch is the linking session's branch (null when unknown).
+queued_prs() { # queued_prs <owner/name>
   load_sessions || return 1
   load_cfgs || return 1
   # shellcheck disable=SC2016
-  tracked_prs | jq -c -s --arg r "$1" '[.[] | select(.repo == $r) | .number] | unique'
+  tracked_prs | jq -c -s --arg r "$1" \
+    '[.[] | select(.repo == $r) | {number, branch: (.session.branch // null), added}] | unique_by(.number)'
 }
 
 # ─── status ──────────────────────────────────────────────────────────────────
 
 # Entries (one per tracked PR, with its facts) → {status, repos, ignored}.
+#
+# Only PRs that carry crow:merge are queued: they merge on their own once
+# green, so the queue can advance past them. One without it is merged by hand
+# (a human-gate cascade, an operator's call). It goes in manual_merge and is
+# never stripped or labeled, or the queue would cancel a suite it can never
+# restart.
 #
 # Holder: the open, ready PR carrying ci:full whose suite is furthest along —
 # passed (and not behind, so it is merging) > running / pending > failed (the
@@ -369,7 +388,8 @@ def build($repo; $entries; $cfg; $labeled):
      | (.number as $n | any($hold[]; . == $n)) as $held
      | .held = $held
      | if $held then .ready = false | .reasons += ["held by the operator"] else . end] as $prs
-  | [$prs[] | select(.state == "OPEN")] as $open
+  | [$prs[] | select(.state == "OPEN" and .merge_label)] as $open
+  | [$prs[] | select(.state == "OPEN" and (.merge_label | not))] as $manual
   | ([$open[] | select(.full_label and .ready)] | sort_by([rank, (.labeled_at // "")]) | .[0]) as $holder
   | ($holder.number // null) as $hn
   | ([$open[] | select(.number != $hn) | . + {pos: (.number as $n | ($order | index($n)) // 1000000)}]
@@ -382,6 +402,7 @@ def build($repo; $entries; $cfg; $labeled):
       queue: $queue,
       to_strip: [$queue[] | select(.full_label) | .number],
       held: [$prs[] | select(.held) | .number],
+      manual_merge: [$manual[] | {number, title, url, full_label, run_state: (.run.state // null), reasons, session}],
       done: [$prs[] | select(.state != "OPEN") | {number, state}],
       # Open PRs with ci:full that no live session (or queue file) owns:
       # Dependabot, teammates. Reported, never touched. null = unreadable.
@@ -391,12 +412,14 @@ def build($repo; $entries; $cfg; $labeled):
     };
 
 . as $all
-| ([$all[] | select(.kind == "pr")] | group_by(.repo)) as $groups
+| [$all[] | select(.kind == "pr" and (own | not))] as $not_own
+| ([$all[] | select(.kind == "pr" and own)] | group_by(.repo)) as $groups
 | {
     status: "ok",
     repos: [$groups[] | select(convention(.)) | .[0].repo as $r
             | build($r; .; ([$cfgs[] | select(.repo == $r)] | .[0] // {}); $labeled[$r])],
     ignored: ([$all[] | select(.kind == "ignored") | {url, reason}]
+              + [$not_own[] | {url, reason: "linked from session \(.session.name), but its head branch \(.facts.head_ref) is not the session branch \(.session.branch), so it is not a PR of that session"}]
               + [$groups[] | select(convention(.) | not) | .[]
                  | {url, reason: (.error // "\(.repo) does not follow the CI Gate convention: none of its PRs has a CI Gate check or ci:full")}])
   }
@@ -471,6 +494,16 @@ require_readable() { # require_readable <step> <repo-object>
   [[ -z "$bad" ]] || die "$1" "could not read $bad in $REPO, so which PR holds ci:full is unknown — retry: $(jq -r '.unreadable[0].error' <<< "$2")"
 }
 
+require_queued() { # require_queued <step> <pr> <repo-object>
+  # shellcheck disable=SC2016
+  jq_true --argjson n "$2" '[.holder // empty, .queue[]] | any(.[]; .number == $n)' <<< "$3" && return 0
+  # shellcheck disable=SC2016
+  if jq_true --argjson n "$2" 'any(.manual_merge[]; .number == $n)' <<< "$3"; then
+    die "$1" "#$2 has no crow:merge, so it merges by hand and stays outside the queue — add crow:merge to queue it"
+  fi
+  die "$1" "#$2 is not an open PR in the $REPO queue — link it to a session, or add it to the queue file"
+}
+
 cmd_status() {
   collect "$REPO" || die "status" "$LOAD_ERROR"
   printf '%s\n' "$STATUS"
@@ -485,15 +518,14 @@ cmd_normalize() {
   load_repo_object; rs="$RS"
   if [[ "$rs" == "null" ]]; then
     jq -cn --arg r "$REPO" --argjson d "$DRY_RUN" \
-      '{status: "ok", repo: $r, dry_run: ($d == 1), holder: null, stripped: [], strip_failed: [], next: null, queue: []}'
+      '{status: "ok", repo: $r, dry_run: ($d == 1), holder: null, stripped: [], strip_failed: [], next: null, queue: [], manual_merge: []}'
     return
   fi
   require_readable "normalize" "$rs"
 
   # shellcheck disable=SC2016
   if [[ -n "$KEEP" ]]; then
-    jq_true --argjson k "$KEEP" '[.holder // empty, .queue[]] | any(.[]; .number == $k)' <<< "$rs" \
-      || die "normalize" "#$KEEP is not an open PR in the $REPO queue"
+    require_queued "normalize" "$KEEP" "$rs"
     holder=$(jq -c --argjson k "$KEEP" \
       '[.holder // empty, .queue[]] | map(select(.number == $k)) | .[0] | {number, run_state: .run.state, reason: "kept with --keep"}' <<< "$rs")
     strip=$(jq -r --argjson k "$KEEP" '[.holder // empty, .queue[]] | .[] | select(.full_label and .number != $k) | .number' <<< "$rs")
@@ -521,7 +553,7 @@ cmd_normalize() {
       status: "ok", repo: $r, dry_run: ($d == 1), holder: $h, stripped: $s, strip_failed: $f,
       next: (if $h == null then .next else null end),
       queue: [.queue[] | {number, title, ready, reasons, held}],
-      foreign_labeled
+      manual_merge, foreign_labeled
     }' <<< "$rs"
 }
 
@@ -539,7 +571,7 @@ refetch() { local f; f=$(fetch_pr "$REPO" "$1") && FACTS="$f"; }
 
 # Label one candidate, or record why not. 0 = labeled (result printed).
 try_advance() { # try_advance <pr>
-  local n="$1" f sha start_sha base behind out rc deadline b review
+  local n="$1" f sha start_sha base behind out rc deadline b review gated
   if ! f=$(fetch_pr "$REPO" "$n"); then attempt "$n" read_failed "$(jq -r .error <<< "$f")"; return 1; fi
   FACTS="$f"
   if ! jq_true '.ready' <<< "$FACTS"; then attempt "$n" not_ready "$(jq -r '.reasons | join(", ")' <<< "$FACTS")"; return 1; fi
@@ -551,6 +583,8 @@ try_advance() { # try_advance <pr>
 
   base=$(jq -r .base <<< "$FACTS")
   sha=$(jq -r .head <<< "$FACTS"); start_sha="$sha"
+  # The gated workflow, learned before an update moves the head.
+  gated=$(jq -c '.gated_workflows' <<< "$FACTS")
   if ! behind=$(behind_by "$REPO" "$base" "$sha"); then
     attempt "$n" update_failed "could not compare ${sha:0:9} with $base"; return 1
   fi
@@ -588,10 +622,15 @@ try_advance() { # try_advance <pr>
     fi
   fi
 
-  # Let the head's own unlabeled run start before the label goes on. It then
-  # predates the label, and watch never counts its fail-closed CI Gate.
+  # Let the head's own unlabeled run of the gated workflow start before the
+  # label goes on. It then predates the label, and watch never counts its
+  # fail-closed CI Gate. Another workflow's run says nothing about that one;
+  # only when the gated workflow is unknown does any run do.
   deadline=$(( $(now_epoch) + UPDATE_TIMEOUT ))
-  while jq_true '.head_runs == 0' <<< "$FACTS" && (( $(now_epoch) < deadline )); do
+  # shellcheck disable=SC2016
+  while ! jq_true --argjson g "$gated" \
+      'if ($g | length) > 0 then any(.head_workflows[]; . as $w | any($g[]; . == $w)) else .head_runs > 0 end' <<< "$FACTS" \
+      && (( $(now_epoch) < deadline )); do
     sleep "$UPDATE_POLL"
     refetch "$n" || true
   done
@@ -619,6 +658,8 @@ cmd_advance() {
     return
   fi
   require_readable "advance" "$rs"
+  # Reject a --pr the queue can't take before looking at who holds.
+  [[ -z "$PR" ]] || require_queued "advance" "$PR" "$rs"
 
   holder=$(jq -r '.holder.number // empty' <<< "$rs")
   if [[ -n "$holder" && "$PR" != "$holder" ]]; then
@@ -634,9 +675,6 @@ cmd_advance() {
   [[ -z "$strip" ]] || die "advance" "$strip also carry ci:full in $REPO — run normalize first, so only one suite runs"
 
   if [[ -n "$PR" ]]; then
-    # shellcheck disable=SC2016
-    jq_true --argjson n "$PR" '[.holder // empty, .queue[]] | any(.[]; .number == $n)' <<< "$rs" \
-      || die "advance" "#$PR is not an open PR in the $REPO queue — link it to a session, or add it to the queue file"
     # shellcheck disable=SC2016
     if jq_true --argjson n "$PR" 'any(.held[]; . == $n)' <<< "$rs"; then
       die "advance" "#$PR is held in $(jq -r '.queue_file // "the queue file"' <<< "$rs") — take it off hold first"
@@ -669,11 +707,18 @@ def mins($s): "\((($s // 0) / 60) | floor)m";
 def short: (. // "") | .[0:9];
 . as $f
 | (age($f.run.completed_at // null) // 0) as $since_done
+# Contention: another labeled PR that is queued — tracked, on the branch of
+# its session (see `own`), and carrying crow:merge. Others are only reported.
+| def tracked: . as $l | any(($queued // [])[]; .number == $l.number);
+  def owned: . as $l | any(($queued // [])[]; .number == $l.number and (.added or .branch == null or .branch == $l.head_ref));
+  [($labeled // [])[] | select(.number != $f.number)] as $other_labeled
 | (if $queued == null or $labeled == null then null
-   else [$labeled[] | .number | select(. != $f.number) | . as $n | select(any($queued[]; . == $n))] end) as $others
+   else [$other_labeled[] | select(owned and .merge_label) | .number] end) as $others
 | (if $labeled == null then null
-   else [$labeled[] | select(.number != $f.number) | select(.number as $n | any(($queued // [])[]; . == $n) | not)
-         | "#\(.number)" + (if .author then " (\(.author))" else "" end)] end) as $foreign
+   else [$other_labeled[] | select((owned and .merge_label) | not)
+         | "#\(.number) (" + (if owned then "no crow:merge, merged by hand"
+                              elif tracked then "not on the branch of its session"
+                              else (.author // "not a Crow session PR") end) + ")"] end) as $foreign
 | ("pr=\($f.number) sha=\($f.head | short) mss=\($f.merge_state // "?") suite=\($f.run.state // "none")"
    + (if ($f.run.workflow // null) != null then " (\($f.run.workflow))" else "" end)
    + (if $f.labeled_at != null then " labeled \(mins(age($f.labeled_at))) ago" else "" end)
@@ -709,6 +754,7 @@ else
   ([(.holder // empty | .number), .to_strip[]] | unique) as $lab
   | ("idle · \(.queue | length) queued, none ready"
      + (if (.queue | length) > 0 then ": " + (.queue | map("#\(.number) (\(.reasons | join(", ")))") | join("; ")) else "" end)
+     + (if (.manual_merge | length) > 0 then " · merged by hand, not queued: " + (.manual_merge | map("#\(.number)") | join(", ")) else "" end)
      + (if (.unreadable | length) > 0 then " · unreadable: " + (.unreadable | map("#\(.number)") | join(", ")) else "" end)) as $line
   | if ($lab | length) > 0 then {event: "LABELED", detail: "prs=\($lab | map(tostring) | join(","))", line: $line}
     elif .next != null then {event: "READY", detail: "pr=\(.next)", line: $line}
@@ -723,7 +769,7 @@ watch_holder() {
   while :; do
     now=$(now_epoch)
     if facts=$(fetch_pr "$REPO" "$PR"); then
-      queued=$(queued_numbers "$REPO" 2>/dev/null) || queued=null
+      queued=$(queued_prs "$REPO" 2>/dev/null) || queued=null
       labeled=$(labeled_open "$REPO") || labeled=null
       # shellcheck disable=SC2016
       if decision=$(jq -c --argjson now "$now" --arg ack "$ACK" --argjson queued "$queued" --argjson labeled "$labeled" \
@@ -742,7 +788,7 @@ watch_holder() {
     [[ "$line" == "$prev_line" ]] || log "$line"
     prev_line="$line"
     if [[ -n "$foreign" && "$foreign" != "$prev_foreign" ]]; then
-      log "also carry ci:full, not Crow session PRs, not touched: $foreign"
+      log "also carry ci:full, outside the queue, not touched: $foreign"
     fi
     prev_foreign="$foreign"
     if [[ -n "$event" ]]; then

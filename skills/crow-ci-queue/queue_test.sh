@@ -44,7 +44,9 @@ export FIX
 
 # Fake gh. Reads: graphql `-F number=N` → $FIX/pr-N.json; `pr list` →
 # $FIX/labeled.json; `api repos/…/compare/BASE...SHA` → $FIX/compare-SHA.json.
-# A missing fixture is an outage (exit 1). Writes (`pr edit`,
+# A missing fixture is an outage (exit 1). Each graphql read of PR N bumps
+# $FIX/reads-N; once it reaches $FIX/pr-N.then-at, $FIX/pr-N.then.json
+# replaces pr-N.json (state that appears later). Writes (`pr edit`,
 # `pr update-branch`) are appended to $FIX/gh.log. update-branch moves
 # $FIX/pr-N.after-update.json over pr-N.json (the new head), prints
 # $FIX/update-N.out, and exits with $FIX/update-N.rc.
@@ -54,6 +56,10 @@ case "$1 $2" in
   "api graphql")
     n=""
     for a in "$@"; do case "$a" in number=*) n="${a#number=}" ;; esac; done
+    reads=$(( $(cat "$FIX/reads-$n" 2>/dev/null || echo 0) + 1 )); echo "$reads" > "$FIX/reads-$n"
+    if [[ -f "$FIX/pr-$n.then.json" ]] && (( reads >= $(cat "$FIX/pr-$n.then-at") )); then
+      mv "$FIX/pr-$n.then.json" "$FIX/pr-$n.json"
+    fi
     f="$FIX/pr-$n.json"
     [[ -f "$f" ]] || { echo "HTTP 502: fake outage" >&2; exit 1; }
     cat "$f" ;;
@@ -106,8 +112,9 @@ export QUEUE_NOW="$NOW" QUEUE_UPDATE_TIMEOUT=0 QUEUE_UPDATE_POLL=0
 q() { bash "$QUEUE_SH" "$@"; }
 
 # A PR fixture in GraphQL shape, from a short spec. Defaults: OPEN, approved,
-# mergeable, labels ["crow:merge"], a CI Gate check on the head, head
-# "h<number>". timeline: [{t: "on"|"off", at, by}] for ci:full. suites:
+# mergeable, labels ["crow:merge"], a CI Gate check on the head, head commit
+# "h<number>" on branch "b<number>" (the branch its fixture session works on).
+# timeline: [{t: "on"|"off", at, by}] for ci:full. suites:
 # [{created, updated, status, conclusion, wf, runs: {name: conclusion|null}}],
 # where a null conclusion is a job still running.
 mkpr() { # mkpr <number> <spec-json> [file]
@@ -119,7 +126,7 @@ mkpr() { # mkpr <number> <spec-json> [file]
         number: $n, url: "https://github.com/o/r/pull/\($n)", title: ($s.title // "PR \($n)"),
         state: ($s.state // "OPEN"), isDraft: ($s.draft // false), createdAt: ($s.created // "2026-10-23T08:00:00Z"),
         mergedAt: ($s.merged // null),
-        author: {login: "coder"}, baseRefName: "main", headRefOid: $head,
+        author: {login: "coder"}, baseRefName: "main", headRefOid: $head, headRefName: ($s.branch // "b\($n)"),
         reviewDecision: (if $s | has("review") then $s.review else "APPROVED" end),
         mergeable: ($s.mergeable // "MERGEABLE"), mergeStateStatus: ($s.mss // "BLOCKED"),
         labels: {nodes: [($s.labels // ["crow:merge"])[] | {name: .}]},
@@ -136,9 +143,15 @@ mkpr() { # mkpr <number> <spec-json> [file]
       }}}}' <<< "$2" > "${3:-$FIX/pr-$1.json}"
 }
 compare() { echo "{\"behind_by\": $2}" > "$FIX/compare-$1.json"; } # compare <sha> <behind>
-labeled() { # labeled <number…> — the open PRs `gh pr list --label ci:full` returns
+labeled() { # labeled <number[!]…> — the open PRs `gh pr list --label ci:full` returns; N! has no crow:merge
   local n out='[]'
-  for n in "$@"; do out=$(jq -c --argjson n "$n" '. + [{number: $n, title: "PR \($n)", url: "https://github.com/o/r/pull/\($n)", author: {login: (if $n >= 90 then "app/dependabot" else "coder" end)}}]' <<< "$out"); done
+  # shellcheck disable=SC2016
+  for n in "$@"; do
+    out=$(jq -c --argjson n "${n%!}" --argjson merge "$([[ "$n" == *! ]] && echo false || echo true)" '. + [{
+      number: $n, title: "PR \($n)", url: "https://github.com/o/r/pull/\($n)", headRefName: "b\($n)",
+      author: {login: (if $n >= 90 then "app/dependabot" else "coder" end)},
+      labels: ([{name: "ci:full"}] + (if $merge then [{name: "crow:merge"}] else [] end))}]' <<< "$out")
+  done
   echo "$out" > "$FIX/labeled.json"
 }
 glog() { cat "$FIX/gh.log" 2>/dev/null; }
@@ -159,14 +172,14 @@ off() { jq -cn --arg at "$1" --arg by "${2:-dgershman}" '{t: "off", at: $at, by:
 # ─── fixtures: sessions ──────────────────────────────────────────────────────
 cat > "$FIX/sessions.json" <<'JSON'
 {"sessions": [
-  {"id": "S11", "name": "r-11", "kind": "work", "status": "active",
+  {"id": "S11", "name": "r-11", "branch": "b11", "kind": "work", "status": "active",
    "links": [{"type": "ticket", "url": "https://github.com/o/r/issues/1"}, {"type": "pr", "url": "https://github.com/o/r/pull/11"}]},
-  {"id": "S12", "name": "r-12", "kind": "work", "status": "inReview", "links": [{"type": "pr", "url": "https://github.com/O/R/pull/12"}]},
-  {"id": "S14", "name": "r-14", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/14"}]},
-  {"id": "S15", "name": "r-15", "kind": "work", "status": "active"},
-  {"id": "S16", "name": "r-16", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/16"}]},
-  {"id": "S17", "name": "r-17", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/17"}]},
-  {"id": "S13", "name": "r-13", "kind": "work", "status": "completed", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/13"}]},
+  {"id": "S12", "name": "r-12", "branch": "b12", "kind": "work", "status": "inReview", "links": [{"type": "pr", "url": "https://github.com/O/R/pull/12"}]},
+  {"id": "S14", "name": "r-14", "branch": "b14", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/14"}]},
+  {"id": "S15", "name": "r-15", "branch": "b15", "kind": "work", "status": "active"},
+  {"id": "S16", "name": "r-16", "branch": "b16", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/16"}]},
+  {"id": "S17", "name": "r-17", "branch": "b17", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/17"}]},
+  {"id": "S13", "name": "r-13", "branch": "b13", "kind": "work", "status": "completed", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/13"}]},
   {"id": "R31", "name": "review-31", "kind": "review", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/r/pull/31"}]},
   {"id": "P21", "name": "plain-21", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://github.com/o/plain/pull/21"}]},
   {"id": "G1", "name": "gitlab-1", "kind": "work", "status": "active", "links": [{"type": "pr", "url": "https://gitlab.example.com/g/p/-/merge_requests/1"}]},
@@ -206,14 +219,15 @@ check "one queue, for the convention repo" "o/r" "$(jq -r '[.repos[].repo] | joi
 r() { jq -r ".repos[0] | $1" <<< "$st"; }
 pr() { jq -r --argjson n "$1" ".repos[0] | [.holder // empty, .queue[]] | map(select(.number == \$n)) | .[0] | $2" <<< "$st"; }
 check "active, inReview, and list-links PRs are queued; completed and review sessions are not" \
-  "11 12 14 15 16 17" "$(r '[.holder.number, .queue[].number] | sort | map(tostring) | join(" ")')"
+  "11 12 15 16 17" "$(r '[.holder.number, .queue[].number] | sort | map(tostring) | join(" ")')"
+check "an approved PR without crow:merge merges by hand: outside the queue" "14" "$(r '[.manual_merge[].number] | map(tostring) | join(" ")')"
 contains "a repo without the convention is ignored" "$(jq -c .ignored <<< "$st")" "o/plain does not follow the CI Gate convention"
 contains "a non-GitHub link is ignored" "$(jq -c .ignored <<< "$st")" "not a github.com pull request URL"
 check "a mixed-case URL lands in the lowercase repo" "S12" "$(pr 12 .session.id)"
 
 echo "status: readiness"
 check "approved + crow:merge + mergeable is ready" "true" "$(pr 12 .ready)"
-check "no crow:merge" "no crow:merge" "$(pr 14 '.reasons | join(",")')"
+check "no crow:merge" "no crow:merge" "$(r '.manual_merge[0].reasons | join(",")')"
 check "draft and unapproved" "draft,not approved yet" "$(pr 15 '.reasons | join(",")')"
 check "a conflict" "merge conflict" "$(pr 17 '.reasons | join(",")')"
 
@@ -226,16 +240,26 @@ check "ci:full matched case-insensitively" "CI:Full" "$(pr 17 .full_label_name)"
 echo "status: holder, order, strip, foreign"
 check "the running ready PR holds" "11" "$(r .holder.number)"
 contains "with a reason" "$(r .holder.reason)" "in progress"
-check "queue is oldest first" "12 14 15 16 17" "$(r '[.queue[].number] | map(tostring) | join(" ")')"
+check "queue is oldest first" "12 15 16 17" "$(r '[.queue[].number] | map(tostring) | join(" ")')"
 check "next is the first ready PR" "12" "$(r .next)"
 check "the not-ready labeled PR is to be stripped" "[17]" "$(r '.to_strip | tostring')"
 check "a labeled PR no session owns is foreign" "99" "$(r '[.foreign_labeled[].number] | map(tostring) | join(" ")')"
+
+echo "status: only a session's own PR is queued"
+jq '(.sessions[] | select(.id == "S16") | .branch) = "b-other"' "$FIX/sessions.json" > "$TMP/s.json" && cp "$FIX/sessions.json" "$TMP/sessions.bak" && mv "$TMP/s.json" "$FIX/sessions.json"
+labeled 11 16 99
+st=$(q status --repo o/r)
+check "a linked PR whose head branch isn't the session's is not queued" "12 15 17" "$(r '[.queue[].number] | map(tostring) | join(" ")')"
+contains "it is ignored, with why" "$(jq -c .ignored <<< "$st")" "its head branch b16 is not the session branch b-other"
+check "and reads as foreign, so normalize never strips it" "16 99" "$(r '[.foreign_labeled[].number] | map(tostring) | join(" ")')"
+mv "$TMP/sessions.bak" "$FIX/sessions.json"
+labeled 11 17 99
 
 echo "status: queue file — add, order, hold"
 mkpr 40 '{"created": "2026-10-23T10:59:00Z"}'
 echo '{"repo": "O/R", "add": [40], "order": [16, 40], "hold": [12]}' > "$TMP/queues/o-r.json"
 st=$(q status --repo o/r)
-check "order goes first, then oldest first" "16 40 12 14 15 17" "$(r '[.queue[].number] | map(tostring) | join(" ")')"
+check "order goes first, then oldest first" "16 40 12 15 17" "$(r '[.queue[].number] | map(tostring) | join(" ")')"
 check "an added PR is queued" "true" "$(pr 40 .added)"
 check "a held PR is not ready" "held by the operator" "$(pr 12 '.reasons | join(",")')"
 check "next skips the held PR" "16" "$(r .next)"
@@ -352,6 +376,23 @@ contains "and says why" "$out" "does not follow the CI Gate convention"
 out=$(q normalize --repo o/empty)
 check "a repo with nothing queued is a no-op" "null" "$(jq -c .holder <<< "$out")"
 
+echo "normalize: an approved PR without crow:merge keeps its suite"
+# The reviewer's repro: approved, ci:full added on approval, suite running,
+# no crow:merge — the queue can never label it again, so it must not strip it.
+mkpr 14 "{\"labels\": [\"ci:full\"], \"timeline\": [$(on 2026-10-23T10:05:00Z reviewer)],
+  \"suites\": [$(suite 2026-10-23T10:04:58Z "$FAIL_CLOSED" COMPLETED FAILURE), $(suite 2026-10-23T10:05:02Z "$RUNNING" IN_PROGRESS)]}"
+: > "$FIX/gh.log"
+out=$(q normalize --repo o/r)
+lacks "it is not stripped" "$(glog)" "pr edit 14"
+check "it is reported under manual_merge with its suite" "14 running true" \
+  "$(jq -r '.manual_merge[] | select(.number == 14) | "\(.number) \(.run_state) \(.full_label)"' <<< "$out")"
+check "and is never the holder" "11" "$(jq -r .holder.number <<< "$out")"
+out=$(q advance --repo o/r --pr 14); rc=$?
+check "advance --pr on it exits 2" "2" "$rc"
+contains "and says why" "$out" "#14 has no crow:merge, so it merges by hand"
+mkpr 14 '{"labels": []}'
+
+
 # ─── advance ─────────────────────────────────────────────────────────────────
 echo "advance: guards"
 out=$(q advance --repo o/r)
@@ -415,11 +456,26 @@ out=$(q advance --repo o/r --pr 12)
 check "lost approval after the update → not labeled" "approval_lost" "$(jq -r '.attempts[0].outcome' <<< "$out")"
 lacks "and no label" "$(glog)" "--add-label"
 
+echo "advance: waits for the gated workflow's own run, not any run"
+mkpr 12 "{\"created\": \"2026-10-23T08:00:00Z\", \"suites\": [$(suite 2026-10-23T09:00:00Z "$FAIL_CLOSED" COMPLETED FAILURE)]}"
+compare h12 2
+# After the update only a fast CodeQL run exists on h12b; the gated Test run
+# shows up on the 5th read of #12.
+mkpr 12 "{\"head\": \"h12b\", \"suites\": [$(suite 2026-10-23T10:59:00Z '{"CodeQL": "SUCCESS"}' COMPLETED SUCCESS 2026-10-23T10:59:00Z CodeQL)]}" \
+  "$FIX/pr-12.after-update.json"
+mkpr 12 "{\"head\": \"h12b\", \"suites\": [$(suite 2026-10-23T10:59:00Z '{"CodeQL": "SUCCESS"}' COMPLETED SUCCESS 2026-10-23T10:59:00Z CodeQL), $(suite 2026-10-23T10:59:05Z "$FAIL_CLOSED" COMPLETED FAILURE)]}" \
+  "$FIX/pr-12.then.json"
+echo 5 > "$FIX/pr-12.then-at"; rm -f "$FIX/reads-12"
+out=$(QUEUE_NOW='' QUEUE_UPDATE_TIMEOUT=20 bash "$QUEUE_SH" advance --repo o/r --pr 12)
+check "labels once the gated run exists" "labeled 12 h12b" "$(jq -r '"\(.result) \(.pr) \(.sha)"' <<< "$out")"
+check "not as soon as the unrelated run appeared" "true" "$( (( $(cat "$FIX/reads-12") >= 5 )) && echo true || echo false)"
+rm -f "$FIX/pr-12.then-at"
+
 echo "advance: nothing to do"
-mkpr 12 '{"labels": []}'; mkpr 16 '{"labels": []}'
+mkpr 12 '{"review": "REVIEW_REQUIRED"}'; mkpr 16 '{"review": "REVIEW_REQUIRED"}'
 out=$(q advance --repo o/r)
 check "nothing ready" "none_ready" "$(jq -r .result <<< "$out")"
-contains "lists why" "$(jq -c .not_ready <<< "$out")" '"reasons":["no crow:merge"]'
+contains "lists why" "$(jq -c .not_ready <<< "$out")" '"reasons":["not approved yet"]'
 out=$(q advance --repo o/empty)
 check "nothing queued" "empty" "$(jq -r .result <<< "$out")"
 out=$(q advance --repo o/r --pr 99); rc=$?
@@ -445,12 +501,22 @@ out=$(wh); rc=$?
 check "the false failure right after labeling is no event (heartbeat)" "10" "$rc"
 contains "heartbeat line" "$out" "EVENT=HEARTBEAT repo=o/r pr=12"
 lacks "never CI_FAILED" "$out" "CI_FAILED"
-contains "reports, but doesn't count, a foreign labeled PR" "$out" "not Crow session PRs, not touched: #99 (app/dependabot)"
+contains "reports, but doesn't count, a foreign labeled PR" "$out" "outside the queue, not touched: #99 (app/dependabot)"
 
 labeled 12 16 99
 out=$(wh); rc=$?
 check "another queued PR labeled → CONTENTION" "0 CONTENTION" "$rc $(grep -o 'EVENT=[A-Z_]*' <<< "$out" | sed 's/EVENT=//')"
 contains "names it, not the foreign one" "$out" "others=16"
+labeled 12 14! 99
+out=$(wh); rc=$?
+check "a labeled PR without crow:merge is not contention" "10" "$rc"
+contains "it is reported as merged by hand" "$out" "#14 (no crow:merge, merged by hand)"
+jq '(.sessions[] | select(.id == "S16") | .branch) = "b-other"' "$FIX/sessions.json" > "$TMP/s.json" && cp "$FIX/sessions.json" "$TMP/sessions.bak" && mv "$TMP/s.json" "$FIX/sessions.json"
+labeled 12 16 99
+out=$(wh); rc=$?
+check "a labeled PR on another branch than its session is not contention" "10" "$rc"
+contains "it is reported" "$out" "#16 (not on the branch of its session)"
+mv "$TMP/sessions.bak" "$FIX/sessions.json"
 labeled 12 99
 
 h12() { mkpr 12 "{\"labels\": [\"crow:merge\", \"ci:full\"], \"head\": \"${2:-h12}\", \"mss\": \"${3:-BLOCKED}\", \"timeline\": [$(on 2026-10-23T10:05:00Z)],
@@ -520,15 +586,17 @@ mv "$TMP/pr-12.bak" "$FIX/pr-12.json"
 echo "watch: idle"
 wi() { bash "$QUEUE_SH" watch --repo o/r --interval 0 --timeout 0; }
 mkpr 11 '{"state": "MERGED"}'
-mkpr 12 '{"labels": []}'; mkpr 16 '{"labels": []}'
+mkpr 12 '{"review": "REVIEW_REQUIRED"}'; mkpr 16 '{"review": "REVIEW_REQUIRED"}'
+mkpr 14 "{\"labels\": [\"ci:full\"], \"timeline\": [$(on 2026-10-23T10:58:00Z)]}"
 out=$(wi); rc=$?
 check "nothing ready → heartbeat" "10" "$rc"
-contains "lists why" "$out" "#12 (no crow:merge)"
+contains "lists why" "$out" "#12 (not approved yet)"
+contains "a labeled manual-merge PR is listed, not LABELED" "$out" "merged by hand, not queued: #14"
 mkpr 16 '{"created": "2026-10-23T09:00:00Z"}'
 out=$(wi); rc=$?
 check "a queued PR became ready → READY" "0" "$rc"
 contains "names it" "$out" "EVENT=READY repo=o/r pr=16"
-mkpr 12 "{\"labels\": [\"ci:full\"], \"timeline\": [$(on 2026-10-23T10:58:00Z)]}"
+mkpr 12 "{\"labels\": [\"crow:merge\", \"ci:full\"], \"timeline\": [$(on 2026-10-23T10:58:00Z)]}"
 out=$(wi); rc=$?
 check "a queued PR got ci:full → LABELED" "0" "$rc"
 contains "names it" "$out" "EVENT=LABELED repo=o/r prs=12"
