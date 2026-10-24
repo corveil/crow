@@ -27,6 +27,9 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-triage/page.html`                      | Page template that `triage.sh build` fills from `items.json`  |
 | `{devRoot}/.claude/skills/crow-triage/triage.sh`                      | Page builder + decisions readback called by the triage skill  |
 | `{devRoot}/.claude/triage/`                                           | Per-triage `items.json`, built page, URL, and read-back files |
+| `{devRoot}/.claude/skills/crow-ci-queue/SKILL.md`                     | `ci:full` queue skill invoked via `/crow-ci-queue`            |
+| `{devRoot}/.claude/skills/crow-ci-queue/queue.sh`                     | Queue status, normalize/advance, and the background watcher   |
+| `{devRoot}/.claude/ci-queues/`                                        | Optional per-repo queue files (`add` / `order` / `hold`)      |
 | `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
 
 ## Workspace Configuration
