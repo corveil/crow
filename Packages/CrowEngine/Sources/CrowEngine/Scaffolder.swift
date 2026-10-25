@@ -81,6 +81,9 @@ public struct Scaffolder {
         let ciQueueSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-ci-queue")
         try fm.createDirectory(atPath: ciQueueSkillsDir, withIntermediateDirectories: true)
 
+        let backlogBriefSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-backlog-brief")
+        try fm.createDirectory(atPath: backlogBriefSkillsDir, withIntermediateDirectories: true)
+
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
@@ -178,6 +181,19 @@ public struct Scaffolder {
         let ciQueueScriptPath = (ciQueueSkillsDir as NSString).appendingPathComponent("queue.sh")
         try Self.bundledCIQueueScript().write(toFile: ciQueueScriptPath, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ciQueueScriptPath)
+
+        // Always overwrite the backlog-brief skill, its page template, and its
+        // helper script (CROW-1367). The script scopes the backlog, composes and
+        // validates each round's cards, guards every publish, and reads the
+        // decisions back from the published artifact.
+        let backlogBriefSkillPath = (backlogBriefSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try CrowAttribution.expandSkillBody(Self.bundledBacklogBriefSkill(), agentKind: managerAgentKind)
+            .write(toFile: backlogBriefSkillPath, atomically: true, encoding: .utf8)
+        let backlogBriefPagePath = (backlogBriefSkillsDir as NSString).appendingPathComponent("page.html")
+        try Self.bundledBacklogBriefPage().write(toFile: backlogBriefPagePath, atomically: true, encoding: .utf8)
+        let backlogBriefScriptPath = (backlogBriefSkillsDir as NSString).appendingPathComponent("brief.sh")
+        try Self.bundledBacklogBriefScript().write(toFile: backlogBriefScriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backlogBriefScriptPath)
 
         // Always overwrite the show-image skill (surfaces generated images in
         // Crow's Images panel). No attribution expansion — it has no agent
@@ -943,6 +959,66 @@ public struct Scaffolder {
         """
     }
 
+    /// The crow-backlog-brief SKILL.md template bundled with the app (CROW-1367).
+    static func bundledBacklogBriefSkill() -> String {
+        if let content = loadFromRepo("skills/crow-backlog-brief/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-backlog-brief-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        ---
+        name: crow-backlog-brief
+        description: Run the daily backlog brief loop: scope and study the backlog, publish one decision page per round, act on the choices.
+        ---
+
+        # Crow Backlog Brief
+
+        ## Activation
+        This skill activates when user invokes `/crow-backlog-brief` command.
+
+        ## Important
+        The full skill was not bundled with this build. It needs `brief.sh` and
+        `page.html` beside this file, and the Artifact and ArtifactData tools.
+        """
+    }
+
+    /// The crow-backlog-brief page template bundled with the app (CROW-1367).
+    static func bundledBacklogBriefPage() -> String {
+        if let content = loadFromRepo("skills/crow-backlog-brief/page.html") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-backlog-brief-page.html", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        <title>__BRIEF_TITLE__</title>
+        <p>crow-backlog-brief page template not bundled.</p>
+        <script type="application/json" id="brief-data">
+        __BRIEF_DATA__
+        </script>
+        """
+    }
+
+    /// The crow-backlog-brief brief.sh helper bundled with the app (CROW-1367).
+    static func bundledBacklogBriefScript() -> String {
+        if let content = loadFromRepo("skills/crow-backlog-brief/brief.sh") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-backlog-brief-brief.sh", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        #!/bin/bash
+        echo '{"status":"error","message":"brief.sh not bundled"}'
+        exit 2
+        """
+    }
+
     /// Shared attribution footer instructions (issue #443).
     static func bundledAttributionFooter() -> String {
         if let content = loadFromRepo("skills/crow-attribution/FOOTER.md") {
@@ -977,6 +1053,8 @@ public struct Scaffolder {
               "Bash(.claude/skills/crow-triage/triage.sh *)",
               "Bash(bash .claude/skills/crow-ci-queue/queue.sh *)",
               "Bash(.claude/skills/crow-ci-queue/queue.sh *)",
+              "Bash(bash .claude/skills/crow-backlog-brief/brief.sh *)",
+              "Bash(.claude/skills/crow-backlog-brief/brief.sh *)",
               "Bash(gh issue view:*)",
               "Bash(gh issue create:*)",
               "Bash(gh issue edit:*)",
