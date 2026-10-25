@@ -517,7 +517,7 @@ Use `/crow-cascade-epic <epic-url>` to run an epic's sub-tickets as a dependency
 
 Use `/crow-triage` to turn a list of proposed work items into a private Kick off / Later / Drop decision page (a claude.ai Artifact), then read the decisions and notes back, write each filed ticket's URL back to the page, and hand the Kick off set to `/crow-cascade-epic`.
 
-Use `/crow-ci-queue` to serialize the label-gated `ci:full` suite across the PRs of live sessions on repos with a `CI Gate` check: one session PR per repo holds `ci:full` and merges, then the next ready PR is updated from main and labeled. A background watcher wakes the Manager on each merge or failure, so it never polls.
+Use `/crow-ci-queue` to serialize the label-gated `ci:full` suite across the PRs of live sessions on repos with a `CI Gate` check: one session PR per repo holds `ci:full` and merges, then the next ready PR is updated from main and labeled. A background watcher wakes the Manager on each merge or failure, so it never polls. It keeps running after a repo drains, picking up new session PRs and newly queueable repos, until the operator stops it.
 
 Use `/crow-backlog-brief` to run a backlog-draining loop in rounds: it scopes the open issues across the configured repos (epics as units, nothing assigned to someone else), studies each one, publishes one decision page per round at a stable claude.ai Artifact URL, acts on the operator's choices once they mark the round done (kickoffs, relabels, closes, follow-ups), and carries undecided cards into the next round.
 

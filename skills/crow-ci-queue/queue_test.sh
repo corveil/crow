@@ -615,6 +615,38 @@ check "--ack-failure without --pr exits 2" "2" "$rc"
 out=$(q bogus); rc=$?
 check "unknown subcommand exits 2" "2" "$rc"
 
+# ─── keep running after a drain (CROW-1369) ──────────────────────────────────
+echo "watch: idle on a drained queue"
+# Every queued PR merged; their sessions still link them. #14 (no crow:merge) stays open.
+for n in 12 15 16 17; do mkpr "$n" '{"state": "MERGED"}'; done
+out=$(wi); rc=$?
+check "a drained queue → heartbeat, not an event" "10" "$rc"
+contains "reads as nothing queued" "$out" "idle · nothing queued · merged by hand, not queued: #14"
+lacks "no 0-queued line" "$out" "0 queued"
+out=$(q watch --repo o/empty --interval 0 --timeout 0); rc=$?
+check "a repo with nothing tracked → heartbeat" "10" "$rc"
+contains "reads as nothing queued" "$out" "EVENT=HEARTBEAT repo=o/empty · idle · nothing queued"
+# A session created after kickoff opens a PR with crow:merge in the drained repo.
+# shellcheck disable=SC2016
+jq '.sessions += [{id: "S18", name: "r-18", branch: "b18", kind: "work", status: "active",
+                   links: [{type: "pr", url: "https://github.com/o/r/pull/18"}]}]' "$FIX/sessions.json" > "$TMP/s.json" \
+  && mv "$TMP/s.json" "$FIX/sessions.json"
+mkpr 18 '{}'
+out=$(wi); rc=$?
+check "a new session PR in a drained queue → READY" "0" "$rc"
+contains "names it" "$out" "EVENT=READY repo=o/r pr=18"
+
+echo "status: a repo that becomes queueable after kickoff"
+# shellcheck disable=SC2016
+jq '.sessions += [{id: "S41", name: "new-41", branch: "b41", kind: "work", status: "active",
+                   links: [{type: "pr", url: "https://github.com/o/new/pull/41"}]}]' "$FIX/sessions.json" > "$TMP/s.json" \
+  && mv "$TMP/s.json" "$FIX/sessions.json"
+mkpr 41 '{}'
+st=$(q status)
+check "the all-repos status picks it up" "o/new o/r" "$(jq -r '[.repos[].repo] | sort | join(" ")' <<< "$st")"
+st=$(q status --repo o/r)
+check "a --repo status leaves it out" "o/r" "$(jq -r '[.repos[].repo] | join(" ")' <<< "$st")"
+
 echo
 echo "queue_test: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

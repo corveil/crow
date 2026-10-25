@@ -746,14 +746,17 @@ def short: (. // "") | .[0:9];
 | . + {line: $line, foreign: (($foreign // []) | join(", "))}
 '
 
-# Repo queue object (or null) → READY / LABELED, or a status line.
+# Repo queue object (or null) → READY / LABELED, or a status line. A drained
+# queue (its merged PRs still linked from live sessions) reads the same as a
+# repo with nothing tracked: the skill keeps an idle watcher on it (CROW-1369).
 # shellcheck disable=SC2016
 IDLE_JQ='
 if . == null then {event: null, line: "idle · nothing queued"}
 else
   ([(.holder // empty | .number), .to_strip[]] | unique) as $lab
-  | ("idle · \(.queue | length) queued, none ready"
-     + (if (.queue | length) > 0 then ": " + (.queue | map("#\(.number) (\(.reasons | join(", ")))") | join("; ")) else "" end)
+  | ("idle · "
+     + (if (.queue | length) == 0 then "nothing queued"
+        else "\(.queue | length) queued, none ready: " + (.queue | map("#\(.number) (\(.reasons | join(", ")))") | join("; ")) end)
      + (if (.manual_merge | length) > 0 then " · merged by hand, not queued: " + (.manual_merge | map("#\(.number)") | join(", ")) else "" end)
      + (if (.unreadable | length) > 0 then " · unreadable: " + (.unreadable | map("#\(.number)") | join(", ")) else "" end)) as $line
   | if ($lab | length) > 0 then {event: "LABELED", detail: "prs=\($lab | map(tostring) | join(","))", line: $line}
