@@ -315,6 +315,10 @@ check "slug is not kept on the card" "false" "$(jq '.cards[1] | has("slug")' "$R
 check "title and release come from config" "Acme Backlog Brief v2.4" "$(jq -r '"\(.title) \(.release.name)"' "$R1")"
 check "context defaults to the repos" "acme/api · acme/web" "$(jq -r .context "$R1")"
 check "generated_at defaults to now" "2026-10-26T08:00:00Z" "$(jq -r .generated_at "$R1")"
+# jq 1.6 on macOS reads a DST date through local time (an hour late); brief.sh
+# parses times itself, so a DST zone changes nothing (PR #1368 review).
+TZ=America/New_York brief compose --config "$CONFIG" --round "$ROUND" --cards "$CARDS" --now 2026-10-26T08:00:00Z --out "$TMP/r1-ny/brief.json" >/dev/null
+check "a DST time zone doesn't shift generated_at" "2026-10-26T08:00:00Z 2026-10-26" "$(jq -r '"\(.generated_at) \(.round)"' "$TMP/r1-ny/brief.json")"
 check "a first round has no carry" "false" "$(jq 'has("carry")' "$R1")"
 check "sections in the report" '{"waiting":1,"kickoff":1,"watch":1,"close":1}' "$(jq -c .sections <<<"$out")"
 jq '.[0].id = "x"' "$CARDS" > "$TMP/bad-cards.json"
@@ -476,6 +480,13 @@ check "a brief that carries cards is never a first publish" "2" "$rc"
 contains "and says to pass --decisions" "$o" "pass --decisions"
 
 # The republish guards, with the round-1 decisions as the fresh read.
+o=$(brief build --brief "$R1" --out "$PAGE" --decisions "$D1"); rc=$?
+check "a directory with no mark-read marker is no read" "4 no_read" "$rc $(jq -r .reason <<<"$o")"
+o=$(brief mark-read --decisions "$D1" --count 3); rc=$?
+check "mark-read refuses a count that doesn't match the files" "1" "$rc"
+contains "and says the list didn't land" "$o" "the list returned 3 docs but"
+check "mark-read records the read" "ok 4" "$(brief mark-read --decisions "$D1" --count 4 | jq -r '"\(.status) \(.count)"')"
+check "the marker isn't read as a decision doc" "4" "$(brief readback --brief "$R1" --decisions "$D1" --now 2026-10-26T10:00:00Z | jq '([.cards[] | select(.status != null or .note != "")] | length) + .other_rounds')"
 out=$(brief build --brief "$R1" --out "$PAGE" --decisions "$D1" --now 2026-10-26T09:10:00Z); rc=$?
 check "a write in the last 10 minutes holds the publish" "3" "$rc"
 check "hold says the operator is answering" "operator_active 360" "$(jq -r '"\(.reason) \(.retry_after_seconds)"' <<<"$out")"
@@ -486,17 +497,23 @@ out=$(brief build --brief "$R2" --out "$PAGE" --decisions "$D1" --now 2026-10-27
 check "a new round over unchanged decisions builds" "ok false" "$(jq -r '"\(.status) \(.guard.stale)"' <<<"$out")"
 cp -R "$D1" "$TMP/raw1-changed"
 echo '{"status":"drop","note":"","by":"u_operator0000000000000","at":"2026-10-27T08:10:00Z"}' > "$TMP/raw1-changed/r20261026-acme-web-7.json"
+brief mark-read --decisions "$TMP/raw1-changed" --count 5 >/dev/null
 out=$(brief build --brief "$R2" --out "$PAGE" --decisions "$TMP/raw1-changed" --now 2026-10-27T09:30:00Z); rc=$?
 check "decisions that changed since compose stop the publish" "4" "$rc"
 check "naming the card" "decisions_changed [\"r20261026-acme-web-7\"]" "$(jq -c '"\(.reason) \(.changed | tojson)"' <<<"$out" | jq -r .)"
 mkdir -p "$TMP/old-read"
 cp "$D1"/*.json "$TMP/old-read/"
-touch -t 202001010000 "$TMP/old-read"/*.json "$TMP/old-read"
+brief mark-read --decisions "$TMP/old-read" --count 4 >/dev/null
+touch -t 202001010000 "$TMP/old-read"/.read.json
 out=$(brief build --brief "$R1" --out "$PAGE" --decisions "$TMP/old-read" --now 2026-10-26T10:00:00Z); rc=$?
 check "an old read stops the publish" "4" "$rc"
 check "as old_read" "old_read" "$(jq -r .reason <<<"$out")"
 mkdir -p "$TMP/empty-read"
-check "an empty, fresh read (no decisions yet) is fine" "0" "$(rc_of brief build --brief "$R1" --out "$PAGE" --decisions "$TMP/empty-read")"
+check "an empty directory alone is not a read" "4" "$(rc_of brief build --brief "$R1" --out "$PAGE" --decisions "$TMP/empty-read")"
+brief mark-read --decisions "$TMP/empty-read" --count 0 >/dev/null
+check "an empty, recorded read (no decisions yet) is fine" "0" "$(rc_of brief build --brief "$R1" --out "$PAGE" --decisions "$TMP/empty-read")"
+echo '[{"id":"r20261026-api-10","data":{"status":null,"note":"","at":"2026-10-26T09:05:00Z"},"version":2}]' > "$TMP/list.json"
+check "a saved list file proves itself" "0" "$(rc_of brief build --brief "$R1" --out "$PAGE" --decisions "$TMP/list.json" --now 2026-10-26T10:00:00Z)"
 
 # ─── readback ────────────────────────────────────────────────────────────────
 echo "readback"
@@ -506,7 +523,7 @@ echo '{"status":"go","note":"","by":"u_operator0000000000000","at":"2026-10-26T0
 R_DIR="$TMP/raw1/rounds"; mkdir -p "$R_DIR"
 out=$(brief readback --brief "$R1" --decisions "$D1" --rounds "$R_DIR" --now 2026-10-26T10:00:00Z)
 check "readback is ok" "ok" "$(jq -r .status <<<"$out")"
-check "counts" '{"cards":4,"go":1,"later":1,"drop":0,"noted":1,"undecided":1,"notes":2,"against_rec":1,"done_by_claude":0}' "$(jq -c .counts <<<"$out")"
+check "counts" '{"cards":4,"go":1,"later":1,"drop":0,"noted":1,"undecided":1,"notes":2,"against_rec":1,"done_by_claude":0,"pending":0,"earlier_to_act":0}' "$(jq -c .counts <<<"$out")"
 check "a note with no button is noted, not undecided" '["r20261026-api-10"]' "$(jq -c .noted <<<"$out")"
 check "untouched cards carry forward" '["r20261026-acme-web-7"]' "$(jq -c .carry_forward <<<"$out")"
 check "to act: decided or noted, no result yet" '["r20261026-pr-acme-api-51","r20261026-api-10","r20261026-acme-web-9"]' "$(jq -c .to_act <<<"$out")"
@@ -539,6 +556,43 @@ check "its result is joined" "Merged by the operator." "$(jq -r '.cards[0].resul
 out=$(brief readback --brief "$R1" --decisions "$TMP/inline.jsonl" --now 2026-10-26T10:00:00Z)
 check "the inline list output carries versions" "7 3" "$(jq -r '[.cards[] | select(.version != null) | .version] | join(" ")' <<<"$out")"
 check "readback needs --decisions" "2" "$(rc_of brief readback --brief "$R1")"
+
+# Ages across the 1 Nov DST change, in a DST zone, are exact.
+jq '.generated_at = "2026-10-31T12:00:00Z"' "$R1" > "$TMP/dst-brief.json"
+mkdir -p "$TMP/dst-read"
+out=$(TZ=America/New_York brief readback --brief "$TMP/dst-brief.json" --decisions "$TMP/dst-read" --now 2026-11-02T12:00:00Z)
+check "a round's age across a DST change is exact" "48" "$(jq -r .round.age_hours <<<"$out")"
+jq '.generated_at = "2026-13-01T00:00:00Z"' "$R1" > "$TMP/bad-brief.json"
+contains "an impossible time is refused" "$(brief check --brief "$TMP/bad-brief.json")" "generated_at must be an ISO 8601 UTC time"
+
+# Interim results. "Pending: …" keeps a card on the to-act list; only a final
+# result takes it off (PR #1368 review).
+P1="$TMP/pending1/decisions"; mkdir -p "$P1"
+echo '{"status":"go","note":"","by":"u_operator0000000000000","at":"2026-10-26T09:00:00Z","result":"Pending: waiting for free memory"}' > "$P1/r20261026-pr-acme-api-51.json"
+echo '{"status":null,"note":"Refunds yes, but ask finance first","by":"u_operator0000000000000","at":"2026-10-26T09:05:00Z"}' > "$P1/r20261026-api-10.json"
+echo '{"status":"later","note":"","by":"u_operator0000000000000","at":"2026-10-26T09:06:00Z","result":"Relabelled P3 with a comment."}' > "$P1/r20261026-acme-web-9.json"
+out=$(brief readback --brief "$R1" --decisions "$P1" --now 2026-10-26T10:00:00Z)
+check "a Pending: result stays to act" '["r20261026-pr-acme-api-51","r20261026-api-10"]' "$(jq -c .to_act <<<"$out")"
+check "and is listed as pending" "r20261026-pr-acme-api-51" "$(jq -r '[.pending[].id] | join(" ")' <<<"$out")"
+check "only final results count as done" "1 1" "$(jq -r '"\(.counts.done_by_claude) \(.counts.pending)"' <<<"$out")"
+
+# The next round carries unfinished actions in `earlier`, under their old ids.
+out=$(brief compose --config "$CONFIG" --round "$TMP/round2.json" --cards "$TMP/cards3.json" --prev-brief "$R1" --decisions "$P1" \
+      --now 2026-10-27T08:00:00Z --out "$TMP/rp2/brief.json")
+check "unfinished actions are carried as earlier" '["r20261026-pr-acme-api-51","r20261026-api-10"]' "$(jq -c .earlier <<<"$out")"
+check "a finished one is not" "false" "$(jq '[.earlier[].id] | index("r20261026-acme-web-9") != null' "$TMP/rp2/brief.json")"
+check "earlier entries keep their round and buttons" "r20261026 I'll merge it" "$(jq -r '.earlier[0] | "\(.round) \(.buttons.go.label)"' "$TMP/rp2/brief.json")"
+check "the brief with earlier entries checks clean" "ok" "$(brief check --brief "$TMP/rp2/brief.json" | jq -r .status)"
+P2="$TMP/pending2/decisions"; mkdir -p "$P2"
+cp "$P1"/*.json "$P2/"
+out=$(brief readback --brief "$TMP/rp2/brief.json" --decisions "$P2" --now 2026-10-27T09:00:00Z)
+check "earlier actions are to act even while the new round is open" "false 2" "$(jq -r '"\(.round.ready_to_act) \(.earlier_to_act | length)"' <<<"$out")"
+check "with their state joined" "Pending: waiting for free memory" "$(jq -r '.earlier[0].result' <<<"$out")"
+echo '{"status":"go","note":"","by":"u_operator0000000000000","at":"2026-10-26T09:00:00Z","result":"Started session api-51"}' > "$P2/r20261026-pr-acme-api-51.json"
+echo '{"round_id":"r20261028","round":"2026-10-28"}' > "$TMP/round3b.json"
+out=$(brief compose --config "$CONFIG" --round "$TMP/round3b.json" --cards "$TMP/cards3.json" --prev-brief "$TMP/rp2/brief.json" --decisions "$P2" \
+      --now 2026-10-28T08:00:00Z --out "$TMP/rp3/brief.json")
+check "an earlier action stays carried until its result is final" '["r20261026-api-10"]' "$(jq -c .earlier <<<"$out")"
 
 # ─── deferred ────────────────────────────────────────────────────────────────
 echo "deferred"
@@ -579,7 +633,11 @@ check "the host's own reading parses" "true" "$(brief memory --min-free 0 | jq -
 echo "corveil"
 out=$(brief corveil search "billing exports")
 check "reads run with CORVEIL_NO_CAPTURE=1" "1" "$(jq -r .capture_off <<<"$out")"
-check "and pass their arguments through" "search billing exports" "$(jq -r .args <<<"$out")"
+check "and pass --no-capture explicitly, then their arguments" "search --no-capture billing exports" "$(jq -r .args <<<"$out")"
+check "whoami takes no --no-capture flag" "whoami" "$(brief corveil whoami | jq -r .args)"
+o=$(brief corveil search x --no-capture=false); rc=$?
+check "a caller can't turn capture back on" "2" "$rc"
+contains "and says why" "$o" "sets --no-capture itself"
 o=$(brief corveil ontology merge a b); rc=$?
 check "a write verb is refused" "2" "$rc"
 contains "naming the read verbs" "$o" "read verbs only"

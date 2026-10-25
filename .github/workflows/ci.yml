@@ -172,7 +172,9 @@ jobs:
           PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-cascade-epic/cascade_test.sh
           PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-triage/triage_test.sh
           PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-ci-queue/queue_test.sh
-          PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-backlog-brief/brief_test.sh
+          # A DST zone: jq 1.6's fromdateiso8601 reads DST dates through local
+          # time on some hosts, so brief.sh parses times itself (PR #1368).
+          TZ=America/New_York PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-backlog-brief/brief_test.sh
 
       - name: NSLog ban (CROW-874)
         run: bash scripts/check-no-nslog.sh

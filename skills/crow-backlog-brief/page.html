@@ -271,6 +271,11 @@ footer ul { margin: 0; padding-left: 18px; }
     <div class="gen-box" id="gen-box"></div>
   </section>
 
+  <section aria-labelledby="earlier-h" id="earlier-sec" hidden>
+    <div class="sec-head"><h2 id="earlier-h">Still to finish from earlier briefs</h2><p>You decided these on an earlier brief, and Claude hasn't finished them yet. There's nothing to answer here; this shows where each one stands.</p></div>
+    <div class="flight" id="earlier"></div>
+  </section>
+
   <section aria-labelledby="flight-h" id="flight-sec" hidden>
     <div class="sec-head"><h2 id="flight-h">Already in flight</h2><p>Running in Crow or in review. Not on today's ballot.</p></div>
     <div class="flight" id="flight"></div>
@@ -517,6 +522,7 @@ __BRIEF_DATA__
   var GENERAL = { id: D.round_id + "-general", key: "general", general: true };
   $("gen-box").innerHTML = "<div data-id='" + esc(GENERAL.id) + "' id='i-" + esc(GENERAL.id) + "' style='display:grid;gap:6px'><label class='lbl' for='note-" + esc(GENERAL.id) + "'>Notes for Claude</label><textarea id='note-" + esc(GENERAL.id) + "' maxlength='" + NOTE_MAX + "' placeholder='Bring something forward, hold an area until someone weighs in…' readonly></textarea><div class='who'></div><div class='result' hidden></div></div>";
   var ITEMS = CARDS.concat([GENERAL]);
+  var EARLIER = arr(D.earlier).filter(function (e) { return e && typeof e === "object" && typeof e.id === "string"; });
   var byId = {};
   ITEMS.forEach(function (it) { byId[it.id] = it; });
 
@@ -557,11 +563,31 @@ __BRIEF_DATA__
     r.btns.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-v") === st)); b.disabled = !can; });
     r.who.textContent = whoLine(d, it);
     var res = str(d.result), t = safeUrl(d.ticket);
-    if (res || t) { r.result.innerHTML = "<span class='lbl'>Claude did</span>" + md(res) + (t ? " <a href='" + esc(t) + "' target='_blank' rel='noopener'>Open ↗</a>" : ""); r.result.hidden = false; }
+    if (res || t) { r.result.innerHTML = resultHTML(res, t); r.result.hidden = false; }
     else r.result.hidden = true;
     r.ta.readOnly = !can;
     var typing = document.activeElement === r.ta || (pending[it.id] && "note" in pending[it.id]);
     if (!typing) { var n = str(d.note); if (r.ta.value !== n) r.ta.value = n; }
+  }
+
+  // "Pending: …" is Claude's interim result; the card is still on its list.
+  function resultHTML(res, t) {
+    var m = /^\s*Pending:\s*/.exec(res);
+    return "<span class='lbl'>" + (m ? "Claude is on it" : "Claude did") + "</span>" + md(m ? res.slice(m[0].length) : res) +
+      (t ? " <a href='" + esc(t) + "' target='_blank' rel='noopener'>Open ↗</a>" : "");
+  }
+
+  function paintEarlier() {
+    if (!EARLIER.length) return;
+    $("earlier").innerHTML = EARLIER.map(function (e) {
+      var d = server[e.id] || {}, u = safeUrl(e.url);
+      var custom = e.buttons && e.buttons[d.status] && str(e.buttons[d.status].label);
+      var what = custom || DECISION_SHORT[d.status] || (str(d.note) ? "Note" : "Decided");
+      var res = str(d.result).replace(/^\s*Pending:\s*/, "");
+      return "<div><span class='st'>" + esc(what) + "</span><span class='t'>" + (u ? "<a href='" + esc(u) + "' target='_blank' rel='noopener' class='key'>" + esc(e.key) + "</a> " : esc(e.key) + " ") +
+        esc(e.title) + (res ? " · <span class='muted'>" + md(res) + "</span>" : "") + " <span class='muted small'>(" + esc(roundName(e.round)) + ")</span></span></div>";
+    }).join("");
+    $("earlier-sec").hidden = false;
   }
 
   function paintTally() {
@@ -594,7 +620,7 @@ __BRIEF_DATA__
     $("empty").hidden = CARDS.length ? any : false;
   }
 
-  function paint() { ITEMS.forEach(paintRow); paintTally(); applyFilter(); }
+  function paint() { ITEMS.forEach(paintRow); paintTally(); applyFilter(); paintEarlier(); }
 
   function queue(id, patch, delay) {
     if (!writable()) return;

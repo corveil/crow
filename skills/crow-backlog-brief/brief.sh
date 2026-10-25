@@ -16,6 +16,7 @@
 #   check    --brief F                                validate brief.json, including the card format
 #   build    --brief F --out F (--decisions PATH | --first-publish) [--active-minutes N] [--now T]
 #                                                     validate, refuse to publish over fresh answers, write the page
+#   mark-read --decisions DIR --count N               record a fresh ArtifactData list of N docs in DIR (build needs it)
 #   readback --brief F --decisions PATH [--rounds PATH] [--round-hours N] [--idle-minutes N] [--now T]
 #                                                     join the decisions to the cards; say whether the round has closed
 #   deferred --issue OWNER/NAME#N --repo-path P [--repo-path P ...] [--ref R]
@@ -26,8 +27,8 @@
 # Exit codes: 0 ok; 1 invalid input (an `errors` list says what); 2 usage or
 # environment error; 3 hold (build: the operator wrote in the last
 # --active-minutes, so wait and build again; corveil: no CLI, skip the
-# ontology); 4 stale (build: the decisions read is too old, or the previous
-# round's decisions changed since compose). Every subcommand except corveil
+# ontology); 4 stale (build: no read recorded, the read is too old, or the
+# previous round's decisions changed since compose). Every subcommand except corveil
 # prints one JSON object. Reads GitHub through `gh` and Crow through `crow`;
 # override with GH_BIN / CROW_BIN / CORVEIL_BIN (tests do). Needs jq 1.6+.
 #
@@ -45,10 +46,12 @@ CORVEIL_BIN="${CORVEIL_BIN:-corveil}"
 # The corveil verbs that only read the ontology. Anything else is refused, so
 # the pre-approved `brief.sh corveil` prefix can never write.
 CORVEIL_READ_VERBS="search entity entities context evidence event history timeline graph stats whoami health"
+# Read verbs that record nothing and take no --no-capture flag.
+CORVEIL_UNCAPTURED_VERBS="whoami health"
 
 CONFIG=""; OUT=""; BACKLOG=""; SCOPE=""; ROUND=""; CARDS=""; STATS=""; PRS=""
 PREV=""; DECISIONS=""; ROUNDS=""; BRIEF=""; TEMPLATE="$SCRIPT_DIR/page.html"
-NOW=""; MERGED_SINCE=""; DAYS=60; ISSUE=""; REF=""; MIN_FREE=""
+NOW=""; MERGED_SINCE=""; DAYS=60; ISSUE=""; REF=""; MIN_FREE=""; COUNT=""
 ACTIVE_MINUTES=""; IDLE_MINUTES=""; ROUND_HOURS=""; MAX_READ_AGE=600; FIRST_PUBLISH=0
 REPO_PATHS=()
 CONFIG_JSON=""; CHECK_RESULT=""
@@ -114,7 +117,7 @@ require_jq_16() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --config|--out|--backlog|--scope|--round|--cards|--stats|--prs|--prev-brief|--decisions|--rounds|--brief|--template|--now|--merged-since|--days|--issue|--ref|--repo-path|--min-free|--active-minutes|--idle-minutes|--round-hours|--max-read-age)
+      --config|--out|--backlog|--scope|--round|--cards|--stats|--prs|--prev-brief|--decisions|--rounds|--brief|--template|--now|--merged-since|--days|--issue|--ref|--repo-path|--min-free|--active-minutes|--idle-minutes|--round-hours|--max-read-age|--count)
         [[ $# -ge 2 ]] || die "parse_args" "$1 needs a value"
         case "$1" in
           --config)         CONFIG="$2" ;;
@@ -141,6 +144,7 @@ parse_args() {
           --idle-minutes)   IDLE_MINUTES="$2" ;;
           --round-hours)    ROUND_HOURS="$2" ;;
           --max-read-age)   MAX_READ_AGE="$2" ;;
+          --count)          COUNT="$2" ;;
         esac
         shift 2 ;;
       --first-publish) FIRST_PUBLISH=1; shift ;;
@@ -175,10 +179,26 @@ def nonempty: type == "string" and (gsub("\\s"; "") | length) > 0;
 def member($xs): . as $v | $xs | map(. == $v) | any;
 def obj: reduce .[] as $e ({}; .[$e.key] = $e.value);
 def is_url: type == "string" and test("^https?://[^[:space:]]+$");
-def epoch: if type != "string" then null
-  else (sub("\\.[0-9]+Z$"; "Z")
-        | (if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}Z$") then sub("Z$"; ":00Z") else . end)
-        | (try fromdateiso8601 catch null)) end;
+# Seconds since 1970 for a UTC time (YYYY-MM-DDTHH:MM[:SS[.fff]]Z), or null.
+# Computed here, not with fromdateiso8601: jq 1.6 on macOS reads a DST date
+# through local time and returns it an hour late (PR #1368 review).
+def civil_days($y; $m; $d):
+  (if $m <= 2 then $y - 1 else $y end) as $yy
+  | ((if $yy >= 0 then $yy else $yy - 399 end) / 400 | floor) as $era
+  | ($yy - $era * 400) as $yoe
+  | (((153 * (if $m > 2 then $m - 3 else $m + 9 end) + 2) / 5 | floor) + $d - 1) as $doy
+  | ($yoe * 365 + ($yoe / 4 | floor) - ($yoe / 100 | floor) + $doy) as $doe
+  | $era * 146097 + $doe - 719468;
+def epoch:
+  if type != "string" then null
+  else ([capture("^(?<y>[0-9]{4})-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2})(?::(?<s>[0-9]{2})(?:\\.[0-9]+)?)?Z$")] | .[0]) as $c
+    | if $c == null then null
+      else ($c.y | tonumber) as $y | ($c.mo | tonumber) as $m | ($c.d | tonumber) as $d
+        | ($c.h | tonumber) as $h | ($c.mi | tonumber) as $mi | (($c.s // "0") | tonumber) as $s
+        | if $m < 1 or $m > 12 or $d < 1 or $d > 31 or $h > 23 or $mi > 59 or $s > 60 then null
+          else civil_days($y; $m; $d) * 86400 + $h * 3600 + $mi * 60 + $s end
+      end
+  end;
 def ID_RE: "^[A-Za-z0-9_.~:@+-]{1,200}$";
 def slugify: tostring | ascii_downcase | gsub("[^a-z0-9]+"; "-") | sub("^-+"; "") | sub("-+$"; "");
 def signed: if . > 0 then "+\(.)" elif . < 0 then "−\(0 - .)" else "±0" end;
@@ -191,6 +211,11 @@ def strlist($k):
 def body: if type == "object" and (.data | type) == "object" then .data else . end;
 def version: if type == "object" and (.version | type) == "number" then .version else null end;
 def blank: (type == "string" and (gsub("\\s"; "") | length) > 0) | not;
+# Claude writes an interim result as "Pending: …" (waiting for free memory, for
+# a marker-cleanup PR to merge). Only a final result takes a card off the to-act
+# list (PR #1368 review).
+def is_pending: type == "string" and test("^\\s*Pending:");
+def is_final: (blank | not) and (is_pending | not);
 '
 
 # ─── config ──────────────────────────────────────────────────────────────────
@@ -655,20 +680,34 @@ docs_file() { # docs_file <var> <flag> <path> — the docs as one JSON array in 
   printf -v "$1" '%s' "$__docs_path"
 }
 
-# Seconds since the newest file in a decisions read was written: the guard
-# that the read happened right before this publish.
+# A directory read is proven by the marker `mark-read` writes after the
+# ArtifactData list, never by the directory's own mtime: `mkdir` alone would
+# pass that (PR #1368 review). A single saved list file proves itself.
+READ_MARKER=".read.json"
+
+# Seconds since the decisions were read, or "none" when no read is recorded.
 read_age() { # read_age <path>
-  local newest=0 f t
-  if [[ -d "$1" ]]; then
-    for f in "$1"/*.json "$1"; do
-      [[ -e "$f" ]] || continue
-      t=$(mtime "$f") || continue
-      (( t > newest )) && newest=$t
-    done
-  else
-    newest=$(mtime "$1") || newest=0
+  local f="$1" t
+  [[ -d "$1" ]] && f="$1/$READ_MARKER"
+  [[ -f "$f" ]] || { echo none; return; }
+  t=$(mtime "$f") || { echo none; return; }
+  echo $(( $(date -u +%s) - t ))
+}
+
+# Records that DIR holds a fresh ArtifactData list of --count docs. Refuses a
+# count that doesn't match the files on disk (a list that didn't land).
+cmd_mark_read() {
+  [[ -n "$DECISIONS" && -d "$DECISIONS" ]] || die "parse_args" "--decisions must be the directory the list wrote (<out_dir>/decisions)"
+  is_uint "$COUNT" || die "parse_args" "--count is required: how many docs the ArtifactData list returned"
+  local f n=0
+  for f in "$DECISIONS"/*.json; do [[ -e "$f" ]] && n=$((n + 1)); done
+  if (( n != COUNT )); then
+    jq -cn --argjson n "$n" --argjson c "$COUNT" --arg d "$DECISIONS" \
+      '{status:"error", step:"mark_read", errors:["the list returned \($c) docs but \($d) holds \($n): list again into an emptied directory"]}'
+    exit 1
   fi
-  echo $(( $(date -u +%s) - newest ))
+  jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson c "$COUNT" '{read_at: $at, count: $c}' > "$DECISIONS/$READ_MARKER"     || die "mark_read" "cannot write $DECISIONS/$READ_MARKER"
+  jq -cn --argjson c "$COUNT" '{status:"ok", count: $c}'
 }
 
 # ─── check (the brief and card format) ───────────────────────────────────────
@@ -773,6 +812,7 @@ else
         + objlist("in_flight"; ["key"]; "{key, url, title, state}")
         + objlist("reviewed"; ["key"]; "{key, url, title, why}")
         + objlist("history"; ["round"]; "{round, go, later, drop, carried, open_after}")
+        + objlist("earlier"; ["id", "key", "title", "round"]; "{id, key, title, round} as compose writes them")
         + (if (.carry // null) == null then []
            elif (.carry | type) == "object" and (.carry.from_round | nonempty) and (.carry.basis | type) == "array" then []
            else ["carry must be {from_round, basis} as compose writes it"] end)
@@ -823,7 +863,9 @@ cmd_check() {
 # previous card is carried forward when it has no decision and no note, its
 # slug isn't on a new card (a new card with that slug replaces it and keeps the
 # carried_from), and round.json doesn't retire it. Decided and noted cards are
-# never carried: they are acted on.
+# never carried as cards: they are acted on. One that has no final result yet
+# (blank, or "Pending: …") goes to `earlier` under its old id, with its earlier
+# entries that are still unfinished, so its action is never dropped.
 # shellcheck disable=SC2016
 COMPOSE='
 def SECTIONS: ["waiting", "kickoff", "watch", "close"];
@@ -852,6 +894,13 @@ def STATUSES: ["go", "later", "drop"];
 | [ $new0[] | (if $refreshed[._slug] then . + {carried_from: $refreshed[._slug]} else . end) | del(._slug) ] as $new
 | ([ SECTIONS[] as $s | ($new[] | select(.section == $s)), ($carried[] | select(.section == $s)) ]
    + [ ($new + $carried)[] | select((.section | member(SECTIONS)) | not) ]) as $all
+| def unfinished($d):
+    ($d | type) == "object" and (($d.status | member(STATUSES)) or ($d.note | blank | not)) and (($d.result | is_final) | not);
+  def stub($round):
+    {id, key, url: (.url // null), title, section, kind: (.kind // "ticket"), rec, round: $round}
+    + (if (.buttons | type) == "object" then {buttons} else {} end);
+  ([ $prevs[] | select(unfinished(.d)) | .card | stub($p.round_id) ]
+   + [ (if $p then ($p.earlier // []) else [] end)[] | select(unfinished($dmap[.id])) ]) as $earlier
 | def count($status): [ $prevs[] | select((.d | type) == "object" and .d.status == $status) ] | length;
   (if $r.history then $r.history
    elif $p then (($p.history // []) + [ {round: ($p.round // $p.round_id), go: (count("go") | tostring), later: (count("later") | tostring),
@@ -892,6 +941,7 @@ def STATUSES: ["go", "later", "drop"];
     history: $history,
     method: ($r.method // []),
     carry: (if $p then {from_round: $p.round_id, basis: basis($pp)} else null end),
+    earlier: (if ($earlier | length) > 0 then $earlier else null end),
     cards: $all
   }
   | with_entries(select(.value != null))
@@ -904,6 +954,7 @@ def STATUSES: ["go", "later", "drop"];
         retired: [ $und[] | select(.slug | member($retire)) | .slug ],
         decided_prev: [ $prevs[] | select((.d | type) == "object" and (.d.status | member(STATUSES))) | .card.id ],
         noted_prev: [ $prevs[] | select(noted(.d)) | .card.id ],
+        earlier: [ $earlier[] | .id ],
         errors: ([ $cs[] | select(type == "object" and has("id")) | "card \(.key // "?" | tostring): cards.json carries no id; compose derives it from slug (or key)" ]
                  + (if $p and $p.round_id == $rid then ["round_id \($rid) is the previous round'"'"'s: a new round needs a new id"] else [] end)
                  + (if ($cs | type) == "array" then [] else ["cards must be a JSON array of cards"] end))
@@ -993,6 +1044,11 @@ cmd_build() {
     [[ -e "$DECISIONS" ]] || die "parse_args" "--decisions not found: $DECISIONS"
     local age docs active
     age=$(read_age "$DECISIONS")
+    if [[ "$age" == "none" ]]; then
+      jq -cn --arg d "$DECISIONS" \
+        '{status:"stale", reason:"no_read", message:"no decisions read is recorded in \($d): list the decisions with ArtifactData, then run mark-read"}'
+      exit 4
+    fi
     if (( MAX_READ_AGE > 0 && age > MAX_READ_AGE )); then
       jq -cn --argjson age "$age" --argjson max "$MAX_READ_AGE" \
         '{status:"stale", reason:"old_read", read_age_seconds:$age,
@@ -1047,7 +1103,9 @@ cmd_build() {
 # Joins this round's decision docs to the cards. The round closes when the
 # operator presses "I'm done with this brief" (rounds/<round_id>.done), or goes
 # stale once it is --round-hours old and nobody has written for
-# --idle-minutes. Only a closed round is acted on: ready_to_act.
+# --idle-minutes. Only a closed round is acted on: ready_to_act. A card stays in
+# to_act until Claude writes a final result; "Pending: …" is not final.
+# earlier_to_act lists actions carried from earlier, closed rounds.
 # shellcheck disable=SC2016
 READBACK='
 def STATUSES: ["go", "later", "drop"];
@@ -1094,6 +1152,12 @@ def REC_STATUS: {kickoff: "go", defer: "later", close: "drop"};
       + (if $d and $d.ok then ($d | clean)
          else {status: null, note: "", by: null, at: null, ticket: null, result: "", version: ($d.version // null)} end) ] as $rows
 | (if $by[$gid] and $by[$gid].ok then ($by[$gid] | clean | {note, by, at, result, version}) else null end) as $general
+# Actions decided on an earlier round and not finished yet (compose carries
+# them in `earlier`). Their round has closed, so they are always actionable.
+| ($all | map(select(.ok)) | map({key: .id, value: .}) | obj) as $all_by
+| [ ($br.earlier // [])[] | . as $e | $all_by[$e.id] as $d
+    | {id, key, url: (.url // null), title, round, rec}
+      + (if $d then ($d | clean) else {status: null, note: "", by: null, at: null, ticket: null, result: "", version: null} end) ] as $earlier
 | ([ $rounds[] | select(.id == $rid) | .raw | body | select(type == "object") ] | .[0] // null) as $rdoc
 | ($rdoc != null and $rdoc.done == true) as $done
 | ($now | epoch) as $t
@@ -1131,14 +1195,19 @@ def REC_STATUS: {kickoff: "go", defer: "later", close: "drop"};
       undecided: ([$rows[] | select(.status == null and (.note | blank))] | length),
       notes: ([$rows[] | select(.note | blank | not)] | length),
       against_rec: ([$decided[] | select(.status != REC_STATUS[.rec])] | length),
-      done_by_claude: ([$rows[] | select(.result | blank | not)] | length)
+      done_by_claude: ([$rows[] | select(.result | is_final)] | length),
+      pending: ([$rows[] | select(.result | is_pending)] | length),
+      earlier_to_act: ([$earlier[] | select(.result | is_final | not)] | length)
     },
     go: [$rows[] | select(.status == "go") | .id],
     later: [$rows[] | select(.status == "later") | .id],
     drop: [$rows[] | select(.status == "drop") | .id],
     noted: [$noted[] | .id],
     undecided: [$rows[] | select(.status == null and (.note | blank)) | .id],
-    to_act: [$rows[] | select((.status != null or (.note | blank | not)) and (.result | blank)) | .id],
+    to_act: [$rows[] | select((.status != null or (.note | blank | not)) and (.result | is_final | not)) | .id],
+    pending: [$rows[] | select(.result | is_pending) | {id, result}],
+    earlier_to_act: [$earlier[] | select(.result | is_final | not) | .id],
+    earlier: $earlier,
     carry_forward: [$rows[] | select(.status == null and (.note | blank)) | .id],
     against_rec: [$decided[] | select(.status != REC_STATUS[.rec]) | {id, rec, status}],
     notes: [$rows[] | select(.note | blank | not) | {id, status, note, by}],
@@ -1253,8 +1322,21 @@ cmd_corveil() {
     jq -cn '{status: "skipped", reason: "no corveil CLI on PATH: skip the ontology step and say so in the method"}'
     exit 3
   fi
+  # The env var is only the flag's default, so a caller's --no-capture=false
+  # would win. Refuse any capture flag, and pass --no-capture explicitly on
+  # every verb that records reads (PR #1368 review).
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --no-capture*|--capture*) die "corveil" "brief.sh corveil sets --no-capture itself; don't pass $arg" ;;
+    esac
+  done
   export CORVEIL_NO_CAPTURE=1
-  exec "$CORVEIL_BIN" "$@"
+  shift
+  case " $CORVEIL_UNCAPTURED_VERBS " in
+    *" $verb "*) exec "$CORVEIL_BIN" "$verb" "$@" ;;
+    *) exec "$CORVEIL_BIN" "$verb" --no-capture "$@" ;;
+  esac
 }
 
 sub="${1:-}"
@@ -1269,9 +1351,10 @@ case "$sub" in
   check)    parse_args "$@"; cmd_check ;;
   build)    parse_args "$@"; cmd_build ;;
   readback) parse_args "$@"; cmd_readback ;;
+  mark-read) parse_args "$@"; cmd_mark_read ;;
   deferred) parse_args "$@"; cmd_deferred ;;
   memory)   parse_args "$@"; cmd_memory ;;
   corveil)  require_jq_16; cmd_corveil "$@" ;;
   --help|-h|"") usage ;;
-  *) die "parse_args" "unknown subcommand: $sub (expected config, fetch, scope, prs, stats, compose, check, build, readback, deferred, memory or corveil)" ;;
+  *) die "parse_args" "unknown subcommand: $sub (expected config, fetch, scope, prs, stats, compose, check, build, mark-read, readback, deferred, memory or corveil)" ;;
 esac
