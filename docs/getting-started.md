@@ -134,7 +134,8 @@ Crow scaffolds the following under the dev root (see `Packages/CrowEngine/Source
         ├── crow-batch-workspace/     # /crow-batch-workspace skill
         ├── crow-cascade-epic/        # /crow-cascade-epic skill + cascade.sh
         ├── crow-triage/              # /crow-triage skill + page.html + triage.sh
-        └── crow-ci-queue/            # /crow-ci-queue skill + queue.sh
+        ├── crow-ci-queue/            # /crow-ci-queue skill + queue.sh
+        └── crow-backlog-brief/       # /crow-backlog-brief skill + page.html + brief.sh
 ```
 
 ## 6. Install (Optional)

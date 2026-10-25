@@ -30,6 +30,10 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-ci-queue/SKILL.md`                     | `ci:full` queue skill invoked via `/crow-ci-queue`            |
 | `{devRoot}/.claude/skills/crow-ci-queue/queue.sh`                     | Queue status, normalize/advance, and the background watcher   |
 | `{devRoot}/.claude/ci-queues/`                                        | Optional per-repo queue files (`add` / `order` / `hold`)      |
+| `{devRoot}/.claude/skills/crow-backlog-brief/SKILL.md`                | Backlog brief loop skill invoked via `/crow-backlog-brief`    |
+| `{devRoot}/.claude/skills/crow-backlog-brief/page.html`               | Page template that `brief.sh build` fills from `brief.json`   |
+| `{devRoot}/.claude/skills/crow-backlog-brief/brief.sh`                | Scope, compose, card check, publish guards, readback          |
+| `{devRoot}/.claude/backlog-brief/`                                    | Per-brief config, URL, built page, and each round's files     |
 | `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
 
 ## Workspace Configuration

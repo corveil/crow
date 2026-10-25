@@ -1,0 +1,717 @@
+<title>__BRIEF_TITLE__</title>
+<!--
+  /crow-backlog-brief page template (CROW-1367). `brief.sh build` fills the
+  title and the #brief-data block from brief.json. Never edit a built page by
+  hand: change the cards, compose and build again. Decisions are not in this
+  file; they live in the artifact's db: `decisions/<card id>` (one doc per
+  card, ids carry the round id) and `rounds/<round_id>` ({done}).
+-->
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: one 1120px column. A header band with the round's numbers and the open-issue burndown, then decision cards (reasoning left, decision rail right) grouped by section, then what is in flight, held, and earlier rounds. */
+:root {
+  --bg: #F3F5F8;
+  --surface: #FFFFFF;
+  --sunk: #E9EDF3;
+  --ink: #18202D;
+  --muted: #5A6476;
+  --rule: #D8DEE7;
+  --accent: #2C4FB8;
+  --accent-soft: #E3E9F9;
+  --go: #17794F;
+  --go-soft: #DDF1E7;
+  --later: #9A6410;
+  --later-soft: #F7EBD3;
+  --drop: #A63A35;
+  --drop-soft: #F6E0DE;
+  --s1: #2C4FB8;
+  --s2: #2E8F87;
+  --s3: #B5792A;
+  --s4: #8A55B8;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10141B; --surface: #171C25; --sunk: #1E2430; --ink: #E5E9F0; --muted: #98A2B3; --rule: #2A3242;
+    --accent: #8FA6FF; --accent-soft: #232D4A;
+    --go: #5CC995; --go-soft: #173327; --later: #E2B15E; --later-soft: #362A15; --drop: #F08A83; --drop-soft: #3A1F1E;
+    --s1: #8FA6FF; --s2: #5CC2B8; --s3: #E2B15E; --s4: #C39BEA;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10141B; --surface: #171C25; --sunk: #1E2430; --ink: #E5E9F0; --muted: #98A2B3; --rule: #2A3242;
+  --accent: #8FA6FF; --accent-soft: #232D4A;
+  --go: #5CC995; --go-soft: #173327; --later: #E2B15E; --later-soft: #362A15; --drop: #F08A83; --drop-soft: #3A1F1E;
+  --s1: #8FA6FF; --s2: #5CC2B8; --s3: #E2B15E; --s4: #C39BEA;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.5; margin: 0; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px; display: grid; gap: 36px; }
+.wrap > * { min-width: 0; }
+h1, h2, h3, h4 { font-family: var(--f-display); text-wrap: balance; margin: 0; letter-spacing: -0.005em; }
+h1 { font-size: clamp(30px, 4.4vw, 42px); font-weight: 700; line-height: 1.05; }
+h2 { font-size: 22px; font-weight: 600; }
+h3 { font-size: 19px; font-weight: 600; line-height: 1.25; }
+p { margin: 0; }
+a { color: var(--accent); }
+code { font-family: var(--f-mono); font-size: 0.88em; background: var(--sunk); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.mono, .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lbl { display: block; font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+
+/* Header */
+header.top { display: grid; gap: 18px; }
+.top-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 12px 24px; }
+.lede { max-width: 72ch; font-size: 16px; }
+.howto { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.howto b { color: var(--ink); font-weight: 600; }
+
+/* Numbers + chart band */
+.band { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.55fr); gap: 20px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px; }
+.band.single { grid-template-columns: minmax(0, 1fr); }
+.kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; align-content: start; }
+.kpi b { display: block; font-family: var(--f-display); font-size: 34px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 13px; color: var(--muted); }
+.kpi .delta { display: block; font-family: var(--f-mono); font-size: 12px; margin-top: 2px; }
+.up { color: var(--drop); } .down { color: var(--go); }
+.chart { min-width: 0; display: grid; gap: 8px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.comp { display: grid; gap: 6px; }
+.comp-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--sunk); }
+.comp-bar span { display: block; height: 100%; }
+@media (max-width: 820px) { .band { grid-template-columns: minmax(0, 1fr); } }
+
+/* Signal */
+.signal { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 14px; }
+.sig { border-top: 2px solid var(--accent); padding-top: 10px; display: grid; gap: 4px; min-width: 0; }
+.sig h4 { font-size: 15px; font-weight: 600; }
+.sig p { font-size: 14px; }
+.sig .src { font-size: 12px; color: var(--muted); }
+
+/* Section heads + toolbar */
+.sec-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 10px 20px; margin-bottom: 14px; }
+.sec-head p { max-width: 70ch; color: var(--muted); font-size: 14px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; border-bottom: 1px solid var(--rule); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.filter { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.filter button, .seg button, .btn { font: inherit; font-size: 13px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.filter button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+button:focus-visible, textarea:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#save-status { font-size: 13px; color: var(--muted); }
+#tally { font-size: 13px; }
+.btn-done { font-weight: 600; border-color: var(--accent); color: var(--accent); }
+.btn-done[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+.btn-done[disabled] { cursor: default; opacity: 0.6; }
+
+/* Cards */
+.cards { display: grid; gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; display: grid; grid-template-columns: minmax(0, 1fr) 280px; overflow: hidden; }
+.card[data-decision="go"] { border-color: var(--go); }
+.card[data-decision="later"] { border-color: var(--later); }
+.card[data-decision="drop"] { border-color: var(--drop); }
+.c-main { padding: 18px 20px; display: grid; gap: 14px; min-width: 0; align-content: start; }
+.c-head { display: grid; gap: 6px; }
+.c-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; color: var(--muted); }
+.kind { font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 4px; background: var(--sunk); color: var(--ink); }
+.kind.epic { background: var(--accent-soft); color: var(--accent); }
+.kind.action { background: var(--later-soft); color: var(--later); }
+.key { font-family: var(--f-mono); font-weight: 500; overflow-wrap: anywhere; }
+.carried { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 4px; border: 1px dashed var(--muted); color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border: 1px solid var(--rule); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+.chip.fit { border-color: var(--go); color: var(--go); }
+.chip.rec-kickoff { background: var(--go-soft); border-color: transparent; color: var(--go); font-weight: 600; }
+.chip.rec-defer { background: var(--later-soft); border-color: transparent; color: var(--later); font-weight: 600; }
+.chip.rec-close { background: var(--drop-soft); border-color: transparent; color: var(--drop); font-weight: 600; }
+.chip.risk-low { background: var(--go-soft); border-color: transparent; color: var(--go); }
+.chip.risk-medium { background: var(--later-soft); border-color: transparent; color: var(--later); }
+.chip.risk-high { background: var(--drop-soft); border-color: transparent; color: var(--drop); }
+.summary { font-size: 15px; }
+.reasons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 22px; }
+.reasons section { min-width: 0; }
+.reasons section.wide { grid-column: 1 / -1; }
+.reasons p, .reasons li, .reasons dd { font-size: 14px; }
+.reasons ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.reasons ul.pros li::marker { content: "+  "; color: var(--go); font-weight: 600; }
+.reasons ul.cons li::marker { content: "−  "; color: var(--drop); font-weight: 600; }
+.grid2 { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
+.grid2 dt { color: var(--muted); font-size: 14px; }
+.grid2 dd { margin: 0; min-width: 0; }
+.tag { font-family: var(--f-mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--sunk); color: var(--muted); margin-left: 6px; white-space: nowrap; }
+.decisions li::marker { content: "? "; font-family: var(--f-mono); color: var(--later); font-weight: 600; }
+.decisions .sugg { display: block; color: var(--muted); }
+.decisions .sugg b { color: var(--ink); font-weight: 600; }
+.progress { display: grid; gap: 4px; }
+.pbar { height: 6px; background: var(--sunk); border-radius: 3px; overflow: hidden; }
+.pbar span { display: block; height: 100%; background: var(--accent); }
+details.more summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+details.more[open] summary { margin-bottom: 8px; }
+details.more ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.c-rail { background: var(--sunk); padding: 18px; display: grid; gap: 12px; align-content: start; border-left: 1px solid var(--rule); min-width: 0; }
+.seg { display: grid; gap: 6px; }
+.seg button { text-align: left; padding: 8px 10px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.seg button[disabled] { cursor: default; opacity: 0.55; }
+.seg button[data-v="go"][aria-pressed="true"] { background: var(--go); border-color: var(--go); color: var(--surface); }
+.seg button[data-v="later"][aria-pressed="true"] { background: var(--later); border-color: var(--later); color: var(--surface); }
+.seg button[data-v="drop"][aria-pressed="true"] { background: var(--drop); border-color: var(--drop); color: var(--surface); }
+.seg button .hint { font-size: 11px; font-family: var(--f-mono); opacity: 0.75; text-align: right; }
+.rail-note label { display: block; font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+textarea { width: 100%; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; resize: vertical; min-height: 84px; }
+textarea[readonly] { background: var(--sunk); }
+.who { font-size: 12px; color: var(--muted); min-height: 1em; }
+.result { font-size: 13px; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; }
+.result a { font-weight: 600; }
+@media (max-width: 760px) {
+  .card { grid-template-columns: minmax(0, 1fr); }
+  .c-rail { border-left: 0; border-top: 1px solid var(--rule); }
+  .reasons { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* In flight, held, history */
+.flight { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px 18px; font-size: 14px; }
+.flight div { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.flight .st { font-family: var(--f-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); flex: none; width: 92px; }
+.flight .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tbl-wrap { overflow-x: auto; max-width: 100%; }
+table.hist { border-collapse: collapse; font-size: 14px; min-width: 520px; width: 100%; }
+table.hist th, table.hist td { text-align: left; vertical-align: top; padding: 6px 10px; border-bottom: 1px solid var(--rule); }
+table.hist th { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+table.hist td.k { font-family: var(--f-mono); white-space: nowrap; }
+footer { font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+footer ul { margin: 0; padding-left: 18px; }
+#empty { padding: 24px; text-align: center; color: var(--muted); }
+.gen-box { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; display: grid; gap: 8px; }
+.gen-box textarea { min-height: 96px; }
+@media (prefers-reduced-motion: no-preference) { .card { transition: border-color .15s; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="top-row">
+      <div>
+        <div class="eyebrow" id="context"></div>
+        <h1 id="title">Backlog Brief</h1>
+      </div>
+      <div class="small muted mono" id="generated"></div>
+    </div>
+    <p class="lede" id="lede" hidden></p>
+    <div class="howto">
+      <span><b>Kick off now</b>: Claude starts a Crow workspace (an epic starts its first wave)</span>
+      <span><b>Deprioritize</b>: relabelled with a comment, off the brief</span>
+      <span><b>Close</b>: closed with a comment, after a last check</span>
+      <span><b>Notes</b>: Claude acts on what you write; a note can override its button</span>
+      <span><b>Skip a card</b> and it comes back on the next brief</span>
+    </div>
+  </header>
+
+  <section class="band" id="band" aria-label="Backlog numbers" hidden>
+    <div class="kpis" id="kpis"></div>
+    <div class="chart" id="chart" hidden>
+      <span class="lbl" id="burn-lbl">Open issues</span>
+      <div id="burn"></div>
+      <div class="legend" id="burn-legend"></div>
+      <div class="comp" id="comp"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="sig-h" id="sig-sec" hidden>
+    <div class="sec-head"><h2 id="sig-h">Signal since the last brief</h2><p>From the org's meetings, Slack, decisions and AI chat. It shapes today's ordering.</p></div>
+    <div class="signal" id="signal"></div>
+  </section>
+
+  <div class="toolbar">
+    <div class="filter" id="filter" role="group" aria-label="Show">
+      <button type="button" data-f="all" aria-pressed="true">All</button>
+      <button type="button" data-f="undecided" aria-pressed="false">Undecided</button>
+      <button type="button" data-f="go" aria-pressed="false">Kick off</button>
+      <button type="button" data-f="later" aria-pressed="false">Deprioritize</button>
+      <button type="button" data-f="drop" aria-pressed="false">Close</button>
+    </div>
+    <span id="tally" class="muted">Loading decisions…</span>
+    <span id="save-status" role="status" aria-live="polite"></span>
+    <button type="button" class="btn btn-done" id="done-btn" aria-pressed="false" disabled>I'm done with this brief</button>
+  </div>
+
+  <section aria-labelledby="s-waiting-h" id="s-waiting" hidden>
+    <div class="sec-head"><h2 id="s-waiting-h">Waiting on you</h2><p>Work already started that needs your answer, ready-to-merge PRs first. Each card's buttons say what they mean here; put a different answer in the note.</p></div>
+    <div class="cards"></div>
+  </section>
+
+  <section aria-labelledby="s-kickoff-h" id="s-kickoff" hidden>
+    <div class="sec-head"><h2 id="s-kickoff-h">Recommended to kick off</h2><p>Ranked by urgency and value. An epic is decided as a whole; kicking it off starts its first wave as a cascade.</p></div>
+    <div class="cards"></div>
+  </section>
+
+  <section aria-labelledby="s-watch-h" id="s-watch" hidden>
+    <div class="sec-head"><h2 id="s-watch-h">Worth a decision, not urgent</h2><p>Valid work Claude would not start today. Deprioritize keeps it off the next brief; kick it off if you disagree.</p></div>
+    <div class="cards"></div>
+  </section>
+
+  <section aria-labelledby="s-close-h" id="s-close" hidden>
+    <div class="sec-head"><h2 id="s-close-h">Recommended to close</h2><p>Already done, superseded, obsolete or a duplicate, with the evidence on each card. Closing these drains the backlog without engineering time.</p></div>
+    <div class="cards"></div>
+  </section>
+
+  <p id="empty" hidden>Nothing matches this filter.</p>
+
+  <section aria-labelledby="gen-h" id="gen-sec">
+    <div class="sec-head"><h2 id="gen-h">Anything else?</h2><p>Notes for the whole brief: priorities Claude missed, tickets to bring forward, how you want Claude to work.</p></div>
+    <div class="gen-box" id="gen-box"></div>
+  </section>
+
+  <section aria-labelledby="flight-h" id="flight-sec" hidden>
+    <div class="sec-head"><h2 id="flight-h">Already in flight</h2><p>Running in Crow or in review. Not on today's ballot.</p></div>
+    <div class="flight" id="flight"></div>
+  </section>
+
+  <section aria-labelledby="rev-h" id="rev-sec" hidden>
+    <div class="sec-head"><h2 id="rev-h">Also reviewed, holding for now</h2><p>Checked this round and still valid, but lower value or blocked. They come back when something changes; ask for any of them under "Anything else?".</p></div>
+    <details class="more"><summary id="rev-sum">Show the list</summary><div class="tbl-wrap"><table class="hist" id="rev"></table></div></details>
+  </section>
+
+  <section aria-labelledby="hist-h" id="hist-sec" hidden>
+    <div class="sec-head"><h2 id="hist-h">Earlier briefs</h2></div>
+    <div class="tbl-wrap"><table class="hist" id="hist"></table></div>
+  </section>
+
+  <footer id="method-sec" hidden>
+    <span class="lbl">How this brief was made</span>
+    <ul id="method"></ul>
+  </footer>
+</div>
+
+<script type="application/json" id="brief-data">
+__BRIEF_DATA__
+</script>
+<script>
+(function () {
+  "use strict";
+  var SECTIONS = ["waiting", "kickoff", "watch", "close"];
+  var DECISION_LABEL = { go: "Kick off now", later: "Deprioritize", drop: "Close ticket" };
+  var DECISION_SHORT = { go: "Kick off", later: "Deprioritize", drop: "Close" };
+  var DECISION_HINT = { go: "start a workspace", later: "relabel, off the brief", drop: "with a comment" };
+  var REC_LABEL = { kickoff: "Recommend: kick off", defer: "Recommend: deprioritize", close: "Recommend: close" };
+  var KIND = { epic: "EPIC", ticket: "TICKET", pr: "OPEN PR", decision: "DECISION", action: "HOUSEKEEPING" };
+  var NOTE_DEBOUNCE_MS = 800, NOTE_MAX = 4000;
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
+  // Inline markup for card text: `code`, **bold**, [text](https://…). Everything else is escaped.
+  function md(s) {
+    var parts = String(s == null ? "" : s).split("`");
+    if (parts.length % 2 === 0) { var tail = parts.pop(); parts[parts.length - 1] += "`" + tail; }
+    return parts.map(function (p, i) {
+      if (i % 2) return "<code>" + esc(p) + "</code>";
+      return esc(p)
+        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "<a href='$2' target='_blank' rel='noopener'>$1</a>");
+    }).join("");
+  }
+  function str(v) { return typeof v === "string" ? v : ""; }
+  function arr(v) { return Array.isArray(v) ? v : []; }
+  function safeUrl(u) { return typeof u === "string" && /^https?:\/\/\S+$/.test(u) ? u : null; }
+  function fmtDay(d) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str(d)); if (!m) return str(d);
+    try { return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12)).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }); } catch (e) { return str(d); }
+  }
+  function roundName(r) { var m = /^r(\d{4})(\d{2})(\d{2})/.exec(str(r)); return m ? fmtDay(m[1] + "-" + m[2] + "-" + m[3]) : str(r); }
+
+  var D = null;
+  try { D = JSON.parse($("brief-data").textContent); } catch (e) { D = null; }
+  if (!D || !Array.isArray(D.cards)) { $("tally").textContent = "This page has no brief data. Build it with brief.sh build from the crow-backlog-brief skill."; return; }
+  var REL = D.release && typeof D.release === "object" ? D.release : null;
+
+  // ---- Static content ----
+  $("context").textContent = str(D.context);
+  if (str(D.title)) $("title").textContent = D.title;
+  (function () {
+    var t = "";
+    try { if (str(D.generated_at)) t = new Date(D.generated_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) {}
+    $("generated").textContent = (str(D.round) ? "Brief of " + fmtDay(D.round) : "") + (t ? " · made " + t : "");
+  })();
+  if (str(D.lede)) { $("lede").innerHTML = md(D.lede); $("lede").hidden = false; }
+  if (arr(D.method).length) { $("method").innerHTML = D.method.map(function (m) { return "<li>" + md(m) + "</li>"; }).join(""); $("method-sec").hidden = false; }
+
+  var S = D.stats || {};
+  if (arr(S.kpis).length) {
+    $("kpis").innerHTML = S.kpis.map(function (k) {
+      var d = str(k.delta) ? " <span class='delta " + (k.dir === "up" || k.dir === "down" ? k.dir : "") + "'>" + esc(k.delta) + "</span>" : "";
+      return "<div class='kpi'><b>" + esc(k.value) + "</b><span>" + md(k.label) + d + "</span></div>";
+    }).join("");
+    $("band").hidden = false;
+  }
+
+  // Burndown: stacked areas per repo on one y scale, with the total as a line.
+  (function burn() {
+    var B = D.burndown; if (!B || !arr(B.days).length || !arr(B.order).length) return;
+    var repos = B.order, colors = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)"];
+    var n = B.days.length, W = 640, H = 220, L = 40, R = 14, T = 12, Bt = 26;
+    var tot = B.days.map(function (_, i) { return repos.reduce(function (a, r) { return a + ((B.series[r] || [])[i] || 0); }, 0); });
+    var max = Math.max.apply(null, tot.concat([1])), step = max > 400 ? 200 : max > 200 ? 100 : max > 80 ? 50 : max > 40 ? 20 : 10, top = Math.ceil(max / step) * step;
+    function x(i) { return n > 1 ? L + (W - L - R) * i / (n - 1) : L; }
+    function y(v) { return T + (H - T - Bt) * (1 - v / top); }
+    var s = "<svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Open issues over the last " + n + " days, stacked by repository, ending at " + tot[n - 1] + "'>";
+    for (var g = 0; g <= top; g += step) s += "<line x1='" + L + "' x2='" + (W - R) + "' y1='" + y(g) + "' y2='" + y(g) + "' stroke='var(--rule)' stroke-width='1'/><text x='" + (L - 6) + "' y='" + (y(g) + 4) + "' text-anchor='end' font-size='11' fill='var(--muted)' font-family='IBM Plex Mono, monospace'>" + g + "</text>";
+    var base = B.days.map(function () { return 0; });
+    repos.forEach(function (r, ri) {
+      var upper = base.map(function (b, i) { return b + ((B.series[r] || [])[i] || 0); });
+      var pts = upper.map(function (v, i) { return x(i) + "," + y(v); }).join(" ");
+      var back = base.map(function (v, i) { return x(i) + "," + y(v); }).reverse().join(" ");
+      s += "<polygon points='" + pts + " " + back + "' fill='" + colors[ri % 4] + "' fill-opacity='" + (ri === 0 ? 0.85 : 0.75) + "' stroke='none'/>";
+      base = upper;
+    });
+    s += "<polyline points='" + tot.map(function (v, i) { return x(i) + "," + y(v); }).join(" ") + "' fill='none' stroke='var(--ink)' stroke-width='1.5'/>";
+    s += "<circle cx='" + x(n - 1) + "' cy='" + y(tot[n - 1]) + "' r='4' fill='var(--ink)'/>";
+    s += "<text x='" + (x(n - 1) - 8) + "' y='" + (y(tot[n - 1]) - 8) + "' text-anchor='end' font-size='12' font-weight='600' fill='var(--ink)' font-family='IBM Plex Mono, monospace'>" + tot[n - 1] + " open</text>";
+    [0, Math.floor((n - 1) / 2), n - 1].forEach(function (i) {
+      s += "<text x='" + x(i) + "' y='" + (H - 6) + "' text-anchor='" + (i === 0 ? "start" : i === n - 1 ? "end" : "middle") + "' font-size='11' fill='var(--muted)' font-family='IBM Plex Mono, monospace'>" + esc(fmtDay(B.days[i])) + "</text>";
+    });
+    s += "</svg>";
+    $("burn-lbl").textContent = "Open issues, last " + n + " days";
+    $("burn").innerHTML = s;
+    $("burn-legend").innerHTML = repos.map(function (r, ri) { return "<span><i style='background:" + colors[ri % 4] + "'></i>" + esc(r) + " <span class='mono'>" + ((B.series[r] || [])[n - 1] || 0) + "</span></span>"; }).join("");
+    $("chart").hidden = false; $("band").hidden = false;
+  })();
+  if ($("chart").hidden) $("band").className = "band single";
+
+  (function comp() {
+    var C = arr(S.composition); if (!C.length) return;
+    var total = C.reduce(function (a, c) { return a + (c.n || 0); }, 0) || 1;
+    var cols = ["var(--accent)", "var(--s2)", "var(--s3)", "var(--muted)"];
+    $("comp").innerHTML = "<span class='lbl'>Where the open issues sit</span><div class='comp-bar' role='img' aria-label='" + esc(C.map(function (c) { return c.n + " " + c.label; }).join(", ")) + "'>" +
+      C.map(function (c, i) { return "<span style='width:" + (100 * (c.n || 0) / total) + "%;background:" + cols[i % 4] + "'></span>"; }).join("") + "</div><div class='legend'>" +
+      C.map(function (c, i) { return "<span><i style='background:" + cols[i % 4] + "'></i>" + esc(c.label) + " <span class='mono'>" + esc(c.n) + "</span></span>"; }).join("") + "</div>";
+    $("chart").hidden = false; $("band").className = "band";
+  })();
+
+  if (arr(D.signal).length) {
+    $("signal").innerHTML = D.signal.map(function (g) {
+      return "<div class='sig'><h4>" + md(g.head) + "</h4><p>" + md(g.body) + "</p>" + (str(g.src) ? "<span class='src'>" + md(g.src) + "</span>" : "") + "</div>";
+    }).join("");
+    $("sig-sec").hidden = false;
+  }
+
+  if (arr(D.in_flight).length) {
+    $("flight").innerHTML = D.in_flight.map(function (f) {
+      var u = safeUrl(f.url);
+      return "<div><span class='st'>" + esc(f.state) + "</span><span class='t'>" + (u ? "<a href='" + esc(u) + "' target='_blank' rel='noopener' class='key'>" + esc(f.key) + "</a> " : esc(f.key) + " ") + esc(f.title) + "</span></div>";
+    }).join("");
+    $("flight-sec").hidden = false;
+  }
+
+  if (arr(D.reviewed).length) {
+    $("rev").innerHTML = "<thead><tr><th>Ticket</th><th>Title</th><th>Why it's holding</th></tr></thead><tbody>" + D.reviewed.map(function (r) {
+      var u = safeUrl(r.url);
+      return "<tr><td class='k'>" + (u ? "<a href='" + esc(u) + "' target='_blank' rel='noopener'>" + esc(r.key) + "</a>" : esc(r.key)) + "</td><td>" + md(r.title) + "</td><td class='muted'>" + md(r.why) + "</td></tr>";
+    }).join("") + "</tbody>";
+    $("rev-sum").textContent = "Show all " + D.reviewed.length;
+    $("rev-sec").hidden = false;
+  }
+
+  if (arr(D.history).length) {
+    $("hist").innerHTML = "<thead><tr><th>Brief</th><th>Kicked off</th><th>Deprioritized</th><th>Closed</th><th>Carried</th><th>Open after</th></tr></thead><tbody>" +
+      D.history.map(function (h) { return "<tr><td class='mono'>" + esc(fmtDay(h.round)) + "</td><td>" + md(h.go) + "</td><td>" + md(h.later) + "</td><td>" + md(h.drop) + "</td><td>" + md(h.carried) + "</td><td class='mono'>" + esc(h.open_after) + "</td></tr>"; }).join("") + "</tbody>";
+    $("hist-sec").hidden = false;
+  }
+
+  // ---- Cards ----
+  function timingLabel(t) {
+    t = str(t);
+    if (t === "before-release") return REL && str(REL.name) ? "Before " + REL.name + (str(REL.date) ? " (" + fmtDay(REL.date) + ")" : "") : "Before the release";
+    if (t === "any-time") return "Any time";
+    var m = /^after (\d{4}-\d{2}-\d{2})$/.exec(t);
+    return m ? "After " + fmtDay(m[1]) : t;
+  }
+  function kindBadge(it) {
+    var k = KIND[it.kind] ? it.kind : "ticket";
+    return "<span class='kind" + (k === "epic" ? " epic" : (k === "action" || k === "pr" || k === "decision") ? " action" : "") + "'>" + KIND[k] + "</span>";
+  }
+  function button(it, v) {
+    var b = it.buttons && it.buttons[v] && typeof it.buttons[v] === "object" ? it.buttons[v] : {};
+    var label = str(b.label) || DECISION_LABEL[v], hint = str(b.label) ? str(b.hint) : DECISION_HINT[v];
+    return "<button type='button' data-v='" + v + "' aria-pressed='false' disabled>" + esc(label) + (hint ? "<span class='hint'>" + esc(hint) + "</span>" : "") + "</button>";
+  }
+  function rail(it) {
+    var id = esc(it.id);
+    return "<div class='seg' role='group' aria-label='Decision for " + esc(it.key) + "'>" + ["go", "later", "drop"].map(function (v) { return button(it, v); }).join("") + "</div>" +
+      "<div class='who'></div><div class='result' hidden></div>" +
+      "<div class='rail-note'><label for='note-" + id + "'>Notes for Claude</label><textarea id='note-" + id + "' maxlength='" + NOTE_MAX + "' placeholder='Scope, owner, caveats, a different plan…' readonly></textarea></div>";
+  }
+  function list(items, cls) { return "<ul" + (cls ? " class='" + cls + "'" : "") + ">" + items.map(function (q) { return "<li>" + md(q) + "</li>"; }).join("") + "</ul>"; }
+
+  function cardHTML(it) {
+    var u = safeUrl(it.url), id = esc(it.id);
+    var h = "<article class='card' id='i-" + id + "' data-id='" + id + "' data-decision=''>";
+    h += "<div class='c-main'><div class='c-head'><div class='c-meta'>" + kindBadge(it);
+    h += u ? "<a class='key' href='" + esc(u) + "' target='_blank' rel='noopener'>" + esc(it.key) + " ↗</a>" : "<span class='key'>" + esc(it.key) + "</span>";
+    if (str(it.repo) && str(it.key).indexOf(it.repo) < 0) h += "<span>" + esc(it.repo) + "</span>";
+    h += arr(it.labels).slice(0, 4).map(function (l) { return "<span>" + esc(l) + "</span>"; }).join("<span aria-hidden='true'>·</span>");
+    if (str(it.carried_from)) h += "<span class='carried'>Carried from " + esc(roundName(it.carried_from)) + "</span>";
+    h += "</div><h3>" + md(it.title) + "</h3></div>";
+
+    h += "<div class='chips'>";
+    if (REC_LABEL[it.rec]) h += "<span class='chip rec-" + esc(it.rec) + "'>" + REC_LABEL[it.rec] + "</span>";
+    if (str(it.effort)) h += "<span class='chip'>Effort · " + esc(it.effort) + "</span>";
+    if (str(it.timing)) h += "<span class='chip" + (it.timing === "before-release" ? " fit" : "") + "'>" + esc(timingLabel(it.timing)) + "</span>";
+    var rk = it.risk && typeof it.risk === "object" ? it.risk : null;
+    if (rk && /^(low|medium|high)$/.test(str(rk.level))) h += "<span class='chip risk-" + rk.level + "'>" + rk.level + " risk</span>";
+    h += "</div>";
+
+    if (str(it.summary)) h += "<p class='summary'>" + md(it.summary) + "</p>";
+    if (it.progress && it.progress.total) {
+      var pct = Math.max(0, Math.min(100, Math.round(100 * it.progress.closed / it.progress.total)));
+      h += "<div class='progress'><span class='lbl'>Epic progress · <span class='mono'>" + esc(it.progress.closed) + "/" + esc(it.progress.total) + "</span> children closed</span><div class='pbar'><span style='width:" + pct + "%'></span></div></div>";
+    }
+
+    h += "<div class='reasons'>";
+    var w = it.who_notices && typeof it.who_notices === "object" ? it.who_notices : null;
+    if (w) {
+      h += "<section class='wide'><span class='lbl'>Who notices</span><dl class='grid2'>";
+      if (str(w.today)) h += "<dt>Today</dt><dd>" + md(w.today) + "</dd>";
+      if (str(w.after)) h += "<dt>After</dt><dd>" + md(w.after) + "</dd>";
+      if (str(w.asked_by)) h += "<dt>Asked by</dt><dd>" + md(w.asked_by) + (typeof w.internal === "boolean" ? "<span class='tag'>" + (w.internal ? "internal" : "external") + "</span>" : "") + "</dd>";
+      h += "</dl></section>";
+    }
+    if (arr(it.pros).length) h += "<section><span class='lbl'>Pros</span>" + list(it.pros, "pros") + "</section>";
+    if (arr(it.cons).length) h += "<section><span class='lbl'>Cons</span>" + list(it.cons, "cons") + "</section>";
+    if (rk) {
+      h += "<section class='wide'><span class='lbl'>Risk profile</span><dl class='grid2'>";
+      [["if_wrong", "If it's wrong"], ["undo", "Undo"], ["notice", "We'd notice"]].forEach(function (k) { if (str(rk[k[0]])) h += "<dt>" + k[1] + "</dt><dd>" + md(rk[k[0]]) + "</dd>"; });
+      h += "</dl></section>";
+    }
+    if (str(it.why_now)) h += "<section" + (str(it.rec_why) ? "" : " class='wide'") + "><span class='lbl'>Why now</span><p>" + md(it.why_now) + "</p></section>";
+    if (str(it.rec_why)) h += "<section" + (str(it.why_now) ? "" : " class='wide'") + "><span class='lbl'>Why this recommendation</span><p>" + md(it.rec_why) + "</p></section>";
+    if (arr(it.decisions).length) {
+      h += "<section class='wide'><span class='lbl'>Decisions you need to make</span><ul class='decisions'>" + it.decisions.map(function (d) {
+        return "<li>" + md(d && d.question) + "<span class='sugg'><b>Suggested:</b> " + md(d && d.suggested) + "</span></li>";
+      }).join("") + "</ul></section>";
+    }
+    if (arr(it.children).length) h += "<section class='wide'><span class='lbl'>Open children</span>" + list(it.children) + "</section>";
+    h += "</div>";
+    if (arr(it.evidence).length) h += "<details class='more'><summary>Evidence (" + it.evidence.length + ")</summary>" + list(it.evidence, "small") + "</details>";
+    h += "</div><div class='c-rail'>" + rail(it) + "</div></article>";
+    return h;
+  }
+
+  var CARDS = D.cards.filter(function (c) { return c && typeof c === "object" && typeof c.id === "string"; });
+  SECTIONS.forEach(function (s) {
+    var cs = CARDS.filter(function (c) { return c.section === s; });
+    if (!cs.length) return;
+    $("s-" + s).querySelector(".cards").innerHTML = cs.map(cardHTML).join("");
+    $("s-" + s).hidden = false;
+  });
+  if (!CARDS.length) { $("empty").textContent = "No cards on this brief."; $("empty").hidden = false; }
+
+  var GENERAL = { id: D.round_id + "-general", key: "general", general: true };
+  $("gen-box").innerHTML = "<div data-id='" + esc(GENERAL.id) + "' id='i-" + esc(GENERAL.id) + "' style='display:grid;gap:6px'><label class='lbl' for='note-" + esc(GENERAL.id) + "'>Notes for Claude</label><textarea id='note-" + esc(GENERAL.id) + "' maxlength='" + NOTE_MAX + "' placeholder='Bring something forward, hold an area until someone weighs in…' readonly></textarea><div class='who'></div><div class='result' hidden></div></div>";
+  var ITEMS = CARDS.concat([GENERAL]);
+  var byId = {};
+  ITEMS.forEach(function (it) { byId[it.id] = it; });
+
+  // Element handles per card, so live updates patch cards in place and never
+  // rebuild a textarea someone is typing in.
+  var rows = {};
+  ITEMS.forEach(function (it) {
+    var el = $("i-" + it.id); if (!el) return;
+    rows[it.id] = { el: el, btns: Array.prototype.slice.call(el.querySelectorAll(".seg button[data-v]")), who: el.querySelector(".who"), result: el.querySelector(".result"), ta: $("note-" + it.id) };
+  });
+
+  // ---- Decisions: collection `decisions`, one doc per card id ----
+  // {status: go|later|drop|null, note, by, at, ticket, result}. `ticket` and
+  // `result` are written only by Claude. `rounds/<round_id>` holds {done}.
+  var server = {}, pending = {}, sent = {}, written = {}, timers = {}, held = {}, retried = {};
+  var db = null, user = null, myId = null, canWrite = null, ready = false, names = {}, filter = "all";
+  var roundDoc = null, roundBusy = false;
+
+  function writable() { return !!db && ready && canWrite !== false; }
+  function view(id) { return Object.assign({}, server[id] || {}, sent[id] || {}, pending[id] || {}); }
+  function statusOf(id) { var s = view(id).status; return DECISION_LABEL[s] ? s : ""; }
+  function setStatus(t) { $("save-status").textContent = t || ""; }
+  function busy() { return Object.keys(sent).length > 0 || Object.keys(pending).length > 0; }
+
+  function whoLine(d, it) {
+    var custom = it && it.buttons && it.buttons[d.status] && str(it.buttons[d.status].label);
+    var what = custom || DECISION_SHORT[d.status] || (str(d.note) ? "Note" : "");
+    if (!what || !d.by) return what && d.status ? what : "";
+    var when = "";
+    try { if (d.at) when = new Date(d.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) {}
+    return what + " · " + (names[d.by] || "Someone") + (when ? ", " + when : "");
+  }
+
+  function paintRow(it) {
+    var r = rows[it.id]; if (!r) return;
+    var d = view(it.id), st = statusOf(it.id), can = writable();
+    r.el.setAttribute("data-decision", st);
+    r.btns.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-v") === st)); b.disabled = !can; });
+    r.who.textContent = whoLine(d, it);
+    var res = str(d.result), t = safeUrl(d.ticket);
+    if (res || t) { r.result.innerHTML = "<span class='lbl'>Claude did</span>" + md(res) + (t ? " <a href='" + esc(t) + "' target='_blank' rel='noopener'>Open ↗</a>" : ""); r.result.hidden = false; }
+    else r.result.hidden = true;
+    r.ta.readOnly = !can;
+    var typing = document.activeElement === r.ta || (pending[it.id] && "note" in pending[it.id]);
+    if (!typing) { var n = str(d.note); if (r.ta.value !== n) r.ta.value = n; }
+  }
+
+  function paintTally() {
+    if (!db || !ready) return;
+    var c = { go: 0, later: 0, drop: 0, none: 0 };
+    CARDS.forEach(function (it) { c[statusOf(it.id) || "none"]++; });
+    $("tally").className = "";
+    $("tally").innerHTML = "<b class='num'>" + c.go + "</b> kick off · <b class='num'>" + c.later + "</b> deprioritize · <b class='num'>" + c.drop + "</b> close · <b class='num'>" + c.none + "</b> undecided";
+    var done = !!(roundDoc && roundDoc.done === true);
+    var b = $("done-btn");
+    b.disabled = !writable() || roundBusy;
+    b.setAttribute("aria-pressed", String(done));
+    b.textContent = done ? "Marked done · Claude acts on the next check" : "I'm done with this brief";
+  }
+
+  function applyFilter() {
+    var any = false;
+    SECTIONS.forEach(function (s) {
+      var sec = $("s-" + s), shown = 0;
+      CARDS.forEach(function (it) {
+        if (it.section !== s) return;
+        var r = rows[it.id]; if (!r) return;
+        var st = statusOf(it.id);
+        var show = filter === "all" || (filter === "undecided" ? !st : st === filter);
+        r.el.hidden = !show; if (show) shown++;
+      });
+      if (CARDS.some(function (it) { return it.section === s; })) sec.hidden = !shown;
+      if (shown) any = true;
+    });
+    $("empty").hidden = CARDS.length ? any : false;
+  }
+
+  function paint() { ITEMS.forEach(paintRow); paintTally(); applyFilter(); }
+
+  function queue(id, patch, delay) {
+    if (!writable()) return;
+    held[id] = false;
+    pending[id] = Object.assign(pending[id] || {}, patch);
+    if (timers[id]) { clearTimeout(timers[id]); timers[id] = null; }
+    if (delay > 0) timers[id] = setTimeout(function () { timers[id] = null; flush(id); }, delay); else flush(id);
+  }
+  function fullBody(id, patch) { return Object.assign({ status: null, note: "", by: null, at: null, ticket: null, result: null }, server[id] || {}, written[id] || {}, patch); }
+  // An existing doc is merged with update(), so fields this view never
+  // touched (the `ticket` and `result` Claude writes back) survive a viewer's edit.
+  function write(id, patch) {
+    var ref = db.collection("decisions").doc(id);
+    if (!server[id]) return ref.set(fullBody(id, patch));
+    return ref.update(patch).catch(function (e) { if (e && e.code === "invalid_argument") return ref.set(fullBody(id, patch)); throw e; });
+  }
+  function flush(id) {
+    if (timers[id]) { clearTimeout(timers[id]); timers[id] = null; }
+    if (sent[id] || !pending[id] || held[id] || !writable()) return;
+    var patch = pending[id]; delete pending[id];
+    patch.at = new Date().toISOString(); if (myId) patch.by = myId;
+    sent[id] = patch; setStatus("Saving…");
+    write(id, patch).then(function () {
+      written[id] = Object.assign({}, written[id] || {}, patch); retried[id] = 0; delete sent[id];
+      if (!busy()) setStatus("Saved");
+    }, function (e) { delete sent[id]; failed(id, patch, e); }).then(function () {
+      if (pending[id] && !timers[id] && !held[id]) flush(id);
+      paint();
+    });
+  }
+  function failed(id, patch, e) {
+    var code = e && e.code, keep = Object.assign({}, patch, pending[id] || {});
+    delete keep.at; delete keep.by; pending[id] = keep; held[id] = true;
+    if (code === "invalid_argument" || code === "revoked" || code === "not_granted" || code === "capability_disabled") {
+      canWrite = false; pending = {};
+      setStatus(code === "revoked" ? "Saving stopped because access to this page changed. Reload to continue." : "You can read this brief but not change it.");
+    } else if (code === "unavailable" && !retried[id]) {
+      retried[id] = 1; setStatus("Saving…");
+      setTimeout(function () { held[id] = false; flush(id); }, 800 + Math.random() * 1200);
+    } else if (code === "quota_exceeded") setStatus("This page's storage is full, so the change wasn't saved.");
+    else setStatus("Couldn't save. Your change is still here; edit again or reload to retry.");
+  }
+  function resolveNames() {
+    if (!user) return;
+    var ids = [];
+    Object.keys(server).forEach(function (k) { var b = server[k] && server[k].by; if (typeof b === "string" && ids.indexOf(b) < 0) ids.push(b); });
+    if (roundDoc && typeof roundDoc.by === "string" && ids.indexOf(roundDoc.by) < 0) ids.push(roundDoc.by);
+    ids = ids.filter(function (i) { return !(i in names); });
+    if (!ids.length) return;
+    user.profiles(ids).then(function (ps) { ids.forEach(function (i) { names[i] = (ps && ps[i] && ps[i].name) || ""; }); ITEMS.forEach(paintRow); }, function () {});
+  }
+
+  // ---- Events ----
+  $("filter").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-f]"); if (!b) return;
+    filter = b.getAttribute("data-f");
+    Array.prototype.forEach.call(this.querySelectorAll("button"), function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+    applyFilter();
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest(".seg button[data-v]");
+    if (!b || b.disabled) return;
+    var host = b.closest("[data-id]"); if (!host) return;
+    var id = host.getAttribute("data-id"), v = b.getAttribute("data-v");
+    queue(id, { status: statusOf(id) === v ? null : v }, 0);
+    paint();
+  });
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (!t.matches || !t.matches("textarea[id^='note-']") || t.readOnly) return;
+    queue(t.id.slice(5), { note: t.value.slice(0, NOTE_MAX) }, NOTE_DEBOUNCE_MS);
+  });
+  document.addEventListener("focusout", function (e) {
+    var t = e.target;
+    if (!t.matches || !t.matches("textarea[id^='note-']")) return;
+    var id = t.id.slice(5);
+    if (pending[id]) flush(id);
+    setTimeout(function () { if (byId[id]) paintRow(byId[id]); }, 0);
+  });
+  $("done-btn").addEventListener("click", function () {
+    if (!writable() || roundBusy) return;
+    Object.keys(pending).forEach(flush);
+    var next = !(roundDoc && roundDoc.done === true);
+    var body = { done: next, at: new Date().toISOString(), by: myId || null };
+    roundBusy = true; paintTally();
+    var ref = db.collection("rounds").doc(D.round_id);
+    (roundDoc ? ref.update(body) : ref.set(body)).then(function () {
+      roundDoc = Object.assign({}, roundDoc || {}, body); setStatus(next ? "Marked done. Claude acts on its next check, or tell it in Crow." : "Reopened");
+    }, function () { setStatus("Couldn't mark the brief done. Tell Claude in the Crow session instead."); }).then(function () { roundBusy = false; paintTally(); });
+  });
+
+  paint();
+
+  // ---- Connect to the artifact runtime ----
+  (async function connect() {
+    var c = window.claude;
+    if (!c || typeof c.use !== "function") { $("tally").textContent = "Decisions load when this page is opened on claude.ai."; return; }
+    var got = await Promise.all([c.use("user").catch(function () { return null; }), c.use("db").catch(function () { return null; })]);
+    user = got[0];
+    if (user) {
+      try { myId = await user.id(); } catch (e) { myId = null; }
+      try { canWrite = await user.can("data.write"); } catch (e) { canWrite = null; }
+    }
+    if (!got[1]) { $("tally").textContent = "Sign in on claude.ai to see and save decisions."; return; }
+    db = got[1];
+    db.collection("decisions").onSnapshot(function (snap) {
+      var next = {};
+      snap.docs.forEach(function (d) { if (!d.exists) return; var b = d.data(); if (b && typeof b === "object") next[d.id] = b; });
+      server = next; ready = true; paint(); resolveNames();
+    }, function (e) {
+      if (e && e.code === "revoked") canWrite = false;
+      setStatus("Live updates stopped. Reload to see new decisions."); paint();
+    });
+    db.collection("rounds").doc(D.round_id).onSnapshot(function (d) {
+      roundDoc = d && d.exists ? d.data() : null; paintTally(); resolveNames();
+    }, function () {});
+    if (canWrite === false) setStatus("You can read this brief but not change it.");
+  })();
+})();
+</script>

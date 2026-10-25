@@ -10,6 +10,8 @@
       "Bash(.claude/skills/crow-triage/triage.sh *)",
       "Bash(bash .claude/skills/crow-ci-queue/queue.sh *)",
       "Bash(.claude/skills/crow-ci-queue/queue.sh *)",
+      "Bash(bash .claude/skills/crow-backlog-brief/brief.sh *)",
+      "Bash(.claude/skills/crow-backlog-brief/brief.sh *)",
       "Bash(crow new-session:*)",
       "Bash(crow rename-session:*)",
       "Bash(crow select-session:*)",
