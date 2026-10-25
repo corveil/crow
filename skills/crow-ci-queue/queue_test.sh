@@ -615,6 +615,100 @@ check "--ack-failure without --pr exits 2" "2" "$rc"
 out=$(q bogus); rc=$?
 check "unknown subcommand exits 2" "2" "$rc"
 
+# ─── keep running after a drain (CROW-1369) ──────────────────────────────────
+echo "watch: idle on a drained queue"
+# Every queued PR merged; their sessions still link them. #14 (no crow:merge) stays open.
+for n in 12 15 16 17; do mkpr "$n" '{"state": "MERGED"}'; done
+out=$(wi); rc=$?
+check "a drained queue → heartbeat, not an event" "10" "$rc"
+contains "reads as nothing queued" "$out" "idle · nothing queued · merged by hand, not queued: #14"
+lacks "no 0-queued line" "$out" "0 queued"
+out=$(q watch --repo o/empty --interval 0 --timeout 0); rc=$?
+check "a repo with nothing tracked → heartbeat" "10" "$rc"
+contains "reads as nothing queued" "$out" "EVENT=HEARTBEAT repo=o/empty · idle · nothing queued"
+# A session created after kickoff opens a PR with crow:merge in the drained repo.
+# shellcheck disable=SC2016
+jq '.sessions += [{id: "S18", name: "r-18", branch: "b18", kind: "work", status: "active",
+                   links: [{type: "pr", url: "https://github.com/o/r/pull/18"}]}]' "$FIX/sessions.json" > "$TMP/s.json" \
+  && mv "$TMP/s.json" "$FIX/sessions.json"
+mkpr 18 '{}'
+out=$(wi); rc=$?
+check "a new session PR in a drained queue → READY" "0" "$rc"
+contains "names it" "$out" "EVENT=READY repo=o/r pr=18"
+
+echo "status: a repo that becomes queueable after kickoff"
+# shellcheck disable=SC2016
+jq '.sessions += [{id: "S41", name: "new-41", branch: "b41", kind: "work", status: "active",
+                   links: [{type: "pr", url: "https://github.com/o/new/pull/41"}]}]' "$FIX/sessions.json" > "$TMP/s.json" \
+  && mv "$TMP/s.json" "$FIX/sessions.json"
+mkpr 41 '{}'
+st=$(q status)
+check "the all-repos status picks it up" "o/new o/r" "$(jq -r '[.repos[].repo] | sort | join(" ")' <<< "$st")"
+st=$(q status --repo o/r)
+check "a --repo status leaves it out" "o/r" "$(jq -r '[.repos[].repo] | join(" ")' <<< "$st")"
+
+echo "watch: one watcher per repo"
+lock="$TMP/queues/.watch-o-empty.pid"
+lock_state() { if [[ -e "$lock" ]]; then echo present; else echo absent; fi; }
+skip() { echo "  skip: $1 ($2)"; }
+wq() { q watch --repo o/empty --interval 0 --timeout 0; }
+# ps is denied in some sandboxes; the checks that need the real one say so.
+ps_ok=false; ps -p $$ -o command= >/dev/null 2>&1 && ps_ok=true
+printf '#!/usr/bin/env bash\necho "ps: operation not permitted" >&2\nexit 1\n' > "$TMP/fake-ps-fail"
+chmod +x "$TMP/fake-ps-fail"
+# Nothing queued and a fixed clock: this watcher polls until it's stopped.
+bash "$QUEUE_SH" watch --repo o/empty --interval 30 > "$TMP/w1.out" 2>&1 &
+w1=$!
+for _ in $(seq 50); do [[ -s "$lock" ]] && break; sleep 0.1; done
+check "a watcher takes its repo's lock" "$w1" "$(cat "$lock" 2>/dev/null)"
+out=$(wq); rc=$?
+check "a second watcher on the same repo is refused" "2" "$rc"
+contains "and names the holder" "$out" "pid $w1 already holds the o/empty watcher lock"
+if $ps_ok; then
+  contains "as a running watcher" "$out" "(a running watcher)"
+else
+  skip "as a running watcher" "ps unavailable here"
+fi
+out=$(PS_BIN="$TMP/fake-ps-fail" wq); rc=$?
+check "a live holder ps can't check still counts (fails closed)" "2" "$rc"
+contains "and says why" "$out" "ps couldn't say what it is, so it counts as a watcher"
+out=$(wi); rc=$?
+check "another repo's watcher still starts" "0" "$rc"
+check "and releases its own lock" "absent" "$([[ -e "$TMP/queues/.watch-o-r.pid" ]] && echo present || echo absent)"
+kill -TERM "$w1"
+for _ in $(seq 50); do [[ -e "$lock" ]] || break; sleep 0.1; done
+check "a stopped watcher (TaskStop) frees the repo at once" "absent" "$(lock_state)"
+kill -KILL "$w1" 2>/dev/null; wait "$w1" 2>/dev/null
+sh -c 'exit 0' & dead=$!; wait "$dead"
+echo "$dead" > "$lock"
+out=$(PS_BIN="$TMP/fake-ps-fail" wq); rc=$?
+check "a lock whose process is gone is taken over, with or without ps" "10" "$rc"
+if $ps_ok; then
+  echo "$$" > "$lock"
+  out=$(wq); rc=$?
+  check "a lock held by a live process that isn't a watcher is taken over" "10" "$rc"
+  check "and released on exit" "absent" "$(lock_state)"
+else
+  skip "a lock held by a live process that isn't a watcher is taken over" "ps unavailable here"
+fi
+if [[ "$(export LC_ALL=C; kill -0 1 2>&1)" == *"not permitted"* ]]; then
+  echo 1 > "$lock"
+  out=$(wq); rc=$?
+  check "a holder that can't be signalled counts (fails closed)" "2" "$rc"
+  contains "and says why" "$out" "it can't be signalled"
+else
+  skip "a holder that can't be signalled counts" "pid 1 is signallable here"
+fi
+echo "$dead" > "$lock"
+mkdir "$lock.takeover"
+out=$(wq); rc=$?
+check "a takeover already under way is refused" "2" "$rc"
+contains "and says so" "$out" "taking its watcher lock right now"
+touch -t 202601010000 "$lock.takeover"
+out=$(wq); rc=$?
+check "a takeover mutex left over a minute ago is cleared" "10" "$rc"
+check "and released with the lock" "absent absent" "$(lock_state) $([[ -e "$lock.takeover" ]] && echo present || echo absent)"
+
 echo
 echo "queue_test: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

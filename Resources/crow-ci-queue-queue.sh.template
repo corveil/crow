@@ -16,17 +16,18 @@
 #   0  a decision is needed — holder: MERGED CLOSED LABEL_REMOVED CONTENTION
 #      CI_FAILED NO_FIX STUCK_AFTER_GREEN SUITE_NOT_RUN; idle: READY LABELED
 #   10 HEARTBEAT — nothing needs a decision yet; re-arm
-#   2  usage error
+#   2  usage error, or another watcher already holds the repo (one per repo)
 #
 # The queue: open PRs carrying crow:merge that a live work session links from
 # its own branch, or that a queue file adds, in repos with the CI Gate
 # convention (ADR 0082, CIGateConvention.swift). Needs jq 1.6+. Reads GitHub
-# via `gh` and Crow via `crow`; override with GH_BIN / CROW_BIN (tests do).
+# via `gh` and Crow via `crow`; override with GH_BIN / CROW_BIN / PS_BIN (tests do).
 
 set -uo pipefail
 
 GH_BIN="${GH_BIN:-gh}"
 CROW_BIN="${CROW_BIN:-crow}"
+PS_BIN="${PS_BIN:-ps}"
 QUEUE_DIR="${CROW_CI_QUEUE_DIR:-.claude/ci-queues}"
 # How long advance waits for update-branch to land and for the new head's own
 # run to start, and how often it looks.
@@ -746,14 +747,17 @@ def short: (. // "") | .[0:9];
 | . + {line: $line, foreign: (($foreign // []) | join(", "))}
 '
 
-# Repo queue object (or null) → READY / LABELED, or a status line.
+# Repo queue object (or null) → READY / LABELED, or a status line. A drained
+# queue (its merged PRs still linked from live sessions) reads the same as a
+# repo with nothing tracked: the skill keeps an idle watcher on it (CROW-1369).
 # shellcheck disable=SC2016
 IDLE_JQ='
 if . == null then {event: null, line: "idle · nothing queued"}
 else
   ([(.holder // empty | .number), .to_strip[]] | unique) as $lab
-  | ("idle · \(.queue | length) queued, none ready"
-     + (if (.queue | length) > 0 then ": " + (.queue | map("#\(.number) (\(.reasons | join(", ")))") | join("; ")) else "" end)
+  | ("idle · "
+     + (if (.queue | length) == 0 then "nothing queued"
+        else "\(.queue | length) queued, none ready: " + (.queue | map("#\(.number) (\(.reasons | join(", ")))") | join("; ")) end)
      + (if (.manual_merge | length) > 0 then " · merged by hand, not queued: " + (.manual_merge | map("#\(.number)") | join(", ")) else "" end)
      + (if (.unreadable | length) > 0 then " · unreadable: " + (.unreadable | map("#\(.number)") | join(", ")) else "" end)) as $line
   | if ($lab | length) > 0 then {event: "LABELED", detail: "prs=\($lab | map(tostring) | join(","))", line: $line}
@@ -761,6 +765,89 @@ else
     else {event: null, line: $line} end
 end
 '
+
+# One watcher per repo (CROW-1369). The skill's run never ends on its own and
+# starts watchers from three places, so a second `watch --repo R` is refused
+# here rather than left to the Manager's memory. The lock is a pidfile in the
+# queue dir. One whose process is gone, or is a live process that isn't a
+# watcher (killed without cleanup, pid reused), is taken over. When the holder
+# can't be checked (a sandbox that denies ps or signals), the lock counts as
+# held: a refused watcher is reported, a doubled one is silent.
+LOCK_FILE=''
+NAP_PID=''
+HOLDER_WHY=''
+
+# Who holds the lock: 0 a running watcher, 1 nobody (gone, or not a watcher),
+# 2 alive but unconfirmed (HOLDER_WHY says why).
+lock_holder() { # lock_holder <pid>
+  local err cmd
+  if ! err=$(export LC_ALL=C; kill -0 "$1" 2>&1); then
+    [[ "$err" == *"No such process"* ]] && return 1
+    HOLDER_WHY="it can't be signalled (${err##*- })"
+    return 2
+  fi
+  if cmd=$("$PS_BIN" -p "$1" -o command= 2>/dev/null) && [[ -n "$cmd" ]]; then
+    [[ "$cmd" == *"queue.sh watch"* ]] && return 0
+    return 1
+  fi
+  kill -0 "$1" 2>/dev/null || return 1 # it exited between the two looks
+  HOLDER_WHY="ps couldn't say what it is"
+  return 2
+}
+
+release_watch_lock() {
+  [[ -z "$NAP_PID" ]] || kill "$NAP_PID" 2>/dev/null
+  if [[ -n "$LOCK_FILE" && "$(cat "$LOCK_FILE" 2>/dev/null)" == "$$" ]]; then rm -f "$LOCK_FILE"; fi
+}
+
+acquire_watch_lock() {
+  local f="$QUEUE_DIR/.watch-${REPO//\//-}.pid" pid state took
+  local mutex="$f.takeover"
+  if ! mkdir -p "$QUEUE_DIR" 2>/dev/null; then
+    log "could not create $QUEUE_DIR, so a second watcher on $REPO would not be refused"
+    return 0
+  fi
+  if ! ( set -o noclobber; echo "$$" > "$f" ) 2>/dev/null; then
+    # Taking over is check-then-replace, so it runs under a mkdir mutex: two
+    # watchers that find the same stale lock can't both remove and win it. A
+    # mutex over a minute old was left by a watcher killed mid-takeover.
+    if ! mkdir "$mutex" 2>/dev/null; then
+      if [[ -z "$(find "$mutex" -maxdepth 0 -mmin +1 2>/dev/null)" ]] \
+         || ! rmdir "$mutex" 2>/dev/null || ! mkdir "$mutex" 2>/dev/null; then
+        die "watch" "another watcher for $REPO is taking its watcher lock right now — wait on that one; don't start another"
+      fi
+    fi
+    pid=$(cat "$f" 2>/dev/null)
+    state=1
+    if is_uint "$pid"; then lock_holder "$pid"; state=$?; fi
+    if (( state != 1 )); then
+      rmdir "$mutex" 2>/dev/null
+      if (( state == 0 )); then
+        die "watch" "pid $pid already holds the $REPO watcher lock (a running watcher) — wait on that one; don't start another"
+      fi
+      die "watch" "pid $pid already holds the $REPO watcher lock and is alive, but $HOLDER_WHY, so it counts as a watcher — wait on it, or delete $f if it isn't one"
+    fi
+    rm -f "$f"
+    ( set -o noclobber; echo "$$" > "$f" ) 2>/dev/null; took=$?
+    rmdir "$mutex" 2>/dev/null
+    (( took == 0 )) || die "watch" "another watcher for $REPO took its watcher lock at the same moment — wait on that one; don't start another"
+  fi
+  LOCK_FILE="$f"
+  # TaskStop (SIGTERM) must free the repo at once, so the next watch isn't refused.
+  trap release_watch_lock EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  trap 'exit 129' HUP
+}
+
+# Sleeps in the background and waits, so a signal ends the watcher straight
+# away instead of after the whole interval.
+nap() { # nap <seconds>
+  sleep "$1" >/dev/null 2>&1 &
+  NAP_PID=$!
+  wait "$NAP_PID"
+  NAP_PID=''
+}
 
 watch_holder() {
   local started now facts queued labeled decision event line prev_line='' foreign prev_foreign=''
@@ -799,7 +886,7 @@ watch_holder() {
       log "EVENT=HEARTBEAT repo=$REPO pr=$PR · $line${ACK:+ · ack=$ACK}"
       exit 10
     fi
-    sleep "$INTERVAL"
+    nap "$INTERVAL"
   done
 }
 
@@ -827,17 +914,18 @@ watch_idle() {
       log "EVENT=HEARTBEAT repo=$REPO · $line"
       exit 10
     fi
-    sleep "$INTERVAL"
+    nap "$INTERVAL"
   done
 }
 
 cmd_watch() {
   [[ -n "$REPO" ]] || die "parse_args" "watch needs --repo owner/name"
+  [[ -n "$PR" || -z "$ACK" ]] || die "parse_args" "--ack-failure needs --pr"
+  acquire_watch_lock
   if [[ -n "$PR" ]]; then
     INTERVAL="${INTERVAL:-60}"
     watch_holder
   else
-    [[ -z "$ACK" ]] || die "parse_args" "--ack-failure needs --pr"
     INTERVAL="${INTERVAL:-120}"
     watch_idle
   fi
