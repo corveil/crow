@@ -76,6 +76,7 @@ While the queue runs, the operator can ask you to add, reorder, hold, or release
 |---|---|
 | `{devRoot}/.claude/skills/crow-ci-queue/queue.sh` | The helper: `status`, `normalize`, `advance`, `watch`. |
 | `{devRoot}/.claude/ci-queues/{owner}-{name}.json` | The optional **queue file** for one repo: PRs to add, the order, PRs on hold. |
+| `{devRoot}/.claude/ci-queues/.watch-{owner}-{name}.pid` | The lock a running watcher holds on its repo (Phase 4). `queue.sh` manages it; don't edit it. |
 
 Run `queue.sh` from `{devRoot}`. That is the Manager's working directory, and the script finds `.claude/ci-queues/` relative to it.
 
@@ -207,7 +208,9 @@ bash .claude/skills/crow-ci-queue/queue.sh watch --repo {repo}
 
 It polls every 60 seconds (120 when idle). It prints a line when something changes, and reports foreign `ci:full` PRs once. It exits with a final `EVENT=<NAME> repo=… …` line, after at most 50 minutes (`HEARTBEAT`). You're re-invoked when it exits.
 
-Keep track of which repos have a watcher. A repo has one from the moment you start it until you handle its exit. While a repo has one, never start another for it, whether from **the loop**, **Discovery**, or an operator's request. Two watchers on one repo would each act on the same event.
+Keep track of which repos have a watcher. A repo has one from the moment you start it until you handle its exit. While a repo has one, never start another for it, whether from **the loop**, **Discovery**, or an operator's request. Two watchers on one repo would each act on the same event. `queue.sh` backs this up: it holds a per-repo lock (`.claude/ci-queues/.watch-{owner}-{name}.pid`) while a watcher runs, and a second `watch` for that repo exits `2` with `a watcher for {repo} is already running`. That reply means the repo is covered. It's not an error to report. A watcher stopped with TaskStop frees its lock at once, and a lock left by a watcher that's gone is taken over.
+
+A repo is **waiting** when its watcher's exit ended with a question for the operator and no re-arm: `NO_FIX`, `LABEL_REMOVED`, or an exit `2` you reported (Phase 5). Treat a waiting repo as if it had a watcher. Don't run **the loop** for it, and don't arm one, until the operator answers and you act on that answer. Otherwise **Discovery** would restart it, and `advance` would re-add `ci:full` to the PR whose label someone removed, or re-arm on a known red without `--ack-failure`.
 
 Without background re-invocation (Cursor, Codex, and other Manager harnesses), skip the watcher. Tell the operator to re-run `/crow-ci-queue` after each merge, and to pick up new sessions and repos. Each run picks up from live GitHub state.
 
@@ -230,7 +233,7 @@ Handle the event, then run **Phase 6**.
 | `HEARTBEAT` (exit 10) | Nothing needs a decision yet. | Re-arm the same command. Keep `--ack-failure` if the line carries `ack=`. Give the operator a one-line status. |
 | `READY` (idle) | A queued PR became ready. | **The loop**. |
 | `LABELED` (idle) | A queued PR got `ci:full`, usually from an approval. | **The loop**: `normalize` keeps it if it's ready, or strips it. |
-| exit `2` | Usage error (JSON). A failed read never exits; the watcher logs it and polls again. | Report it. |
+| exit `2` | Usage error (JSON). A failed read never exits; the watcher logs it and polls again. | `a watcher for {repo} is already running`: that repo already has a watcher, so do nothing (Phase 4). Anything else: report it. The repo is **waiting** until it's sorted. |
 
 ### Phase 6: Check for new repos and PRs
 
@@ -242,7 +245,7 @@ bash .claude/skills/crow-ci-queue/queue.sh status
 
 Add `--repo {repo}` only when the operator scoped the run with `--repo`. One `status` serves both checks:
 
-- **Discovery.** Skip this when the run is scoped with `--repo`. For each repo in `repos[]` that has no watcher (Phase 4), and that the operator hasn't stopped, give one line and start **the loop** for it. That's a repo that became queueable after kickoff, usually because a session opened since then has a PR there. A repo that already has a watcher needs nothing here. Its watcher re-reads the session list on every poll, so a new session PR with `crow:merge` there joins that queue on its own.
+- **Discovery.** Skip this when the run is scoped with `--repo`. For each repo in `repos[]` that has no watcher, isn't **waiting** on an operator answer (Phase 4), and that the operator hasn't stopped, give one line and start **the loop** for it. That's a repo that became queueable after kickoff, usually because a session opened since then has a PR there. A repo that already has a watcher needs nothing here. Its watcher re-reads the session list on every poll, so a new session PR with `crow:merge` there joins that queue on its own.
 - **New PRs merged by hand.** Check each repo's `manual_merge` (next section).
 
 If `status` fails (Crow or GitHub unreachable), say so in one line and carry on. The watchers are unaffected, and the next exit checks again.
@@ -409,6 +412,8 @@ These come from the reference run that this skill packages.
 - **One branch per session.** A session's PR counts only when its head branch is the session's branch. A multi-repo session whose second worktree uses a different branch name has that PR left alone and listed under `ignored`.
 - **One Manager per repo.** Two Managers running the queue on one repo would each pick a holder. Run it from one Manager.
 - **Discovery rides on watcher exits.** A repo that becomes queueable is picked up at the next exit of any watcher. That can be up to 50 minutes (a heartbeat) away, and until then the new repo's approvals add `ci:full` in parallel. If nothing was queueable at kickoff, there's no watcher to ride on: re-run `/crow-ci-queue` later.
+- **It costs a turn per heartbeat, overnight too.** Every watcher exit wakes the Manager for a turn and runs an all-repos `status` (Phase 6), even when every queue is empty. With R repos that's about R turns and R `status` sweeps every 50 minutes until the operator stops the queue. Stop it when you're done for the day (see **Stopping the queue**).
+- **Some bookkeeping lives only in the conversation:** which `manual_merge` PRs you've asked about, which repos are waiting, which ones the operator stopped. Context compaction on a long run can drop it. The worst case is asking about a PR again, or a waiting repo restarted. `queue.sh` still refuses a duplicate watcher.
 - **Not a daemon controller.** This is a skill, by design (CROW-1365's out-of-scope). Moving it into `crowd` next to the auto-merge and auto-rebase controllers is the follow-up, once this skill has settled the policy.
 
 ## Worked example: the 23–24 Oct 2026 reference run

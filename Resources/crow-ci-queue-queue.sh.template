@@ -16,7 +16,7 @@
 #   0  a decision is needed — holder: MERGED CLOSED LABEL_REMOVED CONTENTION
 #      CI_FAILED NO_FIX STUCK_AFTER_GREEN SUITE_NOT_RUN; idle: READY LABELED
 #   10 HEARTBEAT — nothing needs a decision yet; re-arm
-#   2  usage error
+#   2  usage error, or another watcher already holds the repo (one per repo)
 #
 # The queue: open PRs carrying crow:merge that a live work session links from
 # its own branch, or that a queue file adds, in repos with the CI Gate
@@ -765,6 +765,55 @@ else
 end
 '
 
+# One watcher per repo (CROW-1369). The skill's run never ends on its own and
+# starts watchers from three places, so a second `watch --repo R` is refused
+# here rather than left to the Manager's memory. The lock is a pidfile in the
+# queue dir. One whose process is gone, or isn't a watcher (killed without
+# cleanup, pid reused), is taken over.
+LOCK_FILE=''
+NAP_PID=''
+
+watcher_alive() { # watcher_alive <pid>
+  kill -0 "$1" 2>/dev/null && ps -p "$1" -o command= 2>/dev/null | grep -q 'queue\.sh watch'
+}
+
+release_watch_lock() {
+  [[ -z "$NAP_PID" ]] || kill "$NAP_PID" 2>/dev/null
+  if [[ -n "$LOCK_FILE" && "$(cat "$LOCK_FILE" 2>/dev/null)" == "$$" ]]; then rm -f "$LOCK_FILE"; fi
+}
+
+acquire_watch_lock() {
+  local f="$QUEUE_DIR/.watch-${REPO//\//-}.pid" pid
+  if ! mkdir -p "$QUEUE_DIR" 2>/dev/null; then
+    log "could not create $QUEUE_DIR, so a second watcher on $REPO would not be refused"
+    return 0
+  fi
+  if ! ( set -o noclobber; echo "$$" > "$f" ) 2>/dev/null; then
+    pid=$(cat "$f" 2>/dev/null)
+    if is_uint "$pid" && watcher_alive "$pid"; then
+      die "watch" "a watcher for $REPO is already running (pid $pid) — wait on that one; don't start another"
+    fi
+    rm -f "$f"
+    ( set -o noclobber; echo "$$" > "$f" ) 2>/dev/null \
+      || die "watch" "a watcher for $REPO started at the same moment — wait on that one; don't start another"
+  fi
+  LOCK_FILE="$f"
+  # TaskStop (SIGTERM) must free the repo at once, so the next watch isn't refused.
+  trap release_watch_lock EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  trap 'exit 129' HUP
+}
+
+# Sleeps in the background and waits, so a signal ends the watcher straight
+# away instead of after the whole interval.
+nap() { # nap <seconds>
+  sleep "$1" >/dev/null 2>&1 &
+  NAP_PID=$!
+  wait "$NAP_PID"
+  NAP_PID=''
+}
+
 watch_holder() {
   local started now facts queued labeled decision event line prev_line='' foreign prev_foreign=''
   started=$(now_epoch)
@@ -802,7 +851,7 @@ watch_holder() {
       log "EVENT=HEARTBEAT repo=$REPO pr=$PR · $line${ACK:+ · ack=$ACK}"
       exit 10
     fi
-    sleep "$INTERVAL"
+    nap "$INTERVAL"
   done
 }
 
@@ -830,17 +879,18 @@ watch_idle() {
       log "EVENT=HEARTBEAT repo=$REPO · $line"
       exit 10
     fi
-    sleep "$INTERVAL"
+    nap "$INTERVAL"
   done
 }
 
 cmd_watch() {
   [[ -n "$REPO" ]] || die "parse_args" "watch needs --repo owner/name"
+  [[ -n "$PR" || -z "$ACK" ]] || die "parse_args" "--ack-failure needs --pr"
+  acquire_watch_lock
   if [[ -n "$PR" ]]; then
     INTERVAL="${INTERVAL:-60}"
     watch_holder
   else
-    [[ -z "$ACK" ]] || die "parse_args" "--ack-failure needs --pr"
     INTERVAL="${INTERVAL:-120}"
     watch_idle
   fi

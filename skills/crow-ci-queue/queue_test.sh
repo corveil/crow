@@ -647,6 +647,33 @@ check "the all-repos status picks it up" "o/new o/r" "$(jq -r '[.repos[].repo] |
 st=$(q status --repo o/r)
 check "a --repo status leaves it out" "o/r" "$(jq -r '[.repos[].repo] | join(" ")' <<< "$st")"
 
+echo "watch: one watcher per repo"
+lock="$TMP/queues/.watch-o-empty.pid"
+lock_state() { if [[ -e "$lock" ]]; then echo present; else echo absent; fi; }
+# Nothing queued and a fixed clock: this watcher polls until it's stopped.
+bash "$QUEUE_SH" watch --repo o/empty --interval 30 > "$TMP/w1.out" 2>&1 &
+w1=$!
+for _ in $(seq 50); do [[ -s "$lock" ]] && break; sleep 0.1; done
+check "a watcher takes its repo's lock" "$w1" "$(cat "$lock" 2>/dev/null)"
+out=$(q watch --repo o/empty --interval 0 --timeout 0); rc=$?
+check "a second watcher on the same repo is refused" "2" "$rc"
+contains "and names the running one" "$out" "already running (pid $w1)"
+out=$(wi); rc=$?
+check "another repo's watcher still starts" "0" "$rc"
+check "and releases its own lock" "absent" "$([[ -e "$TMP/queues/.watch-o-r.pid" ]] && echo present || echo absent)"
+kill -TERM "$w1"
+for _ in $(seq 50); do [[ -e "$lock" ]] || break; sleep 0.1; done
+check "a stopped watcher (TaskStop) frees the repo at once" "absent" "$(lock_state)"
+kill -KILL "$w1" 2>/dev/null; wait "$w1" 2>/dev/null
+sh -c 'exit 0' & dead=$!; wait "$dead"
+echo "$dead" > "$lock"
+out=$(q watch --repo o/empty --interval 0 --timeout 0); rc=$?
+check "a lock whose watcher is gone is taken over" "10" "$rc"
+echo "$$" > "$lock"
+out=$(q watch --repo o/empty --interval 0 --timeout 0); rc=$?
+check "a lock held by a process that isn't a watcher is taken over" "10" "$rc"
+check "and released on exit" "absent" "$(lock_state)"
+
 echo
 echo "queue_test: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
