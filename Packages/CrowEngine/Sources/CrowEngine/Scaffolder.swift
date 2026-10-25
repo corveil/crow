@@ -78,6 +78,9 @@ public struct Scaffolder {
         let triageSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-triage")
         try fm.createDirectory(atPath: triageSkillsDir, withIntermediateDirectories: true)
 
+        let ciQueueSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-ci-queue")
+        try fm.createDirectory(atPath: ciQueueSkillsDir, withIntermediateDirectories: true)
+
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
@@ -165,6 +168,16 @@ public struct Scaffolder {
         let triageScriptPath = (triageSkillsDir as NSString).appendingPathComponent("triage.sh")
         try Self.bundledTriageScript().write(toFile: triageScriptPath, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: triageScriptPath)
+
+        // Always overwrite the ci-queue skill and its helper script
+        // (CROW-1365). The script reads the queue, strips and adds ci:full,
+        // updates branches, and runs the background watcher.
+        let ciQueueSkillPath = (ciQueueSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try CrowAttribution.expandSkillBody(Self.bundledCIQueueSkill(), agentKind: managerAgentKind)
+            .write(toFile: ciQueueSkillPath, atomically: true, encoding: .utf8)
+        let ciQueueScriptPath = (ciQueueSkillsDir as NSString).appendingPathComponent("queue.sh")
+        try Self.bundledCIQueueScript().write(toFile: ciQueueScriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ciQueueScriptPath)
 
         // Always overwrite the show-image skill (surfaces generated images in
         // Crow's Images panel). No attribution expansion — it has no agent
@@ -888,6 +901,48 @@ public struct Scaffolder {
         """
     }
 
+    /// The crow-ci-queue SKILL.md template bundled with the app (CROW-1365).
+    static func bundledCIQueueSkill() -> String {
+        if let content = loadFromRepo("skills/crow-ci-queue/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-ci-queue-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        ---
+        name: crow-ci-queue
+        description: Serialize the ci:full suite across Crow session PRs, one PR per repo at a time.
+        ---
+
+        # Crow CI Queue
+
+        ## Activation
+        This skill activates when user invokes `/crow-ci-queue` command.
+
+        ## Important
+        The full skill was not bundled with this build. It needs `queue.sh`
+        beside this file.
+        """
+    }
+
+    /// The crow-ci-queue queue.sh helper bundled with the app (CROW-1365).
+    static func bundledCIQueueScript() -> String {
+        if let content = loadFromRepo("skills/crow-ci-queue/queue.sh") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-ci-queue-queue.sh", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        #!/bin/bash
+        echo '{"status":"error","message":"queue.sh not bundled"}'
+        exit 2
+        """
+    }
+
     /// Shared attribution footer instructions (issue #443).
     static func bundledAttributionFooter() -> String {
         if let content = loadFromRepo("skills/crow-attribution/FOOTER.md") {
@@ -920,6 +975,8 @@ public struct Scaffolder {
               "Bash(.claude/skills/crow-cascade-epic/cascade.sh *)",
               "Bash(bash .claude/skills/crow-triage/triage.sh *)",
               "Bash(.claude/skills/crow-triage/triage.sh *)",
+              "Bash(bash .claude/skills/crow-ci-queue/queue.sh *)",
+              "Bash(.claude/skills/crow-ci-queue/queue.sh *)",
               "Bash(gh issue view:*)",
               "Bash(gh issue create:*)",
               "Bash(gh issue edit:*)",

@@ -84,6 +84,7 @@ for skill in \
     crow-create-ticket \
     crow-cascade-epic \
     crow-triage \
+    crow-ci-queue \
     crow-show-image; do
     require_frontmatter "skills/${skill}/SKILL.md" "$skill"
     require_frontmatter "Resources/${skill}-SKILL.md.template" "$skill"
@@ -301,6 +302,65 @@ for f in skills/crow-triage/page.html Resources/crow-triage-page.html.template; 
 done
 require settings.json 'Bash(bash .claude/skills/crow-triage/triage.sh *)'
 for f in skills/crow-triage/SKILL.md Resources/crow-triage-SKILL.md.template; do
+    if [ -f "$f" ] && grep -Fq '\|' "$f"; then
+        echo "DRIFT: $f has a table-escaped pipe (\\|) — move that command into a fenced block" >&2
+        grep -Fn '\|' "$f" | head -5 >&2
+        fail=1
+    fi
+done
+
+# CROW-1365: /crow-ci-queue ships a skill + helper script. Both halves of each
+# must stay byte-identical, and the skill must keep the policy it exists to
+# encode: one holder, update before label, a failed holder keeps its label,
+# the strip-and-report answer to the approver re-adding ci:full, foreign PRs
+# untouched, no merging, and a background watcher instead of polling.
+for pair in \
+    "skills/crow-ci-queue/SKILL.md:Resources/crow-ci-queue-SKILL.md.template" \
+    "skills/crow-ci-queue/queue.sh:Resources/crow-ci-queue-queue.sh.template"; do
+    left="${pair%%:*}"
+    right="${pair#*:}"
+    if [ ! -f "$right" ]; then
+        echo "MISSING FILE: $right" >&2
+        fail=1
+    elif [ -f "$left" ] && ! diff -q "$left" "$right" >/dev/null; then
+        echo "DRIFT: $left and $right differ — an edit must land in both halves" >&2
+        diff -u "$right" "$left" | head -40 >&2 || true
+        fail=1
+    fi
+done
+# shellcheck disable=SC2016  # backticks in the needles are literal, not command substitution
+for f in skills/crow-ci-queue/SKILL.md Resources/crow-ci-queue-SKILL.md.template; do
+    require "$f" \
+        '**One holder per repo.**' \
+        '**Update before label.**' \
+        '**A failed holder keeps its label**' \
+        '**Only Crow session PRs are touched,** and only a session' \
+        '**PRs without `crow:merge` stay outside the queue.**' \
+        'An `add` PR must carry `crow:merge`, like every queued PR' \
+        '**The queue never merges.**' \
+        '**Decision (CROW-1365): strip it again and report it.**' \
+        'normalize --repo {repo} --keep {holder}' \
+        'watch --repo {repo} --pr {holder} --ack-failure {sha}' \
+        '`run_in_background: true`'
+done
+require settings.json 'Bash(bash .claude/skills/crow-ci-queue/queue.sh *)'
+# queue.sh restates CIGateConvention in jq (it runs in the Manager, not in
+# crowd): the check name, the label, and the conclusions that make a red real.
+# Keep them in step with the Swift, so a change there fails here instead of
+# leaving the queue reading CI differently from the daemon (PR #1366 review).
+# The gate-only-red rule itself (actionableFailedChecks) is covered by
+# queue_test.sh's skipped/failure cases.
+ci_gate_swift="Packages/CrowCore/Sources/CrowCore/Models/CIGateConvention.swift"
+require "$ci_gate_swift" 'checkName = "CI Gate"' 'fullSuiteLabel = "ci:full"'
+require skills/crow-ci-queue/queue.sh '.name == "CI Gate"' '== "ci:full"'
+swift_bad=$(awk '/terminalNonSuccessConclusions: Set<String> = \[/,/^ *\]/' "$ci_gate_swift" \
+    | grep -o '"[A-Z_]*"' | tr -d '"' | sort | paste -sd, - || true)
+queue_bad=$(grep -E '^def bad:' skills/crow-ci-queue/queue.sh | grep -o '"[A-Z_]*"' | tr -d '"' | sort | paste -sd, - || true)
+if [ -z "$swift_bad" ] || [ "$swift_bad" != "$queue_bad" ]; then
+    echo "DRIFT: queue.sh's \`def bad\` ($queue_bad) must list CIGateConvention.terminalNonSuccessConclusions ($swift_bad)" >&2
+    fail=1
+fi
+for f in skills/crow-ci-queue/SKILL.md Resources/crow-ci-queue-SKILL.md.template; do
     if [ -f "$f" ] && grep -Fq '\|' "$f"; then
         echo "DRIFT: $f has a table-escaped pipe (\\|) — move that command into a fenced block" >&2
         grep -Fn '\|' "$f" | head -5 >&2

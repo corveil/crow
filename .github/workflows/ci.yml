@@ -152,11 +152,14 @@ jobs:
       - name: crow-triage page build / decisions readback (CROW-1325)
         run: bash skills/crow-triage/triage_test.sh
 
+      - name: crow-ci-queue holder / update-before-label / watcher (CROW-1365)
+        run: bash skills/crow-ci-queue/queue_test.sh
+
       # jq 1.6 is still what some Macs resolve first (Homebrew), and it rejects
       # 1.7-only syntax such as a keyword used as an object key — which once
       # made `watch` release an unmerged wave. The runner's jq is newer, so run
       # the suite again under a pinned, checksum-verified 1.6.
-      - name: crow-cascade-epic and crow-triage under jq 1.6 (CROW-1312 / CROW-1325)
+      - name: crow-cascade-epic, crow-triage and crow-ci-queue under jq 1.6 (CROW-1312 / CROW-1325 / CROW-1365)
         run: |
           mkdir -p "$RUNNER_TEMP/jq16"
           curl -fsSL -o "$RUNNER_TEMP/jq16/jq" https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64
@@ -165,6 +168,7 @@ jobs:
           PATH="$RUNNER_TEMP/jq16:$PATH" jq --version
           PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-cascade-epic/cascade_test.sh
           PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-triage/triage_test.sh
+          PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-ci-queue/queue_test.sh
 
       - name: NSLog ban (CROW-874)
         run: bash scripts/check-no-nslog.sh
