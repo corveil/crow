@@ -21,12 +21,13 @@
 # The queue: open PRs carrying crow:merge that a live work session links from
 # its own branch, or that a queue file adds, in repos with the CI Gate
 # convention (ADR 0082, CIGateConvention.swift). Needs jq 1.6+. Reads GitHub
-# via `gh` and Crow via `crow`; override with GH_BIN / CROW_BIN (tests do).
+# via `gh` and Crow via `crow`; override with GH_BIN / CROW_BIN / PS_BIN (tests do).
 
 set -uo pipefail
 
 GH_BIN="${GH_BIN:-gh}"
 CROW_BIN="${CROW_BIN:-crow}"
+PS_BIN="${PS_BIN:-ps}"
 QUEUE_DIR="${CROW_CI_QUEUE_DIR:-.claude/ci-queues}"
 # How long advance waits for update-branch to land and for the new head's own
 # run to start, and how often it looks.
@@ -768,13 +769,30 @@ end
 # One watcher per repo (CROW-1369). The skill's run never ends on its own and
 # starts watchers from three places, so a second `watch --repo R` is refused
 # here rather than left to the Manager's memory. The lock is a pidfile in the
-# queue dir. One whose process is gone, or isn't a watcher (killed without
-# cleanup, pid reused), is taken over.
+# queue dir. One whose process is gone, or is a live process that isn't a
+# watcher (killed without cleanup, pid reused), is taken over. When the holder
+# can't be checked (a sandbox that denies ps or signals), the lock counts as
+# held: a refused watcher is reported, a doubled one is silent.
 LOCK_FILE=''
 NAP_PID=''
+HOLDER_WHY=''
 
-watcher_alive() { # watcher_alive <pid>
-  kill -0 "$1" 2>/dev/null && ps -p "$1" -o command= 2>/dev/null | grep -q 'queue\.sh watch'
+# Who holds the lock: 0 a running watcher, 1 nobody (gone, or not a watcher),
+# 2 alive but unconfirmed (HOLDER_WHY says why).
+lock_holder() { # lock_holder <pid>
+  local err cmd
+  if ! err=$(export LC_ALL=C; kill -0 "$1" 2>&1); then
+    [[ "$err" == *"No such process"* ]] && return 1
+    HOLDER_WHY="it can't be signalled (${err##*- })"
+    return 2
+  fi
+  if cmd=$("$PS_BIN" -p "$1" -o command= 2>/dev/null) && [[ -n "$cmd" ]]; then
+    [[ "$cmd" == *"queue.sh watch"* ]] && return 0
+    return 1
+  fi
+  kill -0 "$1" 2>/dev/null || return 1 # it exited between the two looks
+  HOLDER_WHY="ps couldn't say what it is"
+  return 2
 }
 
 release_watch_lock() {
@@ -783,19 +801,36 @@ release_watch_lock() {
 }
 
 acquire_watch_lock() {
-  local f="$QUEUE_DIR/.watch-${REPO//\//-}.pid" pid
+  local f="$QUEUE_DIR/.watch-${REPO//\//-}.pid" pid state took
+  local mutex="$f.takeover"
   if ! mkdir -p "$QUEUE_DIR" 2>/dev/null; then
     log "could not create $QUEUE_DIR, so a second watcher on $REPO would not be refused"
     return 0
   fi
   if ! ( set -o noclobber; echo "$$" > "$f" ) 2>/dev/null; then
+    # Taking over is check-then-replace, so it runs under a mkdir mutex: two
+    # watchers that find the same stale lock can't both remove and win it. A
+    # mutex over a minute old was left by a watcher killed mid-takeover.
+    if ! mkdir "$mutex" 2>/dev/null; then
+      if [[ -z "$(find "$mutex" -maxdepth 0 -mmin +1 2>/dev/null)" ]] \
+         || ! rmdir "$mutex" 2>/dev/null || ! mkdir "$mutex" 2>/dev/null; then
+        die "watch" "another watcher for $REPO is taking its watcher lock right now — wait on that one; don't start another"
+      fi
+    fi
     pid=$(cat "$f" 2>/dev/null)
-    if is_uint "$pid" && watcher_alive "$pid"; then
-      die "watch" "a watcher for $REPO is already running (pid $pid) — wait on that one; don't start another"
+    state=1
+    if is_uint "$pid"; then lock_holder "$pid"; state=$?; fi
+    if (( state != 1 )); then
+      rmdir "$mutex" 2>/dev/null
+      if (( state == 0 )); then
+        die "watch" "pid $pid already holds the $REPO watcher lock (a running watcher) — wait on that one; don't start another"
+      fi
+      die "watch" "pid $pid already holds the $REPO watcher lock and is alive, but $HOLDER_WHY, so it counts as a watcher — wait on it, or delete $f if it isn't one"
     fi
     rm -f "$f"
-    ( set -o noclobber; echo "$$" > "$f" ) 2>/dev/null \
-      || die "watch" "a watcher for $REPO started at the same moment — wait on that one; don't start another"
+    ( set -o noclobber; echo "$$" > "$f" ) 2>/dev/null; took=$?
+    rmdir "$mutex" 2>/dev/null
+    (( took == 0 )) || die "watch" "another watcher for $REPO took its watcher lock at the same moment — wait on that one; don't start another"
   fi
   LOCK_FILE="$f"
   # TaskStop (SIGTERM) must free the repo at once, so the next watch isn't refused.
