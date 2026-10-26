@@ -43,6 +43,8 @@ function newChatState(sessionId) {
     // `/` menu entries; null until fetched for this session.
     commands: null,
     commandsLoading: false,
+    // Focus the composer as soon as it is enabled (set on session switch).
+    wantFocus: false,
     // EXPERIMENTAL headless Claude driver (ClaudeStreamDriver.swift).
     driverEnabled: false,
     driver: null,
@@ -102,11 +104,17 @@ function applyChatView() {
     chatWasShown = false;
     return;
   }
+  const entering = !chatWasShown;
   chatWasShown = true;
   ensureChatDom();
-  if (!chatState || chatState.sessionId !== selectedId) {
+  const switched = !chatState || chatState.sessionId !== selectedId;
+  if (switched) {
     chatState = newChatState(selectedId);
     clearChatLog();
+  }
+  if (switched || entering) {
+    chatState.wantFocus = true;
+    maybeFocusChatInput(chatState);
   }
   refreshChat();
   startChatPoll();
@@ -198,6 +206,27 @@ function ensureChatDom() {
   jump.onclick = () => { log.scrollTop = log.scrollHeight; jump.hidden = true; };
   view.appendChild(jump);
   return view;
+}
+
+// Put the caret in the composer after a session switch (or opening Chat) so
+// typing can start at once. Desktop only: on a phone it would throw the
+// keyboard over the conversation. Never steals focus from another text field,
+// a modal, or the session switcher. Retried from applyChatPage, because the
+// composer stays disabled until the first transcript page names a target.
+function maybeFocusChatInput(st) {
+  if (!st || !st.wantFocus || chatState !== st) return;
+  const input = document.getElementById('chat-input');
+  if (!input || input.disabled) return;
+  st.wantFocus = false;
+  if (isCoarsePointer()) return;
+  const ae = document.activeElement;
+  if (ae && ae !== input && ae !== document.body
+    && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  if (document.querySelector('.text-prompt-backdrop, .modal-dialog-backdrop')) return;
+  const sw = document.getElementById('session-switcher');
+  if (sw && !sw.hidden) return;
+  if (window.settingsIsOpen && window.settingsIsOpen()) return;
+  try { input.focus({ preventScroll: true }); } catch (_) { input.focus(); }
 }
 
 function isCoarsePointer() {
@@ -337,6 +366,7 @@ function applyChatPage(st, res) {
     }
   }
   renderChatStatus(st);
+  maybeFocusChatInput(st);
 }
 
 function appendChatEvent(st, log, ev) {

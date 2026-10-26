@@ -7,7 +7,7 @@ Switch with the **Terminal | Chat** toggle in the session header. Chat has its o
 ## How it works
 
 - **Reading.** `crowd` finds the session's transcript file (the same lookup `HarnessTranscriptLocator` uses for handoffs) and reduces it to a short list of events: user and assistant messages, tool calls with their results, turn ends, and notices. The browser polls `get-session-transcript` every 2 seconds with a byte cursor, so each poll returns only what is new. A large transcript opens at its last 2 MB.
-- **Sending.** The composer sends through the same `send` RPC as `crow send`: the text is pasted into the agent's terminal and Enter is pressed. Whatever you type in Chat appears in the terminal too.
+- **Sending.** The composer sends through the same `send` RPC as `crow send`: the text is pasted into the agent's terminal and Enter is pressed. Whatever you type in Chat appears in the terminal too. On a desktop, switching sessions (or opening Chat) puts the caret in the composer so you can type at once; phones don't auto-focus, so the keyboard doesn't cover the conversation.
 - **Rendering.** Messages are rendered as markdown with [markdown-it](https://github.com/markdown-it/markdown-it) (vendored, loaded only when Chat opens). Raw HTML stays text. Links open in a new tab, and only `http(s)` and `mailto` links are allowed. Tool calls are collapsed to one line; tap to expand.
 - **Terminal mode is unaffected.** Nothing in the Chat view runs, polls, or downloads until a session is switched to Chat.
 

@@ -13,6 +13,8 @@ const epilogue = `
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
+  get chatState(){ return chatState; },
+  applyChatView, setChatViewActive,
   set rpc(v){ rpc = v; },
 };
 `;
@@ -23,6 +25,7 @@ const dom = new JSDOM(
      <main id="detail"><header id="detail-header"></header><div id="tabbar"></div>
      <div id="terminal-wrap"></div></main>
      <div id="board"></div>
+     <div id="session-switcher" hidden></div>
    </body></html>`,
   { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/' }
 );
@@ -239,6 +242,38 @@ check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-pe
   T.updateChatMenu();
   check('a failed command fetch is not retried in a loop', failCalls === 1);
   check('…and says commands are unavailable', !menu.hidden && menu.textContent.includes('unavailable'));
+
+  console.log('focus on session switch');
+  const pending = () => new Promise(() => {}); // RPCs never answer; pages are applied by hand
+  T.rpc = pending;
+  T.setChatViewActive(true);
+  input.blur();
+  const pageFor = (sid) => ({ supported: true, reset: true, cursor: 1, path: '/' + sid, terminal_id: 'TERM-' + sid,
+    agent_kind: 'claude-code', events: [] });
+  T.selectedId = 'S-A';
+  T.applyChatView();
+  check('no focus while the composer is still disabled', doc.activeElement !== input);
+  T.applyChatPage(T.chatState, pageFor('S-A'));
+  check('focuses the composer once it is enabled', doc.activeElement === input);
+  input.blur();
+  T.applyChatPage(T.chatState, { supported: true, reset: false, cursor: 2, events: [] });
+  check('a later poll does not grab focus back', doc.activeElement !== input);
+
+  const other = doc.createElement('input');
+  doc.body.appendChild(other);
+  T.selectedId = 'S-B';
+  T.applyChatView();
+  other.focus();
+  T.applyChatPage(T.chatState, pageFor('S-B'));
+  check('another focused text field keeps focus', doc.activeElement === other);
+  other.remove();
+
+  window.matchMedia = (q) => ({ matches: /coarse/.test(q) });
+  T.selectedId = 'S-C';
+  T.applyChatView();
+  T.applyChatPage(T.chatState, pageFor('S-C'));
+  check('no auto-focus on touch devices (no surprise keyboard)', doc.activeElement !== input);
+  delete window.matchMedia;
 
   console.log('context meter');
   const meta = doc.getElementById('chat-meta');
