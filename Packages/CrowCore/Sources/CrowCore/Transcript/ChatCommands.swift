@@ -65,15 +65,41 @@ public enum ChatCommandCatalog {
             for c in cmds where byName[c.name] == nil { byName[c.name] = c }
         }
         if let project = roots.projectDir {
-            let claude = (project as NSString).appendingPathComponent(".claude")
-            add(skills(in: (claude as NSString).appendingPathComponent("skills"), scope: .project))
-            add(commands(in: (claude as NSString).appendingPathComponent("commands"), scope: .project))
+            for dir in projectSearchDirs(from: project, userClaudeDir: roots.userClaudeDir) {
+                let claude = (dir as NSString).appendingPathComponent(".claude")
+                add(skills(in: (claude as NSString).appendingPathComponent("skills"), scope: .project))
+                add(commands(in: (claude as NSString).appendingPathComponent("commands"), scope: .project))
+            }
         }
         add(skills(in: (roots.userClaudeDir as NSString).appendingPathComponent("skills"), scope: .user))
         add(commands(in: (roots.userClaudeDir as NSString).appendingPathComponent("commands"), scope: .user))
         add(pluginSkills(userClaudeDir: roots.userClaudeDir, projectDir: roots.projectDir))
         add(builtins)
         return byName.values.sorted { $0.name < $1.name }
+    }
+
+    /// The folders whose `.claude/` Claude Code reads project skills and
+    /// commands from: the session folder, then each parent, stopping at the
+    /// git repository root (verified on 2.1.310: a worktree does not see
+    /// `{devRoot}/.claude/skills`, while `{devRoot}/.crow/managers/<id>` and
+    /// `{devRoot}/corveil` do). Nearest first. The folder holding the user
+    /// config dir (`~`) is left to the user scope.
+    static func projectSearchDirs(from start: String, userClaudeDir: String) -> [String] {
+        let fm = FileManager.default
+        let userHome = (URL(fileURLWithPath: userClaudeDir).standardizedFileURL.path as NSString)
+            .deletingLastPathComponent
+        var dirs: [String] = []
+        var current = URL(fileURLWithPath: start).standardizedFileURL.path
+        while true {
+            if current == userHome { break }
+            dirs.append(current)
+            // `.git` is a directory in a clone and a file in a worktree.
+            if fm.fileExists(atPath: (current as NSString).appendingPathComponent(".git")) { break }
+            let parent = (current as NSString).deletingLastPathComponent
+            if parent == current || parent.isEmpty { break }
+            current = parent
+        }
+        return dirs
     }
 
     // MARK: - Skills and commands

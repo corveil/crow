@@ -25,12 +25,12 @@ Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to
 
 `list-chat-commands` builds the list in `crowd` from:
 
-- skills: `.claude/skills/<name>/SKILL.md` in the session's worktree, then `~/.claude/skills/` (`description` from the frontmatter; `user-invocable: false` hides a skill);
-- commands: `.claude/commands/*.md` in the worktree, then `~/.claude/commands/`;
+- skills: `.claude/skills/<name>/SKILL.md` in the session's folder and each parent folder up to the git repository root, then `~/.claude/skills/` (`description` from the frontmatter; `user-invocable: false` hides a skill);
+- commands: `.claude/commands/*.md` from the same folders, then `~/.claude/commands/`;
 - skills of plugins enabled in `enabledPlugins`, as `<plugin>:<skill>`;
 - the built-ins `/compact`, `/context`, and `/clear`.
 
-When two entries share a name, the project one is listed. Review sessions list only your own (user and plugin) entries and the built-ins, never the reviewed worktree's, because a review checkout's `.claude/` is the PR author's.
+This is the same walk Claude Code does, so the menu lists what will expand. Crow's bundled `/crow-*` skills live in `{devRoot}/.claude/`, so they appear in Manager sessions (which run at or under the dev root) but not in work sessions, whose git worktree stops the walk; Claude doesn't load them there either. When two entries share a name, the nearest project one is listed. Review sessions list only your own (user and plugin) entries and the built-ins, never the reviewed worktree's, because a review checkout's `.claude/` is the PR author's.
 
 ## Context meter
 

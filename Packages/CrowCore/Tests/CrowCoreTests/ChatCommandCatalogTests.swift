@@ -70,6 +70,45 @@ import Testing
         #expect(!cmds.contains { $0.name.contains("nope") })
     }
 
+    @Test func parentFoldersAreSearchedUpToTheGitRoot() throws {
+        // devroot/.claude/skills/crow-workspace   ← Crow's bundled skills
+        // devroot/repo-wt (a git worktree: `.git` is a file)
+        // devroot/.crow/managers/m1 (no git)
+        let root = try tree([
+            "devroot/.claude/skills/crow-workspace/SKILL.md": "---\ndescription: devroot skill\n---\n",
+            "devroot/.claude/commands/crow-runner.md": "Run things",
+            "devroot/repo-wt/.git": "gitdir: /elsewhere/.git/worktrees/repo-wt",
+            "devroot/repo-wt/.claude/skills/repo-skill/SKILL.md": "---\ndescription: repo\n---\n",
+            "devroot/repo-wt/sub/.claude/commands/nested.md": "Nested command",
+            "devroot/.crow/managers/m1/README.md": "manager",
+            "devroot/.crow/managers/m1/.claude/commands/crow-runner.md": "Manager override",
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home").path
+        func names(_ dir: String) -> Set<String> {
+            Set(ChatCommandCatalog.discover(.init(
+                projectDir: root.appendingPathComponent(dir).path, userClaudeDir: home)).map(\.name))
+        }
+
+        // Inside a git worktree: the walk stops at the worktree root.
+        let wt = names("devroot/repo-wt/sub")
+        #expect(wt.contains("nested") && wt.contains("repo-skill"))
+        #expect(!wt.contains("crow-workspace") && !wt.contains("crow-runner"))
+
+        // A Manager folder (no git) reaches devroot's skills; the nearer copy wins.
+        let mgr = ChatCommandCatalog.discover(.init(
+            projectDir: root.appendingPathComponent("devroot/.crow/managers/m1").path, userClaudeDir: home))
+        #expect(mgr.contains { $0.name == "crow-workspace" && $0.scope == .project })
+        #expect(mgr.first { $0.name == "crow-runner" }?.description == "Manager override")
+
+        // The folder holding the user config dir is not treated as a project.
+        let dirs = ChatCommandCatalog.projectSearchDirs(
+            from: root.appendingPathComponent("devroot/.crow/managers/m1").path,
+            userClaudeDir: root.appendingPathComponent(".claude").path)
+        #expect(dirs.first == root.appendingPathComponent("devroot/.crow/managers/m1").standardizedFileURL.path)
+        #expect(!dirs.contains(root.standardizedFileURL.path))
+    }
+
     @Test func missingRootsYieldOnlyBuiltins() {
         let cmds = ChatCommandCatalog.discover(.init(projectDir: "/nonexistent/p", userClaudeDir: "/nonexistent/h"))
         #expect(cmds.map(\.name) == ["clear", "compact", "context"])
