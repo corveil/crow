@@ -227,6 +227,19 @@ check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-pe
   input.value = '/'; input.setSelectionRange(1, 1); T.updateChatMenu();
   check('no menu for non-Claude sessions', menu.hidden && listCalls === 1);
 
+  // A daemon without the RPC: one request, a message, and no retry loop.
+  let failCalls = 0;
+  T.rpc = async (m) => { if (m === 'list-chat-commands') { failCalls++; throw new Error('Unknown method'); } return {}; };
+  const st7 = T.newChatState(SID);
+  T.chatState = st7;
+  T.applyChatPage(st7, { supported: true, reset: true, cursor: 1, path: '/f.jsonl', terminal_id: 'TERM',
+    agent_kind: 'claude-code', events: [] });
+  input.value = '/'; input.setSelectionRange(1, 1); T.updateChatMenu();
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  T.updateChatMenu();
+  check('a failed command fetch is not retried in a loop', failCalls === 1);
+  check('…and says commands are unavailable', !menu.hidden && menu.textContent.includes('unavailable'));
+
   console.log('context meter');
   const meta = doc.getElementById('chat-meta');
   const st6 = T.newChatState(SID);

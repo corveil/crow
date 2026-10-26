@@ -609,14 +609,21 @@ function chatMenuSupported(st) {
   return !!st && st.agentKind === 'claude-code';
 }
 
+const CHAT_COMMANDS_RETRY_MS = 30000;
+
 async function loadChatCommands(st) {
   if (st.commands || st.commandsLoading) return;
+  // A failed fetch (e.g. a daemon too old to know the RPC) waits before
+  // retrying, so the menu's own re-render can't turn into a request loop.
+  if (st.commandsFailedAt && Date.now() - st.commandsFailedAt < CHAT_COMMANDS_RETRY_MS) return;
   st.commandsLoading = true;
   try {
     const res = await rpc('list-chat-commands', { session_id: st.sessionId });
     st.commands = (res && res.supported && Array.isArray(res.commands)) ? res.commands : [];
+    st.commandsFailedAt = 0;
   } catch (_) {
-    st.commands = null; // retry on the next `/`
+    st.commands = null;
+    st.commandsFailedAt = Date.now();
   } finally {
     st.commandsLoading = false;
   }
@@ -643,7 +650,15 @@ function updateChatMenu() {
   if (!input || !chatMenuSupported(st)) { closeChatMenu(); return; }
   const query = chatSlashQuery(input);
   if (query == null) { closeChatMenu(); return; }
-  if (!st.commands) { loadChatCommands(st); renderChatMenu([], true); return; }
+  if (!st.commands) {
+    loadChatCommands(st);
+    if (st.commandsFailedAt && !st.commandsLoading) {
+      renderChatMenuMessage('Commands are unavailable right now');
+    } else {
+      renderChatMenu([], true);
+    }
+    return;
+  }
   const items = filterChatCommands(st.commands, query);
   const prevName = chatMenuItems[chatMenuIndex] && chatMenuItems[chatMenuIndex].name;
   chatMenuItems = items;
@@ -686,6 +701,15 @@ function renderChatMenu(items, loading) {
   }
   const active = menu.querySelector('.chat-menu-item.active');
   if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+}
+
+function renderChatMenuMessage(text) {
+  const menu = document.getElementById('chat-menu');
+  if (!menu) return;
+  chatMenuItems = [];
+  menu.innerHTML = '';
+  menu.appendChild(el('div', 'chat-menu-empty', text));
+  menu.hidden = false;
 }
 
 function closeChatMenu() {
