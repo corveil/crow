@@ -27,6 +27,7 @@ import Testing
             "home/skills/folded/SKILL.md": "---\ndescription: >\n  Folded block\n  scalar text\nname: x\n---\n",
             "home/commands/compact.md": "---\ndescription: \"user compact\"\n---\n",
             "home/commands/notes.txt": "ignored",
+            "home/skills/wordy/SKILL.md": "---\ndescription: " + String(repeating: "w", count: 5_000) + "\n---\n",
         ])
         defer { try? FileManager.default.removeItem(at: root) }
         let cmds = ChatCommandCatalog.discover(.init(
@@ -45,6 +46,7 @@ import Testing
         #expect(byName["context"]?.kind == .builtin)
         #expect(byName["clear"]?.kind == .builtin)
         #expect(cmds.map(\.name) == cmds.map(\.name).sorted())
+        #expect(byName["wordy"]?.description.count == ChatCommandCatalog.maxDescriptionChars)
     }
 
     @Test func enabledPluginSkillsArePrefixed() throws {

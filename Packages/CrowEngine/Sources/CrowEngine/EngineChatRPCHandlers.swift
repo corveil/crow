@@ -13,8 +13,9 @@ import Foundation
 /// The transcript read is read-only: a tmux agent keeps running and input still
 /// goes through `send`.
 @MainActor
-func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handler] {
+func makeEngineChatHandlers(appState: AppState, devRoot: String) -> [String: CommandRouter.Handler] {
     let capturedAppState = appState
+    let capturedDevRoot = devRoot
     let handlers: [String: CommandRouter.Handler] = [
         "get-session-transcript": { @Sendable params in
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
@@ -104,6 +105,16 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
                 }
                 guard ctx.kind == .claudeCode else {
                     throw RPCError.applicationError("Chat driver supports Claude Code only")
+                }
+                // Never inherit crowd's own working directory: an empty cwd
+                // (no managed terminal, no primary worktree) would make
+                // `Process` start `claude -p` wherever crowd runs. Same rule as
+                // `new-terminal`: an existing directory under the dev root.
+                var isDir: ObjCBool = false
+                guard !ctx.cwd.isEmpty,
+                      FileManager.default.fileExists(atPath: ctx.cwd, isDirectory: &isDir), isDir.boolValue,
+                      Validation.isPathWithinRoot(ctx.cwd, root: capturedDevRoot) else {
+                    throw RPCError.applicationError("Chat driver needs the session's worktree, and this session has none")
                 }
                 guard ChatDriverRegistry.enabled else {
                     throw RPCError.applicationError("Chat driver is off (start crowd with CROW_CHAT_DRIVER=1)")
@@ -284,6 +295,14 @@ final class ChatDriverRegistry {
         d.stop()
         appState?.hookState(for: sessionID).activityState = .idle
         return true
+    }
+
+    /// `stop`, then wait (off the MainActor) for the child to actually exit, so
+    /// a caller about to remove the worktree doesn't race a dying `claude -p`.
+    func stopAndWait(sessionID: UUID, timeout: TimeInterval = 3) async {
+        guard let d = drivers[sessionID] else { return }
+        stop(sessionID: sessionID)
+        await Task.detached(priority: .utility) { d.waitForExit(timeout: timeout) }.value
     }
 
     /// Driver events → the same `AgentActivityState` the hook path drives, so the

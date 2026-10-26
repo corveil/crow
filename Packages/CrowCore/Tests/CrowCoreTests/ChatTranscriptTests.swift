@@ -147,12 +147,39 @@ import Testing
         let page4 = try ChatTranscript.read(path: file.path, format: .claude, cursor: page2.cursor + 10_000)
         #expect(page4.events.map(\.text) == ["one", "two", "three"])
 
-        // A negative cursor restarts from the top instead of trapping (#1372 review).
+        // A negative cursor reads like no cursor (the tail) instead of trapping
+        // (#1372 review). This file is smaller than the tail window.
         let page5 = try ChatTranscript.read(path: file.path, format: .claude, cursor: -1)
         #expect(page5.events.map(\.text) == ["one", "two", "three"])
         #expect(page5.cursor == page2.cursor)
         let page6 = try ChatTranscript.read(path: file.path, format: .claude, cursor: Int.min)
         #expect(page6.events.count == 3)
+    }
+
+    @Test func pagesAreCappedAndCatchUpOverSeveralReads() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat-transcript-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("t.jsonl")
+        let line = { (n: Int) in #"{"type":"user","message":{"content":"m\#(n)"}}"# + "\n" }
+        let lines = (0..<10).map(line)
+        let giant = #"{"type":"user","message":{"content":""# + String(repeating: "x", count: 300) + "\"}}\n"
+        try Data((lines.joined() + giant + line(10)).utf8).write(to: file)
+
+        // From 0 with a small page cap: each read stops at the last whole line.
+        var cursor = 0
+        var texts: [String] = []
+        for _ in 0..<20 {
+            let page = try ChatTranscript.read(path: file.path, format: .claude, cursor: cursor, maxPageBytes: 120)
+            texts += page.events.map(\.text)
+            if page.cursor == cursor { break }
+            cursor = page.cursor
+        }
+        // The line longer than a page is skipped, not a stall; the rest arrives.
+        #expect(texts == (0...10).map { "m\($0)" })
+        let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! Int
+        #expect(cursor == size)
     }
 
     @Test func toolInputSummaryFallsBackToCompactJSON() {

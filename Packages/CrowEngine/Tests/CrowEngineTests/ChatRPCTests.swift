@@ -71,6 +71,54 @@ struct ChatRPCTests {
         }
     }
 
+    @Test("chat-driver-start refuses a session with no worktree, or one outside the dev root")
+    func driverStartRefusesMissingOrOutsideCwd() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.tmp) }
+        // No managed terminal and no worktree: the cwd resolves to "".
+        let bare = Session(name: "no-worktree", kind: .work, agentKind: .claudeCode)
+        f.appState.sessions.append(bare)
+        let none = await call(f, "chat-driver-start", bare)
+        #expect(none.error?.message.contains("worktree") == true)
+
+        // A worktree that exists but sits outside the dev root.
+        let outside = Session(name: "outside", kind: .work, agentKind: .claudeCode)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        f.appState.sessions.append(outside)
+        f.appState.worktrees[outside.id] = [
+            SessionWorktree(sessionID: outside.id, repoName: "repo", repoPath: home,
+                            worktreePath: home, branch: "feature/x", isPrimary: true),
+        ]
+        let out = await call(f, "chat-driver-start", outside)
+        #expect(out.error?.message.contains("worktree") == true)
+        #expect(ChatDriverRegistry.shared.driver(for: bare.id) == nil)
+        #expect(ChatDriverRegistry.shared.driver(for: outside.id) == nil)
+    }
+
+    @Test("the driver itself refuses an empty working directory")
+    func driverRefusesEmptyCwd() throws {
+        let driver = ClaudeStreamDriver(
+            sessionID: UUID(), cwd: "", logURL: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("unused-\(UUID().uuidString).ndjson"),
+            executable: "/bin/sh", arguments: ["-c", "true"]) { _ in }
+        #expect(throws: ClaudeStreamDriver.DriverError.self) { try driver.start() }
+        #expect(!driver.isRunning)
+    }
+
+    @Test("stopAndWait returns only once the child has exited, even one ignoring SIGTERM")
+    func stopAndWaitWaitsForExit() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.tmp) }
+        let registry = ChatDriverRegistry()
+        let id = UUID()
+        let stubborn = (executable: "/bin/sh", arguments: ["-c", "trap '' TERM; while :; do sleep 0.05; done"])
+        let driver = try registry.start(sessionID: id, cwd: f.tmp.path, appState: f.appState, command: stubborn)
+        #expect(driver.isRunning)
+        await registry.stopAndWait(sessionID: id, timeout: 0.3)
+        #expect(!driver.isRunning)
+        #expect(registry.driver(for: id) == nil)
+    }
+
     @Test("list-chat-commands hides a review worktree's project skills")
     func reviewSessionsListNoProjectCommands() async throws {
         let f = try fixture()

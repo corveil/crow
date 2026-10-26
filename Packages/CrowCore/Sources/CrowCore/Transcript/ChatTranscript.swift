@@ -91,6 +91,9 @@ public enum ChatTranscript {
     public static let maxToolInputChars = 300
     /// Without a cursor, start this far from the end of a large file.
     public static let initialTailBytes = 2 * 1_024 * 1_024
+    /// One page reads at most this many bytes; a cursor far behind EOF (or 0
+    /// on a huge log) catches up over several polls instead of one huge read.
+    public static let maxPageBytes = 4 * 1_024 * 1_024
 
     public struct Page: Sendable, Equatable {
         public var events: [ChatEvent]
@@ -106,17 +109,22 @@ public enum ChatTranscript {
 
     /// Read complete lines of `path` from `cursor` (or the tail, when nil) and
     /// parse them. A trailing partial line is left for the next read.
-    public static func read(path: String, format: ChatTranscriptFormat, cursor: Int?) throws -> Page {
+    public static func read(
+        path: String, format: ChatTranscriptFormat, cursor: Int?,
+        maxPageBytes: Int = ChatTranscript.maxPageBytes
+    ) throws -> Page {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         defer { try? handle.close() }
         let size = Int(try handle.seekToEnd())
+        // A negative cursor (any `/rpc` peer can send one) is treated like no
+        // cursor: `UInt64(start)` below would otherwise trap and take crowd down.
+        let cursor = cursor.flatMap { $0 >= 0 ? $0 : nil }
         var start = cursor ?? max(0, size - initialTailBytes)
         // The file shrank or was replaced (a rewrite, not an append): restart.
-        // A negative cursor (any `/rpc` peer can send one) restarts too —
-        // `UInt64(start)` below would otherwise trap and take crowd down.
-        if start > size || start < 0 { start = 0 }
+        if start > size { start = 0 }
         try handle.seek(toOffset: UInt64(start))
-        let data = try handle.readToEnd() ?? Data()
+        let data = try handle.read(upToCount: max(1, maxPageBytes)) ?? Data()
+        let windowFull = start + data.count < size
         var body = data[...]
         var truncated = false
         if cursor == nil, start > 0 {
@@ -132,6 +140,11 @@ public enum ChatTranscript {
         if let lastNL = body.lastIndex(of: 0x0A) {
             consumedEnd = lastNL + 1
             body = body[body.startIndex..<consumedEnd]
+        } else if windowFull {
+            // One line longer than a whole page: skip it rather than stall the
+            // cursor. Its tail is undecodable next time and is skipped too.
+            consumedEnd = data.endIndex
+            body = body[body.startIndex..<body.startIndex]
         } else {
             consumedEnd = body.startIndex
             body = body[body.startIndex..<body.startIndex]

@@ -27,6 +27,9 @@ public struct ChatCommand: Sendable, Equatable {
 /// stream-json). Discovery is best-effort: an unreadable or malformed file is
 /// skipped, never fatal.
 public enum ChatCommandCatalog {
+    /// Descriptions are menu text; the menu clamps to two lines anyway.
+    public static let maxDescriptionChars = 200
+
     public struct Roots: Sendable {
         /// The session's working directory (worktree, or the Manager's dir).
         public var projectDir: String?
@@ -89,7 +92,8 @@ public enum ChatCommandCatalog {
             if let v = fields["user-invocable"], parseBool(v) == false { continue }
             guard let name = commandName(entry, prefix: prefix) else { continue }
             out.append(ChatCommand(
-                name: name, description: fields["description"] ?? "", kind: .skill, scope: scope))
+                name: name, description: String((fields["description"] ?? "").prefix(maxDescriptionChars)),
+                kind: .skill, scope: scope))
         }
         return out
     }
@@ -113,7 +117,7 @@ public enum ChatCommandCatalog {
                 } ?? ""
             }
             out.append(ChatCommand(
-                name: name, description: String(description.prefix(200)), kind: .command, scope: scope))
+                name: name, description: String(description.prefix(maxDescriptionChars)), kind: .command, scope: scope))
         }
         return out
     }

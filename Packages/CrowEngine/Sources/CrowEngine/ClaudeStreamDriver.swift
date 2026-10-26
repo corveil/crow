@@ -103,6 +103,12 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
     }
 
     public func start() throws {
+        // Defense in depth for callers other than `chat-driver-start`: an empty
+        // or missing cwd must not fall back to crowd's own directory.
+        var isDir: ObjCBool = false
+        guard !cwd.isEmpty, FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue else {
+            throw DriverError.invalidWorkingDirectory(cwd)
+        }
         try FileManager.default.createDirectory(
             at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: logURL.path) {
@@ -171,13 +177,29 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
         }
     }
 
+    /// Block until the child has exited, escalating to SIGKILL after
+    /// `timeout`. Returns whether it is gone. Call off the MainActor.
+    @discardableResult
+    public func waitForExit(timeout: TimeInterval = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        if isRunning, let pid = lock.withLock({ process?.processIdentifier }), pid > 0 {
+            kill(pid, SIGKILL)
+            let killDeadline = Date().addingTimeInterval(1)
+            while isRunning, Date() < killDeadline { Thread.sleep(forTimeInterval: 0.02) }
+        }
+        return !isRunning
+    }
+
     public enum DriverError: Error, CustomStringConvertible {
         case notRunning
         case unknownRequest(String)
+        case invalidWorkingDirectory(String)
         public var description: String {
             switch self {
             case .notRunning: return "Chat driver is not running"
             case .unknownRequest(let id): return "No pending permission request \(id)"
+            case .invalidWorkingDirectory(let cwd): return "Not a directory: '\(cwd)'"
             }
         }
     }
