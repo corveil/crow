@@ -14,7 +14,7 @@ const epilogue = `
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
   get chatState(){ return chatState; },
-  applyChatView, setChatViewActive,
+  applyChatView, setChatViewActive, chatHeaderMeter,
   set rpc(v){ rpc = v; },
 };
 `;
@@ -158,8 +158,9 @@ const st3 = T.newChatState(SID);
 T.chatState = st3;
 T.applyChatPage(st3, { supported: true, reset: true, cursor: 1, path: '/d.jsonl', terminal_id: 'TERM',
   driver_enabled: true, driver: null, events: [] });
-const startBtn = doc.querySelector('#chat-driver .chat-driver-btn');
-check('offers Start headless when enabled', startBtn && startBtn.textContent === 'Start headless');
+check('no button starts the headless driver (removed for now)',
+  !doc.querySelector('#chat-driver .chat-driver-btn') && doc.getElementById('chat-driver').hidden
+  && !doc.getElementById('chat-view').textContent.includes('Start headless'));
 T.applyChatPage(st3, { supported: true, reset: false, cursor: 1, terminal_id: 'TERM', driver_enabled: true,
   driver: { running: true, conversation_id: 'c1',
     pending: [{ request_id: 'req-1', tool_name: 'Write', summary: '/w/a.txt' }] },
@@ -275,10 +276,18 @@ check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-pe
   check('no auto-focus on touch devices (no surprise keyboard)', doc.activeElement !== input);
   delete window.matchMedia;
 
-  console.log('context meter');
-  const meta = doc.getElementById('chat-meta');
+  console.log('context meter (header Agent row)');
   const st6 = T.newChatState(SID);
   T.chatState = st6;
+  const agentRow = doc.createElement('div');
+  agentRow.className = 'meta';
+  agentRow.textContent = 'Agent: Claude Code';
+  let handoffOpened = false;
+  agentRow.onclick = () => { handoffOpened = true; };
+  agentRow.appendChild(T.chatHeaderMeter(SID));
+  doc.body.appendChild(agentRow);
+  const meta = doc.getElementById('chat-header-meter');
+  check('meter slot sits in the Agent row', meta && meta.parentNode === agentRow);
   T.applyChatPage(st6, { supported: true, reset: true, cursor: 1, path: '/u.jsonl', terminal_id: 'TERM',
     agent_kind: 'claude-code', events: [] });
   check('meter hidden until usage arrives', meta.hidden);
@@ -298,10 +307,20 @@ check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-pe
   check('unknown window → token count, no percent', !meta.querySelector('.chat-meter-ring')
     && meta.querySelector('.chat-meter-pct').textContent === '51k tokens');
   meta.querySelector('.chat-meter').click();
+  check('clicking the meter does not open the handoff menu', handoffOpened === false);
   T.applyChatPage(st6, { supported: true, reset: false, cursor: 6, events: [] });
   check('a tapped-open detail survives the next poll', meta.querySelector('.chat-meter').classList.contains('open'));
   meta.querySelector('.chat-meter').click();
   check('tapping again closes it', !meta.querySelector('.chat-meter').classList.contains('open'));
+  // A header rebuilt for another session, or in terminal mode, shows no meter.
+  const otherSlot = T.chatHeaderMeter('OTHER-SESSION');
+  check('no meter for a session other than the chat one', otherSlot.hidden && !otherSlot.textContent);
+  T.setChatViewActive(false);
+  const term = T.chatHeaderMeter(SID);
+  check('no meter in terminal mode', term.hidden && !term.textContent);
+  T.setChatViewActive(true);
+  const rebuilt = T.chatHeaderMeter(SID);
+  check('a rebuilt header refills the meter from chat state', !rebuilt.hidden && rebuilt.textContent.includes('tokens'));
   check('model names', T.formatChatModel('claude-haiku-5-5') === 'Haiku 5.5' && T.formatChatModel('gpt-5.5') === 'gpt-5.5');
   check('token formatting', T.formatChatTokens(999) === '999' && T.formatChatTokens(1500) === '1.5k' && T.formatChatTokens(1000000) === '1M');
 

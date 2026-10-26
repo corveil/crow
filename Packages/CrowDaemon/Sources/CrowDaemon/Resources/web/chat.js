@@ -189,11 +189,6 @@ function ensureChatDom() {
   form.onsubmit = (e) => { e.preventDefault(); sendChatMessage(); };
   view.appendChild(form);
 
-  const meta = el('div', 'chat-meta');
-  meta.id = 'chat-meta';
-  meta.hidden = true;
-  view.appendChild(meta);
-
   // Sticky-bottom bookkeeping: the user scrolling up releases the pin.
   log.addEventListener('scroll', () => {
     const jump = document.getElementById('chat-jump');
@@ -249,7 +244,7 @@ function chatNearBottom(log) {
 }
 
 // ---------------------------------------------------------------------------
-// Markdown (markdown-it 14.1.0, vendored at /markdown-it.min.js). Loaded on the
+// Markdown (markdown-it 14.1.1, vendored at /markdown-it.min.js). Loaded on the
 // first Chat open only — the terminal view never fetches it. `html: false`
 // escapes any raw HTML in the source (transcripts carry text other people
 // wrote: tool output, PR bodies in review sessions), and links are limited to
@@ -565,17 +560,10 @@ function renderChatDriver(st, status) {
     if (status.parentNode) status.parentNode.insertBefore(bar, status);
   }
   bar.innerHTML = '';
-  bar.hidden = !(st.driverEnabled || st.driver);
+  // No UI starts the driver for now (operator call, #1372): the bar only
+  // appears for a driver already running, started via `chat-driver-start`.
+  bar.hidden = !chatDriverRunning(st);
   if (bar.hidden) return;
-  if (!chatDriverRunning(st)) {
-    bar.appendChild(el('span', 'chat-driver-label', 'Experimental: run Claude headless (no TUI) for this session.'));
-    const start = el('button', 'chat-driver-btn', st.driverBusy ? 'Starting…' : 'Start headless');
-    start.type = 'button';
-    start.disabled = st.driverBusy;
-    start.onclick = () => chatDriverAction(st, 'chat-driver-start', {});
-    bar.appendChild(start);
-    return;
-  }
   bar.appendChild(el('span', 'chat-driver-label', 'Experimental · headless Claude · new conversation'));
   const stop = el('button', 'chat-driver-btn', 'Stop');
   stop.type = 'button';
@@ -823,14 +811,29 @@ function chatUsagePercent(u) {
 // Survives the poll's re-render, so a tapped-open detail stays open.
 let chatMeterOpen = false;
 
+// The meter lives in the session header's "Agent:" row (renderHeader calls
+// chatHeaderMeter). The header is rebuilt on its own schedule, so the slot is
+// recreated there and refilled here whenever a transcript page lands.
+function chatHeaderMeter(sessionId) {
+  const slot = el('span', 'chat-meta chat-header-meter');
+  slot.id = 'chat-header-meter';
+  // Clicks here must not open the Agent row's handoff menu.
+  slot.addEventListener('click', (e) => e.stopPropagation());
+  const st = chatState;
+  fillChatMeter(slot, chatViewActive && st && st.sessionId === sessionId ? st : null);
+  return slot;
+}
+
 function renderChatMeta(st) {
-  const meta = document.getElementById('chat-meta');
-  if (!meta) return;
+  const slot = document.getElementById('chat-header-meter');
+  if (!slot) return;
+  fillChatMeter(slot, chatViewActive && chatState === st ? st : null);
+}
+
+function fillChatMeter(meta, st) {
   const u = st && st.usage;
   meta.innerHTML = '';
   meta.hidden = !u;
-  const view = document.getElementById('chat-view');
-  if (view) view.classList.toggle('has-meta', !!u);
   if (!u) return;
   if (u.model) meta.appendChild(el('span', 'chat-meta-model', formatChatModel(u.model)));
   const pct = chatUsagePercent(u);

@@ -302,7 +302,10 @@ final class ChatDriverRegistry {
     func stopAndWait(sessionID: UUID, timeout: TimeInterval = 3) async {
         guard let d = drivers[sessionID] else { return }
         stop(sessionID: sessionID)
-        await Task.detached(priority: .utility) { d.waitForExit(timeout: timeout) }.value
+        let exited = await Task.detached(priority: .utility) { d.waitForExit(timeout: timeout) }.value
+        if !exited {
+            CrowLog.error("[chat-driver] session \(sessionID.uuidString.prefix(8)) driver still running after SIGKILL; continuing")
+        }
     }
 
     /// Driver events → the same `AgentActivityState` the hook path drives, so the

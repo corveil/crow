@@ -57,6 +57,11 @@ function renderHeader(s) {
     root.appendChild(metaRow);
   }
   root.appendChild(el('div', 'meta', 'Agent: ' + (s.agent_display_name || s.agent_kind || '—')));
+  // Chat view: model + context-window meter beside the agent (filled by chat.js).
+  if (typeof chatHeaderMeter === 'function') {
+    root.lastChild.classList.add('meta-has-meter');
+    root.lastChild.appendChild(chatHeaderMeter(s.id));
+  }
   // Clickable agent row for non-manager sessions with a worktree (CROW-627).
   if (s.kind !== 'manager' && s.worktree_path) {
     const agentMeta = root.lastChild;

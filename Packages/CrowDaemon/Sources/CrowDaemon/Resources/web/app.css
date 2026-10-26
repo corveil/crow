@@ -2152,8 +2152,6 @@ select.text-prompt-input { cursor: pointer; }
 /* Chat composer `/` menu (chat.js). Opens upward from the composer so the phone
    keyboard never covers it; rows are full-width tap targets. */
 .chat-composer { position: relative; }
-/* The meter row, when shown, owns the bottom safe-area inset. */
-#chat-view.has-meta .chat-composer { padding-bottom: 4px; }
 .chat-menu {
   position: absolute; left: 12px; right: 12px; bottom: calc(100% + 6px);
   max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain;
@@ -2174,11 +2172,12 @@ select.text-prompt-input { cursor: pointer; }
 }
 .chat-menu-empty { padding: 10px; font-size: 12px; color: var(--text-muted); }
 
-/* Context meter row under the composer. */
+/* Context meter, inline in the session header's Agent row. */
+/* `.meta` clips for its ellipsis; the meter's tap-open detail must escape it. */
+.meta.meta-has-meter { overflow: visible; }
 .chat-meta {
-  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
-  padding: 0 14px calc(6px + env(safe-area-inset-bottom));
-  background: var(--bg-surface);
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 10px; vertical-align: middle;
   font-size: 12px; color: var(--text-muted);
 }
 .chat-meta[hidden] { display: none; }
@@ -2196,7 +2195,7 @@ select.text-prompt-input { cursor: pointer; }
 .chat-meter.over, .chat-meter.over .chat-meter-pct { color: var(--red); }
 .chat-meter.over .chat-meter-ring .fill { stroke: var(--red); }
 .chat-meter-detail {
-  display: none; position: absolute; right: 0; bottom: calc(100% + 6px);
+  display: none; position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
   white-space: nowrap; padding: 6px 10px; border-radius: 8px;
   background: var(--bg-elev); border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-popover); color: var(--text-primary); font-size: 12px;

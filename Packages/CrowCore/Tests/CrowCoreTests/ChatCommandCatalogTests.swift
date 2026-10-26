@@ -109,6 +109,52 @@ import Testing
         #expect(!dirs.contains(root.standardizedFileURL.path))
     }
 
+    @Test func projectFilesMustBeRegularAndInsideTheProject() throws {
+        let root = try tree([
+            "secret/key.md": "---\ndescription: TOP-SECRET\n---\n",
+            "secret/dir/stolen.md": "---\ndescription: ALSO-SECRET\n---\n",
+            "proj/.git": "gitdir: x",
+            "proj/.claude/commands/ok.md": "---\ndescription: fine\n---\n",
+            "home/skills/dot/SKILL.md": "---\ndescription: user symlink target\n---\n",
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fm = FileManager.default
+        let proj = root.appendingPathComponent("proj")
+        // A committed symlink to an operator file, a symlinked commands subdir,
+        // a symlinked skill folder, and a FIFO with no writer.
+        try fm.createSymbolicLink(atPath: proj.appendingPathComponent(".claude/commands/leak.md").path,
+                                  withDestinationPath: root.appendingPathComponent("secret/key.md").path)
+        try fm.createDirectory(at: proj.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: proj.appendingPathComponent(".claude/skills/stolen").path,
+                                  withDestinationPath: root.appendingPathComponent("secret/dir").path)
+        try Data("---\ndescription: VIA-DIR\n---\n".utf8)
+            .write(to: root.appendingPathComponent("secret/dir/SKILL.md"))
+        #expect(mkfifo(proj.appendingPathComponent(".claude/commands/fifo.md").path, 0o600) == 0)
+        // The operator's own symlinked user skill stays allowed.
+        let userSkill = root.appendingPathComponent("home/skills/linked")
+        try fm.createSymbolicLink(atPath: userSkill.path,
+                                  withDestinationPath: root.appendingPathComponent("home/skills/dot").path)
+
+        let started = Date()
+        let cmds = ChatCommandCatalog.discover(.init(
+            projectDir: proj.path, userClaudeDir: root.appendingPathComponent("home").path))
+        #expect(Date().timeIntervalSince(started) < 2, "a FIFO must not block discovery")
+        let byName = Dictionary(uniqueKeysWithValues: cmds.map { ($0.name, $0) })
+        #expect(byName["ok"]?.description == "fine")
+        #expect(byName["leak"] == nil)
+        #expect(byName["fifo"] == nil)
+        #expect(byName["stolen"] == nil)
+        #expect(!cmds.contains { $0.description.contains("SECRET") || $0.description.contains("VIA-DIR") })
+        #expect(byName["linked"]?.description == "user symlink target")
+    }
+
+    @Test func pluginPrefixMustBeOneToken() {
+        #expect(ChatCommandCatalog.commandName("lint", prefix: "toolkit") == "toolkit:lint")
+        #expect(ChatCommandCatalog.commandName("lint", prefix: "bad name") == nil)
+        #expect(ChatCommandCatalog.commandName("lint", prefix: "a:b") == nil)
+        #expect(ChatCommandCatalog.commandName("lint", prefix: "") == nil)
+    }
+
     @Test func missingRootsYieldOnlyBuiltins() {
         let cmds = ChatCommandCatalog.discover(.init(projectDir: "/nonexistent/p", userClaudeDir: "/nonexistent/h"))
         #expect(cmds.map(\.name) == ["clear", "compact", "context"])

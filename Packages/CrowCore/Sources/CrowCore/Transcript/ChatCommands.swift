@@ -67,8 +67,8 @@ public enum ChatCommandCatalog {
         if let project = roots.projectDir {
             for dir in projectSearchDirs(from: project, userClaudeDir: roots.userClaudeDir) {
                 let claude = (dir as NSString).appendingPathComponent(".claude")
-                add(skills(in: (claude as NSString).appendingPathComponent("skills"), scope: .project))
-                add(commands(in: (claude as NSString).appendingPathComponent("commands"), scope: .project))
+                add(skills(in: (claude as NSString).appendingPathComponent("skills"), scope: .project, confineTo: dir))
+                add(commands(in: (claude as NSString).appendingPathComponent("commands"), scope: .project, confineTo: dir))
             }
         }
         add(skills(in: (roots.userClaudeDir as NSString).appendingPathComponent("skills"), scope: .user))
@@ -106,14 +106,16 @@ public enum ChatCommandCatalog {
 
     /// `<dir>/<name>/SKILL.md`. The folder name is the invocation name, as in
     /// Claude Code; `user-invocable: false` hides the skill from the menu.
-    static func skills(in dir: String, scope: ChatCommand.Scope, prefix: String? = nil) -> [ChatCommand] {
+    static func skills(
+        in dir: String, scope: ChatCommand.Scope, prefix: String? = nil, confineTo: String? = nil
+    ) -> [ChatCommand] {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
         var out: [ChatCommand] = []
         for entry in entries.sorted() where !entry.hasPrefix(".") {
             let file = ((dir as NSString).appendingPathComponent(entry) as NSString)
                 .appendingPathComponent("SKILL.md")
-            guard let text = readSmall(file) else { continue }
+            guard let text = readSmall(file, followSymlinks: scope != .project, confineTo: confineTo) else { continue }
             let fields = frontmatter(text)
             if let v = fields["user-invocable"], parseBool(v) == false { continue }
             guard let name = commandName(entry, prefix: prefix) else { continue }
@@ -125,13 +127,13 @@ public enum ChatCommandCatalog {
     }
 
     /// `<dir>/<name>.md` (top level only).
-    static func commands(in dir: String, scope: ChatCommand.Scope) -> [ChatCommand] {
+    static func commands(in dir: String, scope: ChatCommand.Scope, confineTo: String? = nil) -> [ChatCommand] {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
         var out: [ChatCommand] = []
         for entry in entries.sorted() where entry.hasSuffix(".md") && !entry.hasPrefix(".") {
             let file = (dir as NSString).appendingPathComponent(entry)
-            guard let text = readSmall(file) else { continue }
+            guard let text = readSmall(file, followSymlinks: scope != .project, confineTo: confineTo) else { continue }
             let fields = frontmatter(text)
             if let v = fields["user-invocable"], parseBool(v) == false { continue }
             guard let name = commandName(String(entry.dropLast(3)), prefix: nil) else { continue }
@@ -213,8 +215,12 @@ public enum ChatCommandCatalog {
         guard !base.isEmpty else { return nil }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.:"))
         guard base.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
-        if let prefix { return "\(prefix):\(base)" }
-        return base
+        guard let prefix else { return base }
+        // The plugin name comes from its `plugin.json`; hold it to the same
+        // charset so the inserted `/prefix:name` stays one token.
+        let p = prefix.trimmingCharacters(in: .whitespaces)
+        guard !p.isEmpty, !p.contains(":"), p.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return "\(p):\(base)"
     }
 
     /// Top-level `key: value` pairs of a `---` frontmatter block. Handles plain
@@ -266,11 +272,34 @@ public enum ChatCommandCatalog {
         return String(rest[end.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Skill files are tiny; cap the read so a hostile repo can't hand us a
-    /// gigabyte "SKILL.md".
-    private static func readSmall(_ path: String, limit: Int = 64 * 1024) -> String? {
-        guard let h = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? h.close() }
+    /// Read a skill or command file defensively: worktree content is untrusted.
+    ///
+    /// - Regular files only (`fstat` after open), opened `O_NONBLOCK` so a FIFO
+    ///   planted in `.claude/` can't hang discovery.
+    /// - `followSymlinks: false` (project scope) opens with `O_NOFOLLOW`, so a
+    ///   committed `.claude/commands/x.md -> ~/.ssh/...` symlink can't leak an
+    ///   operator file into the menu. User and plugin scopes are the operator's
+    ///   own setup and may symlink (dotfile managers do), but must still land on
+    ///   a regular file.
+    /// - `confineTo` (project scope): the fully resolved path must stay inside
+    ///   that folder, which also covers a symlinked `.claude/commands` directory
+    ///   that `O_NOFOLLOW` (last component only) would not.
+    /// - At most `limit` bytes, so a hostile repo can't hand us a gigabyte file.
+    static func readSmall(
+        _ path: String, followSymlinks: Bool, confineTo: String? = nil, limit: Int = 64 * 1024
+    ) -> String? {
+        if let confineTo {
+            let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+            let root = URL(fileURLWithPath: confineTo).resolvingSymlinksInPath().path
+            guard real.hasPrefix(root.hasSuffix("/") ? root : root + "/") else { return nil }
+        }
+        var flags = O_RDONLY | O_NONBLOCK | O_CLOEXEC
+        if !followSymlinks { flags |= O_NOFOLLOW }
+        let fd = open(path, flags)
+        guard fd >= 0 else { return nil }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
         guard let d = try? h.read(upToCount: limit) else { return nil }
         return String(data: d, encoding: .utf8)
     }
