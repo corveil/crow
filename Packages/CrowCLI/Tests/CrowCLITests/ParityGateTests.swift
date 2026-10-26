@@ -339,11 +339,6 @@ struct ParityGateTests {
     /// `.noCLI(…)` row lost among 85.
     static let knownWriteExemptions: Set<String> = [
         "batch-start-review",
-        // Experimental web-only headless driver (CROW_CHAT_DRIVER=1).
-        "chat-driver-permission",
-        "chat-driver-send",
-        "chat-driver-start",
-        "chat-driver-stop",
         "run-job",
         "run-setup",
         "set-config",

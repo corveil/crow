@@ -83,6 +83,6 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
             sessionService: ctx.sessionService, hostBridge: ctx.hostBridge,
             hookDebug: hookDebug)
     ) { existing, _ in existing }
-    handlers.merge(makeEngineChatHandlers(appState: ctx.appState, devRoot: ctx.devRoot)) { existing, _ in existing }
+    handlers.merge(makeEngineChatHandlers(appState: ctx.appState)) { existing, _ in existing }
     return CommandRouter(handlers: handlers)
 }

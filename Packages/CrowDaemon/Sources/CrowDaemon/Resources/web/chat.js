@@ -52,10 +52,6 @@ function newChatState(sessionId) {
     // consecutive repeats collapsed; `histPos` is the entry on screen.
     history: [],
     histPos: null,
-    // EXPERIMENTAL headless Claude driver (ClaudeStreamDriver.swift).
-    driverEnabled: false,
-    driver: null,
-    driverBusy: false,
   };
 }
 
@@ -352,8 +348,6 @@ function applyChatPage(st, res) {
   if (res.agent_kind) st.agentKind = res.agent_kind;
   if (res.usage) st.usage = res.usage;
   else if (res.reset) st.usage = null;
-  st.driverEnabled = !!res.driver_enabled;
-  st.driver = res.driver || null;
   if (res.reset) {
     if (log) log.innerHTML = '';
     st.toolNodes = new Map();
@@ -499,23 +493,14 @@ function renderChatStatus(stArg) {
   status.textContent = '';
   const send = document.getElementById('chat-send');
   const input = document.getElementById('chat-input');
-  const hasTarget = !!(st && (st.terminalId || chatDriverRunning(st)));
+  const hasTarget = !!(st && st.terminalId);
   if (send) send.disabled = !hasTarget || chatSending;
-  if (input) {
-    input.disabled = !hasTarget;
-    input.placeholder = st && chatDriverRunning(st) ? 'Message headless Claude…' : 'Message the agent…';
-  }
+  if (input) input.disabled = !hasTarget;
   if (!st) return;
   renderChatMeta(st);
-  renderChatDriver(st, status);
   if (!st.supported || (st.reason && st.cursor == null)) {
     status.appendChild(el('span', null, st.reason || 'Chat view is not available for this session.'));
     status.classList.add('warn');
-    return;
-  }
-  if (st.driver && st.driver.pending && st.driver.pending.length) {
-    status.classList.add('busy');
-    status.appendChild(el('span', null, 'Waiting for your approval'));
     return;
   }
   // No structured "busy" signal reaches the browser yet, so infer it: anything
@@ -530,19 +515,14 @@ function renderChatStatus(stArg) {
 async function sendChatMessage() {
   const input = document.getElementById('chat-input');
   const st = chatState;
-  if (!input || !st || chatSending) return;
-  if (!st.terminalId && !chatDriverRunning(st)) return;
+  if (!input || !st || !st.terminalId || chatSending) return;
   const text = input.value.replace(/\s+$/, '');
   if (!text) return;
   chatSending = true;
   renderChatStatus();
   try {
-    if (chatDriverRunning(st)) {
-      await rpc('chat-driver-send', { session_id: st.sessionId, text });
-    } else {
-      // Trailing newline = Enter after the bracketed paste (TmuxInput.sendText).
-      await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n' });
-    }
+    // Trailing newline = Enter after the bracketed paste (TmuxInput.sendText).
+    await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n' });
     input.value = '';
     autosizeChatInput(input);
     closeChatMenu();
@@ -562,71 +542,11 @@ async function sendChatMessage() {
 }
 
 // ---------------------------------------------------------------------------
-// EXPERIMENTAL headless driver controls. Rendered above the status line: a start
-// button when crowd has CROW_CHAT_DRIVER=1, then a banner + permission cards
-// while the driver runs. Approvals are the one thing the TUI path cannot offer
-// here — in tmux, a permission prompt is only answerable in the terminal.
-// ---------------------------------------------------------------------------
-function chatDriverRunning(st) {
-  return !!(st && st.driver && st.driver.running);
-}
-
-function renderChatDriver(st, status) {
-  let bar = document.getElementById('chat-driver');
-  if (!bar) {
-    bar = el('div', 'chat-driver');
-    bar.id = 'chat-driver';
-    if (status.parentNode) status.parentNode.insertBefore(bar, status);
-  }
-  bar.innerHTML = '';
-  // No UI starts the driver for now (operator call, #1372): the bar only
-  // appears for a driver already running, started via `chat-driver-start`.
-  bar.hidden = !chatDriverRunning(st);
-  if (bar.hidden) return;
-  bar.appendChild(el('span', 'chat-driver-label', 'Experimental · headless Claude · new conversation'));
-  const stop = el('button', 'chat-driver-btn', 'Stop');
-  stop.type = 'button';
-  stop.onclick = () => chatDriverAction(st, 'chat-driver-stop', {});
-  bar.appendChild(stop);
-  for (const p of (st.driver.pending || [])) {
-    const card = el('div', 'chat-permission');
-    const what = el('div', 'chat-permission-what');
-    what.appendChild(el('span', 'chat-tool-name', p.tool_name));
-    what.appendChild(el('span', 'chat-tool-input', p.summary || ''));
-    card.appendChild(what);
-    const allow = el('button', 'chat-driver-btn primary', 'Allow');
-    allow.type = 'button';
-    allow.onclick = () => chatDriverAction(st, 'chat-driver-permission', { request_id: p.request_id, allow: true });
-    const deny = el('button', 'chat-driver-btn', 'Deny');
-    deny.type = 'button';
-    deny.onclick = () => chatDriverAction(st, 'chat-driver-permission', { request_id: p.request_id, allow: false });
-    card.appendChild(allow);
-    card.appendChild(deny);
-    bar.appendChild(card);
-  }
-}
-
-async function chatDriverAction(st, method, extra) {
-  if (st.driverBusy) return;
-  st.driverBusy = true;
-  renderChatStatus(st);
-  try {
-    await rpc(method, Object.assign({ session_id: st.sessionId }, extra));
-  } catch (e) {
-    alertModal('Chat driver: ' + ((e && e.message) || e));
-  } finally {
-    st.driverBusy = false;
-    refreshChat();
-  }
-}
-
-// ---------------------------------------------------------------------------
 // `/` menu (Claude sessions). Typing `/` at the very start of the composer
 // opens a filtered list of skills, slash commands and built-ins from
 // `list-chat-commands`. Picking one only inserts `/name ` — Claude Code expands
-// it when the message arrives, through the TUI (`send`) or the headless driver
-// alike. Claude expands one skill per message, so the menu only triggers on the
-// leading token.
+// it when the message arrives through the TUI (`send`). Claude expands one
+// skill per message, so the menu only triggers on the leading token.
 // ---------------------------------------------------------------------------
 const CHAT_MENU_LIMIT = 50;
 let chatMenuItems = [];
@@ -854,8 +774,8 @@ function chatHistoryKeydown(e, input) {
 // ---------------------------------------------------------------------------
 // Context meter: a small row under the composer with the model and a ring of
 // how full the context window is. Used tokens are the latest main-conversation
-// call's prompt tokens; the window comes from the headless driver's `result`,
-// the transcript (Codex), or the daemon's model table — and when none knows it,
+// call's prompt tokens; the window comes from the transcript (Codex) or the
+// daemon's model table — and when neither knows it,
 // the row shows a token count with no percentage. Tap/hover for detail.
 // ---------------------------------------------------------------------------
 function formatChatTokens(n) {
@@ -913,8 +833,7 @@ function fillChatMeter(meta, st) {
   const detail = pct != null
     ? formatChatTokens(u.used_tokens) + ' / ' + formatChatTokens(u.max_tokens) + ' tokens'
     : formatChatTokens(u.used_tokens) + ' tokens used';
-  const cost = typeof u.cost_usd === 'number' ? ' · $' + u.cost_usd.toFixed(2) : '';
-  btn.title = 'Context window: ' + detail + cost;
+  btn.title = 'Context window: ' + detail;
   btn.setAttribute('aria-label', pct != null
     ? 'Context window ' + Math.round(pct) + '% used'
     : 'Context window ' + formatChatTokens(u.used_tokens) + ' tokens used');
@@ -940,7 +859,7 @@ function fillChatMeter(meta, st) {
   } else {
     btn.appendChild(el('span', 'chat-meter-pct', formatChatTokens(u.used_tokens) + ' tokens'));
   }
-  const pop = el('span', 'chat-meter-detail', detail + cost);
+  const pop = el('span', 'chat-meter-detail', detail);
   btn.appendChild(pop);
   // Hover shows the detail on desktop (CSS); a tap toggles it on touch.
   btn.setAttribute('aria-expanded', chatMeterOpen ? 'true' : 'false');

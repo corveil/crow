@@ -21,7 +21,7 @@ Transcripts never contain permission prompts. When the agent is waiting for appr
 
 ## `/` menu (Claude Code)
 
-Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to move, Enter or Tab to pick, and Esc to close; on a phone, tap an entry. Picking inserts `/name ` and nothing else. Claude Code expands it when the message arrives, so the menu works the same whether the session runs in the terminal or the experimental headless driver. Claude expands one skill per message.
+Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to move, Enter or Tab to pick, and Esc to close; on a phone, tap an entry. Picking inserts `/name ` and nothing else. Claude Code expands it when the message arrives in the terminal, exactly as if you had typed it there. Claude expands one skill per message.
 
 `list-chat-commands` builds the list in `crowd` from:
 
@@ -37,11 +37,5 @@ This is the same walk Claude Code does, so the menu lists what will expand. Crow
 In Chat view, the session header's **Agent** row shows the model and how full its context window is. The ring turns red above 90%. Hover, or tap on a phone, for used / max tokens.
 
 - **Used tokens** come from the latest main-conversation model call: `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`.
-- **The window** comes from the headless driver's `result.modelUsage[*].contextWindow` when the driver runs, from Codex's own `model_context_window`, or from a small model table (`ChatContextWindow`). Every current Claude 5.x model reports 1,000,000; Claude 3 and 4 models default to 200,000.
+- **The window** comes from Codex's own `model_context_window`, or from a small model table (`ChatContextWindow`). Every current Claude 5.x model reports 1,000,000 (checked against Claude Code's own `result.modelUsage[*].contextWindow`); Claude 3 and 4 models default to 200,000.
 - For a model the table doesn't know, the row shows "N tokens" with no percentage rather than guess.
-
-## Experimental: headless driver
-
-Enabled with `CROW_CHAT_DRIVER=1` in `crowd`'s environment, and started through the `chat-driver-start` RPC; there is no button for it in the UI for now. It works on Claude Code work sessions and runs `claude -p` in stream-json mode as a child of `crowd`, in a **new** conversation (not the terminal's). It answers permission prompts with Allow/Deny cards in Chat, and shows cost in the context meter. It is off by default and refused for review sessions, because `claude -p` skips the workspace-trust check and a review checkout is the PR author's code.
-
-Because the process is a child of `crowd`, restarting `crowd` stops it, unlike tmux-hosted agents. Deleting the session stops it too, before the worktree is removed. The conversation survives on disk. The driver will be superseded by an out-of-process agent host.

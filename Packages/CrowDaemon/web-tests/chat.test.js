@@ -39,7 +39,7 @@ window.setTimeout = () => 0;
 window.requestAnimationFrame = () => 0;
 const realGet = window.document.getElementById.bind(window.document);
 window.document.getElementById = (id) => realGet(id)
-  || (['chat-view', 'chat-log', 'chat-status', 'chat-driver', 'chat-send', 'chat-input', 'chat-jump',
+  || (['chat-view', 'chat-log', 'chat-status', 'chat-send', 'chat-input', 'chat-jump',
     'chat-menu', 'chat-meta'].includes(id)
     ? null : window.document.createElement('div'));
 
@@ -149,37 +149,21 @@ check('URL in tool output is clickable', resA && resA.href === 'https://github.c
   && log.querySelector('.chat-tool-result').textContent === 'Created https://github.com/corveil/crow/pull/2 ok');
 check('URL in a notice is clickable', log.querySelector('.chat-notice a').href === 'https://example.com/d');
 
-console.log('headless driver');
+console.log('sending');
 const calls = [];
-const RUNNING = { supported: true, reset: false, cursor: 1, terminal_id: 'TERM', driver_enabled: true,
-  driver: { running: true, conversation_id: 'c1', pending: [] }, events: [] };
-T.rpc = async (m, p) => { calls.push([m, p]); return m === 'get-session-transcript' ? RUNNING : {}; };
+T.rpc = async (m, p) => { calls.push([m, p]); return {}; };
 const st3 = T.newChatState(SID);
 T.chatState = st3;
-T.applyChatPage(st3, { supported: true, reset: true, cursor: 1, path: '/d.jsonl', terminal_id: 'TERM',
-  driver_enabled: true, driver: null, events: [] });
-check('no button starts the headless driver (removed for now)',
-  !doc.querySelector('#chat-driver .chat-driver-btn') && doc.getElementById('chat-driver').hidden
-  && !doc.getElementById('chat-view').textContent.includes('Start headless'));
-T.applyChatPage(st3, { supported: true, reset: false, cursor: 1, terminal_id: 'TERM', driver_enabled: true,
-  driver: { running: true, conversation_id: 'c1',
-    pending: [{ request_id: 'req-1', tool_name: 'Write', summary: '/w/a.txt' }] },
-  events: [] });
-const card = doc.querySelector('.chat-permission');
-check('permission card shows the tool', card && card.textContent.includes('Write') && card.textContent.includes('/w/a.txt'));
-check('status says waiting on approval', doc.getElementById('chat-status').textContent.includes('approval'));
-card.querySelector('.chat-driver-btn.primary').click();
-check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-permission'
-  && p.request_id === 'req-1' && p.allow === true && p.session_id === SID));
+T.applyChatPage(st3, { supported: true, reset: true, cursor: 1, path: '/d.jsonl', terminal_id: 'TERM', events: [] });
+check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.querySelector('.chat-permission'));
 (async () => {
   calls.length = 0;
-  st3.driverBusy = false;
   doc.getElementById('chat-input').value = 'hello';
   await T.sendChatMessage();
   await new Promise((r) => setImmediate(r));
-  const sends = calls.filter(([m]) => m === 'chat-driver-send' || m === 'send');
-  check('composer routes to the driver, not the TUI', sends.length === 1 && sends[0][0] === 'chat-driver-send'
-    && sends[0][1].text === 'hello');
+  const sends = calls.filter(([m]) => m === 'send' || m.startsWith('chat-driver'));
+  check('composer types into the agent terminal via send (Enter appended)', sends.length === 1
+    && sends[0][0] === 'send' && sends[0][1].terminal_id === 'TERM' && sends[0][1].text === 'hello\n');
 
   console.log('slash menu');
   const COMMANDS = [
@@ -347,9 +331,9 @@ check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-pe
   T.applyChatPage(st6, { supported: true, reset: false, cursor: 3, events: [{ kind: 'user', text: 'x' }] });
   check('a page without usage keeps the last value', meta.querySelector('.chat-meter-pct').textContent === '8.4%');
   T.applyChatPage(st6, { supported: true, reset: false, cursor: 4, events: [],
-    usage: { used_tokens: 190000, max_tokens: 200000, model: 'claude-sonnet-4-5', cost_usd: 1.234 } });
+    usage: { used_tokens: 190000, max_tokens: 200000, model: 'claude-sonnet-4-5' } });
   check('red above 90%', meta.querySelector('.chat-meter').classList.contains('over'));
-  check('driver cost shows in the detail', meta.querySelector('.chat-meter-detail').textContent === '190k / 200k tokens · $1.23');
+  check('detail shows used / max', meta.querySelector('.chat-meter-detail').textContent === '190k / 200k tokens');
   T.applyChatPage(st6, { supported: true, reset: false, cursor: 5, events: [],
     usage: { used_tokens: 51234, max_tokens: null, model: 'mystery-model' } });
   check('unknown window → token count, no percent', !meta.querySelector('.chat-meter-ring')

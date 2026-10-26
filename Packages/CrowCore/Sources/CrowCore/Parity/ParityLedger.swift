@@ -230,34 +230,6 @@ public enum ParityLedger {
             Feeds the web Chat view's composer `/` menu (skills, slash commands, \
             built-ins). In a terminal, Claude Code's own `/` menu already lists them.
             """),
-        .write(
-            "chat-driver-start",
-            noCLI: """
-            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
-            only from the web Chat view. To be superseded by an out-of-process \
-            agent host; no CLI for a transport that is being replaced.
-            """),
-        .write(
-            "chat-driver-send",
-            noCLI: """
-            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
-            only from the web Chat view. To be superseded by an out-of-process \
-            agent host; no CLI for a transport that is being replaced.
-            """),
-        .write(
-            "chat-driver-permission",
-            noCLI: """
-            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
-            only from the web Chat view. To be superseded by an out-of-process \
-            agent host; no CLI for a transport that is being replaced.
-            """),
-        .write(
-            "chat-driver-stop",
-            noCLI: """
-            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
-            only from the web Chat view. To be superseded by an out-of-process \
-            agent host; no CLI for a transport that is being replaced.
-            """),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),
         .write("relaunch-agent", cli: "relaunch-agent"),
