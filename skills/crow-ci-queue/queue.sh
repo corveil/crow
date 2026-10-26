@@ -156,9 +156,18 @@ QUEUE_DEFS='
 def lc: (. // "") | ascii_downcase;
 def bad: ["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE"];
 # CIGateConvention: a repo follows the convention when one of its PRs has a
-# check named exactly "CI Gate" or carries ci:full. No repo names.
-def convention($entries): any($entries[]; .facts != null and (.facts.has_gate or .facts.full_label));
+# check named exactly "CI Gate" or carries ci:full. No repo names. A PR that
+# has carried ci:full (its timeline shows the label) counts too: a head pushed
+# seconds ago has no checks yet, so no CI Gate (CROW-1374).
+def convention($entries): any($entries[]; .facts != null
+  and (.facts.has_gate or .facts.full_label or .facts.labeled_at != null or .facts.unlabeled_at != null));
 def convention_repos: [.[] | select(.kind == "pr")] | group_by(.repo) | map(select(convention(.)) | .[0].repo);
+# Queued: follows the convention now, or a read in the last day found it did
+# ($seen, see remember_convention). A read right after update-branch or an
+# auto-rebase can find every head too new to show it; that must not drop a
+# live queue.
+def queueable($entries; $seen): convention($entries) or ($entries[0].repo as $r | any($seen[]; . == $r));
+def queueable_repos($seen): [.[] | select(.kind == "pr")] | group_by(.repo) | map(select(queueable(.; $seen)) | .[0].repo);
 # A PR linked from a session belongs to it only when its head branch is the
 # session branch, so a PR of a teammate that a coder linked is left alone.
 # Unknown on either side (an older crowd, an unreadable PR) counts as own:
@@ -351,6 +360,30 @@ queued_prs() { # queued_prs <owner/name>
     '[.[] | select(.repo == $r) | {number, branch: (.session.branch // null), added}] | unique_by(.number)'
 }
 
+# A repo's convention marker, {queue-dir}/.convention-{owner}-{name}: touched
+# by every read that finds the repo following the convention. A read that
+# finds no evidence still queues a repo whose marker is under a day old.
+CONVENTION_TTL_MINUTES=1440
+convention_marker() { echo "$QUEUE_DIR/.convention-${1//\//-}"; }
+
+# Best effort: a queue dir we can't write only loses the bridge.
+remember_convention() { # remember_convention <<< repos, one per line
+  local r
+  mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
+  while IFS= read -r r; do
+    [[ -z "$r" ]] || touch "$(convention_marker "$r")" 2>/dev/null
+  done
+  return 0
+}
+
+seen_repos() { # seen_repos <entries-file> → JSON array of the tracked repos with a fresh marker
+  local r
+  while IFS= read -r r; do
+    [[ -n "$r" && -n "$(find "$(convention_marker "$r")" -maxdepth 0 -mmin "-$CONVENTION_TTL_MINUTES" 2>/dev/null)" ]] \
+      && printf '%s\n' "$r"
+  done < <(jq -r -s '[.[] | select(.kind == "pr") | .repo] | unique[]' "$1" 2>/dev/null) | jq -R . | jq -c -s .
+}
+
 # ─── status ──────────────────────────────────────────────────────────────────
 
 # Entries (one per tracked PR, with its facts) → {status, repos, ignored}.
@@ -417,11 +450,11 @@ def build($repo; $entries; $cfg; $labeled):
 | ([$all[] | select(.kind == "pr" and own)] | group_by(.repo)) as $groups
 | {
     status: "ok",
-    repos: [$groups[] | select(convention(.)) | .[0].repo as $r
+    repos: [$groups[] | select(queueable(.; $seen)) | .[0].repo as $r
             | build($r; .; ([$cfgs[] | select(.repo == $r)] | .[0] // {}); $labeled[$r])],
     ignored: ([$all[] | select(.kind == "ignored") | {url, reason}]
               + [$not_own[] | {url, reason: "linked from session \(.session.name), but its head branch \(.facts.head_ref) is not the session branch \(.session.branch), so it is not a PR of that session"}]
-              + [$groups[] | select(convention(.) | not) | .[]
+              + [$groups[] | select(queueable(.; $seen) | not) | .[]
                  | {url, reason: (.error // "\(.repo) does not follow the CI Gate convention: none of its PRs has a CI Gate check or ci:full")}])
   }
 '
@@ -431,7 +464,7 @@ STATUS=''
 # Builds the status for every repo (or only `filter`) into STATUS. Returns 1
 # with LOAD_ERROR set; never prints, so a caller in the main shell can die.
 collect() { # collect <owner/name or empty>
-  local filter="$1" tracked entries line repo number facts err repos r lab labeled='{}'
+  local filter="$1" tracked entries line repo number facts err repos r lab labeled='{}' seen
   load_sessions || return 1
   load_cfgs || return 1
   # A tracked list we couldn't build must not read as "nothing queued".
@@ -454,7 +487,10 @@ collect() { # collect <owner/name or empty>
     jq -c --argjson facts "$facts" --argjson error "$err" '. + {kind: "pr", facts: $facts, error: $error}' <<< "$line" >> "$entries"
   done <<< "$tracked"
 
-  repos=$(jq -r -s "$QUEUE_DEFS"' convention_repos[]' "$entries" 2>/dev/null)
+  seen=$(seen_repos "$entries")
+  jq -r -s "$QUEUE_DEFS"' convention_repos[]' "$entries" 2>/dev/null | remember_convention
+  # shellcheck disable=SC2016
+  repos=$(jq -r -s --argjson seen "$seen" "$QUEUE_DEFS"' queueable_repos($seen)[]' "$entries" 2>/dev/null)
   while IFS= read -r r; do
     [[ -n "$r" ]] || continue
     lab=$(labeled_open "$r") || lab=null
@@ -462,7 +498,7 @@ collect() { # collect <owner/name or empty>
     labeled=$(jq -c --arg r "$r" --argjson l "$lab" '. + {($r): $l}' <<< "$labeled")
   done <<< "$repos"
 
-  STATUS=$(jq -c -s --argjson cfgs "$CFGS" --argjson labeled "$labeled" "$QUEUE_DEFS $STATUS_JQ" "$entries" 2>&1)
+  STATUS=$(jq -c -s --argjson cfgs "$CFGS" --argjson labeled "$labeled" --argjson seen "$seen" "$QUEUE_DEFS $STATUS_JQ" "$entries" 2>&1)
   rm -f "$entries"
   if ! jq_true '.status == "ok"' <<< "$STATUS"; then
     LOAD_ERROR="status filter failed: $(head -c 300 <<< "$STATUS")"

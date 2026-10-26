@@ -77,6 +77,7 @@ While the queue runs, the operator can ask you to add, reorder, hold, or release
 | `{devRoot}/.claude/skills/crow-ci-queue/queue.sh` | The helper: `status`, `normalize`, `advance`, `watch`. |
 | `{devRoot}/.claude/ci-queues/{owner}-{name}.json` | The optional **queue file** for one repo: PRs to add, the order, PRs on hold. |
 | `{devRoot}/.claude/ci-queues/.watch-{owner}-{name}.pid` | The lock a running watcher holds on its repo (Phase 4). `queue.sh` manages it; don't edit it. |
+| `{devRoot}/.claude/ci-queues/.convention-{owner}-{name}` | Touched by every read that finds the repo following the CI Gate convention, so a read right after a push doesn't drop it (Phase 1). `queue.sh` manages it; don't edit it. |
 
 Run `queue.sh` from `{devRoot}`. That is the Manager's working directory, and the script finds `.claude/ci-queues/` relative to it.
 
@@ -90,9 +91,9 @@ Run `queue.sh` from `{devRoot}`. That is the Manager's working directory, and th
 bash .claude/skills/crow-ci-queue/queue.sh status
 ```
 
-Add `--repo owner/name` when the operator named one. `status` is read-only. It returns:
+Add `--repo owner/name` when the operator named one. `status` changes nothing on GitHub. It returns:
 
-- `repos[]`: one queue per repo that follows the convention. A repo follows it when one of its PRs has a check named exactly `CI Gate`, or carries `ci:full`, the same test `CIGateConvention` uses. Each queue has:
+- `repos[]`: one queue per repo that follows the convention. A repo follows it when one of its PRs has a check named exactly `CI Gate`, or carries `ci:full`, the same test `CIGateConvention` uses. A PR that has carried `ci:full` (its timeline shows the label) counts too. A repo stays in `repos[]` for a day after any read found it following the convention, even when no PR shows it at the moment: a head pushed seconds ago (by `update-branch`, auto-rebase, or a coder) has no checks yet, so it has no `CI Gate` either. Each queue has:
   - `holder`: the PR that keeps `ci:full`, with `reason`, or `null`.
   - `queue[]`: every other open queued PR, in order. The queue file's `order` comes first, then oldest first.
   - `next`: the first ready PR in `queue`, or `null`.
@@ -391,6 +392,7 @@ These come from the reference run that this skill packages.
 
 - **False failure right after labeling.** The unlabeled run on the same head commit fails `CI Gate` closed, often seconds before the label. Only suites created at or after the latest `ci:full` label event count. A lone `CI Gate` red with every job skipped is never read as a failure.
 - **Races with auto-rebase.** The head is re-read on every poll and never cached. `update-branch` saying "already up-to-date" isn't trusted: a fresh head and a fresh compare decide.
+- **A just-pushed head.** A head pushed seconds ago has no checks yet, so it has no `CI Gate`. A PR that has carried `ci:full` still shows the convention, and a repo that a read in the last day found following it stays queued. So a read in that window doesn't drop a live queue.
 - **Contention scope.** Only queued PRs count: a session's own PR with `crow:merge`, plus an `add` PR with `crow:merge`. Other PRs with `ci:full` are reported.
 - **Approval after the update** is re-checked before labeling.
 - **Timing is stateless.** Green-for, failed-for, and label age are measured from GitHub's own timestamps. A re-armed watcher picks up where the last one stopped.
@@ -401,7 +403,7 @@ These come from the reference run that this skill packages.
 | Error | Response |
 |---|---|
 | `crow list-sessions failed …` | Crow didn't answer, so which PRs are queued is unknown. Nothing was changed. Check the daemon (`crow list-sessions`), then retry. |
-| `{repo} has no queue: … does not follow the CI Gate convention` | Out of scope: that repo has no label-gated suite to serialize. |
+| `{repo} has no queue: … does not follow the CI Gate convention` | Out of scope: no PR of that repo has a `CI Gate` check or has carried `ci:full`, and no read in the last day found the repo following the convention. It has no label-gated suite to serialize. |
 | `could not read #N …` (normalize / advance) | Transient GitHub failure. Nothing was changed. Retry. |
 | `… also carry ci:full … run normalize first` | Run `normalize --repo {repo}`, then `advance` again. |
 | `#N already holds ci:full … pass --relabel` | Only for `SUITE_NOT_RUN`; otherwise the PR is already running. |
