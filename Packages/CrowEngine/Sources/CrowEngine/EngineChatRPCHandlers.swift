@@ -70,8 +70,12 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
             guard ctx.kind == .claudeCode else {
                 return ["supported": .bool(false), "commands": .array([])]
             }
+            // A review worktree's `.claude/` is the PR author's: list only the
+            // operator's own skills and commands there (defense in depth — a
+            // pick only inserts `/name `, which still has to be sent).
+            let projectDir = (ctx.cwd.isEmpty || ctx.sessionKind == .review) ? nil : ctx.cwd
             // Directory walks stay off the MainActor (#892).
-            let cmds = ChatCommandCatalog.discover(.live(projectDir: ctx.cwd.isEmpty ? nil : ctx.cwd))
+            let cmds = ChatCommandCatalog.discover(.live(projectDir: projectDir))
             return [
                 "supported": .bool(true),
                 "commands": .array(cmds.map { c in
@@ -86,21 +90,23 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
         },
 
         "chat-driver-start": { @Sendable params in
-            guard ChatDriverRegistry.enabled else {
-                throw RPCError.applicationError("Chat driver is off (start crowd with CROW_CHAT_DRIVER=1)")
-            }
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw RPCError.invalidParams("session_id required")
             }
             return try await MainActor.run {
                 let ctx = try chatContext(capturedAppState, id)
-                guard ctx.kind == .claudeCode else {
-                    throw RPCError.applicationError("Chat driver supports Claude Code only")
-                }
+                // Session gates run before the feature flag, so they hold (and
+                // are testable) whether or not the flag is on.
                 // `claude -p` skips the workspace-trust dialog, and a review
                 // clone's `.claude/` is the PR author's: never drive one headless.
                 guard ctx.sessionKind != .review else {
                     throw RPCError.applicationError("Chat driver is not available for review sessions")
+                }
+                guard ctx.kind == .claudeCode else {
+                    throw RPCError.applicationError("Chat driver supports Claude Code only")
+                }
+                guard ChatDriverRegistry.enabled else {
+                    throw RPCError.applicationError("Chat driver is off (start crowd with CROW_CHAT_DRIVER=1)")
                 }
                 let driver = try ChatDriverRegistry.shared.start(
                     sessionID: id, cwd: ctx.cwd, appState: capturedAppState)
@@ -137,7 +143,9 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw RPCError.invalidParams("session_id required")
             }
-            let stopped = await MainActor.run { ChatDriverRegistry.shared.stop(sessionID: id) }
+            let stopped = await MainActor.run {
+                ChatDriverRegistry.shared.stop(sessionID: id, appState: capturedAppState)
+            }
             return ["stopped": .bool(stopped)]
         },
     ]
@@ -233,39 +241,59 @@ final class ChatDriverRegistry {
 
     func driver(for sessionID: UUID) -> ClaudeStreamDriver? { drivers[sessionID] }
 
-    func start(sessionID: UUID, cwd: String, appState: AppState) throws -> ClaudeStreamDriver {
+    /// `command` overrides the `claude -p` argv (tests run a fake child).
+    func start(
+        sessionID: UUID, cwd: String, appState: AppState,
+        command: (executable: String, arguments: [String])? = nil
+    ) throws -> ClaudeStreamDriver {
         if let existing = drivers[sessionID], existing.isRunning { return existing }
-        let claude = AgentRegistry.shared.agent(for: .claudeCode)?.launchBinary() ?? "claude"
-        // A fresh conversation, deliberately: resuming the TUI's conversation
-        // while that TUI is still live would interleave two writers on one
-        // transcript.
-        let (exe, args) = ClaudeStreamDriver.defaultCommand(claudePath: claude, resumeID: nil)
+        let (exe, args) = command ?? {
+            let claude = AgentRegistry.shared.agent(for: .claudeCode)?.launchBinary() ?? "claude"
+            // A fresh conversation, deliberately: resuming the TUI's conversation
+            // while that TUI is still live would interleave two writers on one
+            // transcript.
+            return ClaudeStreamDriver.defaultCommand(claudePath: claude, resumeID: nil)
+        }()
         let log = FileManager.default.temporaryDirectory
             .appendingPathComponent("crow-chat-driver", isDirectory: true)
             .appendingPathComponent("\(sessionID.uuidString).ndjson")
+        // Events carry the driver they came from, so a replaced or stopped
+        // driver's late events (its `.exited` above all) never touch the
+        // current one.
+        let source = WeakDriver()
         let driver = ClaudeStreamDriver(
             sessionID: sessionID, cwd: cwd, logURL: log, executable: exe, arguments: args
-        ) { [weak appState] event in
+        ) { [weak self, weak appState] event in
             Task { @MainActor in
-                guard let appState else { return }
-                ChatDriverRegistry.shared.apply(event, sessionID: sessionID, appState: appState)
+                guard let self, let appState else { return }
+                self.apply(event, sessionID: sessionID, from: source.driver, appState: appState)
             }
         }
+        source.driver = driver
+        drivers[sessionID]?.stop()
         try driver.start()
         drivers[sessionID] = driver
         return driver
     }
 
+    /// Stop and forget the session's driver. Session deletion calls this too,
+    /// so no `claude -p` outlives the worktree it runs in.
     @discardableResult
-    func stop(sessionID: UUID) -> Bool {
+    func stop(sessionID: UUID, appState: AppState? = nil) -> Bool {
         guard let d = drivers.removeValue(forKey: sessionID) else { return false }
         d.stop()
+        appState?.hookState(for: sessionID).activityState = .idle
         return true
     }
 
     /// Driver events → the same `AgentActivityState` the hook path drives, so the
     /// sidebar dot and notifications don't care which transport ran the turn.
-    func apply(_ event: ClaudeStreamDriver.Event, sessionID: UUID, appState: AppState) {
+    /// Events from anything but the session's current driver are dropped.
+    func apply(
+        _ event: ClaudeStreamDriver.Event, sessionID: UUID,
+        from source: ClaudeStreamDriver?, appState: AppState
+    ) {
+        guard let source, let current = drivers[sessionID], current === source else { return }
         let state = appState.hookState(for: sessionID)
         switch event {
         case .turnStarted: state.activityState = .working
@@ -277,4 +305,10 @@ final class ChatDriverRegistry {
         case .conversationStarted: break
         }
     }
+}
+
+/// A weak back-reference from a driver's event closure to the driver itself
+/// (the closure is built before the driver exists).
+private final class WeakDriver: @unchecked Sendable {
+    weak var driver: ClaudeStreamDriver?
 }

@@ -58,7 +58,11 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
     private let arguments: [String]
     private let onEvent: @Sendable (Event) -> Void
 
+    /// Guards the state below. Never held across a pipe write: a child that
+    /// stops reading stdin must not wedge `ingest` (#1372 review).
     private let lock = NSLock()
+    /// Serializes log appends from `write` and `ingest`, independently of `lock`.
+    private let logLock = NSLock()
     private var process: Process?
     private var stdin: FileHandle?
     private var buffer = Data()
@@ -183,12 +187,15 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
     private func write(_ obj: [String: Any]) throws {
         var data = try JSONSerialization.data(withJSONObject: obj)
         data.append(0x0A)
-        try lock.withLock {
-            guard let stdin else { throw DriverError.notRunning }
-            try stdin.write(contentsOf: data)
-            // The log is the transcript of what crossed the wire, both ways.
-            try? logHandle?.write(contentsOf: Data(">".utf8) + data)
-        }
+        guard let stdin = lock.withLock({ self.stdin }) else { throw DriverError.notRunning }
+        try stdin.write(contentsOf: data)
+        // The log is the transcript of what crossed the wire, both ways.
+        appendLog(Data(">".utf8) + data)
+    }
+
+    private func appendLog(_ data: Data) {
+        let handle = lock.withLock { logHandle }
+        logLock.withLock { try? handle?.write(contentsOf: data) }
     }
 
     private func ingest(_ chunk: Data) {
@@ -199,12 +206,12 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
                 lines.append(Data(buffer[buffer.startIndex..<nl]))
                 buffer.removeSubrange(buffer.startIndex...nl)
             }
-            for line in lines where !line.isEmpty {
-                // `stream_event` deltas are high-volume and redundant with the
-                // final `assistant` record; keep them out of the log.
-                if line.range(of: Data("\"type\":\"stream_event\"".utf8)) == nil {
-                    try? logHandle?.write(contentsOf: line + Data([0x0A]))
-                }
+        }
+        for line in lines where !line.isEmpty {
+            // `stream_event` deltas are high-volume and redundant with the
+            // final `assistant` record; keep them out of the log.
+            if line.range(of: Data("\"type\":\"stream_event\"".utf8)) == nil {
+                appendLog(line + Data([0x0A]))
             }
         }
         for line in lines {

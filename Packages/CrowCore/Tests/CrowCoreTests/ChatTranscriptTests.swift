@@ -146,6 +146,13 @@ import Testing
         // A cursor past EOF (file replaced) restarts from the top.
         let page4 = try ChatTranscript.read(path: file.path, format: .claude, cursor: page2.cursor + 10_000)
         #expect(page4.events.map(\.text) == ["one", "two", "three"])
+
+        // A negative cursor restarts from the top instead of trapping (#1372 review).
+        let page5 = try ChatTranscript.read(path: file.path, format: .claude, cursor: -1)
+        #expect(page5.events.map(\.text) == ["one", "two", "three"])
+        #expect(page5.cursor == page2.cursor)
+        let page6 = try ChatTranscript.read(path: file.path, format: .claude, cursor: Int.min)
+        #expect(page6.events.count == 3)
     }
 
     @Test func toolInputSummaryFallsBackToCompactJSON() {

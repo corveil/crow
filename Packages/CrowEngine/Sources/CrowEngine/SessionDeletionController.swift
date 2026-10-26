@@ -89,6 +89,10 @@ final class SessionDeletionController {
 
         appState.isDeletingSession[id] = true
         appState.sessionDeletionError.removeValue(forKey: id)
+        // An experimental headless chat driver is a child of crowd, not a tmux
+        // pane, so `TerminalRouter.destroy` never reaches it: stop it before the
+        // worktree it runs in is removed.
+        ChatDriverRegistry.shared.stop(sessionID: id)
 
         // Slow git + filesystem work runs on a background thread so the main actor
         // stays free to render the spinner and respond to other input.

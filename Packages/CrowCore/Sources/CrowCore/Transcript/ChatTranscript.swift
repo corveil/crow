@@ -112,7 +112,9 @@ public enum ChatTranscript {
         let size = Int(try handle.seekToEnd())
         var start = cursor ?? max(0, size - initialTailBytes)
         // The file shrank or was replaced (a rewrite, not an append): restart.
-        if start > size { start = 0 }
+        // A negative cursor (any `/rpc` peer can send one) restarts too —
+        // `UInt64(start)` below would otherwise trap and take crowd down.
+        if start > size || start < 0 { start = 0 }
         try handle.seek(toOffset: UInt64(start))
         let data = try handle.readToEnd() ?? Data()
         var body = data[...]

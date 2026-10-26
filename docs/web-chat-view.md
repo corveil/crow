@@ -30,7 +30,7 @@ Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to
 - skills of plugins enabled in `enabledPlugins`, as `<plugin>:<skill>`;
 - the built-ins `/compact`, `/context`, and `/clear`.
 
-When two entries share a name, the project one is listed.
+When two entries share a name, the project one is listed. Review sessions list only your own (user and plugin) entries and the built-ins, never the reviewed worktree's, because a review checkout's `.claude/` is the PR author's.
 
 ## Context meter
 
@@ -44,4 +44,4 @@ A row under the composer shows the model and how full its context window is. The
 
 Started with `CROW_CHAT_DRIVER=1` in `crowd`'s environment, Chat offers **Start headless** on Claude Code work sessions. It runs `claude -p` in stream-json mode as a child of `crowd`, in a **new** conversation (not the terminal's). It answers permission prompts with Allow/Deny cards in Chat, and shows cost in the context meter. It is off by default and refused for review sessions, because `claude -p` skips the workspace-trust check and a review checkout is the PR author's code.
 
-Because the process is a child of `crowd`, restarting `crowd` stops it, unlike tmux-hosted agents. The conversation survives on disk. The driver will be superseded by an out-of-process agent host.
+Because the process is a child of `crowd`, restarting `crowd` stops it, unlike tmux-hosted agents. Deleting the session stops it too, before the worktree is removed. The conversation survives on disk. The driver will be superseded by an out-of-process agent host.
