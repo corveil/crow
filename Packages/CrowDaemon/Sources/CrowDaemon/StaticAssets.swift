@@ -24,7 +24,7 @@ enum StaticAssets {
         "pr-glyphs.js", "session-row.js", "session-menu.js", "switcher.js",
         "session.js", "session-header.js", "session-tabs.js", "grid.js", "boards.js", "scorecard-board.js",
         "tickets-board.js", "reviews-board.js", "scratch-board.js",
-        "terminal.js", "tui-record.js", "setup.js",
+        "terminal.js", "chat.js", "tui-record.js", "setup.js",
         "router.js", "app.js",
         "settings-general.js", "settings-automation.js", "settings-notifications.js",
         "settings-webaccess.js", "settings-integrations.js", "settings-workspaces.js",
@@ -63,6 +63,10 @@ enum StaticAssets {
             let file = name
             router.get("/\(file)") { req, _ in webResponse(file, webDir: webDir, request: req) }
         }
+        // markdown-it 14.1.1 (MIT), vendored for the Chat view. Not in
+        // `uiJavaScriptFiles` — `chat.js` loads it on first use of the Chat
+        // view, so the terminal view never pays for it.
+        router.get("/markdown-it.min.js") { req, _ in webResponse("markdown-it.min.js", webDir: webDir, request: req) }
         // Web Settings modal stylesheet (CROW-581) — split out of app.css.
         router.get("/settings.css") { req, _ in webResponse("settings.css", webDir: webDir, request: req) }
         router.get("/brand.svg") { req, _ in webResponse("brand.svg", webDir: webDir, request: req) }

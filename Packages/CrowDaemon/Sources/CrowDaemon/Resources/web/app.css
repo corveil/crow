@@ -1949,3 +1949,236 @@ select.text-prompt-input { cursor: pointer; }
   overflow: hidden;
 }
 .grid-term-host .xterm { pointer-events: none; }
+
+/* ---- Chat view (chat.js) ----
+   Replaces #tabbar + #terminal-wrap while active. #chat-log is a plain
+   overflow container, so scrolling is the browser's own (momentum, no
+   wheel→SGR translation, no alt-screen). */
+.view-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-self: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.view-toggle-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: transparent; color: var(--text-muted);
+  border: 0; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.view-toggle-btn + .view-toggle-btn { border-left: 1px solid var(--border-subtle); }
+.view-toggle-btn.active { background: var(--accent-soft); color: var(--accent); }
+
+#chat-view { display: none; }
+#app.chat-active #tabbar,
+#app.chat-active #terminal-wrap { display: none; }
+#app.chat-active #chat-view {
+  display: flex; flex-direction: column;
+  flex: 1; min-height: 0; position: relative;
+  background: var(--bg-deep);
+}
+#app.board-active #chat-view,
+#app:not(.has-selection) #chat-view { display: none; }
+
+#chat-log {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 16px 8px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.chat-msg {
+  max-width: min(760px, 92%);
+  padding: 8px 12px;
+  border-radius: 14px;
+  line-height: 1.45;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.chat-msg p { margin: 0; white-space: pre-wrap; }
+.chat-msg p + p, .chat-msg p + pre, .chat-msg pre + p { margin-top: 8px; }
+.chat-msg code {
+  font-family: var(--font-mono); font-size: 12.5px;
+  background: var(--badge-wash); border-radius: 4px; padding: 0 4px;
+}
+.chat-user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  border-bottom-right-radius: 4px;
+}
+.chat-assistant {
+  align-self: flex-start;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+.chat-code, .chat-tool-result, .chat-tool-full {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--term-bg); color: var(--term-fg);
+  border-radius: 6px; padding: 8px 10px; margin: 6px 0 0;
+  overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 320px; overflow-y: auto;
+}
+.chat-tool {
+  align-self: flex-start;
+  max-width: min(760px, 92%);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.chat-tool > summary {
+  display: flex; gap: 8px; align-items: baseline;
+  cursor: pointer; list-style: none;
+  padding: 3px 8px; border-radius: 6px;
+  border: 1px dashed var(--border-subtle);
+  min-width: 0;
+}
+.chat-tool > summary::-webkit-details-marker { display: none; }
+.chat-tool > summary::before { content: '▸'; font-size: 10px; }
+.chat-tool[open] > summary::before { content: '▾'; }
+.chat-tool-name { color: var(--text-secondary); font-weight: 600; flex-shrink: 0; }
+.chat-tool-input {
+  font-family: var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.chat-tool.error > summary { border-color: var(--red); }
+.chat-tool.error .chat-tool-name { color: var(--red); }
+.chat-tool-result.error { color: var(--red); }
+.chat-turn-end, .chat-notice {
+  align-self: center;
+  font-size: 11px; color: var(--text-muted);
+  padding: 2px 10px; border-radius: 10px; background: var(--badge-wash);
+}
+.chat-status {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 0; padding: 0 16px;
+  font-size: 12px; color: var(--text-muted);
+}
+.chat-status:empty { display: none; }
+.chat-status.busy, .chat-status.warn { padding: 4px 16px; }
+.chat-status.warn { color: var(--orange); }
+.chat-jump {
+  position: absolute; right: 16px; bottom: 76px;
+  background: var(--bg-elev); color: var(--text-primary);
+  border: 1px solid var(--border-strong); border-radius: 16px;
+  padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer;
+  box-shadow: var(--shadow-raised);
+}
+.chat-composer {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+#chat-input {
+  flex: 1; min-width: 0; resize: none;
+  font: inherit; font-size: 16px; /* ≥16px: iOS won't zoom the page on focus */
+  line-height: 1.35;
+  color: var(--text-primary); background: var(--bg-deep);
+  border: 1px solid var(--border-subtle); border-radius: 10px;
+  padding: 8px 10px; max-height: 160px;
+}
+#chat-input:focus { outline: none; border-color: var(--accent-line); }
+.chat-send {
+  font: inherit; font-size: 14px; font-weight: 600;
+  background: var(--accent-fill); color: var(--on-accent);
+  border: 0; border-radius: 10px; padding: 8px 14px; cursor: pointer;
+}
+.chat-send:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 720px) {
+  #chat-log { padding: 12px 12px 8px; }
+  .chat-msg, .chat-tool { max-width: 96%; }
+  /* The floating hamburger sits over the header's left edge; keep the toggle
+     on its own line so the name never collides with it. */
+  .detail-top { flex-wrap: wrap; }
+}
+/* markdown-it output inside chat bubbles (chat.js renderChatMarkdown). */
+.chat-msg.md p { white-space: normal; }
+.chat-msg.md > :first-child { margin-top: 0; }
+.chat-msg.md > :last-child { margin-bottom: 0; }
+.chat-msg.md p, .chat-msg.md ul, .chat-msg.md ol, .chat-msg.md pre,
+.chat-msg.md blockquote, .chat-msg.md table { margin: 0 0 8px; }
+.chat-msg.md h1, .chat-msg.md h2, .chat-msg.md h3,
+.chat-msg.md h4, .chat-msg.md h5, .chat-msg.md h6 {
+  margin: 12px 0 6px; font-size: 14px; font-weight: 700; color: var(--text-primary);
+}
+.chat-msg.md h1 { font-size: 16px; }
+.chat-msg.md h2 { font-size: 15px; }
+.chat-msg.md ul, .chat-msg.md ol { padding-left: 20px; }
+.chat-msg.md li + li { margin-top: 2px; }
+.chat-msg.md pre {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--term-bg); color: var(--term-fg);
+  border-radius: 6px; padding: 8px 10px;
+  overflow-x: auto; white-space: pre;
+}
+.chat-msg.md pre code { background: none; padding: 0; font-size: inherit; }
+.chat-msg.md blockquote {
+  padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--text-secondary);
+}
+.chat-msg.md hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 10px 0; }
+.chat-msg.md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13px; }
+.chat-msg.md th, .chat-msg.md td { border: 1px solid var(--border-subtle); padding: 4px 8px; text-align: left; }
+.chat-msg.md th { background: var(--badge-wash); }
+.chat-msg a, .chat-notice a, .chat-tool-result a {
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere;
+}
+
+/* Chat composer `/` menu (chat.js). Opens upward from the composer so the phone
+   keyboard never covers it; rows are full-width tap targets. */
+.chat-composer { position: relative; }
+.chat-menu {
+  position: absolute; left: 12px; right: 12px; bottom: calc(100% + 6px);
+  max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg-elev); border: 1px solid var(--border-strong);
+  border-radius: 10px; box-shadow: var(--shadow-popover);
+  padding: 4px; z-index: 5;
+}
+.chat-menu[hidden] { display: none; }
+.chat-menu-item { padding: 8px 10px; border-radius: 8px; cursor: pointer; min-height: 36px; }
+.chat-menu-item.active { background: var(--accent-soft); }
+.chat-menu-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.chat-menu-name { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-menu-item.active .chat-menu-name { color: var(--accent); }
+.chat-menu-kind { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-muted); }
+.chat-menu-desc {
+  font-size: 12px; color: var(--text-secondary); margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.chat-menu-empty { padding: 10px; font-size: 12px; color: var(--text-muted); }
+
+/* Context meter, inline in the session header's Agent row. */
+/* `.meta` clips for its ellipsis; the meter's tap-open detail must escape it. */
+.meta.meta-has-meter { overflow: visible; }
+.chat-meta {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 10px; vertical-align: middle;
+  font-size: 12px; color: var(--text-muted);
+}
+.chat-meta[hidden] { display: none; }
+.chat-meta-model { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chat-meter {
+  position: relative; display: inline-flex; align-items: center; gap: 5px;
+  background: transparent; border: 0; padding: 2px 4px; border-radius: 6px;
+  font: inherit; font-size: 12px; color: var(--text-muted); cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.chat-meter-ring { width: 16px; height: 16px; transform: rotate(-90deg); }
+.chat-meter-ring circle { fill: none; stroke-width: 2.5; }
+.chat-meter-ring .track { stroke: var(--badge-wash); }
+.chat-meter-ring .fill { stroke: var(--text-muted); stroke-linecap: round; transition: stroke-dashoffset .4s ease; }
+.chat-meter.over, .chat-meter.over .chat-meter-pct { color: var(--red); }
+.chat-meter.over .chat-meter-ring .fill { stroke: var(--red); }
+.chat-meter-detail {
+  display: none; position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
+  white-space: nowrap; padding: 6px 10px; border-radius: 8px;
+  background: var(--bg-elev); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-popover); color: var(--text-primary); font-size: 12px;
+}
+.chat-meter.open .chat-meter-detail { display: block; }
+@media (hover: hover) { .chat-meter:hover .chat-meter-detail { display: block; } }
+@media (prefers-reduced-motion: reduce) { .chat-meter-ring .fill { transition: none; } }

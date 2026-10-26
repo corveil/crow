@@ -53,6 +53,7 @@ crow cleanup get                                                        → {"cl
 crow cleanup set [--enabled true|false] [--retention-hours N]           → patch; live within ~1 board poll. Deletes completed/archived sessions incl. worktree + branch
 crow ui get                                                             → {"ui":{"sidebar":{"hide_session_details":…}}}
 crow ui set --hide-session-details true|false                           → patch; connected browsers repaint within ~2s
+crow ui set --chat-view true|false                                      → show the experimental web Chat view toggle (default off); live in ~2s
 crow terminal get                                                       → {"terminal":{"wheel_scroll_lines":…,"agent_wheel_notches":…}}
 crow terminal set [--wheel-scroll-lines N] [--agent-wheel-notches N]    → patch; wheel-scroll tuning (CROW-835, ADR 0013); both floor at 1; live on next scroll
 crow version                                                            → prints the stamped build version

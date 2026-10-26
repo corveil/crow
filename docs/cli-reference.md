@@ -441,13 +441,17 @@ Display preferences for the web UI. This does not start, stop, or open the UI.
 ```bash
 crow ui get
 crow ui set --hide-session-details true
+crow ui set --chat-view true
 ```
 
 | Flag                     | Required | Description                                                        |
 | ------------------------ | -------- | ------------------------------------------------------------------ |
-| `--hide-session-details` | yes      | `true` or `false` — hide ticket title and repo/branch sidebar lines |
+| `--hide-session-details` | no¹      | `true` or `false` — hide ticket title and repo/branch sidebar lines |
+| `--chat-view`            | no¹      | `true` or `false` — show the experimental [web Chat view](web-chat-view.md) toggle in session headers (default `false`) |
 
-Settings are grouped by the config block they belong to, so `get` returns `{"ui": {"sidebar": {...}}}` and gains further blocks as more view options become configurable. Connected browsers pick the change up within a couple of seconds — no reload.
+¹ At least one flag is required (the switcher flags are listed in [`cli.md`](cli.md)).
+
+Settings are grouped by the config block they belong to, so `get` returns `{"ui": {"sidebar": {...}, "switcher": {...}, "chat_view": {...}}}` and gains further blocks as more view options become configurable. Connected browsers pick the change up within a couple of seconds — no reload.
 
 ### `crow terminal get | set`
 

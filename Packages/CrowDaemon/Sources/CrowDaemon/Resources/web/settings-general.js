@@ -73,6 +73,11 @@
     body.appendChild(S.toggleField('Hide session details', S.cfg.sidebar, 'hideSessionDetails',
       'Hides ticket title and repo/branch lines in sidebar rows.'));
 
+    body.appendChild(S.group('Chat view (experimental)'));
+    S.cfg.chatView = S.cfg.chatView || { enabled: false };
+    body.appendChild(S.toggleField('Show the Terminal | Chat toggle', S.cfg.chatView, 'enabled',
+      'Adds a Chat view to session headers: the agent\'s transcript as messages, with a / menu and context meter. Agents still run in the terminal. CLI: crow ui set --chat-view true|false.'));
+
     body.appendChild(S.group('Terminal Scroll'));
     body.appendChild(S.selectField('Wheel speed — plain shell', S.cfg.terminal, 'wheelScrollLines', [
       [1, '1 line / notch'], [2, '2 lines / notch'], [3, '3 lines / notch (default)'], [5, '5 lines / notch'], [8, '8 lines / notch'],

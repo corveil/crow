@@ -112,6 +112,12 @@ import ArgumentParser
     #expect(try UISet.parse(["--hide-session-details", "true"]).hideSessionDetails == true)
 }
 
+@Test func uiSetParsesChatView() throws {
+    #expect(try UISet.parse(["--chat-view", "true"]).chatView == true)
+    #expect(try UISet.parse(["--chat-view", "false"]).chatView == false)
+    #expect(try UISet.parse(["--hide-session-details", "true"]).chatView == nil)
+}
+
 @Test func uiSetParsesSwitcherFlags() throws {
     let cmd = try UISet.parse([
         "--switcher-enabled", "false",

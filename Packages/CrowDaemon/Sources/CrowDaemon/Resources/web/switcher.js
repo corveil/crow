@@ -588,7 +588,8 @@ async function selectSession(id, opts) {
   // dropping it while that tab stays open.
   const routedTerminal = pendingTerminalId
     || (fromRoute ? null : (id === selectedId && activeTerminal ? activeTerminal.id : null));
-  navigate({ view: 'session', sessionId: id, terminalId: routedTerminal });
+  navigate({ view: 'session', sessionId: id, terminalId: routedTerminal,
+    chat: typeof chatViewShown === 'function' && chatViewShown() });
   // A bare #/sessions/<id> asked for no particular tab, so snap to terminals[0]
   // rather than leaving the previous one on screen — otherwise Back leaves the
   // URL bare while T2 is shown, and reloading that same URL would land on T1.
@@ -605,6 +606,7 @@ async function selectSession(id, opts) {
   renderHeader(sessions.find((x) => x.id === id));
   ensureTerminal();
   setTimeout(fitTerminal, 50); // detail pane just became visible (mobile) — refit
+  if (typeof applyChatView === 'function') applyChatView();
   await refreshTerminals();
   refreshLive();
   refreshArtifacts(id);

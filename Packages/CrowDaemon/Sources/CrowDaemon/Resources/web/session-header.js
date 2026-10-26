@@ -26,6 +26,8 @@ function renderHeader(s) {
   badge.style.color = STATUS_COLOR[s.status] || 'var(--text-muted)';
   top.appendChild(badge);
   if (s.is_explore) top.appendChild(el('span', 'explore-badge', 'Exploring'));
+  const chatToggle = typeof chatToggleControl === 'function' ? chatToggleControl() : null;
+  if (chatToggle) top.appendChild(chatToggle);
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));
@@ -56,6 +58,11 @@ function renderHeader(s) {
     root.appendChild(metaRow);
   }
   root.appendChild(el('div', 'meta', 'Agent: ' + (s.agent_display_name || s.agent_kind || '—')));
+  // Chat view: model + context-window meter beside the agent (filled by chat.js).
+  if (typeof chatHeaderMeter === 'function') {
+    root.lastChild.classList.add('meta-has-meter');
+    root.lastChild.appendChild(chatHeaderMeter(s.id));
+  }
   // Clickable agent row for non-manager sessions with a worktree (CROW-627).
   if (s.kind !== 'manager' && s.worktree_path) {
     const agentMeta = root.lastChild;

@@ -252,12 +252,17 @@ public struct UISet: ParsableCommand {
         help: "Include filter as key=value (managers, jobs, reviews, active, paused, in_review, completed, archived)")
     var switcherIncludes: [String] = []
 
+    @Option(
+        name: .customLong("chat-view"),
+        help: "Show the experimental web Chat view toggle in session headers (true or false; default false)")
+    var chatView: Bool?
+
     public init() {}
 
     public func validate() throws {
         guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
             || switcherCaptureInTerminal != nil || switcherOrder != nil || switcherPreview != nil
-            || !switcherIncludes.isEmpty else {
+            || !switcherIncludes.isEmpty || chatView != nil else {
             throw ValidationError(
                 "Nothing to set — provide at least one UI preference flag.")
         }
@@ -296,6 +301,9 @@ public struct UISet: ParsableCommand {
         }
         if let switcherPreview {
             params["switcher_preview"] = .bool(switcherPreview)
+        }
+        if let chatView {
+            params["chat_view_enabled"] = .bool(chatView)
         }
         for item in switcherIncludes {
             let parts = item.split(separator: "=", maxSplits: 1).map(String.init)

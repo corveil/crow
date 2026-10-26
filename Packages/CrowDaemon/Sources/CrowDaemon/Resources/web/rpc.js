@@ -377,12 +377,16 @@ const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSe
   // Terminal wheel-scroll sensitivity (CROW-835), consumed by enableWheelScroll.
   // Defaults mirror AppConfig.TerminalSettings: 3 local lines/notch on plain
   // shells, 1 forwarded notch/notch on agent surfaces.
-  wheelScrollLines: 3, agentWheelNotches: 1 };
+  wheelScrollLines: 3, agentWheelNotches: 1,
+  // Experimental Chat view (`crow ui set --chat-view`). null until the config
+  // loads, so neither the toggle nor a sticky Chat mode flashes the wrong way.
+  chatViewEnabled: null };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
+    uiConfig.chatViewEnabled = !!(cfg.chatView && cfg.chatView.enabled);
     const sw = cfg.switcher || {};
     uiConfig.switcherEnabled = sw.enabled !== false;
     uiConfig.switcherBinding = (sw.binding && String(sw.binding)) || 'cmd+/';
@@ -434,5 +438,6 @@ async function loadUIConfig() {
   } catch (_) { /* keep defaults */ }
   renderSidebar();
   renderStatusBar();
+  if (typeof onChatConfigLoaded === 'function') onChatConfigLoaded();
 }
 window.reloadUIConfig = loadUIConfig;

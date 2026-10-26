@@ -113,10 +113,12 @@ struct SettingsRPCSupportTests {
     @Test func uiJSONNestsUnderSidebar() throws {
         let json = SettingsRPC.uiJSON(
             sidebar: SidebarSettings(hideSessionDetails: true),
-            switcher: SwitcherSettings())
+            switcher: SwitcherSettings(),
+            chatView: ChatViewSettings(enabled: true))
         #expect(json == .object([
             "sidebar": .object(["hide_session_details": .bool(true)]),
             "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
+            "chat_view": .object(["enabled": .bool(true)]),
         ]))
     }
 
@@ -154,7 +156,7 @@ struct SettingsRPCSupportTests {
         let responses = [
             SettingsRPC.telemetryJSON(TelemetryConfig()),
             SettingsRPC.cleanupJSON(CleanupConfig()),
-            SettingsRPC.uiJSON(sidebar: SidebarSettings(), switcher: SwitcherSettings()),
+            SettingsRPC.uiJSON(sidebar: SidebarSettings(), switcher: SwitcherSettings(), chatView: ChatViewSettings()),
             SettingsRPC.terminalJSON(TerminalSettings()),
             SettingsRPC.automationJSON(AppConfig()),
             SettingsRPC.automationJSON(loaded),

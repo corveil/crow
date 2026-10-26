@@ -217,6 +217,19 @@ public enum ParityLedger {
         // Terminals
         .write("new-terminal", cli: "new-terminal"),
         .read("list-terminals", cli: "list-terminals"),
+        .read(
+            "get-session-transcript",
+            noCLI: """
+            Polled by the web Chat view (chat.js) to tail a session's agent \
+            transcript as chat events. The transcript file is already on disk for \
+            CLI users; a verb would only reformat it.
+            """),
+        .read(
+            "list-chat-commands",
+            noCLI: """
+            Feeds the web Chat view's composer `/` menu (skills, slash commands, \
+            built-ins). In a terminal, Claude Code's own `/` menu already lists them.
+            """),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),
         .write("relaunch-agent", cli: "relaunch-agent"),
@@ -552,6 +565,7 @@ public enum ParityLedger {
         .field("switcher.include.inReview", read: "ui get", write: "ui set"),
         .field("switcher.include.completed", read: "ui get", write: "ui set"),
         .field("switcher.include.archived", read: "ui get", write: "ui set"),
+        .field("chatView.enabled", read: "ui get", write: "ui set"),
 
         .field("notifications.globalMute", read: "notifications get", write: "notifications set"),
         .field("notifications.soundEnabled", read: "notifications get", write: "notifications set"),

@@ -169,3 +169,41 @@ enum HarnessTranscriptLocator {
         return path
     }
 }
+
+// MARK: - Chat view
+
+extension HarnessTranscriptLocator {
+    /// The transcript the chat view tails, and how to parse it. Only harnesses
+    /// `ChatTranscript` understands resolve; everything else is `nil`.
+    ///
+    /// Claude falls back to the newest `*.jsonl` in the cwd's project dir when
+    /// no hook has reported a conversation id yet (a session launched before
+    /// hooks fired, or a Manager). That guess can pick a sibling conversation
+    /// that shares the cwd; the view is read-only, so a wrong guess shows the wrong
+    /// history but cannot send anywhere new.
+    static func chatSource(
+        kind: AgentKind, conversationID: String?, cwd: String, roots: Roots = .live
+    ) -> (path: String, format: ChatTranscriptFormat)? {
+        switch kind {
+        case .claudeCode:
+            if let p = path(kind: kind, conversationID: conversationID, cwd: cwd, roots: roots) {
+                return (p, .claude)
+            }
+            let slug = AgentLogSource.posixPathSlug(cwd)
+            guard !slug.isEmpty else { return nil }
+            let dir = URL(fileURLWithPath: roots.claudeProjectsDir).appendingPathComponent(slug, isDirectory: true)
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            let newest = files.filter { $0.pathExtension == "jsonl" }.max { a, b in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return da < db
+            }
+            return newest.map { ($0.path, .claude) }
+        case .codex:
+            return path(kind: kind, conversationID: conversationID, cwd: cwd, roots: roots).map { ($0, .codex) }
+        default:
+            return nil
+        }
+    }
+}

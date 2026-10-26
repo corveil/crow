@@ -1494,3 +1494,22 @@ import Testing
     config.propagateCorveilKeyRotation(from: "", to: "sk-citadel-new")
     #expect(config == before)
 }
+
+// MARK: - chatView (experimental web Chat view toggle)
+
+@Test func chatViewIsOffByDefaultAndForOldConfigs() throws {
+    #expect(AppConfig().chatView.enabled == false)
+    // A config.json written before the block existed decodes as off.
+    let old = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"sidebar":{"hideSessionDetails":true}}"#.utf8))
+    #expect(old.chatView.enabled == false)
+    // A present-but-empty block must not fail the whole decode (CROW-814).
+    let partial = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"chatView":{}}"#.utf8))
+    #expect(partial.chatView.enabled == false)
+}
+
+@Test func chatViewRoundTrips() throws {
+    var config = AppConfig()
+    config.chatView.enabled = true
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+    #expect(decoded.chatView.enabled == true)
+}
