@@ -402,6 +402,12 @@ Three top-level blocks in `{devRoot}/.claude/config.json`, editable from **Setti
 | -------------------- | ------- | ------- | -------------------------------------------------------- |
 | `hideSessionDetails` | `false` | boolean | Hides ticket title and repo/branch lines in sidebar rows |
 
+**`chatView`** — the experimental [web Chat view](web-chat-view.md) (`crow ui set --chat-view`, Settings → General).
+
+| Key       | Default | Range   | Description                                                                 |
+| --------- | ------- | ------- | --------------------------------------------------------------------------- |
+| `enabled` | `false` | boolean | Shows the Terminal \| Chat toggle in session headers. Off: no toggle, no transcript polling |
+
 **Live in the browser — no restart, no reload.** The daemon watches `config.json`'s mtime and pushes a `configReloaded` event on change, so connected clients re-read the view-affecting slice within a couple of seconds regardless of who wrote it (Settings modal, `crow ui set`, or a hand edit).
 ## Notifications
 

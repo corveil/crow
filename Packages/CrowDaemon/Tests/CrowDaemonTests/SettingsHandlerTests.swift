@@ -57,6 +57,7 @@ import CrowEngine
         #expect(ui.result?["ui"] == .object([
             "sidebar": .object(["hide_session_details": .bool(false)]),
             "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
+            "chat_view": .object(["enabled": .bool(false)]),
         ]))
     }
 
@@ -95,6 +96,31 @@ import CrowEngine
             "enabled": .bool(false), "retention_hours": .int(72),
         ]))
         #expect(ConfigStore.loadConfig(devRoot: devRoot)?.cleanup.enabled == false)
+    }
+
+    /// `crow ui set --chat-view` (the experimental web Chat view): a patch that
+    /// writes `chatView.enabled` and nothing else, echoed under `ui.chat_view`.
+    @Test @MainActor func uiSetTogglesChatView() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var seed = AppConfig()
+        seed.sidebar.hideSessionDetails = true
+        try ConfigStore.saveConfig(seed, devRoot: devRoot)
+
+        let on = await call("ui-set", ["chat_view_enabled": .bool(true)], devRoot: devRoot)
+        #expect(on.error == nil)
+        guard case .object(let ui)? = on.result?["ui"] else {
+            Issue.record("ui-set returned no ui object")
+            return
+        }
+        #expect(ui["chat_view"] == .object(["enabled": .bool(true)]))
+        var onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.chatView.enabled == true)
+        #expect(onDisk.sidebar.hideSessionDetails == true)
+
+        _ = await call("ui-set", ["chat_view_enabled": .bool(false)], devRoot: devRoot)
+        onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.chatView.enabled == false)
     }
 
     /// The whole reason these are granular RPCs rather than a `set-config` blob
@@ -154,6 +180,7 @@ import CrowEngine
                     "archived": .bool(false),
                 ]),
             ]),
+            "chat_view": .object(["enabled": .bool(false)]),
         ]))
 
         let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))

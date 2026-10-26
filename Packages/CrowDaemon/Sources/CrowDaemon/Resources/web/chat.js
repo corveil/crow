@@ -55,6 +55,38 @@ function newChatState(sessionId) {
   };
 }
 
+// `crow ui set --chat-view` / Settings → General. Strictly on: the header toggle
+// shows only once the config says so.
+function chatViewEnabled() {
+  return typeof uiConfig !== 'undefined' && uiConfig.chatViewEnabled === true;
+}
+
+// Not known to be off: a sticky Chat mode may apply while the config is still
+// loading, so an enabled install doesn't flash the terminal first.
+function chatViewNotDisabled() {
+  return !(typeof uiConfig !== 'undefined' && uiConfig.chatViewEnabled === false);
+}
+
+// What the URL and the view should show right now.
+function chatViewShown() {
+  return chatViewActive && chatViewNotDisabled();
+}
+
+// The UI config loaded or changed (boot, Settings save, `crow ui set`). Re-apply
+// the view and the header; turning the flag off sends Chat back to the
+// terminal, URL included.
+function onChatConfigLoaded() {
+  if (!selectedId || selectedBoard) return;
+  const shown = currentRoute();
+  if (!chatViewNotDisabled() && shown && shown.view === 'session' && shown.chat) {
+    navigate({ view: 'session', sessionId: selectedId,
+      terminalId: activeTerminal ? activeTerminal.id : null }, { replace: true });
+  }
+  applyChatView();
+  const s = sessions.find((x) => x.id === selectedId);
+  if (s) renderHeader(s);
+}
+
 function setChatViewActive(on) {
   chatViewActive = !!on;
   try { localStorage.setItem('crow.chat.view', chatViewActive ? '1' : '0'); } catch (_) { /* ignore */ }
@@ -77,6 +109,7 @@ function toggleChatView() {
 }
 
 function chatToggleControl() {
+  if (!chatViewEnabled()) return null;
   const wrap = el('div', 'view-toggle');
   wrap.setAttribute('role', 'group');
   wrap.setAttribute('aria-label', 'Session view');
@@ -97,7 +130,7 @@ function chatToggleControl() {
 // Called from selectSession (after the session is bound) and on toggle.
 function applyChatView() {
   const app = document.getElementById('app');
-  const on = chatViewActive && !!selectedId && !selectedBoard;
+  const on = chatViewShown() && !!selectedId && !selectedBoard;
   app.classList.toggle('chat-active', on);
   if (!on) {
     stopChatPoll();
@@ -811,14 +844,14 @@ function chatHeaderMeter(sessionId) {
   // Clicks here must not open the Agent row's handoff menu.
   slot.addEventListener('click', (e) => e.stopPropagation());
   const st = chatState;
-  fillChatMeter(slot, chatViewActive && st && st.sessionId === sessionId ? st : null);
+  fillChatMeter(slot, chatViewShown() && st && st.sessionId === sessionId ? st : null);
   return slot;
 }
 
 function renderChatMeta(st) {
   const slot = document.getElementById('chat-header-meter');
   if (!slot) return;
-  fillChatMeter(slot, chatViewActive && chatState === st ? st : null);
+  fillChatMeter(slot, chatViewShown() && chatState === st ? st : null);
 }
 
 function fillChatMeter(meta, st) {

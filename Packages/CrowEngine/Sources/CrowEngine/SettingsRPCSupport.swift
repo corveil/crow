@@ -204,16 +204,21 @@ public enum SettingsRPC {
     }
 
     /// The `ui` group is a *view* namespace, not a single `AppConfig` block:
-    /// today `sidebar` and `switcher`, later `terminal` and anything else purely
+    /// today `sidebar`, `switcher` and `chat_view`, later `terminal` and anything else purely
     /// presentational. Nesting by config-block name mirrors `config.json` and
     /// keeps a future `sidebar.width` from colliding with `terminal.width`;
     /// growing the group stays purely additive.
-    public static func uiJSON(sidebar: SidebarSettings, switcher: SwitcherSettings) -> JSONValue {
+    public static func uiJSON(
+        sidebar: SidebarSettings, switcher: SwitcherSettings, chatView: ChatViewSettings
+    ) -> JSONValue {
         .object([
             "sidebar": .object([
                 "hide_session_details": .bool(sidebar.hideSessionDetails),
             ]),
             "switcher": switcherJSON(switcher),
+            "chat_view": .object([
+                "enabled": .bool(chatView.enabled),
+            ]),
         ])
     }
 

@@ -565,6 +565,7 @@ public enum ParityLedger {
         .field("switcher.include.inReview", read: "ui get", write: "ui set"),
         .field("switcher.include.completed", read: "ui get", write: "ui set"),
         .field("switcher.include.archived", read: "ui get", write: "ui set"),
+        .field("chatView.enabled", read: "ui get", write: "ui set"),
 
         .field("notifications.globalMute", read: "notifications get", write: "notifications set"),
         .field("notifications.soundEnabled", read: "notifications get", write: "notifications set"),

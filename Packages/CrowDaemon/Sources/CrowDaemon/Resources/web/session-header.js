@@ -26,7 +26,8 @@ function renderHeader(s) {
   badge.style.color = STATUS_COLOR[s.status] || 'var(--text-muted)';
   top.appendChild(badge);
   if (s.is_explore) top.appendChild(el('span', 'explore-badge', 'Exploring'));
-  if (typeof chatToggleControl === 'function') top.appendChild(chatToggleControl());
+  const chatToggle = typeof chatToggleControl === 'function' ? chatToggleControl() : null;
+  if (chatToggle) top.appendChild(chatToggle);
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));

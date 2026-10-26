@@ -2,7 +2,9 @@
 
 Every agent runs as a terminal app inside tmux. The web UI shows that terminal by default. **Chat** is a second view of the same session: the agent's own transcript, rendered as messages with native scrolling. It is built for phones, where a terminal is hard to scroll and type into.
 
-Switch with the **Terminal | Chat** toggle in the session header. Chat has its own address, `#/sessions/<id>/chat`, and the choice sticks across sessions in that browser.
+It is **off by default**. Turn it on with `crow ui set --chat-view true` (or Settings → General → Chat view); `crow ui set --chat-view false` turns it off again. The change reaches open browsers within a couple of seconds, with no restart, and turning it off sends anyone in Chat back to the terminal.
+
+Once it's on, switch with the **Terminal | Chat** toggle in the session header. Chat has its own address, `#/sessions/<id>/chat`, and the choice sticks across sessions in that browser.
 
 ## How it works
 

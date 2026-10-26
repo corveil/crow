@@ -14,7 +14,8 @@ const epilogue = `
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
   get chatState(){ return chatState; },
-  applyChatView, setChatViewActive, chatHeaderMeter,
+  applyChatView, setChatViewActive, chatHeaderMeter, chatToggleControl, onChatConfigLoaded,
+  set chatViewFlag(v){ uiConfig.chatViewEnabled = v; },
   set rpc(v){ rpc = v; },
 };
 `;
@@ -355,6 +356,30 @@ check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.que
   check('a rebuilt header refills the meter from chat state', !rebuilt.hidden && rebuilt.textContent.includes('tokens'));
   check('model names', T.formatChatModel('claude-haiku-5-5') === 'Haiku 5.5' && T.formatChatModel('gpt-5.5') === 'gpt-5.5');
   check('token formatting', T.formatChatTokens(999) === '999' && T.formatChatTokens(1500) === '1.5k' && T.formatChatTokens(1000000) === '1M');
+
+  console.log('chat view flag (crow ui set --chat-view)');
+  const app = doc.getElementById('app');
+  T.rpc = pending;
+  T.selectedId = 'F-1';
+  T.setChatViewActive(true);
+  T.chatViewFlag = null; // config not loaded yet
+  check('no toggle before the config says it is on', T.chatToggleControl() === null);
+  T.applyChatView();
+  check('a sticky Chat mode still applies while the config loads', app.classList.contains('chat-active'));
+  T.chatViewFlag = true;
+  const tog = T.chatToggleControl();
+  check('toggle shows when enabled', tog && tog.textContent.includes('Chat') && tog.textContent.includes('Terminal'));
+  T.chatViewFlag = false;
+  check('no toggle when disabled', T.chatToggleControl() === null);
+  T.onChatConfigLoaded();
+  check('turning the flag off sends Chat back to the terminal', !app.classList.contains('chat-active'));
+  T.applyChatView();
+  check('a sticky Chat mode is ignored while disabled', !app.classList.contains('chat-active'));
+  const slotOff = T.chatHeaderMeter('F-1');
+  check('no header meter while disabled', slotOff.hidden && !slotOff.textContent);
+  T.chatViewFlag = true;
+  T.onChatConfigLoaded();
+  check('turning it back on restores the sticky Chat mode', app.classList.contains('chat-active'));
 
   if (failed) { console.log(failed + ' failed'); process.exit(1); }
   console.log('all passed');

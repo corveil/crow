@@ -88,7 +88,8 @@ func makeSettingsHandlers(
         "terminal-set": { params in try await terminalSetHandler(params: params, devRoot: devRoot) },
         "ui-get": { _ in
             let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-            return ["ui": SettingsRPC.uiJSON(sidebar: config.sidebar, switcher: config.switcher)]
+            return ["ui": SettingsRPC.uiJSON(
+                sidebar: config.sidebar, switcher: config.switcher, chatView: config.chatView)]
         },
         "ui-set": { params in
             try await mapRPCError {
@@ -99,6 +100,7 @@ func makeSettingsHandlers(
                 let switcherOrder = try SettingsRPC.patchSwitcherOrder(params)
                 let switcherPreview = try SettingsRPC.patchBool(params, "switcher_preview")
                 let includePatches = try SettingsRPC.patchSwitcherIncludeKey(params)
+                let chatViewEnabled = try SettingsRPC.patchBool(params, "chat_view_enabled")
                 // Reject the chord agents reserve rather than storing it and
                 // rewriting it on the next decode — a silent revert leaves the
                 // user with no idea why their setting didn't stick (CROW-1002).
@@ -111,12 +113,12 @@ func makeSettingsHandlers(
                 }
                 guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
                     || switcherCapture != nil || switcherOrder != nil || switcherPreview != nil
-                    || !includePatches.isEmpty else {
+                    || !includePatches.isEmpty || chatViewEnabled != nil else {
                     throw RPCError.invalidParams(
                         "Nothing to set — provide at least one UI preference flag.")
                 }
-                let (sidebar, switcher) = try mutateConfig(devRoot: devRoot) {
-                    config -> (SidebarSettings, SwitcherSettings) in
+                let (sidebar, switcher, chatView) = try mutateConfig(devRoot: devRoot) {
+                    config -> (SidebarSettings, SwitcherSettings, ChatViewSettings) in
                     if let hideSessionDetails {
                         config.sidebar.hideSessionDetails = hideSessionDetails
                     }
@@ -130,13 +132,14 @@ func makeSettingsHandlers(
                     for (path, value) in includePatches {
                         config.switcher.include[keyPath: path] = value
                     }
-                    return (config.sidebar, config.switcher)
+                    if let chatViewEnabled { config.chatView.enabled = chatViewEnabled }
+                    return (config.sidebar, config.switcher, config.chatView)
                 }
                 // Connected browsers re-read the view-affecting config slice off
                 // the `configReloaded` push that `startStoreReloadPoll` fires when
                 // config.json's mtime moves — no restart, no reload.
                 return [
-                    "ui": SettingsRPC.uiJSON(sidebar: sidebar, switcher: switcher),
+                    "ui": SettingsRPC.uiJSON(sidebar: sidebar, switcher: switcher, chatView: chatView),
                     "restart_required": .bool(false),
                 ]
             }
