@@ -63,7 +63,7 @@ enum StaticAssets {
             let file = name
             router.get("/\(file)") { req, _ in webResponse(file, webDir: webDir, request: req) }
         }
-        // SPIKE (chat view): markdown-it 14.1.0 (MIT), vendored. Not in
+        // markdown-it 14.1.0 (MIT), vendored for the Chat view. Not in
         // `uiJavaScriptFiles` — `chat.js` loads it on first use of the Chat
         // view, so the terminal view never pays for it.
         router.get("/markdown-it.min.js") { req, _ in webResponse("markdown-it.min.js", webDir: webDir, request: req) }

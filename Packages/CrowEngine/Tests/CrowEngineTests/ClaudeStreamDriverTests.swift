@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CrowEngine
 
-/// SPIKE (chat view, Phase 2). The child is a `/bin/sh` script that speaks the
+/// Experimental headless driver. The child is a `/bin/sh` script that speaks the
 /// stream-json protocol shape observed from Claude Code 2.1.309 — no real
 /// `claude` runs here.
 @Suite struct ClaudeStreamDriverTests {
@@ -22,6 +22,20 @@ import Testing
         #expect(p.toolName == "Write")
         #expect(p.summary == "/w/hello.txt")
         #expect(p.inputJSON.contains("hello.txt"))
+    }
+
+    @Test func usageFoldsAssistantTokensAndResultWindow() {
+        var u = ClaudeStreamDriver.Usage()
+        func feed(_ s: String) { ClaudeStreamDriver.updateUsage(&u, from: Data(s.utf8)) }
+        // Shapes captured from Claude Code 2.1.309 stream-json.
+        feed(#"{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5-5","usage":{"input_tokens":2,"cache_creation_input_tokens":4866,"cache_read_input_tokens":41788,"output_tokens":1}}}"#)
+        feed(#"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":99999}}}"#)
+        #expect(u.usedTokens == 46_656)
+        #expect(u.model == "claude-opus-5-5")
+        #expect(u.contextWindow == nil)
+        feed(#"{"type":"result","total_cost_usd":0.0098,"modelUsage":{"claude-haiku-5-5":{"contextWindow":200000},"claude-opus-5-5[1m]":{"contextWindow":1000000}}}"#)
+        #expect(u.contextWindow == 1_000_000)
+        #expect(u.costUSD == 0.0098)
     }
 
     @Test func defaultCommandRoutesPermissionsToTheHost() {

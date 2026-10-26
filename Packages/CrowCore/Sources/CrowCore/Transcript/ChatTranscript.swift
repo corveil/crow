@@ -1,7 +1,7 @@
 import Foundation
 
-/// SPIKE (chat view): a harness transcript reduced to a small, ACP-shaped event
-/// list the web client can render as chat bubbles instead of a TUI.
+/// One event of the web Chat view: a harness transcript reduced to a small,
+/// ACP-shaped list the client renders as chat bubbles instead of a TUI.
 ///
 /// Read-only and best-effort. The agents keep running in tmux; this parses the
 /// JSONL the harness already writes (`~/.claude/projects/…`, Codex rollouts) so
@@ -13,7 +13,7 @@ public struct ChatEvent: Sendable, Equatable {
         case toolCall = "tool_call"
         case toolResult = "tool_result"
         case turnEnd = "turn_end"
-        /// Harness-side notices: slash commands, compaction, task notifications.
+        /// Harness-side notices: compaction, interrupts, task notifications.
         case notice
     }
 
@@ -42,6 +42,43 @@ public struct ChatEvent: Sendable, Equatable {
     }
 }
 
+/// Context-window occupancy as of the latest main-conversation model call.
+public struct ChatUsage: Sendable, Equatable {
+    /// Prompt tokens of that call. Claude: `input_tokens +
+    /// cache_read_input_tokens + cache_creation_input_tokens`.
+    public var usedTokens: Int
+    public var model: String?
+    /// The window, when the transcript states it (Codex does; Claude's JSONL
+    /// does not — see `ChatContextWindow`).
+    public var maxTokens: Int?
+
+    public init(usedTokens: Int, model: String?, maxTokens: Int? = nil) {
+        self.usedTokens = usedTokens
+        self.model = model
+        self.maxTokens = maxTokens
+    }
+}
+
+/// Context-window size by model name, for transcripts that don't record it.
+///
+/// Every current Claude model reported `contextWindow: 1000000` in stream-json
+/// `result.modelUsage` (Claude Code 2.1.309, 2026-10-26: haiku-5-5, sonnet-5-5,
+/// opus-5-5 with and without `[1m]`, fable-5-1). The transcript names the model
+/// without the `[1m]` suffix. Unknown models return nil so the UI shows a raw
+/// token count instead of a guessed percentage.
+public enum ChatContextWindow {
+    public static func maxTokens(model: String?) -> Int? {
+        guard let raw = model?.lowercased(), !raw.isEmpty else { return nil }
+        if raw.hasSuffix("[1m]") { return 1_000_000 }
+        let m = raw.hasPrefix("anthropic/") ? String(raw.dropFirst("anthropic/".count)) : raw
+        let oneMillion = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "claude-fable-5"]
+        if oneMillion.contains(where: { m.hasPrefix($0) }) { return 1_000_000 }
+        let legacy = ["claude-3", "claude-opus-4", "claude-sonnet-4", "claude-haiku-4"]
+        if legacy.contains(where: { m.hasPrefix($0) }) { return 200_000 }
+        return nil
+    }
+}
+
 public enum ChatTranscriptFormat: String, Sendable {
     case claude
     case codex
@@ -62,6 +99,9 @@ public enum ChatTranscript {
         public var cursor: Int
         /// True when the read started mid-file (initial tail of a large log).
         public var truncated: Bool
+        /// The latest usage seen in this page's lines; nil when none (keep the
+        /// previous page's value).
+        public var usage: ChatUsage? = nil
     }
 
     /// Read complete lines of `path` from `cursor` (or the tail, when nil) and
@@ -96,23 +136,63 @@ public enum ChatTranscript {
         }
         // `Data` slices keep the parent's indices, which here are 0-based into
         // `data`, so the absolute offset is `start + consumedEnd`.
-        let events = parse(Data(body), format: format)
-        return Page(events: events, cursor: start + consumedEnd, truncated: truncated)
+        let (events, usage) = parseWithUsage(Data(body), format: format)
+        return Page(events: events, cursor: start + consumedEnd, truncated: truncated, usage: usage)
     }
 
     /// Parse NDJSON bytes. Lines that don't decode are skipped.
     public static func parse(_ data: Data, format: ChatTranscriptFormat) -> [ChatEvent] {
+        parseWithUsage(data, format: format).events
+    }
+
+    public static func parseWithUsage(
+        _ data: Data, format: ChatTranscriptFormat
+    ) -> (events: [ChatEvent], usage: ChatUsage?) {
         var out: [ChatEvent] = []
+        var usage: ChatUsage?
+        var codexModel: String?
         for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else {
                 continue
             }
             switch format {
-            case .claude: appendClaude(obj, to: &out)
-            case .codex: appendCodex(obj, to: &out)
+            case .claude:
+                appendClaude(obj, to: &out)
+                if let u = claudeUsage(obj) { usage = u }
+            case .codex:
+                appendCodex(obj, to: &out)
+                if let u = codexUsage(obj, model: &codexModel) { usage = u }
             }
         }
-        return out
+        return (out, usage)
+    }
+
+    /// Main-conversation assistant records carry the call's `usage`.
+    static func claudeUsage(_ obj: [String: Any]) -> ChatUsage? {
+        guard obj["type"] as? String == "assistant", obj["isSidechain"] as? Bool != true,
+              let message = obj["message"] as? [String: Any],
+              let u = message["usage"] as? [String: Any] else { return nil }
+        func n(_ k: String) -> Int { (u[k] as? NSNumber)?.intValue ?? 0 }
+        let used = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens")
+        guard used > 0 else { return nil }
+        let model = message["model"] as? String
+        // `<synthetic>` marks harness-made messages (e.g. an API error), not a real call.
+        if model == "<synthetic>" { return nil }
+        return ChatUsage(usedTokens: used, model: model)
+    }
+
+    /// Codex: `turn_context` names the model; `event_msg/token_count` carries the
+    /// last call's input tokens and the model's context window.
+    static func codexUsage(_ obj: [String: Any], model: inout String?) -> ChatUsage? {
+        guard let payload = obj["payload"] as? [String: Any] else { return nil }
+        if obj["type"] as? String == "turn_context", let m = payload["model"] as? String { model = m }
+        guard obj["type"] as? String == "event_msg", payload["type"] as? String == "token_count",
+              let info = payload["info"] as? [String: Any],
+              let last = info["last_token_usage"] as? [String: Any],
+              let input = (last["input_tokens"] as? NSNumber)?.intValue, input > 0 else { return nil }
+        return ChatUsage(
+            usedTokens: input, model: model,
+            maxTokens: (info["model_context_window"] as? NSNumber)?.intValue)
     }
 
     // MARK: - Claude Code
@@ -188,8 +268,10 @@ public enum ChatTranscript {
         if text.isEmpty { return }
         if text.hasPrefix("<local-command-caveat>") || text.hasPrefix("<system-reminder>") { return }
         if let name = tagContent(text, "command-name") {
+            // `/skill args` the user typed; the expanded skill body follows as a
+            // meta record, which is skipped.
             let args = tagContent(text, "command-args") ?? ""
-            out.append(ChatEvent(kind: .notice, text: args.isEmpty ? name : "\(name) \(args)", timestamp: ts))
+            out.append(ChatEvent(kind: .user, text: args.isEmpty ? name : "\(name) \(args)", timestamp: ts))
             return
         }
         if let cmd = tagContent(text, "bash-input") {

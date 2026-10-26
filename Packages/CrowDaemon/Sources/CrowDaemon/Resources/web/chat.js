@@ -1,10 +1,12 @@
 'use strict';
-// Crow web UI — SPIKE: structured Chat view for agent sessions.
+// Crow web UI — Chat view: a structured alternative to the terminal pane.
 //
-// A read-mostly alternative to the xterm/tmux pane: the daemon tails the
-// harness's own transcript (`get-session-transcript`, ChatTranscript.swift) and
-// we render it as bubbles with native scrolling. The agent keeps running in
-// tmux; the composer types into it through the same `send` RPC the CLI uses.
+// The daemon tails the harness's own transcript (`get-session-transcript`,
+// ChatTranscript.swift) and we render it as bubbles with native scrolling. The
+// agent keeps running in tmux; the composer types into it through the same
+// `send` RPC the CLI uses. Claude sessions also get a `/` menu
+// (`list-chat-commands`) and a context meter. Nothing here runs, and nothing is
+// fetched, until a session is switched to Chat.
 //
 //   #/sessions/:id/chat   — the chat view for a session (router.js)
 
@@ -17,6 +19,9 @@ const CHAT_POLL_MS = 2000;
 let chatState = null;
 let chatPollTimer = null;
 let chatSending = false;
+// Whether the last applyChatView showed chat — the terminal only needs a refit
+// when we actually leave chat, not on every terminal-mode session switch.
+let chatWasShown = false;
 
 function newChatState(sessionId) {
   return {
@@ -31,7 +36,14 @@ function newChatState(sessionId) {
     // tool_id → the <details> a later tool_result is appended into.
     toolNodes: new Map(),
     inflight: false,
-    // Phase 2: opt-in headless Claude driver (ClaudeStreamDriver.swift).
+    agentKind: null,
+    // Context meter: the latest `usage` the daemon reported (kept across pages
+    // that carry none).
+    usage: null,
+    // `/` menu entries; null until fetched for this session.
+    commands: null,
+    commandsLoading: false,
+    // EXPERIMENTAL headless Claude driver (ClaudeStreamDriver.swift).
     driverEnabled: false,
     driver: null,
     driverBusy: false,
@@ -84,10 +96,13 @@ function applyChatView() {
   app.classList.toggle('chat-active', on);
   if (!on) {
     stopChatPoll();
+    closeChatMenu();
     // The terminal was display:none while chat was up — refit it.
-    if (typeof fitTerminal === 'function') setTimeout(fitTerminal, 30);
+    if (chatWasShown && typeof fitTerminal === 'function') setTimeout(fitTerminal, 30);
+    chatWasShown = false;
     return;
   }
+  chatWasShown = true;
   ensureChatDom();
   if (!chatState || chatState.sessionId !== selectedId) {
     chatState = newChatState(selectedId);
@@ -138,8 +153,11 @@ function ensureChatDom() {
   input.rows = 1;
   input.placeholder = 'Message the agent…';
   input.setAttribute('aria-label', 'Message the agent');
-  input.addEventListener('input', () => autosizeChatInput(input));
+  input.addEventListener('input', () => { autosizeChatInput(input); updateChatMenu(); });
+  input.addEventListener('click', () => updateChatMenu());
+  input.addEventListener('blur', () => { setTimeout(closeChatMenu, 150); });
   input.addEventListener('keydown', (e) => {
+    if (chatMenuKeydown(e)) return;
     // Desktop: Enter sends, Shift+Enter is a newline. Touch keyboards have no
     // Shift habit, so there Enter is a newline and the button sends.
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isCoarsePointer()) {
@@ -150,10 +168,23 @@ function ensureChatDom() {
   const send = el('button', 'chat-send', 'Send');
   send.type = 'submit';
   send.id = 'chat-send';
+  const menu = el('div', 'chat-menu');
+  menu.id = 'chat-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('aria-label', 'Commands and skills');
+  menu.hidden = true;
+  input.setAttribute('aria-controls', 'chat-menu');
+  input.setAttribute('aria-autocomplete', 'list');
+  form.appendChild(menu);
   form.appendChild(input);
   form.appendChild(send);
   form.onsubmit = (e) => { e.preventDefault(); sendChatMessage(); };
   view.appendChild(form);
+
+  const meta = el('div', 'chat-meta');
+  meta.id = 'chat-meta';
+  meta.hidden = true;
+  view.appendChild(meta);
 
   // Sticky-bottom bookkeeping: the user scrolling up releases the pin.
   log.addEventListener('scroll', () => {
@@ -279,6 +310,9 @@ function applyChatPage(st, res) {
   st.supported = res.supported !== false;
   st.reason = res.reason || null;
   st.terminalId = res.terminal_id || st.terminalId;
+  if (res.agent_kind) st.agentKind = res.agent_kind;
+  if (res.usage) st.usage = res.usage;
+  else if (res.reset) st.usage = null;
   st.driverEnabled = !!res.driver_enabled;
   st.driver = res.driver || null;
   if (res.reset) {
@@ -431,6 +465,7 @@ function renderChatStatus(stArg) {
     input.placeholder = st && chatDriverRunning(st) ? 'Message headless Claude…' : 'Message the agent…';
   }
   if (!st) return;
+  renderChatMeta(st);
   renderChatDriver(st, status);
   if (!st.supported || (st.reason && st.cursor == null)) {
     status.appendChild(el('span', null, st.reason || 'Chat view is not available for this session.'));
@@ -454,7 +489,8 @@ function renderChatStatus(stArg) {
 async function sendChatMessage() {
   const input = document.getElementById('chat-input');
   const st = chatState;
-  if (!input || !st || !st.terminalId || chatSending) return;
+  if (!input || !st || chatSending) return;
+  if (!st.terminalId && !chatDriverRunning(st)) return;
   const text = input.value.replace(/\s+$/, '');
   if (!text) return;
   chatSending = true;
@@ -468,6 +504,7 @@ async function sendChatMessage() {
     }
     input.value = '';
     autosizeChatInput(input);
+    closeChatMenu();
     const log = document.getElementById('chat-log');
     if (log) log.scrollTop = log.scrollHeight;
     // The harness writes the user line within a beat; don't wait for the poll.
@@ -481,7 +518,7 @@ async function sendChatMessage() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2: headless driver controls. Rendered above the status line: a start
+// EXPERIMENTAL headless driver controls. Rendered above the status line: a start
 // button when crowd has CROW_CHAT_DRIVER=1, then a banner + permission cards
 // while the driver runs. Approvals are the one thing the TUI path cannot offer
 // here — in tmux, a permission prompt is only answerable in the terminal.
@@ -509,7 +546,7 @@ function renderChatDriver(st, status) {
     bar.appendChild(start);
     return;
   }
-  bar.appendChild(el('span', 'chat-driver-label', 'Headless Claude · new conversation'));
+  bar.appendChild(el('span', 'chat-driver-label', 'Experimental · headless Claude · new conversation'));
   const stop = el('button', 'chat-driver-btn', 'Stop');
   stop.type = 'button';
   stop.onclick = () => chatDriverAction(st, 'chat-driver-stop', {});
@@ -544,4 +581,245 @@ async function chatDriverAction(st, method, extra) {
     st.driverBusy = false;
     refreshChat();
   }
+}
+
+// ---------------------------------------------------------------------------
+// `/` menu (Claude sessions). Typing `/` at the very start of the composer
+// opens a filtered list of skills, slash commands and built-ins from
+// `list-chat-commands`. Picking one only inserts `/name ` — Claude Code expands
+// it when the message arrives, through the TUI (`send`) or the headless driver
+// alike. Claude expands one skill per message, so the menu only triggers on the
+// leading token.
+// ---------------------------------------------------------------------------
+const CHAT_MENU_LIMIT = 50;
+let chatMenuItems = [];
+let chatMenuIndex = 0;
+
+// The `/token` being typed, when the caret is still inside it; else null.
+function chatSlashQuery(input) {
+  const v = input.value;
+  if (!v.startsWith('/')) return null;
+  const caret = input.selectionStart == null ? v.length : input.selectionStart;
+  const head = v.slice(0, caret);
+  if (/\s/.test(head)) return null;
+  return head.slice(1);
+}
+
+function chatMenuSupported(st) {
+  return !!st && st.agentKind === 'claude-code';
+}
+
+async function loadChatCommands(st) {
+  if (st.commands || st.commandsLoading) return;
+  st.commandsLoading = true;
+  try {
+    const res = await rpc('list-chat-commands', { session_id: st.sessionId });
+    st.commands = (res && res.supported && Array.isArray(res.commands)) ? res.commands : [];
+  } catch (_) {
+    st.commands = null; // retry on the next `/`
+  } finally {
+    st.commandsLoading = false;
+  }
+  if (chatState === st) updateChatMenu();
+}
+
+// Prefix matches first, then substring-in-name, then description matches.
+function filterChatCommands(commands, query) {
+  const q = (query || '').toLowerCase();
+  if (!q) return commands.slice(0, CHAT_MENU_LIMIT);
+  const prefix = [], inName = [], inDesc = [];
+  for (const c of commands) {
+    const n = c.name.toLowerCase();
+    if (n.startsWith(q)) prefix.push(c);
+    else if (n.includes(q)) inName.push(c);
+    else if ((c.description || '').toLowerCase().includes(q)) inDesc.push(c);
+  }
+  return prefix.concat(inName, inDesc).slice(0, CHAT_MENU_LIMIT);
+}
+
+function updateChatMenu() {
+  const input = document.getElementById('chat-input');
+  const st = chatState;
+  if (!input || !chatMenuSupported(st)) { closeChatMenu(); return; }
+  const query = chatSlashQuery(input);
+  if (query == null) { closeChatMenu(); return; }
+  if (!st.commands) { loadChatCommands(st); renderChatMenu([], true); return; }
+  const items = filterChatCommands(st.commands, query);
+  const prevName = chatMenuItems[chatMenuIndex] && chatMenuItems[chatMenuIndex].name;
+  chatMenuItems = items;
+  const keep = items.findIndex((c) => c.name === prevName);
+  chatMenuIndex = keep >= 0 ? keep : 0;
+  renderChatMenu(items, false);
+}
+
+function renderChatMenu(items, loading) {
+  const menu = document.getElementById('chat-menu');
+  const input = document.getElementById('chat-input');
+  if (!menu) return;
+  menu.innerHTML = '';
+  if (loading) {
+    menu.appendChild(el('div', 'chat-menu-empty', 'Loading commands…'));
+  } else if (!items.length) {
+    menu.appendChild(el('div', 'chat-menu-empty', 'No matching skills or commands'));
+  }
+  items.forEach((c, i) => {
+    const opt = el('div', 'chat-menu-item' + (i === chatMenuIndex ? ' active' : ''));
+    opt.id = 'chat-menu-opt-' + i;
+    opt.setAttribute('role', 'option');
+    opt.setAttribute('aria-selected', i === chatMenuIndex ? 'true' : 'false');
+    const top = el('div', 'chat-menu-top');
+    top.appendChild(el('span', 'chat-menu-name', '/' + c.name));
+    top.appendChild(el('span', 'chat-menu-kind', c.kind === 'builtin' ? 'built-in' : c.scope + ' ' + c.kind));
+    opt.appendChild(top);
+    if (c.description) opt.appendChild(el('div', 'chat-menu-desc', c.description));
+    // pointerdown + preventDefault keeps the textarea focused (and the phone
+    // keyboard up) through the tap.
+    opt.addEventListener('pointerdown', (e) => e.preventDefault());
+    opt.addEventListener('mousedown', (e) => e.preventDefault());
+    opt.addEventListener('click', () => { chatMenuIndex = i; selectChatMenuItem(); });
+    menu.appendChild(opt);
+  });
+  menu.hidden = false;
+  if (input) {
+    input.setAttribute('aria-expanded', 'true');
+    if (items.length) input.setAttribute('aria-activedescendant', 'chat-menu-opt-' + chatMenuIndex);
+  }
+  const active = menu.querySelector('.chat-menu-item.active');
+  if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+}
+
+function closeChatMenu() {
+  const menu = document.getElementById('chat-menu');
+  const input = document.getElementById('chat-input');
+  chatMenuItems = [];
+  chatMenuIndex = 0;
+  if (menu) { menu.hidden = true; menu.innerHTML = ''; }
+  if (input) { input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }
+}
+
+function chatMenuOpen() {
+  const menu = document.getElementById('chat-menu');
+  return !!(menu && !menu.hidden);
+}
+
+// Returns true when the key was the menu's to handle.
+function chatMenuKeydown(e) {
+  if (!chatMenuOpen() || e.isComposing) return false;
+  if (e.key === 'Escape') { e.preventDefault(); closeChatMenu(); return true; }
+  if (!chatMenuItems.length) return false;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = chatMenuItems.length;
+    chatMenuIndex = (chatMenuIndex + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    renderChatMenu(chatMenuItems, false);
+    return true;
+  }
+  if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+    e.preventDefault();
+    selectChatMenuItem();
+    return true;
+  }
+  return false;
+}
+
+// Replace the leading `/token` with `/name `, keeping anything typed after it.
+function selectChatMenuItem() {
+  const input = document.getElementById('chat-input');
+  const item = chatMenuItems[chatMenuIndex];
+  if (!input || !item) return;
+  const v = input.value;
+  const m = v.match(/^\/\S*/);
+  const rest = m ? v.slice(m[0].length).replace(/^\s+/, '') : v;
+  const head = '/' + item.name + ' ';
+  input.value = head + rest;
+  try { input.setSelectionRange(head.length, head.length); } catch (_) { /* jsdom */ }
+  closeChatMenu();
+  autosizeChatInput(input);
+  input.focus();
+}
+
+// ---------------------------------------------------------------------------
+// Context meter: a small row under the composer with the model and a ring of
+// how full the context window is. Used tokens are the latest main-conversation
+// call's prompt tokens; the window comes from the headless driver's `result`,
+// the transcript (Codex), or the daemon's model table — and when none knows it,
+// the row shows a token count with no percentage. Tap/hover for detail.
+// ---------------------------------------------------------------------------
+function formatChatTokens(n) {
+  if (n == null || !isFinite(n)) return '0';
+  if (n < 1000) return String(Math.round(n));
+  if (n < 10000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  if (n < 999500) return Math.round(n / 1000) + 'k';
+  return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+}
+
+// `claude-opus-5-5` → `Opus 5.5`; anything else is shown as-is.
+function formatChatModel(model) {
+  if (!model) return '';
+  const m = String(model).match(/^claude-([a-z]+)-(\d+)-(\d+)(\[1m\])?/i);
+  if (!m) return String(model);
+  return m[1].charAt(0).toUpperCase() + m[1].slice(1) + ' ' + m[2] + '.' + m[3] + (m[4] ? ' (1M)' : '');
+}
+
+function chatUsagePercent(u) {
+  if (!u || !u.max_tokens || u.max_tokens <= 0) return null;
+  return Math.min(100, (u.used_tokens / u.max_tokens) * 100);
+}
+
+// Survives the poll's re-render, so a tapped-open detail stays open.
+let chatMeterOpen = false;
+
+function renderChatMeta(st) {
+  const meta = document.getElementById('chat-meta');
+  if (!meta) return;
+  const u = st && st.usage;
+  meta.innerHTML = '';
+  meta.hidden = !u;
+  const view = document.getElementById('chat-view');
+  if (view) view.classList.toggle('has-meta', !!u);
+  if (!u) return;
+  if (u.model) meta.appendChild(el('span', 'chat-meta-model', formatChatModel(u.model)));
+  const pct = chatUsagePercent(u);
+  const btn = el('button', 'chat-meter' + (pct != null && pct > 90 ? ' over' : '') + (chatMeterOpen ? ' open' : ''), '');
+  btn.type = 'button';
+  const detail = pct != null
+    ? formatChatTokens(u.used_tokens) + ' / ' + formatChatTokens(u.max_tokens) + ' tokens'
+    : formatChatTokens(u.used_tokens) + ' tokens used';
+  const cost = typeof u.cost_usd === 'number' ? ' · $' + u.cost_usd.toFixed(2) : '';
+  btn.title = 'Context window: ' + detail + cost;
+  btn.setAttribute('aria-label', pct != null
+    ? 'Context window ' + Math.round(pct) + '% used'
+    : 'Context window ' + formatChatTokens(u.used_tokens) + ' tokens used');
+  if (pct != null) {
+    const r = 7, c = 2 * Math.PI * r;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 18 18');
+    svg.setAttribute('class', 'chat-meter-ring');
+    svg.setAttribute('aria-hidden', 'true');
+    const track = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    const fill = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    for (const node of [track, fill]) {
+      node.setAttribute('cx', '9'); node.setAttribute('cy', '9'); node.setAttribute('r', String(r));
+    }
+    track.setAttribute('class', 'track');
+    fill.setAttribute('class', 'fill');
+    fill.setAttribute('stroke-dasharray', String(c));
+    fill.setAttribute('stroke-dashoffset', String(c * (1 - pct / 100)));
+    svg.appendChild(track);
+    svg.appendChild(fill);
+    btn.appendChild(svg);
+    btn.appendChild(el('span', 'chat-meter-pct', pct < 10 ? pct.toFixed(1).replace(/\.0$/, '') + '%' : Math.round(pct) + '%'));
+  } else {
+    btn.appendChild(el('span', 'chat-meter-pct', formatChatTokens(u.used_tokens) + ' tokens'));
+  }
+  const pop = el('span', 'chat-meter-detail', detail + cost);
+  btn.appendChild(pop);
+  // Hover shows the detail on desktop (CSS); a tap toggles it on touch.
+  btn.setAttribute('aria-expanded', chatMeterOpen ? 'true' : 'false');
+  btn.onclick = () => {
+    chatMeterOpen = !chatMeterOpen;
+    btn.classList.toggle('open', chatMeterOpen);
+    btn.setAttribute('aria-expanded', chatMeterOpen ? 'true' : 'false');
+  };
+  meta.appendChild(btn);
 }

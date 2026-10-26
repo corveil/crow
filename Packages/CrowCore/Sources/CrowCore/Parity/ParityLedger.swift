@@ -220,37 +220,43 @@ public enum ParityLedger {
         .read(
             "get-session-transcript",
             noCLI: """
-            SPIKE (chat view, feature/crow-chat-view-spike): polled by the web \
-            Chat view only. A CLI verb would need CLAUDE.md + reference docs for \
-            a surface that may not survive the spike.
+            Polled by the web Chat view (chat.js) to tail a session's agent \
+            transcript as chat events. The transcript file is already on disk for \
+            CLI users; a verb would only reformat it.
+            """),
+        .read(
+            "list-chat-commands",
+            noCLI: """
+            Feeds the web Chat view's composer `/` menu (skills, slash commands, \
+            built-ins). In a terminal, Claude Code's own `/` menu already lists them.
             """),
         .write(
             "chat-driver-start",
             noCLI: """
-            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
-            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
-            supported surface; no CLI until the spike is kept.
+            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
+            only from the web Chat view. To be superseded by an out-of-process \
+            agent host; no CLI for a transport that is being replaced.
             """),
         .write(
             "chat-driver-send",
             noCLI: """
-            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
-            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
-            supported surface; no CLI until the spike is kept.
+            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
+            only from the web Chat view. To be superseded by an out-of-process \
+            agent host; no CLI for a transport that is being replaced.
             """),
         .write(
             "chat-driver-permission",
             noCLI: """
-            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
-            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
-            supported surface; no CLI until the spike is kept.
+            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
+            only from the web Chat view. To be superseded by an out-of-process \
+            agent host; no CLI for a transport that is being replaced.
             """),
         .write(
             "chat-driver-stop",
             noCLI: """
-            SPIKE (chat view Phase 2, feature/crow-chat-view-spike): the web Chat \
-            view's opt-in headless Claude driver (CROW_CHAT_DRIVER=1). Not a \
-            supported surface; no CLI until the spike is kept.
+            EXPERIMENTAL headless Claude driver behind CROW_CHAT_DRIVER=1, driven \
+            only from the web Chat view. To be superseded by an out-of-process \
+            agent host; no CLI for a transport that is being replaced.
             """),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),

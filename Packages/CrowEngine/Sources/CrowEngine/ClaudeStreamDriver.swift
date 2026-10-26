@@ -1,10 +1,14 @@
 import CrowCore
 import Foundation
 
-/// SPIKE (chat view, Phase 2): drives Claude Code headless over
+/// EXPERIMENTAL: drives Claude Code headless over
 /// `claude -p --input-format stream-json --output-format stream-json`, instead
-/// of a TUI in tmux. Opt-in (`CROW_CHAT_DRIVER=1` on crowd), isolated from the
-/// launch / `send` paths, and one process per Crow session.
+/// of a TUI in tmux. Opt-in (`CROW_CHAT_DRIVER=1` on crowd, off by default),
+/// isolated from the launch / `send` paths, and one process per Crow session.
+///
+/// The process is a child of crowd, so it does not survive a crowd restart the
+/// way tmux-hosted agents do. It is a stepping stone to an out-of-process agent
+/// host, which will supersede it.
 ///
 /// Wire protocol (verified against Claude Code 2.1.309):
 /// - stdin: `{"type":"user","message":{"role":"user","content":"…"}}` per turn;
@@ -18,7 +22,7 @@ import Foundation
 ///   silently auto-denies (`system/permission_denied`).
 ///
 /// Claude also writes its normal `~/.claude/projects/<slug>/<id>.jsonl`, so the
-/// Phase 1 transcript reader renders a driven session unchanged.
+/// Chat view's transcript reader renders a driven session unchanged.
 public final class ClaudeStreamDriver: @unchecked Sendable {
     public enum Event: Sendable, Equatable {
         case conversationStarted(id: String)
@@ -26,6 +30,17 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
         case turnEnded(isError: Bool)
         case permissionRequested(PermissionRequest)
         case exited(status: Int32)
+    }
+
+    /// Context usage for the Chat view's meter. `contextWindow` and `costUSD`
+    /// come from `result` (`modelUsage[*].contextWindow`, `total_cost_usd`; both
+    /// verified present on 2.1.309), the token count from the latest
+    /// main-conversation `assistant` record.
+    public struct Usage: Sendable, Equatable {
+        public var usedTokens: Int?
+        public var model: String?
+        public var contextWindow: Int?
+        public var costUSD: Double?
     }
 
     public struct PermissionRequest: Sendable, Equatable {
@@ -50,12 +65,14 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
     private var logHandle: FileHandle?
     private var _conversationID: String?
     private var _pending: [String: PermissionRequest] = [:]
+    private var _usage = Usage()
 
     public var conversationID: String? { lock.withLock { _conversationID } }
     public var pendingPermissions: [PermissionRequest] {
         lock.withLock { Array(_pending.values).sorted { $0.requestID < $1.requestID } }
     }
     public var isRunning: Bool { lock.withLock { process?.isRunning ?? false } }
+    public var usage: Usage { lock.withLock { _usage } }
 
     /// The production argv. `claudePath` comes from the agent's resolved
     /// binary; a login shell supplies the PATH crowd itself may not have.
@@ -191,6 +208,7 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
             }
         }
         for line in lines {
+            lock.withLock { Self.updateUsage(&_usage, from: line) }
             guard let event = Self.classify(line) else { continue }
             lock.withLock {
                 switch event {
@@ -200,6 +218,38 @@ public final class ClaudeStreamDriver: @unchecked Sendable {
                 }
             }
             onEvent(event)
+        }
+    }
+
+    /// Fold one stdout line into `usage`. Pure.
+    static func updateUsage(_ usage: inout Usage, from line: Data) {
+        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
+        switch obj["type"] as? String {
+        case "assistant":
+            // Subagent traffic carries a `parent_tool_use_id`; only the main
+            // conversation fills the session's context.
+            if let parent = obj["parent_tool_use_id"], !(parent is NSNull) { return }
+            guard let message = obj["message"] as? [String: Any],
+                  let u = message["usage"] as? [String: Any] else { return }
+            func n(_ k: String) -> Int { (u[k] as? NSNumber)?.intValue ?? 0 }
+            let used = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens")
+            guard used > 0 else { return }
+            usage.usedTokens = used
+            if let m = message["model"] as? String, m != "<synthetic>" { usage.model = m }
+        case "result":
+            if let cost = (obj["total_cost_usd"] as? NSNumber)?.doubleValue { usage.costUSD = cost }
+            if let models = obj["modelUsage"] as? [String: [String: Any]] {
+                // Prefer the entry for the model that answered; `[1m]` variants
+                // key as `<model>[1m]`.
+                let key = usage.model.flatMap { m in
+                    models.keys.first { $0 == m || $0.hasPrefix(m) }
+                } ?? models.keys.sorted().first
+                if let key, let w = (models[key]?["contextWindow"] as? NSNumber)?.intValue {
+                    usage.contextWindow = w
+                }
+            }
+        default:
+            break
         }
     }
 

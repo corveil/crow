@@ -2,13 +2,16 @@ import CrowCore
 import CrowIPC
 import Foundation
 
-/// SPIKE (chat view): `get-session-transcript` — the session's agent transcript
-/// reduced to chat events (`ChatTranscript`), tailed by byte cursor — plus the
-/// opt-in Phase 2 `chat-driver-*` verbs (`ClaudeStreamDriver`).
+/// The web Chat view's RPCs:
+///
+/// - `get-session-transcript` — the session's agent transcript reduced to chat
+///   events (`ChatTranscript`), tailed by byte cursor, plus context usage.
+/// - `list-chat-commands` — the composer's `/` menu (`ChatCommandCatalog`).
+/// - `chat-driver-*` — the EXPERIMENTAL headless Claude driver
+///   (`ClaudeStreamDriver`), refused unless crowd runs with `CROW_CHAT_DRIVER=1`.
 ///
 /// The transcript read is read-only: a tmux agent keeps running and input still
-/// goes through `send`. The driver verbs refuse unless crowd was started with
-/// `CROW_CHAT_DRIVER=1`.
+/// goes through `send`.
 @MainActor
 func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handler] {
     let capturedAppState = appState
@@ -54,7 +57,32 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
             base["truncated"] = .bool(page.truncated)
             base["reset"] = .bool(reset || cursor == nil)
             base["events"] = .array(page.events.map(eventJSON))
+            base["usage"] = usageJSON(page.usage, driver: driver?.usage) ?? .null
             return base
+        },
+
+        "list-chat-commands": { @Sendable params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw RPCError.invalidParams("session_id required")
+            }
+            let ctx = try await MainActor.run { try chatContext(capturedAppState, id) }
+            // Claude Code only for now: other harnesses expand slash input differently.
+            guard ctx.kind == .claudeCode else {
+                return ["supported": .bool(false), "commands": .array([])]
+            }
+            // Directory walks stay off the MainActor (#892).
+            let cmds = ChatCommandCatalog.discover(.live(projectDir: ctx.cwd.isEmpty ? nil : ctx.cwd))
+            return [
+                "supported": .bool(true),
+                "commands": .array(cmds.map { c in
+                    .object([
+                        "name": .string(c.name),
+                        "description": .string(c.description),
+                        "kind": .string(c.kind.rawValue),
+                        "scope": .string(c.scope.rawValue),
+                    ])
+                }),
+            ]
         },
 
         "chat-driver-start": { @Sendable params in
@@ -150,6 +178,34 @@ private func driverJSON(_ d: ClaudeStreamDriver) -> JSONValue {
     ])
 }
 
+/// The context meter's numbers. The driver's live `result` data wins when a
+/// driver runs; otherwise the transcript's latest call plus the model table.
+/// Nil when this page saw no usage and no driver has reported any — the client
+/// keeps showing its previous value.
+func usageJSON(_ page: ChatUsage?, driver: ClaudeStreamDriver.Usage?) -> JSONValue? {
+    let used = driver?.usedTokens ?? page?.usedTokens
+    guard let used else { return nil }
+    let model = driver?.model ?? page?.model
+    var o: [String: JSONValue] = [
+        "used_tokens": .int(used),
+        "model": model.map { .string($0) } ?? .null,
+    ]
+    if let w = driver?.contextWindow {
+        o["max_tokens"] = .int(w)
+        o["max_source"] = .string("driver")
+    } else if let w = page?.maxTokens {
+        o["max_tokens"] = .int(w)
+        o["max_source"] = .string("transcript")
+    } else if let w = ChatContextWindow.maxTokens(model: model) {
+        o["max_tokens"] = .int(w)
+        o["max_source"] = .string("model_table")
+    } else {
+        o["max_tokens"] = .null
+    }
+    if let cost = driver?.costUSD { o["cost_usd"] = .double(cost) }
+    return .object(o)
+}
+
 private func eventJSON(_ e: ChatEvent) -> JSONValue {
     var o: [String: JSONValue] = [
         "kind": .string(e.kind.rawValue),
@@ -163,7 +219,7 @@ private func eventJSON(_ e: ChatEvent) -> JSONValue {
     return .object(o)
 }
 
-/// SPIKE: one `ClaudeStreamDriver` per session, daemon-lifetime only (not
+/// EXPERIMENTAL: one `ClaudeStreamDriver` per session, daemon-lifetime only (not
 /// persisted — a crowd restart drops the process; the conversation survives on
 /// disk and could be `--resume`d).
 @MainActor

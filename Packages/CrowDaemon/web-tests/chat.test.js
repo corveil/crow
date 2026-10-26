@@ -3,12 +3,13 @@ const vm = require('vm');
 const fs = require('fs');
 const { loadClientSource, WEB } = require('./load-client');
 
-// SPIKE (chat view): #/sessions/:id/chat routing, and the transcript renderer
+// Chat view: #/sessions/:id/chat routing, and the transcript renderer
 // that turns `get-session-transcript` pages into bubbles + collapsed tool rows.
 const epilogue = `
 ;globalThis.__t = {
   parseRoute, routeToHash,
   newChatState, applyChatPage, ensureChatDom, sendChatMessage, buildChatMarkdown,
+  updateChatMenu, chatMenuKeydown, filterChatCommands, formatChatModel, formatChatTokens,
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
@@ -35,7 +36,8 @@ window.setTimeout = () => 0;
 window.requestAnimationFrame = () => 0;
 const realGet = window.document.getElementById.bind(window.document);
 window.document.getElementById = (id) => realGet(id)
-  || (['chat-view', 'chat-log', 'chat-status', 'chat-driver', 'chat-send', 'chat-input', 'chat-jump'].includes(id)
+  || (['chat-view', 'chat-log', 'chat-status', 'chat-driver', 'chat-send', 'chat-input', 'chat-jump',
+    'chat-menu', 'chat-meta'].includes(id)
     ? null : window.document.createElement('div'));
 
 const ctx = dom.getInternalVMContext();
@@ -174,6 +176,87 @@ check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-pe
   const sends = calls.filter(([m]) => m === 'chat-driver-send' || m === 'send');
   check('composer routes to the driver, not the TUI', sends.length === 1 && sends[0][0] === 'chat-driver-send'
     && sends[0][1].text === 'hello');
+
+  console.log('slash menu');
+  const COMMANDS = [
+    { name: 'clear', description: 'Start a new conversation', kind: 'builtin', scope: 'builtin' },
+    { name: 'compact', description: 'Summarize the conversation', kind: 'builtin', scope: 'builtin' },
+    { name: 'review-pr', description: 'Review a pull request', kind: 'skill', scope: 'project' },
+    { name: 'ship', description: 'Compact and ship it', kind: 'command', scope: 'user' },
+  ];
+  let listCalls = 0;
+  T.rpc = async (m) => {
+    if (m === 'list-chat-commands') { listCalls++; return { supported: true, commands: COMMANDS }; }
+    return {};
+  };
+  const st4 = T.newChatState(SID);
+  T.chatState = st4;
+  T.applyChatPage(st4, { supported: true, reset: true, cursor: 1, path: '/s.jsonl', terminal_id: 'TERM',
+    agent_kind: 'claude-code', events: [] });
+  const input = doc.getElementById('chat-input');
+  const menu = doc.getElementById('chat-menu');
+  const key = (k) => {
+    const e = new window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true });
+    return T.chatMenuKeydown(e);
+  };
+  input.value = 'hello /review'; T.updateChatMenu();
+  check('no menu unless / leads the message', menu.hidden);
+  input.value = '/'; input.setSelectionRange(1, 1); T.updateChatMenu();
+  await new Promise((r) => setImmediate(r));
+  check('commands fetched once, on the first /', listCalls === 1);
+  check('menu lists every command for a bare /', !menu.hidden && menu.querySelectorAll('.chat-menu-item').length === 4);
+  input.value = '/comp'; input.setSelectionRange(5, 5); T.updateChatMenu();
+  const names = () => [...menu.querySelectorAll('.chat-menu-name')].map((n) => n.textContent);
+  check('prefix matches rank before description matches', names().join(',') === '/compact,/ship');
+  check('ArrowDown moves the selection', key('ArrowDown') && menu.querySelector('.active .chat-menu-name').textContent === '/ship');
+  check('ArrowDown wraps', key('ArrowDown') && menu.querySelector('.active .chat-menu-name').textContent === '/compact');
+  check('Enter picks the item', key('Enter') && input.value === '/compact ' && menu.hidden);
+  input.value = '/rev extra words'; input.setSelectionRange(4, 4); T.updateChatMenu();
+  check('Tab picks and keeps the arguments', key('Tab') && input.value === '/review-pr extra words');
+  input.value = '/cl'; input.setSelectionRange(3, 3); T.updateChatMenu();
+  check('Escape closes without picking', key('Escape') && menu.hidden && input.value === '/cl');
+  check('keys pass through when the menu is closed', key('Enter') === false);
+  input.value = '/r'; input.setSelectionRange(2, 2); T.updateChatMenu();
+  menu.querySelector('.chat-menu-item').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  check('tapping an item picks it', input.value === '/review-pr ');
+  check('filter ignores case', T.filterChatCommands(COMMANDS, 'REV').length === 1);
+  const st5 = T.newChatState(SID);
+  T.chatState = st5;
+  T.applyChatPage(st5, { supported: true, reset: true, cursor: 1, path: '/c.jsonl', terminal_id: 'TERM',
+    agent_kind: 'codex', events: [] });
+  input.value = '/'; input.setSelectionRange(1, 1); T.updateChatMenu();
+  check('no menu for non-Claude sessions', menu.hidden && listCalls === 1);
+
+  console.log('context meter');
+  const meta = doc.getElementById('chat-meta');
+  const st6 = T.newChatState(SID);
+  T.chatState = st6;
+  T.applyChatPage(st6, { supported: true, reset: true, cursor: 1, path: '/u.jsonl', terminal_id: 'TERM',
+    agent_kind: 'claude-code', events: [] });
+  check('meter hidden until usage arrives', meta.hidden);
+  T.applyChatPage(st6, { supported: true, reset: false, cursor: 2, events: [],
+    usage: { used_tokens: 84000, max_tokens: 1000000, model: 'claude-opus-5-5', max_source: 'model_table' } });
+  check('meter shows model + percent', !meta.hidden && meta.querySelector('.chat-meta-model').textContent === 'Opus 5.5'
+    && meta.querySelector('.chat-meter-pct').textContent === '8.4%');
+  check('detail has used / max', meta.querySelector('.chat-meter-detail').textContent === '84k / 1M tokens');
+  T.applyChatPage(st6, { supported: true, reset: false, cursor: 3, events: [{ kind: 'user', text: 'x' }] });
+  check('a page without usage keeps the last value', meta.querySelector('.chat-meter-pct').textContent === '8.4%');
+  T.applyChatPage(st6, { supported: true, reset: false, cursor: 4, events: [],
+    usage: { used_tokens: 190000, max_tokens: 200000, model: 'claude-sonnet-4-5', cost_usd: 1.234 } });
+  check('red above 90%', meta.querySelector('.chat-meter').classList.contains('over'));
+  check('driver cost shows in the detail', meta.querySelector('.chat-meter-detail').textContent === '190k / 200k tokens · $1.23');
+  T.applyChatPage(st6, { supported: true, reset: false, cursor: 5, events: [],
+    usage: { used_tokens: 51234, max_tokens: null, model: 'mystery-model' } });
+  check('unknown window → token count, no percent', !meta.querySelector('.chat-meter-ring')
+    && meta.querySelector('.chat-meter-pct').textContent === '51k tokens');
+  meta.querySelector('.chat-meter').click();
+  T.applyChatPage(st6, { supported: true, reset: false, cursor: 6, events: [] });
+  check('a tapped-open detail survives the next poll', meta.querySelector('.chat-meter').classList.contains('open'));
+  meta.querySelector('.chat-meter').click();
+  check('tapping again closes it', !meta.querySelector('.chat-meter').classList.contains('open'));
+  check('model names', T.formatChatModel('claude-haiku-5-5') === 'Haiku 5.5' && T.formatChatModel('gpt-5.5') === 'gpt-5.5');
+  check('token formatting', T.formatChatTokens(999) === '999' && T.formatChatTokens(1500) === '1.5k' && T.formatChatTokens(1000000) === '1M');
+
   if (failed) { console.log(failed + ' failed'); process.exit(1); }
   console.log('all passed');
 })();

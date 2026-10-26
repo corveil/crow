@@ -170,7 +170,7 @@ enum HarnessTranscriptLocator {
     }
 }
 
-// MARK: - SPIKE (chat view)
+// MARK: - Chat view
 
 extension HarnessTranscriptLocator {
     /// The transcript the chat view tails, and how to parse it. Only harnesses
@@ -179,7 +179,8 @@ extension HarnessTranscriptLocator {
     /// Claude falls back to the newest `*.jsonl` in the cwd's project dir when
     /// no hook has reported a conversation id yet (a session launched before
     /// hooks fired, or a Manager). That guess can pick a sibling conversation
-    /// that shares the cwd — acceptable for a read-only spike.
+    /// that shares the cwd; the view is read-only, so a wrong guess shows the wrong
+    /// history but cannot send anywhere new.
     static func chatSource(
         kind: AgentKind, conversationID: String?, cwd: String, roots: Roots = .live
     ) -> (path: String, format: ChatTranscriptFormat)? {

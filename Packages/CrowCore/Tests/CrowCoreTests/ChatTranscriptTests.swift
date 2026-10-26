@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CrowCore
 
-/// SPIKE (chat view). Fixture lines are hand-written to the shapes Claude Code
+/// Chat view transcript reader. Fixture lines are hand-written to the shapes Claude Code
 /// 2.1.x and Codex 0.16x persist — never read from a live `~/.claude` (ADR 0012).
 @Suite struct ChatTranscriptTests {
     static let claudeFixture = #"""
@@ -28,7 +28,7 @@ import Testing
         let events = ChatTranscript.parse(Data(Self.claudeFixture.utf8), format: .claude)
         #expect(events.map(\.kind) == [
             .user, .assistant, .toolCall, .toolResult, .toolCall, .toolResult,
-            .assistant, .turnEnd, .notice, .user, .notice,
+            .assistant, .turnEnd, .user, .user, .notice,
         ])
         #expect(events[0].text == "Fix the flaky test")
         #expect(events[1].text == "Looking at it.")
@@ -43,6 +43,40 @@ import Testing
         #expect(events[8].text == "/compact")
         #expect(events[9].text == "! ls")
         #expect(events[10].text == "Conversation compacted")
+    }
+
+    @Test func claudeUsageIsTheLatestMainCallsPromptTokens() {
+        let lines = #"""
+        {"type":"assistant","message":{"model":"claude-opus-5-5","content":[],"usage":{"input_tokens":2,"cache_read_input_tokens":40000,"cache_creation_input_tokens":1000,"output_tokens":50}}}
+        {"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-5-5","content":[],"usage":{"input_tokens":9,"cache_read_input_tokens":9}}}
+        {"type":"assistant","message":{"model":"<synthetic>","content":[],"usage":{"input_tokens":0}}}
+        {"type":"assistant","message":{"model":"claude-opus-5-5","content":[],"usage":{"input_tokens":4,"cache_read_input_tokens":41000,"cache_creation_input_tokens":600,"output_tokens":9}}}
+        {"type":"user","message":{"content":"next"}}
+        """#
+        let (_, usage) = ChatTranscript.parseWithUsage(Data(lines.utf8), format: .claude)
+        #expect(usage == ChatUsage(usedTokens: 41_604, model: "claude-opus-5-5"))
+        #expect(ChatTranscript.parseWithUsage(Data(#"{"type":"user","message":{"content":"x"}}"#.utf8), format: .claude).usage == nil)
+    }
+
+    @Test func codexUsageCarriesItsOwnWindow() {
+        let lines = #"""
+        {"type":"turn_context","payload":{"model":"gpt-5.5"}}
+        {"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":25559,"cached_input_tokens":2432,"output_tokens":13},"model_context_window":258400}}}
+        """#
+        let (_, usage) = ChatTranscript.parseWithUsage(Data(lines.utf8), format: .codex)
+        #expect(usage == ChatUsage(usedTokens: 25_559, model: "gpt-5.5", maxTokens: 258_400))
+    }
+
+    @Test func contextWindowTable() {
+        // Values observed in stream-json `result.modelUsage[*].contextWindow`.
+        #expect(ChatContextWindow.maxTokens(model: "claude-opus-5-5") == 1_000_000)
+        #expect(ChatContextWindow.maxTokens(model: "claude-haiku-5-5") == 1_000_000)
+        #expect(ChatContextWindow.maxTokens(model: "claude-fable-5-1") == 1_000_000)
+        #expect(ChatContextWindow.maxTokens(model: "claude-opus-4-1[1m]") == 1_000_000)
+        #expect(ChatContextWindow.maxTokens(model: "claude-sonnet-4-5-20250929") == 200_000)
+        #expect(ChatContextWindow.maxTokens(model: "claude-3-5-haiku-20241022") == 200_000)
+        #expect(ChatContextWindow.maxTokens(model: "some-future-model") == nil)
+        #expect(ChatContextWindow.maxTokens(model: nil) == nil)
     }
 
     @Test func toolResultsAreClipped() {

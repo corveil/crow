@@ -50,7 +50,7 @@ function parseRoute(hash) {
   if (!seg.length) return { view: 'home' };
   if (seg[0] === 'sessions' && seg[1]) {
     if (seg.length === 2) return { view: 'session', sessionId: seg[1] };
-    // SPIKE (chat view): #/sessions/:id/chat
+    // Chat view (chat.js): #/sessions/:id/chat
     if (seg.length === 3 && seg[2] === 'chat') return { view: 'session', sessionId: seg[1], chat: true };
     if (seg.length === 4 && seg[2] === 't') {
       return { view: 'session', sessionId: seg[1], terminalId: seg[3] };

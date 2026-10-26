@@ -1,0 +1,47 @@
+# Web Chat view
+
+Every agent runs as a terminal app inside tmux. The web UI shows that terminal by default. **Chat** is a second view of the same session: the agent's own transcript, rendered as messages with native scrolling. It is built for phones, where a terminal is hard to scroll and type into.
+
+Switch with the **Terminal | Chat** toggle in the session header. Chat has its own address, `#/sessions/<id>/chat`, and the choice sticks across sessions in that browser.
+
+## How it works
+
+- **Reading.** `crowd` finds the session's transcript file (the same lookup `HarnessTranscriptLocator` uses for handoffs) and reduces it to a short list of events: user and assistant messages, tool calls with their results, turn ends, and notices. The browser polls `get-session-transcript` every 2 seconds with a byte cursor, so each poll returns only what is new. A large transcript opens at its last 2 MB.
+- **Sending.** The composer sends through the same `send` RPC as `crow send`: the text is pasted into the agent's terminal and Enter is pressed. Whatever you type in Chat appears in the terminal too.
+- **Rendering.** Messages are rendered as markdown with [markdown-it](https://github.com/markdown-it/markdown-it) (vendored, loaded only when Chat opens). Raw HTML stays text. Links open in a new tab, and only `http(s)` and `mailto` links are allowed. Tool calls are collapsed to one line; tap to expand.
+- **Terminal mode is unaffected.** Nothing in the Chat view runs, polls, or downloads until a session is switched to Chat.
+
+| Harness | Chat view |
+|---|---|
+| Claude Code | Supported, with the `/` menu and context meter |
+| Codex | Supported (messages and tools; context meter from the rollout) |
+| Others | "Not supported yet"; use the terminal |
+
+Transcripts never contain permission prompts. When the agent is waiting for approval, answer it in the terminal.
+
+## `/` menu (Claude Code)
+
+Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to move, Enter or Tab to pick, and Esc to close; on a phone, tap an entry. Picking inserts `/name ` and nothing else. Claude Code expands it when the message arrives, so the menu works the same whether the session runs in the terminal or the experimental headless driver. Claude expands one skill per message.
+
+`list-chat-commands` builds the list in `crowd` from:
+
+- skills: `.claude/skills/<name>/SKILL.md` in the session's worktree, then `~/.claude/skills/` (`description` from the frontmatter; `user-invocable: false` hides a skill);
+- commands: `.claude/commands/*.md` in the worktree, then `~/.claude/commands/`;
+- skills of plugins enabled in `enabledPlugins`, as `<plugin>:<skill>`;
+- the built-ins `/compact`, `/context`, and `/clear`.
+
+When two entries share a name, the project one is listed.
+
+## Context meter
+
+A row under the composer shows the model and how full its context window is. The ring turns red above 90%. Hover, or tap on a phone, for used / max tokens.
+
+- **Used tokens** come from the latest main-conversation model call: `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`.
+- **The window** comes from the headless driver's `result.modelUsage[*].contextWindow` when the driver runs, from Codex's own `model_context_window`, or from a small model table (`ChatContextWindow`). Every current Claude 5.x model reports 1,000,000; Claude 3 and 4 models default to 200,000.
+- For a model the table doesn't know, the row shows "N tokens" with no percentage rather than guess.
+
+## Experimental: headless driver
+
+Started with `CROW_CHAT_DRIVER=1` in `crowd`'s environment, Chat offers **Start headless** on Claude Code work sessions. It runs `claude -p` in stream-json mode as a child of `crowd`, in a **new** conversation (not the terminal's). It answers permission prompts with Allow/Deny cards in Chat, and shows cost in the context meter. It is off by default and refused for review sessions, because `claude -p` skips the workspace-trust check and a review checkout is the PR author's code.
+
+Because the process is a child of `crowd`, restarting `crowd` stops it, unlike tmux-hosted agents. The conversation survives on disk. The driver will be superseded by an out-of-process agent host.
