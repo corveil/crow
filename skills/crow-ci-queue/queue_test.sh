@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Unit tests for queue.sh (CROW-1365): queue collection and the CI Gate
-# convention check, readiness, the run classification (including the false
-# failure from the unlabeled run), holder choice and ordering, normalize,
-# advance's update-before-label and its races, and watch's events.
+# convention check (and a just-pushed head, CROW-1374), readiness, the run
+# classification (including the false failure from the unlabeled run), holder
+# choice and ordering, normalize, advance's update-before-label and its races,
+# and watch's events.
 #
 # Drives queue.sh as a subprocess against a fake `gh` (answers from fixture
 # files, records writes in gh.log) and a fake `crow` (list-sessions /
@@ -646,6 +647,70 @@ st=$(q status)
 check "the all-repos status picks it up" "o/new o/r" "$(jq -r '[.repos[].repo] | sort | join(" ")' <<< "$st")"
 st=$(q status --repo o/r)
 check "a --repo status leaves it out" "o/r" "$(jq -r '[.repos[].repo] | join(" ")' <<< "$st")"
+
+# ─── a just-pushed head (CROW-1374) ──────────────────────────────────────────
+echo "status: a just-pushed head doesn't drop a live repo"
+# corveil/corveil#4973 on 2026-10-26: the holder merged, its session completed,
+# and auto-rebase pushed the one PR left, a draft without ci:full. Its new head
+# had no checks yet, so no CI Gate.
+# shellcheck disable=SC2016
+jq '.sessions += [{id: "S51", name: "live-51", branch: "b51", kind: "work", status: "active",
+                   links: [{type: "pr", url: "https://github.com/o/live/pull/51"}]},
+                  {id: "S52", name: "seen-52", branch: "b52", kind: "work", status: "active",
+                   links: [{type: "pr", url: "https://github.com/o/seen/pull/52"}]}]' "$FIX/sessions.json" > "$TMP/s.json" \
+  && mv "$TMP/s.json" "$FIX/sessions.json"
+marker() { if [[ -e "$TMP/queues/.convention-$1" ]]; then echo present; else echo absent; fi; }
+# Seen before: #52's head has a CI Gate check when normalize reads it.
+mkpr 52 '{"draft": true, "review": "REVIEW_REQUIRED"}'
+out=$(q normalize --repo o/seen); rc=$?
+check "normalize on the old head succeeds" "0 ok" "$rc $(jq -r .status <<< "$out")"
+check "and remembers that o/seen follows the convention" "present" "$(marker o-seen)"
+# Auto-rebase pushes h52b: no check suites, no CI Gate, no ci:full, never labeled.
+mkpr 52 '{"draft": true, "review": "REVIEW_REQUIRED", "head": "h52b", "rollup": []}'
+st=$(q status --repo o/seen)
+check "a fresh head in a repo seen following the convention stays queued" "o/seen" "$(jq -r '[.repos[].repo] | join(" ")' <<< "$st")"
+check "and nothing is ignored" "0" "$(jq -r '.ignored | length' <<< "$st")"
+out=$(q advance --repo o/seen); rc=$?
+check "advance answers for the draft, not the convention" "0 none_ready" "$rc $(jq -r .result <<< "$out")"
+out=$(q normalize --repo o/seen); rc=$?
+check "and so does normalize" "0 ok" "$rc $(jq -r .status <<< "$out")"
+# A read that fails (a 502) in a repo seen lately keeps the repo too: the PR is
+# unreadable, so normalize and advance say retry, not "has no queue".
+mv "$FIX/pr-52.json" "$TMP/pr-52.bak"
+st=$(q status --repo o/seen)
+check "an unreadable PR in a repo seen lately stays queued, as unreadable" "o/seen [52]" \
+  "$(jq -r '.repos[] | "\(.repo) \([.unreadable[].number] | tostring)"' <<< "$st")"
+out=$(q advance --repo o/seen); rc=$?
+check "advance exits 2" "2" "$rc"
+contains "and says to retry the read" "$out" "could not read #52 in o/seen, so which PR holds ci:full is unknown — retry"
+lacks "not that the repo has no queue" "$out" "has no queue"
+out=$(q normalize --repo o/seen); rc=$?
+contains "so does normalize" "$rc $out" "2 {\"status\":\"error\",\"step\":\"normalize\",\"message\":\"could not read #52"
+mv "$TMP/pr-52.bak" "$FIX/pr-52.json"
+# A sighting over a day old no longer bridges a read with no evidence.
+touch -t 202601010000 "$TMP/queues/.convention-o-seen"
+out=$(q advance --repo o/seen); rc=$?
+check "a sighting over a day old doesn't count" "2" "$rc"
+contains "and the repo reads as not following the convention" "$out" "o/seen does not follow the CI Gate convention"
+# Never read before, but #51 carried ci:full yesterday: its timeline shows it.
+mkpr 51 "{\"draft\": true, \"head\": \"h51b\", \"rollup\": [], \"timeline\": [$(on 2026-10-22T10:00:00Z), $(off 2026-10-22T11:00:00Z)]}"
+st=$(q status --repo o/live)
+check "a fresh head on a PR that has carried ci:full stays queued" "o/live" "$(jq -r '[.repos[].repo] | join(" ")' <<< "$st")"
+out=$(q advance --repo o/live); rc=$?
+check "advance answers for the draft" "0 none_ready" "$rc $(jq -r .result <<< "$out")"
+
+echo "status: a repo that never showed the convention is still ignored"
+# o/plain's #21 has never had a CI Gate check or ci:full.
+st=$(q status)
+contains "it is ignored" "$(jq -c .ignored <<< "$st")" "o/plain does not follow the CI Gate convention"
+check "and never remembered" "absent" "$(marker o-plain)"
+mkpr 21 '{"head": "h21b", "rollup": []}'
+st=$(q status)
+contains "a fresh head doesn't change that" "$(jq -c .ignored <<< "$st")" "o/plain does not follow the CI Gate convention"
+check "it isn't queued" "false" "$(jq -r 'any(.repos[]; .repo == "o/plain")' <<< "$st")"
+out=$(q normalize --repo o/plain); rc=$?
+check "normalize still exits 2" "2" "$rc"
+mkpr 21 '{"rollup": ["build"]}'
 
 echo "watch: one watcher per repo"
 lock="$TMP/queues/.watch-o-empty.pid"
