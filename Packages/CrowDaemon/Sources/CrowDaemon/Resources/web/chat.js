@@ -22,6 +22,9 @@ let chatSending = false;
 // Whether the last applyChatView showed chat — the terminal only needs a refit
 // when we actually leave chat, not on every terminal-mode session switch.
 let chatWasShown = false;
+// Unsent composer text per session, so switching sessions never carries a
+// draft (and a Send) over to the wrong agent.
+const chatDrafts = new Map();
 
 function newChatState(sessionId) {
   return {
@@ -45,6 +48,10 @@ function newChatState(sessionId) {
     commandsLoading: false,
     // Focus the composer as soon as it is enabled (set on session switch).
     wantFocus: false,
+    // ↑/↓ prompt recall: this session's user messages, oldest first, with
+    // consecutive repeats collapsed; `histPos` is the entry on screen.
+    history: [],
+    histPos: null,
     // EXPERIMENTAL headless Claude driver (ClaudeStreamDriver.swift).
     driverEnabled: false,
     driver: null,
@@ -109,8 +116,15 @@ function applyChatView() {
   ensureChatDom();
   const switched = !chatState || chatState.sessionId !== selectedId;
   if (switched) {
+    const input = document.getElementById('chat-input');
+    if (input && chatState) chatDrafts.set(chatState.sessionId, input.value);
     chatState = newChatState(selectedId);
     clearChatLog();
+    if (input) {
+      input.value = chatDrafts.get(selectedId) || '';
+      autosizeChatInput(input);
+      closeChatMenu();
+    }
   }
   if (switched || entering) {
     chatState.wantFocus = true;
@@ -166,6 +180,7 @@ function ensureChatDom() {
   input.addEventListener('blur', () => { setTimeout(closeChatMenu, 150); });
   input.addEventListener('keydown', (e) => {
     if (chatMenuKeydown(e)) return;
+    if (chatHistoryKeydown(e, input)) return;
     // Desktop: Enter sends, Shift+Enter is a newline. Touch keyboards have no
     // Shift habit, so there Enter is a newline and the button sends.
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isCoarsePointer()) {
@@ -368,6 +383,7 @@ function appendChatEvent(st, log, ev) {
   switch (ev.kind) {
     case 'user':
       log.appendChild(chatBubble('user', ev.text));
+      pushChatHistory(st, ev.text);
       break;
     case 'assistant':
       log.appendChild(chatBubble('assistant', ev.text));
@@ -530,6 +546,9 @@ async function sendChatMessage() {
     input.value = '';
     autosizeChatInput(input);
     closeChatMenu();
+    pushChatHistory(st, text);
+    st.histPos = null;
+    chatDrafts.delete(st.sessionId);
     const log = document.getElementById('chat-log');
     if (log) log.scrollTop = log.scrollHeight;
     // The harness writes the user line within a beat; don't wait for the poll.
@@ -778,6 +797,58 @@ function selectChatMenuItem() {
   closeChatMenu();
   autosizeChatInput(input);
   input.focus();
+}
+
+// ---------------------------------------------------------------------------
+// Prompt history (↑/↓), after T3 Code's composerPromptHistory: recall only
+// starts from an empty composer (or the entry already recalled, unedited), so
+// a draft is never overwritten; ↑ needs the caret on the first line and ↓ on
+// the last, so multi-line editing keeps normal arrow movement.
+// ---------------------------------------------------------------------------
+const CHAT_HISTORY_LIMIT = 200;
+
+function pushChatHistory(st, text) {
+  const t = String(text || '').trim();
+  if (!t) return;
+  const h = st.history;
+  if (h[h.length - 1] === t) return;
+  h.push(t);
+  if (h.length > CHAT_HISTORY_LIMIT) h.splice(0, h.length - CHAT_HISTORY_LIMIT);
+}
+
+// Returns true when the key was a history step.
+function chatHistoryKeydown(e, input) {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return false;
+  if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return false;
+  const st = chatState;
+  if (!st || !st.history.length) return false;
+  const v = input.value;
+  const pos = st.histPos && st.histPos.recalled === v ? st.histPos : null;
+  if (!pos && v.length > 0) return false; // a draft: leave the arrows alone
+  const caret = input.selectionStart == null ? v.length : input.selectionStart;
+  const h = st.history;
+  let next;
+  if (e.key === 'ArrowUp') {
+    if (v.slice(0, caret).includes('\n')) return false;
+    next = pos ? pos.index - 1 : h.length - 1;
+    if (next < 0) { e.preventDefault(); return true; } // oldest: stay put
+  } else {
+    if (!pos) return false;
+    if (v.slice(caret).includes('\n')) return false;
+    next = pos.index + 1;
+  }
+  e.preventDefault();
+  if (next >= h.length) {
+    st.histPos = null;
+    input.value = '';
+  } else {
+    st.histPos = { index: next, recalled: h[next] };
+    input.value = h[next];
+  }
+  try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) { /* jsdom */ }
+  autosizeChatInput(input);
+  closeChatMenu();
+  return true;
 }
 
 // ---------------------------------------------------------------------------

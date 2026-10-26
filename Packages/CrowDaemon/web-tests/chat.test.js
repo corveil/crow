@@ -9,7 +9,7 @@ const epilogue = `
 ;globalThis.__t = {
   parseRoute, routeToHash,
   newChatState, applyChatPage, ensureChatDom, sendChatMessage, buildChatMarkdown,
-  updateChatMenu, chatMenuKeydown, filterChatCommands, formatChatModel, formatChatTokens,
+  updateChatMenu, chatMenuKeydown, chatHistoryKeydown, filterChatCommands, formatChatModel, formatChatTokens,
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
@@ -275,6 +275,54 @@ check('Allow answers that request', calls.some(([m, p]) => m === 'chat-driver-pe
   T.applyChatPage(T.chatState, pageFor('S-C'));
   check('no auto-focus on touch devices (no surprise keyboard)', doc.activeElement !== input);
   delete window.matchMedia;
+
+  console.log('prompt history');
+  T.rpc = pending;
+  T.selectedId = 'H-1';
+  T.applyChatView();
+  T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/h', terminal_id: 'T-H',
+    agent_kind: 'claude-code', events: [
+      { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'a' },
+      { kind: 'user', text: 'second' }, { kind: 'user', text: 'second' },
+      { kind: 'user', text: 'line one\nline two' },
+    ] });
+  const hk = (k, mods) => T.chatHistoryKeydown(new window.KeyboardEvent('keydown',
+    Object.assign({ key: k, bubbles: true, cancelable: true }, mods || {})), input);
+  input.value = '';
+  check('↑ on an empty composer recalls the newest prompt', hk('ArrowUp') && input.value === 'line one\nline two');
+  input.setSelectionRange(input.value.length, input.value.length);
+  check('↑ with the caret below line one moves the caret, not history', hk('ArrowUp') === false);
+  input.setSelectionRange(0, 0);
+  check('↑ from the first line steps back (repeats collapsed)', hk('ArrowUp') && input.value === 'second');
+  check('↑ again', hk('ArrowUp') && input.value === 'first');
+  check('↑ at the oldest stays put', hk('ArrowUp') && input.value === 'first');
+  check('↓ steps forward', hk('ArrowDown') && input.value === 'second');
+  hk('ArrowDown');
+  input.setSelectionRange(input.value.length, input.value.length);
+  check('↓ past the newest clears the composer', hk('ArrowDown') && input.value === '');
+  input.value = 'my draft';
+  check('a draft is never overwritten by ↑', hk('ArrowUp') === false && input.value === 'my draft');
+  input.value = '';
+  check('modified arrows are left alone', hk('ArrowUp', { shiftKey: true }) === false);
+  hk('ArrowUp');
+  input.value = input.value + ' edited';
+  check('an edited recall counts as a draft', hk('ArrowDown') === false && hk('ArrowUp') === false);
+
+  console.log('per-session drafts');
+  T.selectedId = 'D-A';
+  T.applyChatView();
+  input.value = 'half-typed for A';
+  T.selectedId = 'D-B';
+  T.applyChatView();
+  check('switching sessions does not carry the draft over', input.value === '');
+  input.value = 'for B';
+  T.selectedId = 'D-A';
+  T.applyChatView();
+  check('switching back restores that session\'s draft', input.value === 'half-typed for A');
+  T.selectedId = 'D-B';
+  T.applyChatView();
+  check('and the other one', input.value === 'for B');
+  input.value = '';
 
   console.log('context meter (header Agent row)');
   const st6 = T.newChatState(SID);
