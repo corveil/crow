@@ -363,6 +363,9 @@ queued_prs() { # queued_prs <owner/name>
 # A repo's convention marker, {queue-dir}/.convention-{owner}-{name}: touched
 # by every read that finds the repo following the convention. A read that
 # finds no evidence still queues a repo whose marker is under a day old.
+# Not the base branch's required checks (`CI Gate`, ADR 0082): classic branch
+# protection shows them only to admins, and reading them would cost a REST
+# call per repo without evidence on every read, non-convention repos included.
 CONVENTION_TTL_MINUTES=1440
 convention_marker() { echo "$QUEUE_DIR/.convention-${1//\//-}"; }
 

@@ -674,6 +674,19 @@ out=$(q advance --repo o/seen); rc=$?
 check "advance answers for the draft, not the convention" "0 none_ready" "$rc $(jq -r .result <<< "$out")"
 out=$(q normalize --repo o/seen); rc=$?
 check "and so does normalize" "0 ok" "$rc $(jq -r .status <<< "$out")"
+# A read that fails (a 502) in a repo seen lately keeps the repo too: the PR is
+# unreadable, so normalize and advance say retry, not "has no queue".
+mv "$FIX/pr-52.json" "$TMP/pr-52.bak"
+st=$(q status --repo o/seen)
+check "an unreadable PR in a repo seen lately stays queued, as unreadable" "o/seen [52]" \
+  "$(jq -r '.repos[] | "\(.repo) \([.unreadable[].number] | tostring)"' <<< "$st")"
+out=$(q advance --repo o/seen); rc=$?
+check "advance exits 2" "2" "$rc"
+contains "and says to retry the read" "$out" "could not read #52 in o/seen, so which PR holds ci:full is unknown — retry"
+lacks "not that the repo has no queue" "$out" "has no queue"
+out=$(q normalize --repo o/seen); rc=$?
+contains "so does normalize" "$rc $out" "2 {\"status\":\"error\",\"step\":\"normalize\",\"message\":\"could not read #52"
+mv "$TMP/pr-52.bak" "$FIX/pr-52.json"
 # A sighting over a day old no longer bridges a read with no evidence.
 touch -t 202601010000 "$TMP/queues/.convention-o-seen"
 out=$(q advance --repo o/seen); rc=$?
