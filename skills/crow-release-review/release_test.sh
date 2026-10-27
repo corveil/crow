@@ -345,6 +345,10 @@ check "invalid fields are reported" '["checks:api-99-1:status","checks:api-99-1:
 check "an invalid decision reads as none" '""' "$(jq -c '.items[] | select(.id == "infra-7") | .decision' <<<"$out")"
 check "an unreadable runbook doc reads as not done" "false" "$(jq -r '.runbook.steps[1].done' <<<"$out")"
 check "out_dir files carry no version" "null" "$(jq -c '.steps[0].version' <<<"$out")"
+check "write says how to record each step" '{"api-51-1":"update","api-51-2":"set","api-52-1":"update","api-52-2":"set","infra-7-1":"leave"}' \
+  "$(jq -c '[.steps[] | {(.id): .write}] | add' <<<"$out")"
+check "docs Claude may update with no version known need a pin" '["api-51-1","api-52-1"]' "$(jq -c '[.pins_needed[].id]' <<<"$out")"
+check "to_run carries the write mode" '{"exists":true,"write":"update"}' "$(jq -c '.to_run[0] | {exists, write}' <<<"$out")"
 check "items carry their step counts" '{"id":"api-51","pass":1,"fail":0,"pending":1}' "$(jq -c '.items[0] | {id, pass, fail, pending}' <<<"$out")"
 
 rm "$RAW/checks/api-52-1.json"
@@ -364,6 +368,12 @@ check "an empty doc a person left is safe to write" "true" "$(jq -r '.to_run[] |
 echo '{"status": "", "note": "Holding this one", "by": "u_operator1234567890abcd", "at": "x"}' > "$RAW/checks/api-52-1.json"
 out=$(rr readback --items "$ITEMS" --data "$RAW")
 check "a person's note is not safe to overwrite" "false" "$(jq -r '.to_run[] | select(.id == "api-52-1") | .agent_may_write' <<<"$out")"
+check "and its write mode is leave" "leave" "$(jq -r '.to_run[] | select(.id == "api-52-1") | .write' <<<"$out")"
+check "a leave is never in pins_needed" '["api-51-1"]' "$(jq -c '[.pins_needed[].id]' <<<"$out")"
+# A page that couldn't learn the viewer's id writes by "viewer": still a person.
+echo '{"status": "pass", "note": "Baseline: 412 sessions", "by": "viewer", "at": "x"}' > "$RAW/checks/api-52-1.json"
+out=$(rr readback --items "$ITEMS" --data "$RAW")
+check "by viewer reads as a person" '{"owner":"viewer","write":"leave"}' "$(jq -c '.steps[] | select(.id == "api-52-1") | {owner, write}' <<<"$out")"
 
 mkdir -p "$TMP/fresh"
 out=$(rr readback --items "$ITEMS" --data "$TMP/fresh")
@@ -397,6 +407,7 @@ check "JSON Lines input keeps the version" "3" "$(jq -r '.steps[] | select(.id =
 check "an array of docs reads the same" '["infra-9"]' "$(jq -c .decisions.question <<<"$out")"
 check "an array keeps the decision's version" "2" "$(jq -r '.items[] | select(.id == "infra-9") | .decision_version' <<<"$out")"
 check "an {id: doc} map reads the same" '{"id":"rb-02","done":true}' "$(jq -c '.runbook.steps[1] | {id, done}' <<<"$out")"
+check "with versions known, nothing needs a pin" '[]' "$(jq -c '.pins_needed' <<<"$out")"
 
 echo "== report =="
 md=$(rr report --items "$ITEMS" --data "$RAW"); rc=$?
@@ -492,6 +503,10 @@ echo "$*" >> "$FAKE_GH_DIR/calls"
 case "$*" in
   *"--state merged"*) cat "$FAKE_GH_DIR/merged.json" ;;
   *"--state open"*)   cat "$FAKE_GH_DIR/open.json" ;;
+  "api repos/acme/api/commits/"*"/pulls")
+    [[ -f "$FAKE_GH_DIR/pulls-fail" ]] && { echo "HTTP 502" >&2; exit 1; }
+    sha="${2#repos/acme/api/commits/}"; sha="${sha%/pulls}"
+    if [[ -f "$FAKE_GH_DIR/pulls-$sha.json" ]]; then cat "$FAKE_GH_DIR/pulls-$sha.json"; else echo '[]'; fi ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
 SH
@@ -521,11 +536,36 @@ SH
   out=$(scope --repo acme/api --path "$G/clone" --since v2.3.0 --out "$TMP/scope/api.json"); rc=$?
   S=$(cat "$TMP/scope/api.json")
   check "an explicit --since" "v2.3.0" "$(jq -r .since <<<"$S")"
-  check "the summary line" '{"commits":3,"prs":2,"direct_commits":1,"open_prs":2}' "$(jq -c .counts <<<"$out")"
+  check "the summary line" '{"commits":3,"prs":2,"direct_commits":1,"to_study":3,"open_prs":2}' "$(jq -c .counts <<<"$out")"
+  check "no warnings on a clean range" '[]' "$(jq -c .warnings <<<"$out")"
+  check "only the unmatched commit is looked up" "1" "$(grep -c "commits/$c3/pulls" "$TMP/gh/calls")"
   check "PRs come oldest first, matched by merge commit" '[51,52]' "$(jq -c '[.prs[].pr]' <<<"$S")"
   check "a PR carries its author and labels" '{"author":"dana","labels":["security"]}' "$(jq -c '.prs[1] | {author, labels}' <<<"$S")"
   check "a PR merged elsewhere is left out" "0" "$(jq '[.prs[] | select(.pr == 60)] | length' <<<"$S")"
-  check "a commit with no PR is a direct commit" '[{"subject":"Fix a typo","pr_hint":null}]' "$(jq -c '[.direct_commits[] | {subject, pr_hint}]' <<<"$S")"
+  check "a commit with no PR is a direct commit" '[{"subject":"Fix a typo","pr_hint":null,"via_pr":null,"covered":false}]' \
+    "$(jq -c '[.direct_commits[] | {subject, pr_hint, via_pr, covered}]' <<<"$S")"
+
+  # A rebase-merged PR: only its last commit is the merge commit, so its
+  # earlier commit is unmatched. The lookup ties it to the PR already listed.
+  echo '[{"number": 52, "merged_at": "2026-10-26T10:00:00Z"}]' > "$TMP/gh/pulls-$c3.json"
+  out=$(scope --repo acme/api --path "$G/clone" --since v2.3.0 --out "$TMP/scope/api.json")
+  check "a rebase-merged PR's earlier commit is covered" '{"via_pr":52,"covered":true}' "$(jq -c '.direct_commits[0] | {via_pr, covered}' "$TMP/scope/api.json")"
+  check "a covered commit isn't counted to study" "2" "$(jq -r .counts.to_study <<<"$out")"
+  rm "$TMP/gh/pulls-$c3.json"
+
+  touch "$TMP/gh/pulls-fail"
+  out=$(scope --repo acme/api --path "$G/clone" --since v2.3.0 --out "$TMP/scope/api.json"); rc=$?
+  check "a failed lookup does not fail scope" "0" "$rc"
+  contains "but warns" "$(jq -r '.warnings | join(" | ")' <<<"$out")" "could not look up the PR for 1 direct commits"
+  rm "$TMP/gh/pulls-fail"
+
+  cp "$TMP/gh/merged.json" "$TMP/gh/merged-keep.json"
+  jq '. + [range(0; 997) | {number: (1000 + .), title: "old", url: "https://github.com/acme/api/pull/1", mergedAt: "2026-10-01T00:00:00Z",
+                             mergeCommit: {oid: "1111111111111111111111111111111111111111"}, author: null, labels: [], baseRefName: "main"}]' \
+    "$TMP/gh/merged-keep.json" > "$TMP/gh/merged.json"
+  out=$(scope --repo acme/api --path "$G/clone" --since v2.3.0 --out "$TMP/scope/api.json")
+  contains "hitting gh's 1000-PR limit warns" "$(jq -r '.warnings | join(" | ")' <<<"$out")" "returned 1000 merged PRs, its limit"
+  mv "$TMP/gh/merged-keep.json" "$TMP/gh/merged.json"
   check "open PRs, sorted, with review state" '[{"pr":3,"draft":true,"labels":["wip"]},{"pr":9,"review":"APPROVED","mergeable":"CONFLICTING"}]' \
     "$(jq -c '[.open_prs[] | if .pr == 3 then {pr, draft, labels} else {pr, review, mergeable} end]' <<<"$S")"
   check "the merged search starts a day before the tag" "1" "$(grep -c 'merged:>=' "$TMP/gh/calls" | awk '{print ($1 > 0)}')"
@@ -534,6 +574,11 @@ SH
   jq '[.[] | select(.number != 51)]' "$TMP/gh/merged.json" > "$TMP/gh/m2.json" && mv "$TMP/gh/m2.json" "$TMP/gh/merged.json"
   scope --repo acme/api --path "$G/clone" --since v2.3.0 --out "$TMP/scope/api.json" >/dev/null
   check "a (#N) subject with no matched PR keeps its hint" "51" "$(jq -r '.direct_commits[] | select(.subject | startswith("Retry")) | .pr_hint' "$TMP/scope/api.json")"
+  # The search missed #51, but the lookup still finds it: study it as a PR.
+  echo '[{"number": 51, "merged_at": "2026-10-25T10:00:00Z"}, {"number": 49, "merged_at": null}]' > "$TMP/gh/pulls-$c2.json"
+  scope --repo acme/api --path "$G/clone" --since v2.3.0 --out "$TMP/scope/api.json" >/dev/null
+  check "the lookup names a PR the search missed, and it isn't covered" '{"via_pr":51,"covered":false}' \
+    "$(jq -c '.direct_commits[] | select(.subject | startswith("Retry")) | {via_pr, covered}' "$TMP/scope/api.json")"
 
   out=$(scope --repo acme/api --path "$G/clone" --since v2.3.0 --target "$c3" --out "$TMP/scope/t.json"); rc=$?
   check "an explicit --target" "$c3" "$(jq -r .head "$TMP/scope/t.json")"

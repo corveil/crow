@@ -313,7 +313,9 @@ __RELEASE_DATA__
     if (!writable()) { delete overlay[q.col][q.id]; q.cbs.forEach(cb => cb(false)); scheduleRender(); return; }
     inflight.add(path);
     const patch = Object.assign({}, q.patch, { at: new Date().toISOString() });
-    if (myId && (q.col === "checks" || q.col === "runbook")) patch.by = myId;
+    // Always stamp who wrote it: a tick that kept an earlier by "agent" would
+    // read back as Claude's, and Claude could overwrite it.
+    if (q.col === "checks" || q.col === "runbook") patch.by = myId || "viewer";
     let ok = false, err = null;
     try { await send(q.col, q.id, patch); ok = true; }
     catch (e) {

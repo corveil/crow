@@ -42,6 +42,8 @@ SINCE=""
 TARGET=""
 TRANSCRIPT=""
 GH_BIN="${GH_BIN:-gh}"
+MERGED_LIMIT=1000   # scope: gh pr list --limit for merged PRs
+LOOKUP_CAP=200      # scope: at most this many per-commit PR lookups
 
 die() { # die <step> <message>
   jq -cn --arg step "$1" --arg msg "$2" '{status:"error", step:$step, message:$msg}'
@@ -574,9 +576,13 @@ def owner: if (.by | type) != "string" or .by == "" then null
     | $s + (if $d != null and $d.ok then ($d | clean_check) + {exists: true}
             else {status: "", note: "", by: null, at: null, version: ($d.version // null), exists: ($d != null)} end)
     | . + {owner: owner}
-    | . + {agent_may_write: ((.exists | not) or .owner == "agent" or (.status == "" and .note == ""))} ] as $rows
+    | . + {agent_may_write: ((.exists | not) or .owner == "agent" or (.status == "" and .note == ""))}
+    # How Claude records a result here: set creates (no pin), update needs
+    # if_version, leave means a person set it. out_dir files carry no version,
+    # so an update with version null takes its pin from the list result.
+    | . + {write: (if (.exists | not) then "set" elif .agent_may_write then "update" else "leave" end)} ] as $rows
 | def in_repo: if $repo == "" then true else .repo == $repo end;
-  def brief: {id, item, repo, step, needs, status, note, by, at, version, owner};
+  def brief: {id, item, repo, step, needs, status, note, by, at, version, owner, write};
   [ $page.items[] | . as $it
     | ($dmap[$it.id] // null) as $d | ($nmap[$it.id] // null) as $n
     | [$rows[] | select(.item == $it.id)] as $mine
@@ -621,7 +627,8 @@ def owner: if (.by | type) != "string" or .by == "" then null
     failed: [ $rows[] | select(.status == "fail") | brief ],
     passed: [ $rows[] | select(.status == "pass") | brief ],
     to_run: [ $rows[] | select(in_repo) | select(.status == "" and (.needs == "agent" or .needs == "agent+aws") and (.optional | not))
-              | {id, item, repo, step, how, expect, needs, when, baseline, note, version, agent_may_write} ],
+              | {id, item, repo, step, how, expect, needs, when, baseline, note, exists, version, agent_may_write, write} ],
+    pins_needed: [ $rows[] | select(in_repo) | select(.write == "update" and .version == null) | {collection: "checks", id} ],
     for_people: [ $rows[] | select(in_repo) | select(.status == "" and (.needs == "human" or .needs == "agent+staff")) | {id, item, repo, step, needs, when} ],
     baselines_needed: [ $rows[] | select(in_repo) | select(.baseline != null and .status == "" and .note == "") | {id, item, repo, step, baseline, needs} ],
     time_gated: [ $rows[] | select(in_repo) | select(.when != null and .status == "") | {id, item, repo, step, when, needs} ],
@@ -884,7 +891,7 @@ cmd_scope() {
   since_epoch=$(git -C "$REPO_PATH" log -1 --format=%ct "$since_sha") || die "scope" "git log failed for $since"
   # A day early, so a timezone can't push a PR merged right after the tag out of the search.
   search_from=$(jq -rn --argjson t "$since_epoch" '($t - 86400) | todate | .[0:10]')
-  merged=$("$GH_BIN" pr list -R "$REPO" --state merged --search "merged:>=$search_from" --limit 1000 \
+  merged=$("$GH_BIN" pr list -R "$REPO" --state merged --search "merged:>=$search_from" --limit "$MERGED_LIMIT" \
     --json number,title,url,mergedAt,mergeCommit,author,labels,baseRefName 2>&1) \
     || die "scope" "gh pr list (merged) failed for $REPO: $merged"
   open=$("$GH_BIN" pr list -R "$REPO" --state open --limit 300 \
@@ -897,31 +904,67 @@ cmd_scope() {
   printf '%s\n' "$merged" > "$WORK/merged.json"
   printf '%s\n' "$open" > "$WORK/open.json"
 
+  # Ask GitHub which merged PR each unmatched commit belongs to. A
+  # rebase-merged PR's earlier commits land here, because only its last
+  # commit is the PR's merge commit, and a PR the search missed (its limit)
+  # shows up here too. One API call per commit, up to LOOKUP_CAP.
+  local direct sha pulls pr looked=0 failed=0 skipped=0
+  # shellcheck disable=SC2016
+  direct=$(jq -r --slurpfile m "$WORK/merged.json" '
+      (reduce $m[0][] as $p ({}; if ($p.mergeCommit | type) == "object" then .[$p.mergeCommit.oid] = true else . end)) as $set
+      | .[] | select($set[.sha] | not) | .sha' "$WORK/commits.json") || die "scope" "could not read the commit list"
+  : > "$WORK/pulls.jsonl"
+  while IFS= read -r sha; do
+    [[ -n "$sha" ]] || continue
+    if (( looked >= LOOKUP_CAP )); then skipped=$((skipped+1)); continue; fi
+    looked=$((looked+1))
+    if pulls=$("$GH_BIN" api "repos/$REPO/commits/$sha/pulls" 2>/dev/null) \
+       && pr=$(jq -c '[.[] | select(.merged_at != null) | .number] | first // null' <<<"$pulls" 2>/dev/null); then
+      jq -cn --arg sha "$sha" --argjson pr "$pr" '{sha: $sha, pr: $pr}' >> "$WORK/pulls.jsonl"
+    else
+      failed=$((failed+1))
+    fi
+  done <<<"$direct"
+
   # shellcheck disable=SC2016
   jq -n --arg repo "$REPO" --arg path "$REPO_PATH" --arg target "$target" --arg head "$head" \
     --arg since "$since" --arg since_sha "$since_sha" --argjson since_epoch "$since_epoch" \
-    --slurpfile c "$WORK/commits.json" --slurpfile m "$WORK/merged.json" --slurpfile o "$WORK/open.json" '
+    --argjson limit "$MERGED_LIMIT" --argjson cap "$LOOKUP_CAP" --argjson failed "$failed" --argjson skipped "$skipped" \
+    --slurpfile c "$WORK/commits.json" --slurpfile m "$WORK/merged.json" --slurpfile o "$WORK/open.json" \
+    --slurpfile l "$WORK/pulls.jsonl" '
     $c[0] as $commits | $m[0] as $merged | $o[0] as $open
     | def login: if (.author | type) == "object" then .author.login else null end;
     def names: [(.labels // [])[] | .name];
     (reduce $merged[] as $p ({}; if ($p.mergeCommit | type) == "object" then .[$p.mergeCommit.oid] = $p else . end)) as $by_oid
+    | (reduce $l[] as $x ({}; .[$x.sha] = $x.pr)) as $via
     | [ $commits[] | . as $c | ($by_oid[$c.sha] // null) as $p
         | if $p == null then {sha: $c.sha, subject: $c.subject, date: $c.date,
-                              pr_hint: ($c.subject | (capture("\\(#(?<n>[0-9]+)\\)$") | .n | tonumber)? // null)}
+                              pr_hint: ($c.subject | (capture("\\(#(?<n>[0-9]+)\\)$") | .n | tonumber)? // null),
+                              via_pr: ($via[$c.sha] // null)}
           else {pr: $p.number, title: $p.title, url: $p.url, merged_at: $p.mergedAt, author: ($p | login),
-                labels: ($p | names), sha: $c.sha} end ] as $rows
+                labels: ($p | names), sha: $c.sha} end ] as $rows0
+    | [$rows0[] | select(.pr != null) | .pr] as $pr_nums
+    | [ $rows0[] | if .pr == null then . + {covered: (.via_pr != null and (.via_pr as $n | $pr_nums | map(. == $n) | any))} else . end ] as $rows
     | { status: "ok", repo: $repo, path: $path,
         target: $target, head: $head, head_short: $head[0:12],
         since: $since, since_sha: $since_sha, since_date: ($since_epoch | todate),
-        counts: {commits: ($commits | length), prs: ([$rows[] | select(.pr != null)] | length),
-                 direct_commits: ([$rows[] | select(.pr == null)] | length), open_prs: ($open | length)},
+        counts: {commits: ($commits | length), prs: ($pr_nums | length),
+                 direct_commits: ([$rows[] | select(.pr == null)] | length),
+                 to_study: (($pr_nums | length) + ([$rows[] | select(.pr == null and (.covered | not))] | length)),
+                 open_prs: ($open | length)},
+        warnings: (
+          (if ($merged | length) >= $limit then
+             ["gh pr list returned \($limit) merged PRs, its limit, so some may be missing from prs: their commits are in direct_commits, with via_pr when the lookup found the PR"]
+           else [] end)
+          + (if $failed > 0 then ["could not look up the PR for \($failed) direct commits: check them by hand"] else [] end)
+          + (if $skipped > 0 then ["looked up the PR for only the first \($cap) direct commits; \($skipped) were not looked up"] else [] end)),
         prs: ([$rows[] | select(.pr != null)] | reverse),
         direct_commits: ([$rows[] | select(.pr == null)] | reverse),
         open_prs: [ $open | sort_by(.number)[]
                     | {pr: .number, title, url, draft: .isDraft, review: .reviewDecision, mergeable,
                        base: .baseRefName, head: .headRefName, labels: names, updated_at: .updatedAt} ] }' \
     | write_atomic "$OUT" || die "scope" "could not write $OUT"
-  jq -c --arg out "$OUT" '{status, out:$out, repo, since, head_short, counts}' "$OUT"
+  jq -c --arg out "$OUT" '{status, out:$out, repo, since, head_short, counts, warnings}' "$OUT"
 }
 
 sub="${1:-}"

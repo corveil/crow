@@ -93,7 +93,7 @@ The read-back and the verify loop rely on it. The page and this skill both keep 
   - runbook id = `rb-01`, `rb-02`, …
   - Every id uses only letters, digits and `_ - . ~ : @ +`. `R ids` fills missing ids and never changes one that is already there. `check` refuses duplicates, a step id that doesn't start with its item id, and a runbook id that isn't `rb-NN`.
 - **`checks.note` carries evidence**, and the page shows it under the step. A note with an empty `status` records a baseline, or why a step couldn't run yet.
-- **`checks.by`** is `"agent"` for Claude's writes, and the viewer's user id for a tick on the page. `readback` turns it into `owner`: `agent`, `viewer`, or `null`.
+- **`checks.by`** is `"agent"` for Claude's writes, and the viewer's user id for a tick on the page (`"viewer"` when the page can't tell who). `readback` turns it into `owner`: `agent`, `viewer`, or `null`.
 - **Item content lives in the page source; state lives only in the db.** Never put a result or decision in `items.json`, and never seed the db on publish.
 - **The page queues writes one per doc**: a new doc is created with `set`, an existing one is merged with `update`, so a viewer's tick never erases Claude's evidence note. Notes save after a pause in typing. If the db is unavailable (signed out, an old viewer, outside claude.ai) the page renders read-only. So do viewers without write access (Viewer or Commenter in the Share menu).
 
@@ -126,8 +126,10 @@ Add `--since REV` when the last release isn't the newest `v*` tag reachable from
 | `since`, `since_sha`, `since_date` | The last release. |
 | `target`, `head`, `head_short` | What this release would ship. Tag this exact commit. |
 | `prs` | Every PR merged in between, oldest first. A PR counts when its merge commit is on the first-parent history of `since..head`. |
-| `direct_commits` | First-parent commits with no PR. `pr_hint` is a `(#N)` in the subject, when there is one. Study them like PRs. |
+| `direct_commits` | First-parent commits whose PR wasn't matched. `pr_hint` is a `(#N)` in the subject; `via_pr` is the merged PR GitHub says the commit belongs to. `covered: true` means that PR is already in `prs`: a rebase-merged PR's earlier commits land here, because only its last commit is its merge commit. Study every commit that isn't `covered`. |
 | `open_prs` | Every open PR, with its review decision, mergeability and labels. |
+| `counts.to_study` | `prs` plus the direct commits that aren't `covered`. |
+| `warnings` | Read every one. `gh pr list` stops at 1000 merged PRs: a range that hits it says so, and the missing PRs' commits come back in `direct_commits` with their `via_pr`. A lookup that failed, or the 200-commit lookup cap, is named too. |
 
 Then read `open_prs` for PRs that **bear on the release**: an image pin the release depends on, a PR that must not merge before the tag, a fix the release needs. They become items with `not_merged: true` when the release depends on them, or blockers when they must not ride along.
 
@@ -267,7 +269,7 @@ Then give the operator the link and five facts:
 When the operator says they're done, asks where things stand, or before any tag:
 
 1. Clear the last read, so a doc deleted since then doesn't linger: `rm -rf D/raw`.
-2. `ArtifactData` `list` on each of `notes`, `decisions`, `checks` and `runbook`, with `url` = the artifact, `query` = `{"limit": 1000}` and `out_dir` = `D/raw`. If a result has a `next_cursor`, list the next page into the same `out_dir`. Keep each doc's `version` from the results for the writes in **Phase 8**.
+2. `ArtifactData` `list` on each of `notes`, `decisions`, `checks` and `runbook`, with `url` = the artifact, `query` = `{"limit": 1000}` and `out_dir` = `D/raw`. If a result has a `next_cursor`, list the next page into the same `out_dir`. **The saved files are bare bodies: each doc's version is only in the list result itself** (one line per doc, such as `"api-51-1" … version 3`). Keep those results; the writes in **Phase 8** pin to them.
 3. Join them to the page:
 
    ```bash
@@ -279,7 +281,8 @@ When the operator says they're done, asks where things stand, or before any tag:
 | `counts` | `items, steps, pass, fail, pending, noted, set_by_people, ship, question, hold, undecided, notes, runbook_done, runbook_total` |
 | `repos` | Per repo: items, steps, pass, fail, pending, holds. |
 | `failed` / `passed` | Steps with their evidence, `by` and `owner`. |
-| `to_run` | Steps not run yet whose `needs` is `agent` or `agent+aws` and that aren't optional, with `how`, `expect`, `version` and `agent_may_write`. **This is the verify list.** |
+| `to_run` | Steps not run yet whose `needs` is `agent` or `agent+aws` and that aren't optional, with `how`, `expect`, `exists`, `version`, `agent_may_write` and `write`. **This is the verify list.** |
+| `pins_needed` | Docs Claude may update whose version `readback` can't see (`out_dir` files carry none). Take each one's version from the list result, or `get` it, before the write. |
 | `for_people` | Steps not run yet that need a person (`human`, `agent+staff`). |
 | `baselines_needed` | Steps with a `baseline` and nothing recorded yet. |
 | `time_gated` | Steps not run yet that have a `when`. |
@@ -333,10 +336,11 @@ A second coding agent can run the same steps from the **Copy agent brief** box o
 
 The operator ticks things on the page while you work, so:
 
-- **Read right before a batch write**: list `checks` (and `runbook`, if you'll tick one) and run `readback` for the versions and owners.
-- **A new doc:** `set`, without `if_version`. The write is refused if the doc appeared meanwhile; read it and decide again.
-- **An existing doc:** only when its `agent_may_write` is `true` (you wrote it, or it holds no status and no note). `update` it with `if_version` = its version. Write `status`, `note`, `by: "agent"` and `at`.
-- **A doc a person set** (`owner: "viewer"` with a status or a note): **never overwrite their tick.** Leave it, and if your result differs, say so in chat with your evidence.
+- **Read right before a batch write**: list `checks` (and `runbook`, if you'll tick one) into `D/raw` and run `readback`. Each step row's `write` says how to record it:
+  - **`set`**: no doc yet. Write it without `if_version`. The write is refused if the doc appeared meanwhile; read it and decide again.
+  - **`update`**: a doc you may write (you wrote it, or it holds no status and no note). `update` it with `if_version` = its version. Write `status`, `note`, `by: "agent"` and `at`. `readback`'s `version` is `null` for `out_dir` input, so every such doc is listed in `pins_needed`: take its version from the list result's line for that doc, or `get` the doc right before the write.
+  - **`leave`**: a person set it (`owner: "viewer"` with a status or a note). **Never overwrite their tick.** Leave it, and if your result differs, say so in chat with your evidence.
+- **Never drop `if_version` to make a write go through.** A write to an existing doc without one is refused anyway; a missing version means read it again.
 - Several results go in one `ArtifactData` `batch` of up to 50 entries, each pinned with its own `if_version` where the doc exists:
 
   ```json
