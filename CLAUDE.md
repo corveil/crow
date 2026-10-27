@@ -299,7 +299,7 @@ crow batch-work-on-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"
 crow explore-issue --url "..."                  → {"ok":true}   (types /crow-workspace --explore <url> into the Manager)
 crow batch-explore-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
 crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
-crow create-manager [--agent claude-code|cursor|codex|opencode] [--workspace NAME|none]  → {"session_id":"<uuid>","name":"Manager N","workspace_id":…,"workspace_name":…}
+crow create-manager [--agent claude-code|cursor|codex|opencode] [--workspace NAME]  → {"session_id":"<uuid>","name":"Manager N","workspace_id":…,"workspace_name":…}
 crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixChecks|mergePR|reReview
                                                 → {"dispatched":bool,"action":"...","reason":"..."}
 ```
@@ -312,7 +312,7 @@ crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixCheck
 - `quick-action` returns `dispatched:false` + `reason` with a **zero** exit code when the session has no agent terminal or no linked PR — branch on `dispatched`, not the exit code.
 - `refresh-tickets` awaits the poll, so a following `list-tickets` sees the new data. It returns `{"ok":true}` without polling when a refresh is already in flight or the provider is rate-limited.
 - `create-manager --agent` is used as given — an unrecognized kind is not rejected, so a typo stamps the Manager with a kind no agent is registered for. Omit `--agent` to get the configured Manager default.
-- `create-manager --workspace` tags the extra Manager with a workspace for life (CROW-1382): it launches with that workspace's gateway (else `managerGateway`), ships its transcripts per harness conversation when the workspace has `--upload-session-logs` on, and starts with the workspace's provider, repos and custom instructions. Omitted means `defaults.managerWorkspace`; `none` means untagged. There is no re-tag verb, and the primary Manager is never tagged. `get-session` reports a tagged Manager as `workspace_match: "workspace"`.
+- `create-manager --workspace` tags the extra Manager with a workspace for life (CROW-1382): it launches with that workspace's gateway (else `managerGateway`), ships its transcripts per harness conversation when the workspace has `--upload-session-logs` on, and starts with the workspace's provider, repos and custom instructions. Every extra Manager needs one (CROW-1386): omitted, it comes from the calling tagged Manager (`$CROW_SESSION_ID`), then `defaults.managerWorkspace`, and if neither resolves the command fails — Crow never guesses. There is no `none`, no re-tag verb, and the primary Manager is never tagged. Pre-existing untagged extra Managers keep running and show an **untagged** badge. Removing a workspace clears a `defaults.managerWorkspace` that names it (`manager_default_cleared`); renaming one rewrites it. `get-session` reports a tagged Manager as `workspace_match: "workspace"`.
 
 ### Notification Commands
 

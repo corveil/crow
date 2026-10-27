@@ -212,5 +212,8 @@ public struct WorkspaceRemove: ParsableCommand {
         if result["gateway_discarded"]?.boolValue == true {
             warn("the workspace's AI gateway was discarded — re-add it with `crow gateway set` if you recreate the workspace.")
         }
+        if result["manager_default_cleared"]?.boolValue == true {
+            warn("it was the default Manager workspace, so defaults.managerWorkspace was cleared — set a new one with `crow defaults set --manager-workspace NAME`.")
+        }
     }
 }

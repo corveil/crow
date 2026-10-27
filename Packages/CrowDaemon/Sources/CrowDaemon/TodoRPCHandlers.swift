@@ -207,6 +207,20 @@ private func openScratchManager(
     let requestedAgentKind = params["agent_kind"]?.stringValue
         .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
     let brief = briefFor(item)
+    var liveManager: UUID?
+    if let existing = item.linkedSessionID {
+        let alive = await MainActor.run {
+            appState.sessions.contains { $0.id == existing && $0.kind == .manager }
+        }
+        if alive { liveManager = existing }
+    }
+    // A new Manager needs a workspace (CROW-1386): the item's, else
+    // `defaults.managerWorkspace`, else refuse. Resolved before the ticket
+    // stamp, so a refusal doesn't hold the dispatch window shut.
+    let tag: ManagerWorkspaceTag.Decision? = liveManager != nil ? nil
+        : try ManagerWorkspaceTag.resolve(
+            requested: nil, context: item.workspace,
+            config: ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
     // Stamp before the slow Manager launch so a second RPC during startup
     // sees the in-flight window. Explore does not stamp.
     if rejectIfTicketed {
@@ -215,40 +229,35 @@ private func openScratchManager(
         repo.save(item)
     }
 
-    if let existing = item.linkedSessionID {
-        let alive = await MainActor.run {
-            appState.sessions.contains { $0.id == existing && $0.kind == .manager }
+    if let existing = liveManager {
+        // Re-Explore / Ticket on a live Manager: refresh the brief file and
+        // type only a one-line pointer to it — never the multi-line brief
+        // (CROW-1327).
+        let path = TodoRPC.explorePromptPath(sessionID: existing)
+        var seeded = false
+        if case .pointer(let line) = TodoRPC.briefDelivery(
+            managerAlive: true,
+            briefWritten: TodoRPC.writeBriefFile(brief, to: path),
+            path: path
+        ) {
+            seeded = await sendToManager(
+                sessionID: existing, text: line, appState: appState)
         }
-        if alive {
-            // Re-Explore / Ticket on a live Manager: refresh the brief file and
-            // type only a one-line pointer to it — never the multi-line brief
-            // (CROW-1327).
-            let path = TodoRPC.explorePromptPath(sessionID: existing)
-            var seeded = false
-            if case .pointer(let line) = TodoRPC.briefDelivery(
-                managerAlive: true,
-                briefWritten: TodoRPC.writeBriefFile(brief, to: path),
-                path: path
-            ) {
-                seeded = await sendToManager(
-                    sessionID: existing, text: line, appState: appState)
-            }
-            if item.state != .exploring {
-                item.state = .exploring
-                item.updatedAt = Date()
-                repo.save(item)
-            }
-            var result: [String: JSONValue] = [
-                "todo": TodoRPC.todoJSON(item),
-                "session_id": .string(existing.uuidString),
-                "seeded": .bool(seeded),
-            ]
-            if !seeded {
-                result["warning"] = .string(
-                    "Could not deliver the brief — use `crow todo talk --id \(item.id.uuidString) \"Read and follow the instructions in \(path)\"` once the Manager is ready")
-            }
-            return result
+        if item.state != .exploring {
+            item.state = .exploring
+            item.updatedAt = Date()
+            repo.save(item)
         }
+        var result: [String: JSONValue] = [
+            "todo": TodoRPC.todoJSON(item),
+            "session_id": .string(existing.uuidString),
+            "seeded": .bool(seeded),
+        ]
+        if !seeded {
+            result["warning"] = .string(
+                "Could not deliver the brief — use `crow todo talk --id \(item.id.uuidString) \"Read and follow the instructions in \(path)\"` once the Manager is ready")
+        }
+        return result
     }
 
     let (sessionID, name) = await MainActor.run { () -> (UUID, String) in
@@ -258,7 +267,7 @@ private func openScratchManager(
         let display = TodoRPC.managerName(from: item.text)
         let id = sessionService.createManagerSession(
             name: display, cwd: devRoot, agentKind: requestedAgentKind,
-            initialPrompt: brief)
+            initialPrompt: brief, workspaceID: tag?.workspaceID)
         return (id, display)
     }
 

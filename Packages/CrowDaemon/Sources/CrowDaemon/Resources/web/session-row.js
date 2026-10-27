@@ -114,6 +114,12 @@ function sessionRow(s) {
     const ws = el('span', 'badge workspace-badge', name);
     ws.title = 'Workspace: ' + name + ' — sets this Manager’s gateway and transcript upload';
     badges.appendChild(ws);
+  } else if (s.kind === 'manager' && !isPrimaryManager(s)) {
+    // An extra Manager from before every one needed a workspace (CROW-1386).
+    // It keeps running as it was; tags can't be added later, so say so.
+    const ws = el('span', 'badge workspace-badge workspace-badge-untagged', 'untagged');
+    ws.title = 'No workspace — created before extra Managers required one. It uses the Manager gateway and ships no transcripts.';
+    badges.appendChild(ws);
   }
   if (s.is_explore) {
     const exp = el('span', 'explore-badge', 'Exploring');

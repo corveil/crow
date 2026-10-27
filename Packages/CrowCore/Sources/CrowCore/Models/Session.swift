@@ -109,9 +109,11 @@ public struct Session: Identifiable, Codable, Sendable {
     // Picks the Manager's AI gateway (the workspace's, falling back to
     // `AppConfig.managerGateway`) and opts its transcripts into the
     // workspace's `uploadSessionLogs`. Immutable once created — there is no
-    // re-tag verb. Nil means cross-workspace (the pre-CROW-1382 behavior), and
-    // is the only legal value for the primary Manager and for every non-Manager
-    // session: read it through `managerWorkspaceTag`, never directly.
+    // re-tag verb. Every extra Manager created since CROW-1386 has one; nil on
+    // an extra Manager means it predates that (the sidebar badges it
+    // "untagged"). Nil is the only legal value for the primary Manager and for
+    // every non-Manager session: read it through `managerWorkspaceTag`, never
+    // directly.
     public var workspaceID: UUID?
 
     // Every harness conversation this Manager has run, oldest first (CROW-1382).

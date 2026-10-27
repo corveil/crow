@@ -34,22 +34,40 @@ struct ManagerWorkspaceTagTests {
         let decision = try ManagerWorkspaceTag.resolve(requested: nil, config: config)
         #expect(decision.workspaceID == config.workspaces[0].id)
         #expect(decision.workspaceName == "Corveil")
-        #expect(decision.warning == nil)
     }
 
-    @Test func absentWorkspaceWithNoDefaultIsUntagged() throws {
-        let decision = try ManagerWorkspaceTag.resolve(requested: nil, config: config())
-        #expect(decision == ManagerWorkspaceTag.Decision(workspaceID: nil, workspaceName: nil, warning: nil))
-    }
-
-    /// `none` beats the default — the only way to get a cross-workspace
-    /// Manager once a default is set.
-    @Test func noneAndBlankAreUntaggedEvenWithADefault() throws {
-        let config = config(defaultWorkspace: "Corveil")
-        for raw in ["none", "NONE", "", "  "] {
-            let decision = try ManagerWorkspaceTag.resolve(requested: raw, config: config)
-            #expect(decision.workspaceID == nil, "\(raw)")
+    /// CROW-1386: no explicit choice, no context and no default is a refusal
+    /// that names both fixes — Crow never guesses a workspace.
+    @Test func absentWorkspaceWithNoDefaultIsRefused() {
+        #expect {
+            _ = try ManagerWorkspaceTag.resolve(requested: nil, config: config())
+        } throws: { error in
+            let message = "\(error)"
+            return message.contains("--workspace") && message.contains("--manager-workspace")
         }
+    }
+
+    /// `none` used to ask for an untagged Manager; it is now refused, even
+    /// with a default set, rather than silently tagging with the default.
+    @Test func noneIsRefusedEvenWithADefault() {
+        for raw in ["none", "NONE"] {
+            #expect(throws: RPCError.self, "\(raw)") {
+                _ = try ManagerWorkspaceTag.resolve(requested: raw, config: config(defaultWorkspace: "Corveil"))
+            }
+        }
+    }
+
+    /// A workspace actually named "none" is still addressable.
+    @Test func workspaceNamedNoneStillResolves() throws {
+        var config = config()
+        config.workspaces.append(WorkspaceInfo(name: "None"))
+        #expect(try ManagerWorkspaceTag.resolve(requested: "none", config: config).workspaceName == "None")
+    }
+
+    /// Blank is "not chosen", so it falls through to the default.
+    @Test func blankRequestFallsBackToDefault() throws {
+        let decision = try ManagerWorkspaceTag.resolve(requested: "  ", config: config(defaultWorkspace: "Radius"))
+        #expect(decision.workspaceName == "Radius")
     }
 
     @Test func explicitWorkspaceByNameOrUUID() throws {
@@ -62,17 +80,39 @@ struct ManagerWorkspaceTagTests {
 
     @Test func unknownExplicitWorkspaceIsRejected() {
         #expect(throws: RPCError.self) {
-            _ = try ManagerWorkspaceTag.resolve(requested: "Nope", config: config())
+            _ = try ManagerWorkspaceTag.resolve(requested: "Nope", config: config(defaultWorkspace: "Corveil"))
         }
     }
 
-    /// A default that outlived a rename must not break the "+" button: the
-    /// Manager is created untagged and the caller is told why.
-    @Test func staleDefaultCreatesUntaggedWithWarning() throws {
-        let decision = try ManagerWorkspaceTag.resolve(
-            requested: nil, config: config(defaultWorkspace: "Renamed"))
-        #expect(decision.workspaceID == nil)
-        #expect(decision.warning?.contains("Renamed") == true)
+    /// A stale default is treated as unset: refused, and the message says
+    /// which name went stale.
+    @Test func staleDefaultIsRefused() {
+        #expect {
+            _ = try ManagerWorkspaceTag.resolve(requested: nil, config: config(defaultWorkspace: "Renamed"))
+        } throws: { error in "\(error)".contains("Renamed") }
+        #expect(ManagerWorkspaceTag.resolvedDefault(in: config(defaultWorkspace: "Renamed")) == nil)
+        #expect(ManagerWorkspaceTag.resolvedDefault(in: config(defaultWorkspace: "radius"))?.name == "Radius")
+    }
+
+    /// Context (a Scratch item's workspace, the creating Manager's tag) beats
+    /// the default; explicit beats context; a stale context is skipped.
+    @Test func contextSitsBetweenExplicitAndDefault() throws {
+        let config = config(defaultWorkspace: "Corveil")
+        #expect(try ManagerWorkspaceTag.resolve(requested: nil, context: "Radius", config: config)
+            .workspaceName == "Radius")
+        #expect(try ManagerWorkspaceTag.resolve(
+            requested: nil, context: config.workspaces[1].id.uuidString, config: config)
+            .workspaceName == "Radius")
+        #expect(try ManagerWorkspaceTag.resolve(requested: "Corveil", context: "Radius", config: config)
+            .workspaceName == "Corveil")
+        #expect(try ManagerWorkspaceTag.resolve(requested: nil, context: "Gone", config: config)
+            .workspaceName == "Corveil")
+    }
+
+    @Test func noWorkspacesConfiguredIsRefused() {
+        #expect {
+            _ = try ManagerWorkspaceTag.resolve(requested: nil, config: AppConfig())
+        } throws: { error in "\(error)".contains("No workspaces are configured") }
     }
 
     // MARK: - Which gateway a Manager launches with

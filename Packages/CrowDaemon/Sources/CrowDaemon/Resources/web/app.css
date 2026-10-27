@@ -244,6 +244,8 @@ body.mgr-reordering, body.mgr-reordering * { cursor: grabbing; }
 }
 /* #792: closed-issue ticket pill — purple, matching the merged-PR pill. */
 .workspace-badge { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* CROW-1386: an extra Manager from before workspaces were required. */
+.workspace-badge-untagged { font-style: italic; opacity: 0.75; }
 .badge-closed { color: var(--purple); background: color-mix(in srgb, var(--purple) 14%, transparent); }
 .row-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .pr-badge {
