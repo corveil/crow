@@ -84,6 +84,9 @@ public struct Scaffolder {
         let backlogBriefSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-backlog-brief")
         try fm.createDirectory(atPath: backlogBriefSkillsDir, withIntermediateDirectories: true)
 
+        let releaseReviewSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-release-review")
+        try fm.createDirectory(atPath: releaseReviewSkillsDir, withIntermediateDirectories: true)
+
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
@@ -194,6 +197,19 @@ public struct Scaffolder {
         let backlogBriefScriptPath = (backlogBriefSkillsDir as NSString).appendingPathComponent("brief.sh")
         try Self.bundledBacklogBriefScript().write(toFile: backlogBriefScriptPath, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backlogBriefScriptPath)
+
+        // Always overwrite the release-review skill, its page template, and its
+        // helper script (CROW-1371). The script scopes each repo's release range,
+        // validates and builds the page, and reads the notes, decisions, step
+        // results and runbook ticks back from the published artifact.
+        let releaseReviewSkillPath = (releaseReviewSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try CrowAttribution.expandSkillBody(Self.bundledReleaseReviewSkill(), agentKind: managerAgentKind)
+            .write(toFile: releaseReviewSkillPath, atomically: true, encoding: .utf8)
+        let releaseReviewPagePath = (releaseReviewSkillsDir as NSString).appendingPathComponent("page.html")
+        try Self.bundledReleaseReviewPage().write(toFile: releaseReviewPagePath, atomically: true, encoding: .utf8)
+        let releaseReviewScriptPath = (releaseReviewSkillsDir as NSString).appendingPathComponent("release.sh")
+        try Self.bundledReleaseReviewScript().write(toFile: releaseReviewScriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: releaseReviewScriptPath)
 
         // Always overwrite the show-image skill (surfaces generated images in
         // Crow's Images panel). No attribution expansion — it has no agent
@@ -1019,6 +1035,66 @@ public struct Scaffolder {
         """
     }
 
+    /// The crow-release-review SKILL.md template bundled with the app (CROW-1371).
+    static func bundledReleaseReviewSkill() -> String {
+        if let content = loadFromRepo("skills/crow-release-review/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-release-review-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        ---
+        name: crow-release-review
+        description: Study main since the last release, publish a release review page, then verify the release and check it off.
+        ---
+
+        # Crow Release Review
+
+        ## Activation
+        This skill activates when user invokes `/crow-release-review` command.
+
+        ## Important
+        The full skill was not bundled with this build. It needs `release.sh` and
+        `page.html` beside this file, and the Artifact and ArtifactData tools.
+        """
+    }
+
+    /// The crow-release-review page template bundled with the app (CROW-1371).
+    static func bundledReleaseReviewPage() -> String {
+        if let content = loadFromRepo("skills/crow-release-review/page.html") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-release-review-page.html", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        <title>__RELEASE_TITLE__</title>
+        <p>crow-release-review page template not bundled.</p>
+        <script type="application/json" id="release-data">
+        __RELEASE_DATA__
+        </script>
+        """
+    }
+
+    /// The crow-release-review release.sh helper bundled with the app (CROW-1371).
+    static func bundledReleaseReviewScript() -> String {
+        if let content = loadFromRepo("skills/crow-release-review/release.sh") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-release-review-release.sh", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        #!/bin/bash
+        echo '{"status":"error","message":"release.sh not bundled"}'
+        exit 2
+        """
+    }
+
     /// Shared attribution footer instructions (issue #443).
     static func bundledAttributionFooter() -> String {
         if let content = loadFromRepo("skills/crow-attribution/FOOTER.md") {
@@ -1055,6 +1131,8 @@ public struct Scaffolder {
               "Bash(.claude/skills/crow-ci-queue/queue.sh *)",
               "Bash(bash .claude/skills/crow-backlog-brief/brief.sh *)",
               "Bash(.claude/skills/crow-backlog-brief/brief.sh *)",
+              "Bash(bash .claude/skills/crow-release-review/release.sh *)",
+              "Bash(.claude/skills/crow-release-review/release.sh *)",
               "Bash(gh issue view:*)",
               "Bash(gh issue create:*)",
               "Bash(gh issue edit:*)",

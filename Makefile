@@ -196,6 +196,8 @@ parity:
 	@bash skills/crow-ci-queue/queue_test.sh
 	@echo "==> crow-backlog-brief scope / compose / card format / publish guards (CROW-1367)..."
 	@bash skills/crow-backlog-brief/brief_test.sh
+	@echo "==> crow-release-review scope / ids / build / readback / extract (CROW-1371)..."
+	@bash skills/crow-release-review/release_test.sh
 	@echo "==> macos-sign-notarize helpers (CROW-1150)..."
 	@./scripts/macos-sign-notarize_test.sh
 	@echo "==> desktop sidecar helpers (CROW-1189)..."

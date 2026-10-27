@@ -35,6 +35,9 @@ struct LaunchScaffoldTests {
         "skills/crow-backlog-brief/SKILL.md",
         "skills/crow-backlog-brief/page.html",
         "skills/crow-backlog-brief/brief.sh",
+        "skills/crow-release-review/SKILL.md",
+        "skills/crow-release-review/page.html",
+        "skills/crow-release-review/release.sh",
         "skills/crow-show-image/SKILL.md",
         "skills/crow-attribution/FOOTER.md",
     ]
@@ -90,8 +93,9 @@ struct LaunchScaffoldTests {
     /// (`settings.json` pre-approves both forms), so each lands executable —
     /// including `cascade.sh`, the `/crow-cascade-epic` helper (CROW-1312),
     /// `triage.sh`, the `/crow-triage` helper (CROW-1325), `queue.sh`, the
-    /// `/crow-ci-queue` helper (CROW-1365), and `brief.sh`, the
-    /// `/crow-backlog-brief` helper (CROW-1367).
+    /// `/crow-ci-queue` helper (CROW-1365), `brief.sh`, the
+    /// `/crow-backlog-brief` helper (CROW-1367), and `release.sh`, the
+    /// `/crow-release-review` helper (CROW-1371).
     @Test func skillScriptsAreExecutable() throws {
         let devRoot = try Self.makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
@@ -105,6 +109,7 @@ struct LaunchScaffoldTests {
             "skills/crow-triage/triage.sh",
             "skills/crow-ci-queue/queue.sh",
             "skills/crow-backlog-brief/brief.sh",
+            "skills/crow-release-review/release.sh",
         ] {
             let path = (claudeDir as NSString).appendingPathComponent(relative)
             #expect(FileManager.default.isExecutableFile(atPath: path), "not executable: \(relative)")

@@ -522,6 +522,8 @@ Use `/crow-ci-queue` to serialize the label-gated `ci:full` suite across the PRs
 
 Use `/crow-backlog-brief` to run a backlog-draining loop in rounds: it scopes the open issues across the configured repos (epics as units, nothing assigned to someone else), studies each one, publishes one decision page per round at a stable claude.ai Artifact URL, acts on the operator's choices once they mark the round done (kickoffs, relabels, closes, follow-ups), and carries undecided cards into the next round.
 
+Use `/crow-release-review` to study everything on `main` since each repo's last release and publish a private release review page (a claude.ai Artifact): what changes for users, risks, blockers, a phased runbook and post-release test steps. It reads the operator's notes and decisions back, runs each tag only on their explicit go, and after each release goes live runs the agent-runnable checks and records pass or fail with evidence on the page.
+
 ## Fetching Ticket / PR Data
 
 Claude Code permission allow-rules (`Bash(gh issue view:*)`, `Bash(gh api:*)`, `Bash(gh pr view:*)`, `Bash(git -C:*)`, …) are **prefix matches against the whole Bash command**. A compound invocation auto-approves only if **every** segment matches a rule — so one un-allowlisted segment (a `cd`, a `find`, an `echo` banner, a pipe into `head`) forces a permission prompt even though the `gh`/`git` part is allowlisted on its own.
