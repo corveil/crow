@@ -77,6 +77,11 @@ function scratchRow(item) {
 
   const chips = el('div', 'scratch-chips');
   chips.appendChild(scratchStateChip(item.state));
+  if (item.workspace) {
+    const ws = el('span', 'status-pill scratch-workspace', item.workspace);
+    ws.title = 'Workspace';
+    chips.appendChild(ws);
+  }
   if (item.priority) chips.appendChild(el('span', 'status-pill', item.priority));
   for (const tag of (item.tags || [])) chips.appendChild(el('span', 'label-pill', tag));
   body.appendChild(chips);

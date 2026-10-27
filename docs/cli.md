@@ -2299,7 +2299,7 @@ Subcommands: [`add`](#crow-todo-add), [`list`](#crow-todo-list), [`get`](#crow-t
 Capture a Scratch item.
 
 ```
-crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>]
+crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>] [--workspace <workspace>]
 ```
 
 | Flag | Value | Required | Description |
@@ -2308,6 +2308,7 @@ crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>]
 | `--tag` | `<tag>` | no | Comma-separated tags |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
 | `--note` | `<note>` | no | Longer note |
+| `--workspace` | `<workspace>` | no | Workspace the item belongs to (name or UUID) |
 
 ---
 
@@ -2358,10 +2359,10 @@ crow todo drop --id <id>
 Update fields on an existing Scratch item.
 
 ```
-crow todo edit --id <id> [--text <text>] [--note <note>] [--priority <priority>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
+crow todo edit --id <id> [--text <text>] [--note <note>] [--priority <priority>] [--workspace <workspace>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
 ```
 
-Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list.
+Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list. --workspace "" clears the workspace.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -2369,6 +2370,7 @@ Only the provided flags change. --add-tag / --remove-tag compose; they do not re
 | `--text` | `<text>` | no | Replacement item text |
 | `--note` | `<note>` | no | Replacement note |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
+| `--workspace` | `<workspace>` | no | Workspace name or UUID; "" clears it |
 | `--add-tag` | `<add-tag>` _(repeatable)_ | no | Tag to add (repeatable) |
 | `--remove-tag` | `<remove-tag>` _(repeatable)_ | no | Tag to remove (repeatable) |
 

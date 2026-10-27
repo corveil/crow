@@ -684,6 +684,7 @@ crow todo add "native scratch list" --tag crow,cli --priority p2 --note "explore
 | `--tag`     | no       | Comma-separated tags                 |
 | `--priority`| no       | `p1`, `p2`, `p3`, or `p4`           |
 | `--note`    | no       | Longer note                         |
+| `--workspace` | no     | Workspace the item belongs to (name, case-insensitive, or UUID). Stored as the workspace's canonical name and echoed as `workspace` in `todo list` / `todo get`. An unknown name is rejected. |
 
 ### `crow todo list`
 
@@ -704,7 +705,7 @@ crow todo get --id <todo-uuid>
 crow todo edit --id <todo-uuid> --text "changed" --add-tag cli --remove-tag ios
 ```
 
-`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list.
+`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list. `--workspace NAME` sets the item's workspace and `--workspace ""` clears it.
 
 ### `crow todo done`
 

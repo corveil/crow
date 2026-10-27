@@ -46,6 +46,8 @@ public struct TodoAdd: ParsableCommand {
     var priority: String?
     @Option(name: .long, help: "Longer note")
     var note: String?
+    @Option(name: .long, help: "Workspace the item belongs to (name or UUID)")
+    var workspace: String?
 
     public init() {}
 
@@ -58,6 +60,7 @@ public struct TodoAdd: ParsableCommand {
         var params: [String: JSONValue] = ["text": .string(text)]
         if let note { params["note"] = .string(note) }
         if let priority { params["priority"] = .string(priority) }
+        if let workspace { params["workspace"] = .string(workspace) }
         let tags = splitTodoTags(tag)
         if !tags.isEmpty { params["tags"] = .array(tags.map { .string($0) }) }
         printJSON(try rpc("todo-add", params: params))
@@ -114,7 +117,7 @@ public struct TodoEdit: ParsableCommand {
         abstract: "Update fields on an existing Scratch item",
         discussion: """
         Only the provided flags change. --add-tag / --remove-tag compose; \
-        they do not replace the whole list.
+        they do not replace the whole list. --workspace "" clears the workspace.
         """
     )
 
@@ -122,6 +125,7 @@ public struct TodoEdit: ParsableCommand {
     @Option(name: .long, help: "Replacement item text") var text: String?
     @Option(name: .long, help: "Replacement note") var note: String?
     @Option(name: .long, help: "Priority: p1, p2, p3, or p4") var priority: String?
+    @Option(name: .long, help: "Workspace name or UUID; \"\" clears it") var workspace: String?
     @Option(name: .customLong("add-tag"), parsing: .singleValue, help: "Tag to add (repeatable)")
     var addTag: [String] = []
     @Option(name: .customLong("remove-tag"), parsing: .singleValue, help: "Tag to remove (repeatable)")
@@ -140,6 +144,7 @@ public struct TodoEdit: ParsableCommand {
         if let text { params["text"] = .string(text) }
         if let note { params["note"] = .string(note) }
         if let priority { params["priority"] = .string(priority) }
+        if let workspace { params["workspace"] = .string(workspace) }
         if !addTag.isEmpty { params["add_tags"] = .array(addTag.map { .string($0) }) }
         if !removeTag.isEmpty { params["remove_tags"] = .array(removeTag.map { .string($0) }) }
         printJSON(try rpc("todo-edit", params: params))

@@ -51,6 +51,21 @@ public enum TodoRPC {
         }
     }
 
+    /// Resolve a `workspace` param to the workspace's canonical name, or nil
+    /// when absent or blank (blank clears it on `todo-edit`). Names match
+    /// case-insensitively and a UUID is accepted, via
+    /// ``WorkspaceRPC/resolveIndex(_:in:)`` so `--workspace` means the same
+    /// thing here as on `crow workspace` and `crow gateway` (CROW-1383).
+    public static func decodeWorkspace(_ value: JSONValue?, config: AppConfig) throws -> String? {
+        guard let value, value != .null else { return nil }
+        guard let raw = value.stringValue else {
+            throw RPCError.invalidParams("workspace must be a string")
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        return config.workspaces[try WorkspaceRPC.resolveIndex(trimmed, in: config)].name
+    }
+
     public static func decodeState(_ value: JSONValue?) throws -> TodoState? {
         guard let raw = value?.stringValue else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -86,8 +101,11 @@ public enum TodoRPC {
         .sorted { $0.createdAt > $1.createdAt }
     }
 
-    /// Apply an edit patch. Only provided fields change.
-    public static func applyingEdit(_ item: TodoItem, params: [String: JSONValue]) throws -> TodoItem {
+    /// Apply an edit patch. Only provided fields change. `config` resolves a
+    /// `workspace` param; it is only read when that param is present.
+    public static func applyingEdit(
+        _ item: TodoItem, params: [String: JSONValue], config: AppConfig = AppConfig()
+    ) throws -> TodoItem {
         var next = item
         if params["text"] != nil {
             next.text = try decodeText(params["text"])
@@ -97,6 +115,9 @@ public enum TodoRPC {
         }
         if params["priority"] != nil {
             next.priority = try decodePriority(params["priority"])
+        }
+        if params["workspace"] != nil {
+            next.workspace = try decodeWorkspace(params["workspace"], config: config)
         }
         if params["state"] != nil {
             next.state = try decodeState(params["state"]) ?? item.state

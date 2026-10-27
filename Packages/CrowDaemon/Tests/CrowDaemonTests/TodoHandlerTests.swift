@@ -19,11 +19,11 @@ import CrowEngine
     }
 
     @MainActor
-    private func harness() -> (CommandRouter, JSONStore) {
+    private func harness(devRoot: String? = nil) -> (CommandRouter, JSONStore) {
         let store = JSONStore.temporary()
         let router = makeCommandRouter(
             appState: AppState(), store: store, git: GitManager(),
-            devRoot: tempDevRoot(), cockpit: nil)
+            devRoot: devRoot ?? tempDevRoot(), cockpit: nil)
         return (router, store)
     }
 
@@ -65,6 +65,38 @@ import CrowEngine
 
         let reopened = await call(router, "todo-reopen", ["todo_id": .string(id)])
         #expect(reopened.result?["todo"]?.objectValue?["state"]?.stringValue == "captured")
+    }
+
+    @Test @MainActor func workspaceIsValidatedSetAndCleared() async throws {
+        let devRoot = tempDevRoot()
+        var config = AppConfig()
+        config.workspaces = [WorkspaceInfo(name: "Corveil")]
+        try ConfigStore.saveConfig(config, devRoot: devRoot)
+        let (router, _) = harness(devRoot: devRoot)
+
+        let added = await call(router, "todo-add", [
+            "text": .string("tagged"), "workspace": .string("corveil"),
+        ])
+        let todo = try #require(added.result?["todo"]?.objectValue)
+        #expect(todo["workspace"]?.stringValue == "Corveil")
+        let id = try #require(todo["id"]?.stringValue)
+
+        let got = await call(router, "todo-get", ["todo_id": .string(id)])
+        #expect(got.result?["todo"]?.objectValue?["workspace"]?.stringValue == "Corveil")
+
+        let unknown = await call(router, "todo-add", [
+            "text": .string("bad"), "workspace": .string("Nope"),
+        ])
+        #expect(unknown.error != nil)
+        let badEdit = await call(router, "todo-edit", [
+            "todo_id": .string(id), "workspace": .string("Nope"),
+        ])
+        #expect(badEdit.error != nil)
+
+        let cleared = await call(router, "todo-edit", [
+            "todo_id": .string(id), "workspace": .string(""),
+        ])
+        #expect(cleared.result?["todo"]?.objectValue?["workspace"] == nil)
     }
 
     @Test @MainActor func parkDropDeleteAndLink() async throws {
