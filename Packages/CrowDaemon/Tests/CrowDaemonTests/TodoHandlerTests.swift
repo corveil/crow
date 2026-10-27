@@ -18,12 +18,25 @@ import CrowEngine
         return dir
     }
 
+    /// A devRoot whose config has one workspace, set as the Manager default,
+    /// so a bare `todo-add` resolves one (CROW-1387).
+    private func defaultedDevRoot() -> String {
+        let devRoot = tempDevRoot()
+        var config = AppConfig()
+        config.workspaces = [WorkspaceInfo(name: "Corveil")]
+        config.defaults.managerWorkspace = "Corveil"
+        try? ConfigStore.saveConfig(config, devRoot: devRoot)
+        return devRoot
+    }
+
     @MainActor
-    private func harness(devRoot: String? = nil) -> (CommandRouter, JSONStore) {
+    private func harness(
+        devRoot: String? = nil, appState: AppState = AppState()
+    ) -> (CommandRouter, JSONStore) {
         let store = JSONStore.temporary()
         let router = makeCommandRouter(
-            appState: AppState(), store: store, git: GitManager(),
-            devRoot: devRoot ?? tempDevRoot(), cockpit: nil)
+            appState: appState, store: store, git: GitManager(),
+            devRoot: devRoot ?? defaultedDevRoot(), cockpit: nil)
         return (router, store)
     }
 
@@ -97,6 +110,56 @@ import CrowEngine
             "todo_id": .string(id), "workspace": .string(""),
         ])
         #expect(cleared.result?["todo"]?.objectValue?["workspace"] == nil)
+    }
+
+    @Test @MainActor func addFillsWorkspaceAndAgentFromTheDefaults() async throws {
+        let (router, _) = harness()
+        let added = await call(router, "todo-add", ["text": .string("defaulted")])
+        let todo = try #require(added.result?["todo"]?.objectValue)
+        #expect(todo["workspace"]?.stringValue == "Corveil")
+        #expect(todo["agent_kind"]?.stringValue?.isEmpty == false)
+    }
+
+    @Test @MainActor func addWithoutAnyWorkspaceErrors() async {
+        let (router, store) = harness(devRoot: tempDevRoot())
+        let added = await call(router, "todo-add", ["text": .string("homeless")])
+        #expect(added.error?.message.contains("workspace") == true)
+        #expect((store.data.todos ?? []).isEmpty)
+    }
+
+    @Test @MainActor func addInheritsTheCreatingTaggedManager() async throws {
+        let devRoot = tempDevRoot()
+        var config = AppConfig()
+        let other = WorkspaceInfo(name: "Other")
+        config.workspaces = [WorkspaceInfo(name: "Corveil"), other]
+        config.defaults.managerWorkspace = "Corveil"
+        try ConfigStore.saveConfig(config, devRoot: devRoot)
+        let appState = AppState()
+        let manager = Session(name: "Manager 2", kind: .manager, agentKind: .cursor, workspaceID: other.id)
+        appState.sessions.append(manager)
+        let (router, _) = harness(devRoot: devRoot, appState: appState)
+
+        let added = await call(router, "todo-add", [
+            "text": .string("from a tagged Manager"),
+            "from_session": .string(manager.id.uuidString),
+        ])
+        let todo = try #require(added.result?["todo"]?.objectValue)
+        #expect(todo["workspace"]?.stringValue == "Other")
+        #expect(todo["agent_kind"]?.stringValue == "cursor")
+    }
+
+    @Test @MainActor func unknownAgentIsRejected() async throws {
+        let (router, _) = harness()
+        let added = await call(router, "todo-add", [
+            "text": .string("x"), "agent_kind": .string("not-an-agent"),
+        ])
+        #expect(added.error != nil)
+        let ok = await call(router, "todo-add", ["text": .string("y")])
+        let id = try #require(ok.result?["todo"]?.objectValue?["id"]?.stringValue)
+        let edit = await call(router, "todo-edit", [
+            "todo_id": .string(id), "agent_kind": .string("not-an-agent"),
+        ])
+        #expect(edit.error != nil)
     }
 
     @Test @MainActor func parkDropDeleteAndLink() async throws {

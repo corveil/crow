@@ -68,6 +68,10 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
     /// over RPC; a later workspace rename leaves the stored name behind, the
     /// same way `JobConfig.workspace` does.
     public var workspace: String?
+    /// The coding agent Explore / Ticket launch the item's Manager with
+    /// (CROW-1387). Nil on items captured before agents were recorded; those
+    /// launch with the configured Manager agent, as they always did.
+    public var agentKind: AgentKind?
     /// When Scratch Ticket last opened a filing Manager. A second `todo ticket`
     /// is a no-op until a ticket URL is linked, or this age exceeds the dispatch TTL.
     public var ticketRequestedAt: Date?
@@ -83,6 +87,7 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         state: TodoState = .captured,
         links: [TodoLink] = [],
         workspace: String? = nil,
+        agentKind: AgentKind? = nil,
         ticketRequestedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -95,6 +100,7 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         self.state = state
         self.links = links
         self.workspace = workspace
+        self.agentKind = agentKind
         self.ticketRequestedAt = ticketRequestedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -110,13 +116,14 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         state = try container.decodeIfPresent(TodoState.self, forKey: .state) ?? .captured
         links = try container.decodeIfPresent([TodoLink].self, forKey: .links) ?? []
         workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
+        agentKind = try container.decodeIfPresent(AgentKind.self, forKey: .agentKind)
         ticketRequestedAt = try container.decodeIfPresent(Date.self, forKey: .ticketRequestedAt)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, note, tags, priority, state, links, workspace, ticketRequestedAt, createdAt, updatedAt
+        case id, text, note, tags, priority, state, links, workspace, agentKind, ticketRequestedAt, createdAt, updatedAt
     }
 
     /// Recognized priority tokens. Stored lowercase (`p1`…`p4`).

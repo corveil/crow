@@ -28,6 +28,10 @@ A filed ticket can name the right repo and say something a reviewer can act on. 
 - **Keep the picker, then open a session pre-seeded with that repo.** The operator is still choosing before anyone has looked at the code, which is the step the session is for.
 - **A new session kind.** Explore is already a Manager plus a brief. A second kind would fork launch, resume, and the sidebar for a prompt difference.
 
+## Update (CROW-1387)
+
+Scratch items now carry an agent and a workspace, and `todo ticket` opens a Manager tagged with that workspace. The brief names the workspace's ticket provider and repos, so the agent files inside it. Crow still does not pick the repo or call `TaskBackend.createTask`; the agent chooses among the workspace's repos. `crow todo ticket --workspace` exists again, with a different meaning: it overrides the Manager's workspace tag for one launch, matching the web Explore/Ticket dialog. It is not a repo picker, and `--repo` stays removed.
+
 ## References
 
 - Ticket: https://github.com/corveil/crow/issues/1289

@@ -120,23 +120,23 @@ crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"ga
 
 ### Todo Commands
 ```
-crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME]
+crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME] [--agent KIND]
 crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
 crow todo get --id <uuid>
-crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--workspace NAME|""] [--add-tag ...] [--remove-tag ...]
+crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--workspace NAME|""] [--agent KIND|""] [--add-tag ...] [--remove-tag ...]
 crow todo done --id <uuid>
 crow todo reopen --id <uuid>
 crow todo park --id <uuid>
 crow todo drop --id <uuid>
 crow todo delete --id <uuid>
 crow todo link --id <uuid> --type session|ticket|pr|custom [--url ...] [--session <uuid>] [--label "..."]
-crow todo explore --id <uuid> [--agent claude-code]
-crow todo ticket --id <uuid> [--agent claude-code]
+crow todo explore --id <uuid> [--agent KIND] [--workspace NAME]
+crow todo ticket --id <uuid> [--agent KIND] [--workspace NAME]
 crow todo work --id <uuid>
 crow todo talk --id <uuid> "..."
 ```
 
-Durable pre-ticket ideas (CROW-1231). Not reaped by session cleanup. `explore` and `ticket` both open a Manager. `ticket` seeds a file-ticket brief (no repo picker); a second call within 15 minutes is a no-op until the issue URL is linked. `work` types `/crow-workspace` off the linked ticket.
+Durable pre-ticket ideas (CROW-1231). Not reaped by session cleanup. Every item carries an agent and a workspace (CROW-1387): `add` takes each from its flag, else the tagged Manager running it (`$CROW_SESSION_ID`), else the defaults, and fails only when no workspace resolves. `explore` and `ticket` both open a Manager tagged with the item's workspace and running its agent (`--agent` / `--workspace` override one launch). `ticket` seeds a file-ticket brief that names the workspace's provider and repos (no repo picker); reusing a live linked Manager in another workspace warns and never re-tags it; a second call within 15 minutes is a no-op until the issue URL is linked. `work` types `/crow-workspace` off the linked ticket.
 
 ### TUI recording Commands
 ```

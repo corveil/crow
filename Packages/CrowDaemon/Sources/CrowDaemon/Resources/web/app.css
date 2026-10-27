@@ -947,6 +947,16 @@ body.update-banner-visible #back-to-sidebar {
   border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary);
 }
 .scratch-input:focus { outline: none; border-color: var(--accent); }
+.scratch-select {
+  flex: 0 1 auto; min-width: 0; max-width: 160px; padding: 8px 6px; border-radius: 8px;
+  border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary);
+}
+.scratch-select:focus { outline: none; border-color: var(--accent); }
+@media (max-width: 600px) {
+  .scratch-capture { flex-wrap: wrap; }
+  .scratch-input { flex-basis: 100%; }
+  .scratch-select { flex: 1 1 0; max-width: none; }
+}
 .scratch-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 .scratch-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 button.scratch-link {

@@ -35,7 +35,14 @@ public struct Todo: ParsableCommand {
 public struct TodoAdd: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "add",
-        abstract: "Capture a Scratch item"
+        abstract: "Capture a Scratch item",
+        discussion: """
+        Every item carries an agent and a workspace, which Explore and Ticket \
+        launch the Manager with. Each resolves from the flag, then the Manager \
+        running this command when it is tagged with a workspace \
+        ($CROW_SESSION_ID), then the defaults (defaults.managerWorkspace; the \
+        Manager agent). Fails only when no workspace resolves.
+        """
     )
 
     @Argument(help: "Item text")
@@ -48,12 +55,15 @@ public struct TodoAdd: ParsableCommand {
     var note: String?
     @Option(name: .long, help: "Workspace the item belongs to (name or UUID)")
     var workspace: String?
+    @Option(name: .long, help: "Coding agent Explore/Ticket launch with (e.g. claude-code, cursor)")
+    var agent: String?
 
     public init() {}
 
     public func validate() throws {
         try validateTodoText(text)
         if let priority { try validateTodoPriority(priority) }
+        try validateTodoAgent(agent)
     }
 
     public func run() throws {
@@ -61,6 +71,11 @@ public struct TodoAdd: ParsableCommand {
         if let note { params["note"] = .string(note) }
         if let priority { params["priority"] = .string(priority) }
         if let workspace { params["workspace"] = .string(workspace) }
+        if let agent { params["agent_kind"] = .string(agent) }
+        if let creator = ProcessInfo.processInfo.environment["CROW_SESSION_ID"],
+           UUID(uuidString: creator) != nil {
+            params["from_session"] = .string(creator)
+        }
         let tags = splitTodoTags(tag)
         if !tags.isEmpty { params["tags"] = .array(tags.map { .string($0) }) }
         printJSON(try rpc("todo-add", params: params))
@@ -117,7 +132,8 @@ public struct TodoEdit: ParsableCommand {
         abstract: "Update fields on an existing Scratch item",
         discussion: """
         Only the provided flags change. --add-tag / --remove-tag compose; \
-        they do not replace the whole list. --workspace "" clears the workspace.
+        they do not replace the whole list. --workspace "" clears the workspace; \
+        --agent "" clears the agent.
         """
     )
 
@@ -126,6 +142,7 @@ public struct TodoEdit: ParsableCommand {
     @Option(name: .long, help: "Replacement note") var note: String?
     @Option(name: .long, help: "Priority: p1, p2, p3, or p4") var priority: String?
     @Option(name: .long, help: "Workspace name or UUID; \"\" clears it") var workspace: String?
+    @Option(name: .long, help: "Coding agent kind; \"\" clears it") var agent: String?
     @Option(name: .customLong("add-tag"), parsing: .singleValue, help: "Tag to add (repeatable)")
     var addTag: [String] = []
     @Option(name: .customLong("remove-tag"), parsing: .singleValue, help: "Tag to remove (repeatable)")
@@ -145,6 +162,7 @@ public struct TodoEdit: ParsableCommand {
         if let note { params["note"] = .string(note) }
         if let priority { params["priority"] = .string(priority) }
         if let workspace { params["workspace"] = .string(workspace) }
+        if let agent { params["agent_kind"] = .string(agent) }
         if !addTag.isEmpty { params["add_tags"] = .array(addTag.map { .string($0) }) }
         if !removeTag.isEmpty { params["remove_tags"] = .array(removeTag.map { .string($0) }) }
         printJSON(try rpc("todo-edit", params: params))
@@ -240,8 +258,10 @@ public struct TodoExplore: ParsableCommand {
     )
 
     @Option(name: .long, help: "Todo UUID") var id: String
-    @Option(name: .long, help: "Coding agent kind; default Manager agent when omitted")
+    @Option(name: .long, help: "Coding agent for this launch; the item's agent when omitted")
     var agent: String?
+    @Option(name: .long, help: "Workspace to tag the Manager with for this launch; the item's when omitted")
+    var workspace: String?
 
     public init() {}
 
@@ -250,11 +270,15 @@ public struct TodoExplore: ParsableCommand {
         if let agent, agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw ValidationError("--agent must not be blank (e.g. claude-code, cursor, codex).")
         }
+        if let workspace, workspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ValidationError("--workspace must not be blank.")
+        }
     }
 
     public func run() throws {
         var params: [String: JSONValue] = ["todo_id": .string(id)]
         if let agent { params["agent_kind"] = .string(agent) }
+        if let workspace { params["workspace"] = .string(workspace) }
         printJSON(try rpc("todo-explore", params: params, timeoutSeconds: 90))
     }
 }
@@ -266,8 +290,10 @@ public struct TodoTicket: ParsableCommand {
     )
 
     @Option(name: .long, help: "Todo UUID") var id: String
-    @Option(name: .long, help: "Coding agent kind; default Manager agent when omitted")
+    @Option(name: .long, help: "Coding agent for this launch; the item's agent when omitted")
     var agent: String?
+    @Option(name: .long, help: "Workspace to tag the Manager with for this launch; the item's when omitted")
+    var workspace: String?
 
     public init() {}
 
@@ -276,11 +302,15 @@ public struct TodoTicket: ParsableCommand {
         if let agent, agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw ValidationError("--agent must not be blank (e.g. claude-code, cursor, codex).")
         }
+        if let workspace, workspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ValidationError("--workspace must not be blank.")
+        }
     }
 
     public func run() throws {
         var params: [String: JSONValue] = ["todo_id": .string(id)]
         if let agent { params["agent_kind"] = .string(agent) }
+        if let workspace { params["workspace"] = .string(workspace) }
         printJSON(try rpc("todo-ticket", params: params, timeoutSeconds: 90))
     }
 }
@@ -346,6 +376,13 @@ func validateTodoPriority(_ value: String) throws {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard ["p1", "p2", "p3", "p4"].contains(trimmed) else {
         throw ValidationError("priority must be one of: p1, p2, p3, p4")
+    }
+}
+
+/// `todo add --agent` must name something; the daemon checks it is installed.
+func validateTodoAgent(_ value: String?) throws {
+    if let value, value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        throw ValidationError("--agent must not be blank (e.g. claude-code, cursor, codex).")
     }
 }
 

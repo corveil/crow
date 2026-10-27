@@ -88,10 +88,26 @@ private let todoUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     #expect(cmd.agent == "cursor")
 }
 
-@Test func todoTicketRejectsWorkspaceFlag() {
+// `--workspace` came back in CROW-1387 as the Manager's tag for this launch —
+// not the repo picker ADR 0029 removed. `--repo` stays gone.
+@Test func todoTicketParsesWorkspaceAsTheManagerTag() throws {
+    let cmd = try TodoTicket.parse(["--id", todoUUID, "--workspace", "Corveil"])
+    #expect(cmd.workspace == "Corveil")
     #expect(throws: (any Error).self) {
-        _ = try TodoTicket.parse(["--id", todoUUID, "--workspace", "Corveil"])
+        _ = try TodoTicket.parse(["--id", todoUUID, "--workspace", " "])
     }
+    #expect(throws: (any Error).self) {
+        _ = try TodoTicket.parse(["--id", todoUUID, "--repo", "corveil/crow"])
+    }
+}
+
+@Test func todoAddAndEditParseAgent() throws {
+    let add = try TodoAdd.parse(["idea", "--agent", "cursor", "--workspace", "Corveil"])
+    #expect(add.agent == "cursor")
+    #expect(add.workspace == "Corveil")
+    #expect(throws: (any Error).self) { _ = try TodoAdd.parse(["idea", "--agent", " "]) }
+    let edit = try TodoEdit.parse(["--id", todoUUID, "--agent", ""])
+    #expect(edit.agent == "")
 }
 
 @Test func todoTalkParsesPositionalText() throws {
