@@ -34,6 +34,10 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-backlog-brief/page.html`               | Page template that `brief.sh build` fills from `brief.json`   |
 | `{devRoot}/.claude/skills/crow-backlog-brief/brief.sh`                | Scope, compose, card check, publish guards, readback          |
 | `{devRoot}/.claude/backlog-brief/`                                    | Per-brief config, URL, built page, and each round's files     |
+| `{devRoot}/.claude/skills/crow-release-review/SKILL.md`               | Release review skill invoked via `/crow-release-review`       |
+| `{devRoot}/.claude/skills/crow-release-review/page.html`              | Page template that `release.sh build` fills from `items.json` |
+| `{devRoot}/.claude/skills/crow-release-review/release.sh`             | Scope, ids, item check, build, readback, Markdown report      |
+| `{devRoot}/.claude/release-review/`                                   | Per-release scope, study, items, built page, URL, read-back   |
 | `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
 
 ## Workspace Configuration

@@ -1,0 +1,763 @@
+<title>__RELEASE_TITLE__</title>
+<!--
+  /crow-release-review page template (CROW-1371). `release.sh build` fills the
+  title and the #release-data block from items.json. Never edit a built page by
+  hand: change items.json and build again. Notes, decisions, step results and
+  runbook ticks are not in this file; they live in the artifact's db
+  collections (notes, decisions, checks, runbook), keyed by the ids in the data.
+-->
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: a change-control sheet. Sticky tab bar; a summary, one column of change cards per repo, a runbook and a test ledger. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --sunk: #eaeef3;
+  --fg: #141922;
+  --muted: #586273;
+  --line: #d9dee6;
+  --accent: #1d5bb0;
+  --accent-soft: #e2ecfa;
+  --ok: #1d7a48;
+  --ok-soft: #dff3e7;
+  --warn: #9a6200;
+  --warn-soft: #fbefd6;
+  --bad: #b42323;
+  --bad-soft: #fbe2e0;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 6px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1116; --surface: #161b22; --sunk: #1c222b; --fg: #e5e9ef; --muted: #98a2b1; --line: #2a313c;
+  --accent: #74a9ff; --accent-soft: #1b2a42; --ok: #5cc98b; --ok-soft: #14301f; --warn: #e3b04b; --warn-soft: #3a2c0e;
+  --bad: #ff7b72; --bad-soft: #3d1715; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e1116; --surface: #161b22; --sunk: #1c222b; --fg: #e5e9ef; --muted: #98a2b1; --line: #2a313c;
+  --accent: #74a9ff; --accent-soft: #1b2a42; --ok: #5cc98b; --ok-soft: #14301f; --warn: #e3b04b; --warn-soft: #3a2c0e;
+  --bad: #ff7b72; --bad-soft: #3d1715; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; overflow-x: hidden; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: 0.005em; }
+h1 { font-size: 1.9rem; font-weight: 700; line-height: 1.15; }
+h2 { font-size: 1.35rem; font-weight: 600; }
+h3 { font-size: 1.08rem; font-weight: 600; line-height: 1.3; }
+p { margin: 0; }
+.wrap { max-width: 1080px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.eyebrow { font-family: var(--font-display); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+header.top { background: var(--surface); border-bottom: 1px solid var(--line); }
+header.top .wrap { padding-block: 22px 14px; display: grid; gap: 14px; }
+.versions { display: flex; flex-wrap: wrap; gap: 10px; }
+.ver { display: grid; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); min-width: 0; max-width: 100%; }
+.ver b { font-family: var(--font-display); font-weight: 600; font-size: 0.95rem; }
+.ver span { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }
+.ver .arrow { color: var(--accent); }
+
+nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+nav.tabs .wrap { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+nav.tabs button { font: 600 0.92rem var(--font-display); letter-spacing: 0.02em; color: var(--muted); background: none; border: 0; border-bottom: 3px solid transparent; padding: 11px 12px 9px; cursor: pointer; white-space: nowrap; }
+nav.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+nav.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+nav.tabs .count { font-family: var(--font-mono); font-weight: 400; font-size: 0.76rem; color: var(--muted); margin-left: 4px; }
+
+main .wrap { padding-block: 22px 60px; display: grid; gap: 22px; }
+section[role="tabpanel"] { display: grid; gap: 18px; min-width: 0; }
+.lede { max-width: 72ch; color: var(--muted); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.verdict { border-left: 5px solid var(--warn); }
+.verdict.lvl-low { border-left-color: var(--ok); }
+.verdict.lvl-high { border-left-color: var(--bad); }
+.verdict p { max-width: 75ch; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.stat { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; background: var(--bg); min-width: 0; }
+.stat .n { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat .l { font-size: 0.82rem; color: var(--muted); }
+ul.plain { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; }
+ul.plain li { max-width: 80ch; }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font: 600 0.74rem var(--font-display); letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent; }
+.risk-low { background: var(--ok-soft); color: var(--ok); }
+.risk-medium { background: var(--warn-soft); color: var(--warn); }
+.risk-high { background: var(--bad-soft); color: var(--bad); }
+.pill.cat { background: var(--sunk); color: var(--muted); }
+.pill.blk { background: var(--bad); color: var(--surface); }
+.pill.open { background: var(--accent-soft); color: var(--accent); }
+
+.callout { border: 1px solid var(--bad); background: var(--bad-soft); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 4px; min-width: 0; }
+.callout.soft { border-color: var(--warn); background: var(--warn-soft); }
+.callout.calm { border-color: var(--line); background: var(--bg); }
+.callout.done { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: var(--ok-soft); }
+.callout b { font-family: var(--font-display); font-size: 1rem; }
+.callout p { max-width: 80ch; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip { font: 500 0.85rem var(--font-body); border: 1px solid var(--line); background: var(--surface); color: var(--fg); padding: 5px 11px; border-radius: 999px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--fg); color: var(--surface); border-color: var(--fg); }
+.chip:focus-visible, .btn:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type="search"] { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--fg); min-width: 0; flex: 1 1 200px; max-width: 320px; }
+
+.items { display: grid; gap: 12px; }
+details.item { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); min-width: 0; }
+details.item[open] { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+details.item > summary { list-style: none; cursor: pointer; padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; align-items: start; }
+details.item > summary::-webkit-details-marker { display: none; }
+.sum-main { display: grid; gap: 6px; min-width: 0; }
+.sum-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.prn { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+.sum-side { display: grid; gap: 6px; justify-items: end; text-align: right; }
+.progress { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+.progress.bad { color: var(--bad); }
+.dec-badge { font: 600 0.74rem var(--font-display); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.dec-badge.ship { color: var(--ok); } .dec-badge.hold { color: var(--bad); } .dec-badge.question { color: var(--warn); }
+.fixes { color: var(--muted); font-size: 0.93rem; max-width: 80ch; }
+.body { padding: 14px 16px 16px; display: grid; gap: 14px; border-top: 1px solid var(--line); min-width: 0; }
+.ba { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: stretch; }
+.ba > div { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; min-width: 0; }
+.ba .to { color: var(--accent); align-self: center; font-family: var(--font-display); font-weight: 700; }
+.ba p { margin-top: 4px; }
+.pc { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.pc ul { margin: 4px 0 0; padding-left: 1.1em; display: grid; gap: 3px; }
+.lbl { font-family: var(--font-display); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.lbl.good { color: var(--ok); } .lbl.badc { color: var(--bad); }
+.riskbox { border-left: 3px solid var(--warn); padding: 2px 0 2px 12px; }
+.riskbox.risk-l { border-left-color: var(--ok); } .riskbox.risk-h { border-left-color: var(--bad); }
+.riskbox p { margin-top: 4px; max-width: 85ch; }
+
+.steps { display: grid; gap: 6px; min-width: 0; }
+.step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: start; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); min-width: 0; }
+.step.pass { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.step.fail { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.step input[type="checkbox"] { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--ok); cursor: pointer; }
+.step .st { display: grid; gap: 3px; min-width: 0; }
+.step .st b { font-weight: 600; }
+.how, .copybox { font-family: var(--font-mono); font-size: 0.8rem; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.copybox { background: var(--bg); padding: 10px 12px; border-radius: var(--r); max-height: 320px; overflow: auto; }
+.exp, .meta { font-size: 0.88rem; color: var(--muted); }
+.ev { font-size: 0.85rem; border-top: 1px dashed var(--line); padding-top: 4px; margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ev .who { font-family: var(--font-mono); font-size: 0.76rem; color: var(--muted); }
+.step .ctl { display: grid; gap: 4px; justify-items: end; }
+.needs { font: 500 0.72rem var(--font-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+.needs.person { color: var(--warn); border-color: var(--warn); }
+.btn { font: 500 0.82rem var(--font-body); border: 1px solid var(--line); background: var(--surface); color: var(--fg); padding: 3px 9px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.btn.on-fail { background: var(--bad); color: var(--surface); border-color: var(--bad); }
+.btn.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.decide { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.decide .btn[aria-pressed="true"].ship { background: var(--ok); color: var(--surface); border-color: var(--ok); }
+.decide .btn[aria-pressed="true"].question { background: var(--warn); color: var(--surface); border-color: var(--warn); }
+.decide .btn[aria-pressed="true"].hold { background: var(--bad); color: var(--surface); border-color: var(--bad); }
+textarea { font: inherit; font-size: 0.93rem; width: 100%; min-height: 76px; resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--fg); }
+textarea:disabled { border-style: dashed; }
+.save { font-size: 0.78rem; color: var(--muted); min-height: 1.2em; }
+.notes { display: grid; gap: 6px; }
+
+ol.runbook { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; counter-reset: rb; }
+ol.runbook li { counter-increment: rb; display: grid; grid-template-columns: 2.2em auto minmax(0, 1fr); gap: 10px; align-items: start; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 11px 12px; min-width: 0; }
+ol.runbook li::before { content: counter(rb); font: 700 1.1rem var(--font-display); color: var(--accent); font-variant-numeric: tabular-nums; }
+ol.runbook li.done { background: var(--ok-soft); }
+ol.runbook li input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--ok); }
+ol.runbook .why { color: var(--muted); font-size: 0.9rem; margin-top: 2px; }
+ol.runbook .phase { font: 600 0.72rem var(--font-display); letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.cmd { display: grid; gap: 4px; margin-top: 6px; justify-items: start; min-width: 0; }
+.cmd .copybox { max-height: none; width: 100%; }
+
+.ledger-group { display: grid; gap: 8px; min-width: 0; }
+.ledger-group h3 { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.bar { height: 8px; border-radius: 99px; background: var(--sunk); overflow: hidden; display: flex; }
+.bar i { display: block; height: 100%; }
+.bar .p { background: var(--ok); } .bar .f { background: var(--bad); }
+.status-line { font-size: 0.82rem; color: var(--muted); }
+.empty { color: var(--muted); font-style: italic; }
+details.method > summary { cursor: pointer; font-family: var(--font-display); font-weight: 600; }
+
+@media (max-width: 680px) {
+  h1 { font-size: 1.5rem; }
+  details.item > summary { grid-template-columns: minmax(0, 1fr); }
+  .sum-side { justify-items: start; text-align: left; grid-auto-flow: column; justify-content: start; align-items: center; }
+  .ba { grid-template-columns: minmax(0, 1fr); } .ba .to { justify-self: center; transform: rotate(90deg); }
+  .pc { grid-template-columns: minmax(0, 1fr); }
+  .step { grid-template-columns: auto minmax(0, 1fr); } .step .ctl { grid-column: 2; justify-items: start; grid-auto-flow: column; justify-content: start; }
+  ol.runbook li { grid-template-columns: 1.6em auto minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="eyebrow" id="hdr-eyebrow">Release review</div>
+    <h1 id="hdr-title">Release review</h1>
+    <div class="versions" id="versions"></div>
+    <div class="status-line" id="db-status" role="status">Loading saved notes and check-offs…</div>
+  </div>
+</header>
+<nav class="tabs" aria-label="Sections"><div class="wrap" role="tablist" id="tablist"></div></nav>
+<main><div class="wrap" id="panels"></div></main>
+
+<script type="application/json" id="release-data">
+__RELEASE_DATA__
+</script>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (sel, el) => (el || document).querySelector(sel);
+  let DATA = null;
+  try { DATA = JSON.parse($("#release-data").textContent); } catch (e) { DATA = null; }
+  if (!DATA || !Array.isArray(DATA.items) || !Array.isArray(DATA.repos)) {
+    $("#panels").textContent = "This page has no release data. Build it with release.sh build from the crow-release-review skill.";
+    $("#db-status").textContent = "";
+    return;
+  }
+
+  const arr = (v) => Array.isArray(v) ? v : [];
+  const str = (v) => typeof v === "string" ? v : "";
+  const safeUrl = (u) => typeof u === "string" && /^https?:\/\/\S+$/.test(u) ? u : null;
+  const ITEMS = DATA.items.map(i => Object.assign({}, i, { test_steps: arr(i.test_steps) }));
+  const REPOS = DATA.repos;
+  const RUNBOOK = arr(DATA.runbook);
+  const allSteps = ITEMS.flatMap(i => i.test_steps.map(s => Object.assign({}, s, { item: i })));
+  const DECISION_LABEL = { ship: "OK to ship", question: "Question", hold: "Hold" };
+  const AGENT_NEEDS = ["agent", "agent+aws"];
+  const RISK_RANK = { high: 0, medium: 1, low: 2 };
+  const NOTE_MAX = 4000, NOTE_DEBOUNCE_MS = 900;
+  const ref = (i) => (str(i.label) || i.repo) + (i.pr != null ? " #" + i.pr : "");
+  const itemsOf = (repoId) => ITEMS.filter(i => i.repo === repoId);
+  const repoTab = (repoId) => "repo-" + repoId;
+
+  const h = (tag, attrs, ...kids) => {
+    const el = document.createElement(tag);
+    if (attrs) for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "text") el.textContent = v;
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? "" : v);
+    }
+    for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return el;
+  };
+  const link = (url, text) => {
+    const u = safeUrl(url);
+    return u ? h("a", { href: u, target: "_blank", rel: "noopener", text: text || u.replace(/^https:\/\/github\.com\//, "") }) : null;
+  };
+  const list = (xs) => h("ul", { class: "plain" }, arr(xs).map(t => h("li", { text: t })));
+
+  // ---------- saved state: the notes, decisions, checks and runbook collections ----------
+
+  const COLS = ["notes", "decisions", "checks", "runbook"];
+  const DEFAULTS = {
+    notes: { text: "", at: "" },
+    decisions: { value: "", at: "" },
+    checks: { status: "", note: "", by: "", at: "" },
+    runbook: { done: false, at: "" },
+  };
+  const server = { notes: {}, decisions: {}, checks: {}, runbook: {} };   // from the live snapshots
+  const overlay = { notes: {}, decisions: {}, checks: {}, runbook: {} };  // this view's unconfirmed writes
+  const loaded = { notes: false, decisions: false, checks: false, runbook: false };
+  let db = null, myId = null, canWrite = null;
+
+  const view = (col, id) => Object.assign({}, server[col][id] || {}, overlay[col][id] || {});
+  const writable = () => !!db && canWrite !== false && COLS.every(c => loaded[c]);
+  const checkOf = (id) => {
+    const v = view("checks", id);
+    return { status: v.status === "pass" || v.status === "fail" ? v.status : "", note: str(v.note), by: str(v.by) };
+  };
+  const decisionOf = (id) => { const v = view("decisions", id).value; return DECISION_LABEL[v] ? v : ""; };
+  const noteOf = (id) => str(view("notes", id).text);
+  const doneOf = (id) => view("runbook", id).done === true;
+  function setStatus(t) { const el = $("#db-status"); if (el) el.textContent = t; }
+
+  // One write in flight per document. A newer change to the same document
+  // waits and merges into the next write. A new document is created with set;
+  // an existing one is merged with update, so fields this view never touched
+  // (the evidence note Claude wrote on a check) survive a viewer's tick.
+  const queued = new Map(), inflight = new Set();
+  function save(col, id, patch, onDone) {
+    if (!writable()) { if (onDone) onDone(false); return; }
+    overlay[col][id] = Object.assign({}, overlay[col][id] || {}, patch);
+    const path = col + "/" + id;
+    const q = queued.get(path) || { col, id, patch: {}, cbs: [] };
+    Object.assign(q.patch, patch);
+    if (onDone) q.cbs.push(onDone);
+    queued.set(path, q);
+    pump(path);
+  }
+  function send(col, id, patch) {
+    const ref = db.collection(col).doc(id);
+    const full = () => Object.assign({}, DEFAULTS[col], server[col][id] || {}, patch);
+    if (!server[col][id]) return ref.set(full());
+    return ref.update(patch).catch(e => {
+      if (e && e.code === "invalid_argument") return ref.set(full());   // deleted meanwhile
+      throw e;
+    });
+  }
+  async function pump(path) {
+    if (inflight.has(path) || !queued.has(path)) return;
+    const q = queued.get(path);
+    queued.delete(path);
+    if (!writable()) { delete overlay[q.col][q.id]; q.cbs.forEach(cb => cb(false)); scheduleRender(); return; }
+    inflight.add(path);
+    const patch = Object.assign({}, q.patch, { at: new Date().toISOString() });
+    // Always stamp who wrote it: a tick that kept an earlier by "agent" would
+    // read back as Claude's, and Claude could overwrite it.
+    if (q.col === "checks" || q.col === "runbook") patch.by = myId || "viewer";
+    let ok = false, err = null;
+    try { await send(q.col, q.id, patch); ok = true; }
+    catch (e) {
+      err = e;
+      if (e && e.code === "unavailable") {
+        await new Promise(r => setTimeout(r, 400 + Math.random() * 800));
+        try { await send(q.col, q.id, patch); ok = true; err = null; } catch (e2) { err = e2; }
+      }
+    }
+    inflight.delete(path);
+    if (!queued.has(path)) delete overlay[q.col][q.id];
+    if (!ok) failed(err);
+    q.cbs.forEach(cb => { try { cb(ok); } catch (_) {} });
+    scheduleRender();
+    pump(path);
+  }
+  function failed(e) {
+    const code = e && e.code;
+    if (["invalid_argument", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"].includes(code)) {
+      canWrite = false;
+      queued.clear();
+      for (const c of COLS) overlay[c] = {};
+      setStatus(code === "revoked" ? "Saving stopped because access to this page changed. Reload to continue."
+        : "Read-only: you can see notes and results but not change them. A Contributor (Share menu) can save.");
+    } else if (code === "quota_exceeded") {
+      setStatus("This page's storage is full, so the last change wasn't saved.");
+    } else {
+      setStatus("Couldn't save the last change. Reload to see what was saved, then try again.");
+    }
+  }
+
+  // ---------- header ----------
+
+  $("#hdr-eyebrow").textContent = "Release review" + (str(DATA.generated) ? " · prepared " + DATA.generated : "") + (str(DATA.context) ? " · " + DATA.context : "");
+  $("#hdr-title").textContent = str(DATA.heading) || str(DATA.title) || "Release review";
+  for (const r of REPOS) {
+    $("#versions").append(h("div", { class: "ver" }, h("b", { text: r.name }),
+      h("span", null, r.from, h("span", { class: "arrow" }, "  →  "), r.to),
+      h("span", { text: str(r.count_label) || itemsOf(r.id).length + " changes" })));
+  }
+
+  // ---------- tabs ----------
+
+  const TABS = [
+    { id: "summary", label: "Summary" },
+    ...REPOS.map(r => ({ id: repoTab(r.id), label: r.name, count: itemsOf(r.id).length })),
+    { id: "runbook", label: "Release runbook", count: RUNBOOK.length },
+    { id: "tests", label: "Test ledger", count: allSteps.length },
+  ];
+  const state = { filter: "all", q: "", ledgerStatus: "all", ledgerWho: "all", tab: "summary" };
+  for (const t of TABS) {
+    $("#tablist").append(h("button", { role: "tab", type: "button", id: "tab-" + t.id, "aria-controls": "panel-" + t.id, onclick: () => selectTab(t.id) },
+      t.label, t.count != null ? h("span", { class: "count", text: t.count }) : null));
+    $("#panels").append(h("section", { role: "tabpanel", id: "panel-" + t.id, "aria-labelledby": "tab-" + t.id, hidden: true }));
+  }
+  function selectTab(id, fromHash) {
+    if (!TABS.some(t => t.id === id)) id = "summary";
+    state.tab = id;
+    for (const t of TABS) {
+      $("#tab-" + t.id).setAttribute("aria-selected", String(t.id === id));
+      $("#panel-" + t.id).hidden = t.id !== id;
+    }
+    if (!fromHash) { try { history.replaceState(null, "", "#" + id); } catch (_) {} window.scrollTo({ top: 0 }); }
+  }
+  function openItem(i) {
+    selectTab(repoTab(i.repo));
+    const el = document.getElementById("item-" + i.id);
+    if (el) { el.open = true; openState.add(i.id); el.scrollIntoView({ block: "start" }); }
+  }
+
+  // ---------- summary ----------
+
+  const stat = (n, l) => h("div", { class: "stat" }, h("div", { class: "n", text: n }), h("div", { class: "l", text: l }));
+  const PROGRESS = { done: ["risk-low", "Done", "done"], running: ["risk-medium", "In progress", "soft"], waiting: ["cat", "Waiting", "calm"], held: ["blk", "Held", ""] };
+  const callout = (cls, pill, title, why, action, url) => h("div", { class: "callout " + cls },
+    h("div", { class: "sum-meta" }, pill, h("b", { text: title })),
+    why ? h("p", { text: why }) : null,
+    action ? h("p", null, h("span", { class: "lbl", text: "Action  " }), action) : null,
+    url ? h("p", null, link(url)) : null);
+
+  function renderSummary() {
+    const p = $("#panel-summary"); p.textContent = "";
+    const v = DATA.verdict || {};
+    p.append(h("div", { class: "panel verdict lvl-" + (v.level || "medium") },
+      h("div", { class: "sum-meta" }, h("span", { class: "eyebrow", text: "Verdict" }), h("span", { class: "pill risk-" + (v.level || "medium"), text: (v.level || "medium") + " risk" })),
+      h("h2", { text: str(v.headline) }), ...arr(v.paragraphs).map(t => h("p", { text: t }))));
+
+    const counts = { high: 0, medium: 0, low: 0 };
+    ITEMS.forEach(i => { counts[i.risk_level] = (counts[i.risk_level] || 0) + 1; });
+    const passed = allSteps.filter(s => checkOf(s.id).status === "pass").length;
+    const failedN = allSteps.filter(s => checkOf(s.id).status === "fail").length;
+    const decided = ITEMS.filter(i => decisionOf(i.id)).length;
+    p.append(h("div", { class: "stats" },
+      stat(ITEMS.length, "changes across " + REPOS.length + (REPOS.length === 1 ? " repo" : " repos")),
+      stat(counts.high, "high risk"), stat(counts.medium, "medium risk"), stat(counts.low, "low risk"),
+      stat(passed + " / " + allSteps.length, "test steps passed" + (failedN ? " · " + failedN + " failed" : "")),
+      stat(decided + " / " + ITEMS.length, "changes with a decision")));
+
+    if (arr(DATA.progress).length) {
+      p.append(h("div", { class: "panel" }, h("h2", { text: "Release progress" }),
+        ...DATA.progress.map(s => { const st = PROGRESS[s.state] || PROGRESS.waiting;
+          return callout(st[2], h("span", { class: "pill " + st[0], text: st[1] }), s.label, str(s.text), null, s.url); })));
+    }
+    if (arr(DATA.findings).length) {
+      p.append(h("div", { class: "panel" }, h("h2", { text: "Found during the release (not caused by it)" }),
+        h("p", { class: "lede", text: "Problems the checks surfaced that were already there before this release." }),
+        ...DATA.findings.map(f => callout("", h("span", { class: "pill blk", text: str(f.tag) || "Needs a decision" }), f.title, f.why, str(f.action), f.url))));
+    }
+
+    const blockers = arr(DATA.blockers);
+    const hard = blockers.filter(b => !b.soft), soft = blockers.filter(b => b.soft);
+    const bl = h("div", { class: "panel" }, h("h2", { text: "Fix these before you tag" }));
+    if (!blockers.length) bl.append(h("p", { class: "empty", text: "No blockers found." }));
+    for (const b of hard) bl.append(callout("", h("span", { class: "pill blk", text: "Blocker" }), b.title, b.why, str(b.action), b.url));
+    for (const b of soft) bl.append(callout("soft", h("span", { class: "pill risk-medium", text: "Do first" }), b.title, b.why, str(b.action), b.url));
+    p.append(bl);
+
+    const g = h("div", { class: "grid2" });
+    g.append(h("div", { class: "panel" }, h("h2", { text: "Biggest risks" }), arr(DATA.top_risks).length ? list(DATA.top_risks) : h("p", { class: "empty", text: "None listed." })));
+    g.append(h("div", { class: "panel" }, h("h2", { text: "What users will notice" }), arr(DATA.user_visible).length ? list(DATA.user_visible) : h("p", { class: "empty", text: "Nothing visible to users." })));
+    p.append(g);
+    if (arr(DATA.cleared).length) p.append(h("div", { class: "panel" }, h("h2", { text: "Checked and not blocking" }), list(DATA.cleared)));
+
+    const risky = ITEMS.filter(i => i.risk_level !== "low").sort((a, b) => (RISK_RANK[a.risk_level] || 0) - (RISK_RANK[b.risk_level] || 0));
+    if (risky.length) {
+      p.append(h("div", { class: "panel" }, h("h2", { text: "Medium and high-risk changes" }),
+        h("p", { class: "lede", text: "Open a change in its repo tab for the full write-up, tests and notes." }),
+        h("ul", { class: "plain" }, risky.map(i => h("li", null, h("span", { class: "pill risk-" + i.risk_level, text: i.risk_level }), " ",
+          h("a", { href: "#" + repoTab(i.repo), onclick: (e) => { e.preventDefault(); openItem(i); } }, ref(i) + " · " + i.title))))));
+    }
+    if (arr(DATA.method).length) {
+      p.append(h("details", { class: "panel method" }, h("summary", { text: "How this review was made" }), list(DATA.method)));
+    }
+  }
+
+  // ---------- repo tabs ----------
+
+  const openState = new Set();
+  function matches(i) {
+    const f = state.filter;
+    if (f === "undecided" && decisionOf(i.id)) return false;
+    if (f === "failed" && !i.test_steps.some(s => checkOf(s.id).status === "fail")) return false;
+    if (["high", "medium", "low"].includes(f) && i.risk_level !== f) return false;
+    if (state.q) {
+      const hay = [i.pr, i.title, i.before, i.after, i.fixes, i.risk, i.category, i.audience, i.id].join(" ").toLowerCase();
+      if (!hay.includes(state.q.toLowerCase())) return false;
+    }
+    return true;
+  }
+  function renderRepo(repo) {
+    const p = $("#panel-" + repoTab(repo.id)); p.textContent = "";
+    const head = h("div", { class: "panel" },
+      h("div", { class: "sum-meta" }, h("h2", { text: repo.name + "  " + repo.from + " → " + repo.to }),
+        str(repo.repo) ? h("span", { class: "prn", text: repo.repo + (str(repo.head) ? " @ " + repo.head.slice(0, 12) : "") }) : null),
+      ...arr(repo.how).map(t => h("p", { class: "lede", text: t })));
+    if (str(repo.live)) head.append(h("div", { class: "cmd" }, h("span", { class: "lbl", text: "What is live" }), copyBlock(repo.live)));
+    p.append(head);
+    const tb = h("div", { class: "toolbar", role: "group", "aria-label": "Filter changes" });
+    for (const [f, label] of [["all", "All"], ["high", "High risk"], ["medium", "Medium risk"], ["low", "Low risk"], ["undecided", "No decision yet"], ["failed", "Failed tests"]]) {
+      tb.append(h("button", { type: "button", class: "chip", "aria-pressed": String(state.filter === f), onclick: () => { state.filter = f; render(); } }, label));
+    }
+    tb.append(h("input", { type: "search", id: "q-" + repo.id, placeholder: "Filter by PR, title, word…", "aria-label": "Search changes", value: state.q,
+      oninput: (e) => { state.q = e.target.value; fillItems(repo, box); } }));
+    p.append(tb);
+    const box = h("div", { class: "items" });
+    p.append(box);
+    fillItems(repo, box);
+  }
+  function fillItems(repo, box) {
+    box.textContent = "";
+    const items = itemsOf(repo.id).filter(matches);
+    if (!items.length) box.append(h("p", { class: "empty", text: "No changes match this filter." }));
+    for (const i of items) box.append(renderItem(i));
+  }
+  function stepCounts(i) {
+    let p = 0, f = 0;
+    for (const s of i.test_steps) { const st = checkOf(s.id).status; if (st === "pass") p++; else if (st === "fail") f++; }
+    return { p, f, n: i.test_steps.length };
+  }
+  function renderItem(i) {
+    const dec = decisionOf(i.id);
+    const c = stepCounts(i);
+    const d = h("details", { class: "item", id: "item-" + i.id, open: openState.has(i.id) });
+    d.addEventListener("toggle", () => { if (d.open) openState.add(i.id); else openState.delete(i.id); });
+    d.append(h("summary", null,
+      h("div", { class: "sum-main" },
+        h("div", { class: "sum-meta" },
+          h("span", { class: "prn", text: (i.not_merged ? "open PR " : "") + ref(i) }),
+          h("span", { class: "pill risk-" + i.risk_level, text: i.risk_level + " risk" }),
+          h("span", { class: "pill cat", text: i.category }),
+          i.blocker ? h("span", { class: "pill blk", text: "blocker" }) : null,
+          i.not_merged ? h("span", { class: "pill open", text: "not merged" }) : null),
+        h("h3", { text: i.title }),
+        h("p", { class: "fixes", text: i.fixes })),
+      h("div", { class: "sum-side" },
+        h("span", { class: "dec-badge " + dec, text: dec ? DECISION_LABEL[dec] : "No decision" }),
+        c.n ? h("span", { class: "progress" + (c.f ? " bad" : ""), text: c.p + "/" + c.n + " tests" + (c.f ? " · " + c.f + " failed" : "") }) : null,
+        noteOf(i.id) ? h("span", { class: "progress", text: "has notes" }) : null)));
+
+    const b = h("div", { class: "body" });
+    b.append(h("div", { class: "sum-meta" }, h("span", { class: "lbl", text: "Who notices" }), h("span", { text: i.audience }), link(i.url)));
+    b.append(h("div", { class: "ba" },
+      h("div", null, h("span", { class: "lbl", text: "Before" }), h("p", { text: i.before })),
+      h("span", { class: "to", "aria-hidden": "true", text: "→" }),
+      h("div", null, h("span", { class: "lbl", text: "After" }), h("p", { text: i.after }))));
+    b.append(h("div", { class: "pc" },
+      h("div", null, h("span", { class: "lbl good", text: "Pros" }), h("ul", null, arr(i.pros).map(t => h("li", { text: t })))),
+      h("div", null, h("span", { class: "lbl badc", text: "Cons" }), h("ul", null, arr(i.cons).map(t => h("li", { text: t }))))));
+    b.append(h("div", { class: "riskbox risk-" + String(i.risk_level || "m")[0] }, h("span", { class: "lbl", text: "Deploy risk · " + i.risk_level }), h("p", { text: i.risk })));
+    if (str(i.blocker)) b.append(h("div", { class: "callout" }, h("b", { text: "Must resolve before release" }), h("p", { text: i.blocker })));
+    if (arr(i.deploy_prereqs).length) b.append(h("div", null, h("span", { class: "lbl", text: "Operator steps for this change" }), list(i.deploy_prereqs)));
+    if (arr(i.questions).length) b.append(h("div", null, h("span", { class: "lbl", text: "Open questions" }), list(i.questions)));
+    if (i.test_steps.length) b.append(h("div", { class: "steps" }, h("span", { class: "lbl", text: "Post-release test steps" }), i.test_steps.map(s => renderStep(Object.assign({}, s, { item: i }), false))));
+    else b.append(h("p", { class: "empty", text: "No production test needed for this change." }));
+
+    const can = writable();
+    const decide = h("div", { class: "decide", role: "group", "aria-label": "Decision for " + ref(i) }, h("span", { class: "lbl", text: "Decision  " }));
+    for (const val of ["ship", "question", "hold"]) {
+      decide.append(h("button", { type: "button", class: "btn " + val, "aria-pressed": String(dec === val), disabled: !can,
+        onclick: (e) => { e.preventDefault(); save("decisions", i.id, { value: dec === val ? "" : val }); render(); } }, DECISION_LABEL[val]));
+    }
+    b.append(decide);
+
+    const saveEl = h("span", { class: "save", role: "status" });
+    const ta = h("textarea", { id: "note-" + i.id, maxlength: String(NOTE_MAX), disabled: !can,
+      placeholder: can ? "Questions, concerns, things to do before or after the release…" : "No notes yet." });
+    ta.value = noteOf(i.id);
+    let timer = null;
+    const flush = () => {
+      clearTimeout(timer); timer = null;
+      const text = ta.value.slice(0, NOTE_MAX);
+      if (text === noteOf(i.id)) { if (saveEl.textContent === "Editing…") saveEl.textContent = ""; return; }
+      saveEl.textContent = "Saving…";
+      save("notes", i.id, { text }, ok => { saveEl.textContent = ok ? "Saved" : "Not saved"; });
+    };
+    ta.addEventListener("input", () => { saveEl.textContent = "Editing…"; clearTimeout(timer); timer = setTimeout(flush, NOTE_DEBOUNCE_MS); });
+    ta.addEventListener("blur", () => { flush(); if (deferred) setTimeout(render, 0); });
+    b.append(h("div", { class: "notes" }, h("label", { class: "lbl", for: "note-" + i.id, text: "Notes for Claude" }), ta, saveEl));
+    d.append(b);
+    return d;
+  }
+  function renderStep(s, inLedger) {
+    const st = checkOf(s.id);
+    const can = writable();
+    const person = !AGENT_NEEDS.includes(s.needs);
+    const row = h("div", { class: "step " + st.status, id: (inLedger ? "ledger-" : "step-") + s.id });
+    const cb = h("input", { type: "checkbox", "aria-label": "Passed: " + s.step, disabled: !can });
+    cb.checked = st.status === "pass";
+    cb.addEventListener("change", () => { save("checks", s.id, { status: cb.checked ? "pass" : "" }); render(); });
+    row.append(cb, h("div", { class: "st" },
+      inLedger ? h("span", { class: "prn", text: ref(s.item) + " · " + s.item.title }) : null,
+      h("b", { text: s.step }),
+      h("div", { class: "how", text: s.how }),
+      h("div", { class: "exp", text: "Expect: " + s.expect }),
+      str(s.baseline) ? h("div", { class: "meta", text: "Before the deploy, capture: " + s.baseline }) : null,
+      str(s.when) ? h("div", { class: "meta", text: "When: " + s.when }) : null,
+      st.note ? h("div", { class: "ev" }, h("span", { class: "who", text: (st.status ? "Evidence" : "Note") + (st.by === "agent" ? " · agent" : "") + ": " }), st.note) : null),
+      h("div", { class: "ctl" },
+        h("span", { class: "needs" + (person ? " person" : ""), text: s.needs }),
+        s.optional ? h("span", { class: "needs", text: "optional" }) : null,
+        h("button", { type: "button", class: "btn" + (st.status === "fail" ? " on-fail" : ""), disabled: !can,
+          onclick: () => { save("checks", s.id, { status: st.status === "fail" ? "" : "fail" }); render(); } }, st.status === "fail" ? "Failed" : "Mark failed")));
+    return row;
+  }
+
+  // ---------- copy ----------
+
+  function copyBlock(text) {
+    const box = h("div", { class: "copybox", text });
+    const btn = h("button", { type: "button", class: "btn", onclick: () => copy(text, box, btn, "Copy") }, "Copy");
+    return h("div", { class: "cmd" }, box, btn);
+  }
+  async function copy(text, box, btn, label) {
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (_) {}
+    if (!ok) {
+      const r = document.createRange(); r.selectNodeContents(box);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    }
+    btn.textContent = ok ? "Copied" : "Selected: copy it now";
+    setTimeout(() => { btn.textContent = label; }, 2000);
+  }
+
+  // ---------- runbook ----------
+
+  function renderRunbook() {
+    const p = $("#panel-runbook"); p.textContent = "";
+    const done = RUNBOOK.filter(r => doneOf(r.id)).length;
+    p.append(h("div", { class: "panel" }, h("h2", { text: "Release runbook" }),
+      ...arr(DATA.runbook_intro).map(t => h("p", { class: "lede", text: t })),
+      h("p", { class: "status-line", text: done + " of " + RUNBOOK.length + " steps done. Ticks are shared with everyone who can open this page." })));
+    if (arr(DATA.deploy_order).length) p.append(h("div", { class: "panel" }, h("h2", { text: "Deploy order" }), list(DATA.deploy_order)));
+    const ol = h("ol", { class: "runbook" });
+    const can = writable();
+    for (const r of RUNBOOK) {
+      const isDone = doneOf(r.id);
+      const cb = h("input", { type: "checkbox", "aria-label": "Done: " + r.action, disabled: !can });
+      cb.checked = isDone;
+      cb.addEventListener("change", () => { save("runbook", r.id, { done: cb.checked }); render(); });
+      ol.append(h("li", { class: isDone ? "done" : "", id: "runbook-" + r.id }, cb,
+        h("div", { style: "min-width:0" }, h("div", { class: "phase", text: r.phase }), h("b", { text: r.action }),
+          str(r.why) ? h("p", { class: "why", text: r.why }) : null,
+          str(r.cmd) ? copyBlock(r.cmd) : null)));
+    }
+    if (RUNBOOK.length) p.append(ol);
+    else p.append(h("p", { class: "empty", text: "No runbook for this release." }));
+    if (arr(DATA.rollback).length) {
+      p.append(h("div", { class: "panel" }, h("h2", { text: "Rollback" }),
+        ...DATA.rollback.map(r => h("div", { class: "callout calm" },
+          str(r.repo) ? h("span", { class: "lbl", text: (REPOS.find(x => x.id === r.repo) || { name: r.repo }).name }) : null,
+          h("p", { text: r.text }), str(r.cmd) ? copyBlock(r.cmd) : null))));
+    }
+    if (arr(DATA.ordering_risks).length) p.append(h("div", { class: "panel" }, h("h2", { text: "What goes wrong if the order slips" }), list(DATA.ordering_risks)));
+  }
+
+  // ---------- test ledger ----------
+
+  function agentBrief() {
+    const url = safeUrl(DATA.url) || "(this page's claude.ai URL: ask the operator for it)";
+    const live = REPOS.filter(r => str(r.live)).map(r => "   - " + r.name + ": " + r.live);
+    const lines = [
+      "You are running post-release verification for " + (str(DATA.heading) || DATA.title) + ". The test steps are on this claude.ai artifact: " + url,
+      "",
+      "1. Read the page with the Artifact tool (action: read). The steps are in the JSON inside <script id=\"release-data\">: items[].test_steps[], each with an id, step, how, expect and needs, and sometimes baseline and when.",
+      "2. Find out what has shipped before you run anything." + (live.length ? " For each repo:" : " Ask the operator if you can't tell."),
+      ...live,
+      "   Run steps only for releases that are live.",
+      "3. Run only steps whose needs is \"agent\" or \"agent+aws\". Skip \"human\" and \"agent+staff\" steps, steps marked optional, and anything that would change production.",
+      "4. Stay read-only against production: describe, list and get calls, CLI reads, curl GETs, gh reads. Never create, change or delete a production resource.",
+      "5. List the checks collection first (ArtifactData, action list, collection \"checks\", query {\"limit\": 1000}). Record each result with ArtifactData on the same URL, collection \"checks\", doc_id = the step id, data {\"status\": \"pass\" or \"fail\", \"note\": \"one or two lines of evidence\", \"by\": \"agent\", \"at\": \"<ISO time>\"}:",
+      "   - No document yet: action \"set\", without if_version.",
+      "   - A document by \"agent\", or one with no status and no note: action \"update\", with if_version = its version.",
+      "   - A document a person wrote (they ticked it, failed it or left a note): leave it, and give your result in your summary instead.",
+      "   Use \"fail\" when the result doesn't match expect. If the expectation has gone stale (a resource renamed, an id one character longer), record the actual value and the difference in the note instead of failing blindly. If a step can't run yet, write status \"\" with a note saying why.",
+      "6. Steps with a when that hasn't come yet (next-day jobs, 24 h comparisons): don't record them; list them at the end.",
+      "7. Finish with a summary: passed, failed (with evidence), not yet runnable, and left for a person.",
+    ];
+    if (arr(DATA.agent_notes).length) lines.push("", "Notes for this release:", ...DATA.agent_notes.map(n => "- " + n));
+    return lines.join("\n");
+  }
+  function ledgerMatches(s) {
+    const st = checkOf(s.id);
+    if (state.ledgerStatus === "todo" && st.status) return false;
+    if (state.ledgerStatus === "pass" && st.status !== "pass") return false;
+    if (state.ledgerStatus === "fail" && st.status !== "fail") return false;
+    if (state.ledgerWho === "agent" && !AGENT_NEEDS.includes(s.needs)) return false;
+    if (state.ledgerWho === "person" && AGENT_NEEDS.includes(s.needs)) return false;
+    return true;
+  }
+  function renderTests() {
+    const p = $("#panel-tests"); p.textContent = "";
+    const pass = allSteps.filter(s => checkOf(s.id).status === "pass").length;
+    const fail = allSteps.filter(s => checkOf(s.id).status === "fail").length;
+    const n = allSteps.length;
+    const brief = agentBrief();
+    const briefBox = h("div", { class: "copybox", id: "agent-brief", text: brief });
+    const copyBtn = h("button", { type: "button", class: "btn primary", onclick: () => copy(brief, briefBox, copyBtn, "Copy agent brief") }, "Copy agent brief");
+    p.append(h("div", { class: "panel" }, h("h2", { text: "Post-release test ledger" }),
+      h("p", { class: "lede", text: "Every test step from every change, in one list. Tick a step when it passes, or mark it failed. A coding agent can run the steps marked agent and record each result here with its evidence." }),
+      h("div", { class: "bar", role: "img", "aria-label": pass + " passed, " + fail + " failed of " + n },
+        h("i", { class: "p", style: "width:" + (n ? pass / n * 100 : 0) + "%" }), h("i", { class: "f", style: "width:" + (n ? fail / n * 100 : 0) + "%" })),
+      h("p", { class: "status-line", text: pass + " passed · " + fail + " failed · " + (n - pass - fail) + " not run" }),
+      h("div", { class: "toolbar" }, h("span", { class: "lbl", text: "Brief for a coding agent" }), copyBtn), briefBox));
+    const tb = h("div", { class: "toolbar", role: "group", "aria-label": "Filter steps" });
+    for (const [f, label] of [["all", "All"], ["todo", "Not run"], ["pass", "Passed"], ["fail", "Failed"]]) {
+      tb.append(h("button", { type: "button", class: "chip", "aria-pressed": String(state.ledgerStatus === f), onclick: () => { state.ledgerStatus = f; render(); } }, label));
+    }
+    for (const [f, label] of [["all", "Anyone"], ["agent", "An agent can run"], ["person", "Needs a person"]]) {
+      tb.append(h("button", { type: "button", class: "chip", "aria-pressed": String(state.ledgerWho === f), onclick: () => { state.ledgerWho = f; render(); } }, label));
+    }
+    p.append(tb);
+    let shown = 0;
+    for (const r of REPOS) {
+      const steps = allSteps.filter(s => s.item.repo === r.id);
+      const visible = steps.filter(ledgerMatches);
+      if (!visible.length) continue;
+      shown += visible.length;
+      const rp = steps.filter(s => checkOf(s.id).status === "pass").length;
+      p.append(h("div", { class: "ledger-group" }, h("h3", null, r.name, h("span", { class: "progress", text: rp + "/" + steps.length + " passed" })),
+        h("div", { class: "steps" }, visible.map(s => renderStep(s, true)))));
+    }
+    if (!shown) p.append(h("p", { class: "empty", text: n ? "No steps match this filter." : "This release has no test steps." }));
+  }
+
+  // ---------- render ----------
+
+  // A snapshot that lands while someone types a note waits for the blur, so
+  // the textarea they're in is never rebuilt under them.
+  let deferred = false, frame = 0;
+  function render() {
+    const active = document.activeElement;
+    if (active && active.tagName === "TEXTAREA") { deferred = true; return; }
+    deferred = false;
+    const y = window.scrollY;
+    const qFocus = active && active.id && active.id.startsWith("q-") ? active.id : null;
+    renderSummary();
+    for (const r of REPOS) renderRepo(r);
+    renderRunbook();
+    renderTests();
+    if (qFocus) { const q = document.getElementById(qFocus); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+    window.scrollTo({ top: y });
+  }
+  function scheduleRender() {
+    if (frame) return;
+    frame = requestAnimationFrame(() => { frame = 0; render(); });
+  }
+
+  render();
+  selectTab((location.hash || "").replace("#", "") || "summary", true);
+  window.addEventListener("hashchange", () => selectTab(location.hash.replace("#", ""), true));
+
+  // ---------- connect to the artifact runtime ----------
+
+  (async function connect() {
+    const c = window.claude;
+    if (!c || typeof c.use !== "function") { setStatus("Notes and check-offs load when this page is opened on claude.ai."); return; }
+    const got = await Promise.all([
+      c.use("user").catch(() => null),
+      c.use("db").catch(() => null),
+    ]);
+    const user = got[0];
+    if (user) {
+      try { myId = await user.id(); } catch (_) { myId = null; }
+      try { canWrite = await user.can("data.write"); } catch (_) { canWrite = null; }
+    }
+    db = got[1];
+    if (!db) { setStatus("Saving is unavailable in this view. Open the page on claude.ai, signed in, to see and save notes and check-offs."); return; }
+    setStatus(canWrite === false ? "Read-only: you can see notes and results but not change them."
+      : "Notes, decisions and check-offs save as you go and are shared with everyone who can open this page.");
+    for (const col of COLS) {
+      db.collection(col).limit(1000).onSnapshot(snap => {
+        const next = {};
+        snap.docs.forEach(d => { if (d.exists) { const body = d.data(); if (body && typeof body === "object") next[d.id] = body; } });
+        server[col] = next;
+        loaded[col] = true;
+        scheduleRender();
+      }, err => {
+        if (err && err.code === "revoked") canWrite = false;
+        setStatus("Live updates stopped. Reload to see new results.");
+        scheduleRender();
+      });
+    }
+  })();
+})();
+</script>
