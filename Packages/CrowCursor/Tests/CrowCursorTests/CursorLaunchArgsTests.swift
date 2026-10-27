@@ -7,10 +7,11 @@ struct CursorLaunchArgsTests {
         #expect(CursorLaunchArgs.autoPermissionSuffix(false) == "")
     }
 
-    @Test func autoPermissionOnIsClaudeAutoParity() {
+    @Test func autoPermissionOnIsRunEverything() {
         let s = CursorLaunchArgs.autoPermissionSuffix(true)
-        // Approval off (--force) + auto-approve MCP; genuine parity with
-        // Claude's `--permission-mode auto` (no sandbox) — #829 review.
+        // Approval off (--force) + auto-approve MCP: Cursor's Run Everything
+        // mode. No sandbox, like Claude's `--permission-mode auto`, but no
+        // classifier either, so more permissive (#829 review, CROW-1345).
         #expect(s == " --force --approve-mcps")
         // No sandbox (blocks network on job/review/Manager), no --yolo, no
         // --auto-review (stalls unattended on an approval card and loses to a

@@ -560,7 +560,11 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   TTY-detach via a second tmux server; no-ops when `$TMUX` is set). Claude
   `--permission-prompts none` (2.1.259) was the same kind of re-check of
   CROW-1176's stall and **declined** ([CROW-1215](https://github.com/corveil/crow/issues/1215) —
-  print-mode / `-p` only; Crow launches the interactive TUI). The canonical
+  print-mode / `-p` only; Crow launches the interactive TUI). Cursor
+  `--auto-review` was the same kind of re-check and **declined**
+  ([CROW-1345](https://github.com/corveil/crow/issues/1345) — a classifier block
+  ends in a TUI approval card, not a denial, and a persisted Run Everything
+  `approvalMode` overrides the flag). The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);
@@ -569,7 +573,9 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
   Claude's recap subagent (**≥ 2.1.108**), Claude's extra-workdir auto-mode
   Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall; no silent bypass;
-  `--permission-prompts none` declined CROW-1215),
+  `--permission-prompts none` declined CROW-1215), Cursor `--auto-review`
+  (documented run mode; declined CROW-1345 — approval-card stall, loses to a
+  persisted Run Everything),
   OpenCode's `session.status` done
   signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
   `session.idle` question), and the one still-unpinned empirical timing
@@ -604,7 +610,7 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
 
 ## References
 
-- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175); `--permission-prompts none` re-check: [#1215](https://github.com/corveil/crow/issues/1215)
+- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175); `--permission-prompts none` re-check: [#1215](https://github.com/corveil/crow/issues/1215); Cursor `--auto-review` re-check: [#1345](https://github.com/corveil/crow/issues/1345)
 - Related ADRs: [0014](./0014-pluggable-coding-agent-adapter.md) (the adapter),
   [0004](./0004-manager-auto-permission-mode.md) (`--permission-mode auto`),
   [0011](./0011-agent-handoff-preserves-session-not-chat.md) (handoff)
