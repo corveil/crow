@@ -2309,8 +2309,10 @@ Subcommands: [`add`](#crow-todo-add), [`list`](#crow-todo-list), [`get`](#crow-t
 Capture a Scratch item.
 
 ```
-crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>] [--workspace <workspace>]
+crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>] [--workspace <workspace>] [--agent <agent>]
 ```
+
+Every item carries an agent and a workspace, which Explore and Ticket launch the Manager with. Each resolves from the flag, then the Manager running this command when it is tagged with a workspace ($CROW_SESSION_ID), then the defaults (defaults.managerWorkspace; the Manager agent). Fails only when no workspace resolves.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -2319,6 +2321,7 @@ crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>] [--wo
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
 | `--note` | `<note>` | no | Longer note |
 | `--workspace` | `<workspace>` | no | Workspace the item belongs to (name or UUID) |
+| `--agent` | `<agent>` | no | Coding agent Explore/Ticket launch with (e.g. claude-code, cursor) |
 
 ---
 
@@ -2369,10 +2372,10 @@ crow todo drop --id <id>
 Update fields on an existing Scratch item.
 
 ```
-crow todo edit --id <id> [--text <text>] [--note <note>] [--priority <priority>] [--workspace <workspace>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
+crow todo edit --id <id> [--text <text>] [--note <note>] [--priority <priority>] [--workspace <workspace>] [--agent <agent>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
 ```
 
-Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list. --workspace "" clears the workspace.
+Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list. --workspace "" clears the workspace; --agent "" clears the agent.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -2381,6 +2384,7 @@ Only the provided flags change. --add-tag / --remove-tag compose; they do not re
 | `--note` | `<note>` | no | Replacement note |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
 | `--workspace` | `<workspace>` | no | Workspace name or UUID; "" clears it |
+| `--agent` | `<agent>` | no | Coding agent kind; "" clears it |
 | `--add-tag` | `<add-tag>` _(repeatable)_ | no | Tag to add (repeatable) |
 | `--remove-tag` | `<remove-tag>` _(repeatable)_ | no | Tag to remove (repeatable) |
 
@@ -2391,13 +2395,14 @@ Only the provided flags change. --add-tag / --remove-tag compose; they do not re
 Open a Manager and seed the item as an explore brief.
 
 ```
-crow todo explore --id <id> [--agent <agent>]
+crow todo explore --id <id> [--agent <agent>] [--workspace <workspace>]
 ```
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--id` | `<id>` | yes | Todo UUID |
-| `--agent` | `<agent>` | no | Coding agent kind; default Manager agent when omitted |
+| `--agent` | `<agent>` | no | Coding agent for this launch; the item's agent when omitted |
+| `--workspace` | `<workspace>` | no | Workspace to tag the Manager with for this launch; the item's when omitted |
 
 ---
 
@@ -2496,13 +2501,14 @@ crow todo talk --id <id> <text>
 Open a Manager and seed the item as a file-ticket brief.
 
 ```
-crow todo ticket --id <id> [--agent <agent>]
+crow todo ticket --id <id> [--agent <agent>] [--workspace <workspace>]
 ```
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--id` | `<id>` | yes | Todo UUID |
-| `--agent` | `<agent>` | no | Coding agent kind; default Manager agent when omitted |
+| `--agent` | `<agent>` | no | Coding agent for this launch; the item's agent when omitted |
+| `--workspace` | `<workspace>` | no | Workspace to tag the Manager with for this launch; the item's when omitted |
 
 ---
 

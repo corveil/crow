@@ -12,6 +12,7 @@ const epilogue = `
   renderBoard(){ return renderBoard(); },
   sidebarLeftStack(){ return sidebarLeftStack(); },
   scratchOpenCount(){ return scratchOpenCount(); },
+  resetScratchPickers(){ scratchPickers = null; scratchPickersLoading = null; scratchCaptureAgent = null; scratchCaptureWorkspace = null; },
 };
 `;
 const appjs = loadClientSource() + epilogue;
@@ -163,16 +164,30 @@ async function flush() {
   `, ctx);
 
   const ticketBtn = () => [...board.querySelectorAll('button')].find((b) => b.textContent === 'Ticket');
+  const exploreBtn = () => [...board.querySelectorAll('button')].find((b) => b.textContent === 'Explore');
   const prevRpc = T.rpc;
   const calls = [];
+  // CROW-1387: items carry an agent + workspace; the pickers load from these.
   item.state = 'captured';
+  item.agent_kind = 'cursor';
+  item.workspace = 'Corveil';
+  const pickerReplies = {
+    'list-agents': { agents: [
+      { kind: 'claude-code', name: 'Claude Code', available: true, default: true },
+      { kind: 'cursor', name: 'Cursor', available: true },
+    ] },
+    'workspace-list': { workspaces: [{ name: 'Corveil' }, { name: 'Acme' }] },
+    'agents-get': { agents: { effective: { manager: 'claude-code' } } },
+    'defaults-get': { defaults: { manager_workspace: 'acme' } },
+  };
+  T.resetScratchPickers();
   T.boardData.scratch = { todos: [item] };
-  T.renderBoard();
 
   const requestedAt = new Date().toISOString();
   T.rpc = async (method, params) => {
     calls.push({ method, params });
-    if (method === 'todo-ticket') {
+    if (pickerReplies[method]) return pickerReplies[method];
+    if (method === 'todo-ticket' || method === 'todo-explore') {
       return { ok: true, session_id: 'sess', seeded: true, todo: { ...item, ticket_requested_at: requestedAt } };
     }
     if (method === 'todo-list') {
@@ -180,27 +195,76 @@ async function flush() {
     }
     return {};
   };
+  T.renderBoard();
+  await flush();
+
+  // Capture form: Agent + Workspace, required, filled in from the defaults.
+  const capSelects = [...board.querySelectorAll('.scratch-capture select')];
+  check('capture form has agent + workspace pickers', capSelects.length === 2);
+  check('capture pickers are required', capSelects.every((sel) => sel.required));
+  check('capture agent defaults to the Manager agent', capSelects[0] && capSelects[0].value === 'claude-code');
+  check('capture workspace defaults to defaults.managerWorkspace (canonical)',
+    capSelects[1] && capSelects[1].value === 'Acme');
+  board.querySelector('.scratch-input').value = 'with pickers';
+  calls.length = 0;
+  await board.querySelector('.scratch-capture').onsubmit({ preventDefault() {} });
+  const addCall = calls.find((c) => c.method === 'todo-add');
+  check('capture sends agent_kind + workspace',
+    !!(addCall && addCall.params.agent_kind === 'claude-code' && addCall.params.workspace === 'Acme'));
+  T.boardData.scratch = { todos: [item] };
+  T.renderBoard();
+
   promptCalls.length = 0;
   window.__alerts = [];
+  calls.length = 0;
   ticketBtn().click();
   await flush();
   check('Ticket does not call window.prompt', promptCalls.length === 0);
-  check('Ticket does not open a repo dropdown',
-    !window.document.querySelector('.text-prompt-backdrop select'));
-  check('Ticket does not list repos',
-    !calls.some((c) => c.method === 'list-workspace-repos')
-    && !calls.some((c) => c.method === 'workspace-list'));
+  const dialog = window.document.querySelector('.scratch-launch-card');
+  check('Ticket opens the Agent + Workspace dialog', !!dialog);
+  const dlgSelects = dialog ? [...dialog.querySelectorAll('select')] : [];
+  check('dialog agent is filled in from the item', dlgSelects[0] && dlgSelects[0].value === 'cursor');
+  check('dialog workspace is filled in from the item', dlgSelects[1] && dlgSelects[1].value === 'Corveil');
+  check('Ticket does not list repos', !calls.some((c) => c.method === 'list-workspace-repos'));
+  check('nothing launches before the dialog is confirmed', !calls.some((c) => c.method === 'todo-ticket'));
+  [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Ticket').click();
+  await flush();
   const ticketCall = calls.find((c) => c.method === 'todo-ticket');
-  check('todo-ticket receives only the item id',
+  check('todo-ticket receives only the item id when nothing changed',
     !!(ticketCall && ticketCall.params
       && ticketCall.params.todo_id === item.id
       && !('repo' in ticketCall.params)
-      && !('workspace' in ticketCall.params)));
+      && !('workspace' in ticketCall.params)
+      && !('agent_kind' in ticketCall.params)));
   check('Ticket refreshes the scratch list', calls.some((c) => c.method === 'todo-list'));
   check('Ticket stays disabled after refresh while filing',
     ticketBtn() && ticketBtn().disabled);
   check('Ticket title says filing after refresh',
     /Filing/.test(ticketBtn()?.title || ''));
+
+  // Explore with a changed workspace sends it as a one-launch override.
+  calls.length = 0;
+  exploreBtn().click();
+  await flush();
+  const exDialog = window.document.querySelector('.scratch-launch-card');
+  const exSelects = exDialog ? [...exDialog.querySelectorAll('select')] : [];
+  if (exSelects[1]) exSelects[1].value = 'Acme';
+  if (exDialog) [...exDialog.querySelectorAll('button')].find((b) => b.textContent === 'Explore').click();
+  await flush();
+  const exploreCall = calls.find((c) => c.method === 'todo-explore');
+  check('Explore sends a changed workspace as an override',
+    !!(exploreCall && exploreCall.params.workspace === 'Acme' && !('agent_kind' in exploreCall.params)));
+
+  // Cancel launches nothing.
+  T.renderBoard();
+  calls.length = 0;
+  exploreBtn().click();
+  await flush();
+  const cancelDialog = window.document.querySelector('.scratch-launch-card');
+  if (cancelDialog) [...cancelDialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+  await flush();
+  check('Cancel launches nothing', !calls.some((c) => c.method === 'todo-explore'));
+  check('Cancel closes the dialog', !window.document.querySelector('.scratch-launch-card'));
 
   const editable = {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',

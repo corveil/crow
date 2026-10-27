@@ -688,6 +688,15 @@ crow todo add "native scratch list" --tag crow,cli --priority p2 --note "explore
 | `--priority`| no       | `p1`, `p2`, `p3`, or `p4`           |
 | `--note`    | no       | Longer note                         |
 | `--workspace` | no     | Workspace the item belongs to (name, case-insensitive, or UUID). Stored as the workspace's canonical name and echoed as `workspace` in `todo list` / `todo get`. An unknown name is rejected. |
+| `--agent`   | no       | Coding agent Explore / Ticket launch the item's Manager with (`claude-code`, `cursor`, …). Echoed as `agent_kind`. An agent that is not installed is rejected. |
+
+Every item carries an agent and a workspace (CROW-1387). Neither flag is required, because agents and scripts call `todo add`; each value resolves on its own, in this order:
+
+1. the explicit `--workspace` / `--agent`;
+2. the Manager running the command, when `$CROW_SESSION_ID` names an extra Manager tagged with a workspace (`create-manager --workspace`): its workspace and its agent;
+3. the defaults: `defaults.managerWorkspace`, and `agentsByKind.manager ?? defaultAgentKind`.
+
+The command fails only when no workspace resolves, including when `defaults.managerWorkspace` names a workspace that no longer exists. It never guesses one. The web capture form shows both as required fields, filled in from the same defaults.
 
 ### `crow todo list`
 
@@ -708,7 +717,7 @@ crow todo get --id <todo-uuid>
 crow todo edit --id <todo-uuid> --text "changed" --add-tag cli --remove-tag ios
 ```
 
-`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list. `--workspace NAME` sets the item's workspace and `--workspace ""` clears it.
+`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list. `--workspace NAME` sets the item's workspace and `--workspace ""` clears it; `--agent KIND` sets its agent and `--agent ""` clears it.
 
 ### `crow todo done`
 
@@ -751,6 +760,8 @@ crow todo link --id <todo-uuid> --type session --session <session-uuid> --label 
 
 Create a Manager, seed the item as a Scratch explore brief, attach the session, and move state to `exploring`. Needs tmux.
 
+The Manager is tagged with the item's workspace and runs the item's agent (CROW-1387), through the same `create-manager --workspace` path, so it gets that workspace's gateway and starting context. `--agent` and `--workspace` override them for this launch only; the item is not changed. An item with no workspace (captured before CROW-1387) launches an untagged Manager, as before. An item whose workspace no longer exists launches untagged with a `warning`. When the item's linked Manager is still up, the brief goes to it instead; if that Manager is tagged with a different workspace, the response carries a `warning`. A Manager is never re-tagged.
+
 The brief is written to `$TMPDIR/crow-explore-<session>.md` and is the only copy (CROW-1327). A fresh Manager launches with that file as its prompt — nothing is pasted into the TUI afterwards. When the item's linked Manager is already running, the file is rewritten and only one line is typed: `Read and follow the instructions in <path>`. `seeded` is false only when the file could not be written or the Manager pane never appeared.
 
 ```bash
@@ -760,7 +771,7 @@ crow todo explore --id <todo-uuid> --agent cursor
 
 ### `crow todo ticket`
 
-Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore` — written to the brief file and launched as argv, or pointed at with a one-line `Read and follow the instructions in <path>` when the Manager is already up. The agent chooses the repo, files the provider issue, and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`. A second call within 15 minutes, before that URL exists, returns `already_dispatched` and does not open another Manager.
+Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore` — written to the brief file and launched as argv, or pointed at with a one-line `Read and follow the instructions in <path>` when the Manager is already up. The Manager is tagged with the item's workspace and runs its agent, exactly as for `todo explore` (including `--agent` / `--workspace` and the linked-Manager `warning`). The brief names that workspace's ticket provider (GitHub, GitLab, or the Jira project) and its repos, so the agent files there instead of guessing; an item with no workspace leaves the repo to the agent, as before. The agent files the provider issue and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`. A second call within 15 minutes, before that URL exists, returns `already_dispatched` and does not open another Manager.
 
 ```bash
 crow todo ticket --id <todo-uuid>

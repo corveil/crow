@@ -28,13 +28,23 @@ func makeTodoHandlers(
         },
         "todo-add": { params in
             try await mapRPCError {
+                // Agent + workspace (CROW-1387): explicit param → the creating
+                // Manager's tag and agent → the defaults. Errors only when no
+                // workspace resolves.
+                let creatorID = params["from_session"]?.stringValue.flatMap(UUID.init)
+                let creator = await MainActor.run {
+                    creatorID.flatMap { id in appState.sessions.first(where: { $0.id == id }) }
+                }
+                let target = try TodoRPC.captureTarget(
+                    params: params, creator: creator,
+                    config: ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
                 let item = TodoItem(
                     text: try TodoRPC.decodeText(params["text"]),
                     note: TodoRPC.decodeNote(params["note"]),
                     tags: try TodoRPC.decodeTags(params["tags"]),
                     priority: try TodoRPC.decodePriority(params["priority"]),
-                    workspace: try TodoRPC.decodeWorkspace(
-                        params["workspace"], config: todoConfig(params, devRoot: devRoot))
+                    workspace: target.workspace,
+                    agentKind: target.agentKind
                 )
                 repo.save(item)
                 return ["todo": TodoRPC.todoJSON(item)]
@@ -120,7 +130,7 @@ func makeTodoHandlers(
                 try await openScratchManager(
                     params: params, repo: repo, appState: appState,
                     sessionService: sessionService, devRoot: devRoot,
-                    briefFor: TodoRPC.exploreBrief(for:),
+                    briefFor: { item, _ in TodoRPC.exploreBrief(for: item) },
                     rejectIfTicketed: false)
             }
         },
@@ -129,7 +139,7 @@ func makeTodoHandlers(
                 try await openScratchManager(
                     params: params, repo: repo, appState: appState,
                     sessionService: sessionService, devRoot: devRoot,
-                    briefFor: TodoRPC.ticketBrief(for:),
+                    briefFor: TodoRPC.ticketBrief(for:workspace:),
                     rejectIfTicketed: true)
             }
         },
@@ -149,8 +159,9 @@ func makeTodoHandlers(
     return handlers
 }
 
-/// The config a `workspace` param resolves against. Only read from disk when
-/// the param is present, so add/edit without `--workspace` never touch it.
+/// The config a `todo-edit` `workspace` param resolves against. Only read from
+/// disk when the param is present, so an edit without `--workspace` never
+/// touches it.
 private func todoConfig(_ params: [String: JSONValue], devRoot: String) -> AppConfig {
     guard params["workspace"] != nil else { return AppConfig() }
     return ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
@@ -182,7 +193,7 @@ private func openScratchManager(
     appState: AppState,
     sessionService: SessionService?,
     devRoot: String,
-    briefFor: (TodoItem) -> String,
+    briefFor: (TodoItem, WorkspaceInfo?) -> String,
     rejectIfTicketed: Bool
 ) async throws -> [String: JSONValue] {
     var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
@@ -204,23 +215,21 @@ private func openScratchManager(
         throw RPCError.applicationError(
             "Opening a Manager for a Scratch item requires tmux on the daemon host")
     }
-    let requestedAgentKind = params["agent_kind"]?.stringValue
-        .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
-    let brief = briefFor(item)
-    var liveManager: UUID?
+    var liveManager: Session?
     if let existing = item.linkedSessionID {
-        let alive = await MainActor.run {
-            appState.sessions.contains { $0.id == existing && $0.kind == .manager }
+        liveManager = await MainActor.run {
+            appState.sessions.first { $0.id == existing && $0.kind == .manager }
         }
-        if alive { liveManager = existing }
     }
-    // A new Manager needs a workspace (CROW-1386): the item's, else
+    // The item's agent and workspace (CROW-1387); `agent_kind` / `workspace`
+    // params override them for this launch only. A new Manager needs a
+    // workspace (CROW-1386): the override, the item's, else
     // `defaults.managerWorkspace`, else refuse. Resolved before the ticket
     // stamp, so a refusal doesn't hold the dispatch window shut.
-    let tag: ManagerWorkspaceTag.Decision? = liveManager != nil ? nil
-        : try ManagerWorkspaceTag.resolve(
-            requested: nil, context: item.workspace,
-            config: ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
+    let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+    let launch = try TodoRPC.launchTarget(
+        for: item, params: params, config: config, newManager: liveManager == nil)
+    let brief = briefFor(item, launch.workspace)
     // Stamp before the slow Manager launch so a second RPC during startup
     // sees the in-flight window. Explore does not stamp.
     if rejectIfTicketed {
@@ -229,7 +238,8 @@ private func openScratchManager(
         repo.save(item)
     }
 
-    if let existing = liveManager {
+    if let manager = liveManager {
+        let existing = manager.id
         // Re-Explore / Ticket on a live Manager: refresh the brief file and
         // type only a one-line pointer to it — never the multi-line brief
         // (CROW-1327).
@@ -253,10 +263,17 @@ private func openScratchManager(
             "session_id": .string(existing.uuidString),
             "seeded": .bool(seeded),
         ]
+        var warnings: [String] = []
         if !seeded {
-            result["warning"] = .string(
+            warnings.append(
                 "Could not deliver the brief — use `crow todo talk --id \(item.id.uuidString) \"Read and follow the instructions in \(path)\"` once the Manager is ready")
         }
+        // Never re-tag the live Manager (tags are immutable); just say so.
+        if let mismatch = TodoRPC.existingManagerWarning(
+            managerTag: manager.managerWorkspaceTag, launch: launch.workspace, config: config) {
+            warnings.append(mismatch)
+        }
+        if !warnings.isEmpty { result["warning"] = .string(warnings.joined(separator: " ")) }
         return result
     }
 
@@ -266,8 +283,8 @@ private func openScratchManager(
         // agent TUI owns stdin and offset/eat the explore brief (CROW-1237).
         let display = TodoRPC.managerName(from: item.text)
         let id = sessionService.createManagerSession(
-            name: display, cwd: devRoot, agentKind: requestedAgentKind,
-            initialPrompt: brief, workspaceID: tag?.workspaceID)
+            name: display, cwd: devRoot, agentKind: launch.agentKind,
+            initialPrompt: brief, workspaceID: launch.workspace?.id)
         return (id, display)
     }
 
@@ -291,6 +308,7 @@ private func openScratchManager(
         "session_id": .string(sessionID.uuidString),
         "name": .string(name),
         "seeded": .bool(seeded),
+        "workspace_name": launch.workspace.map { .string($0.name) } ?? .null,
     ]
     if !seeded {
         result["warning"] = .string(

@@ -102,9 +102,11 @@ public enum TodoRPC {
     }
 
     /// Apply an edit patch. Only provided fields change. `config` resolves a
-    /// `workspace` param; it is only read when that param is present.
+    /// `workspace` param; it is only read when that param is present. A blank
+    /// `agent_kind` clears the agent, like a blank `workspace`.
     public static func applyingEdit(
-        _ item: TodoItem, params: [String: JSONValue], config: AppConfig = AppConfig()
+        _ item: TodoItem, params: [String: JSONValue], config: AppConfig = AppConfig(),
+        isRegistered: (AgentKind) -> Bool = { AgentRegistry.shared.registeredKind($0) != nil }
     ) throws -> TodoItem {
         var next = item
         if params["text"] != nil {
@@ -118,6 +120,9 @@ public enum TodoRPC {
         }
         if params["workspace"] != nil {
             next.workspace = try decodeWorkspace(params["workspace"], config: config)
+        }
+        if params["agent_kind"] != nil {
+            next.agentKind = try decodeAgentKind(params["agent_kind"], isRegistered: isRegistered)
         }
         if params["state"] != nil {
             next.state = try decodeState(params["state"]) ?? item.state
@@ -323,19 +328,31 @@ public enum TodoRPC {
     /// delivery path as ``exploreBrief(for:)``, but the agent files a real
     /// provider issue and attaches it. Crow does not pick the repo or call
     /// `TaskBackend.createTask`.
-    public static func ticketBrief(for item: TodoItem) -> String {
+    ///
+    /// With a `workspace` (CROW-1387) the brief names its ticket provider and
+    /// repos, so the agent files there instead of choosing a repo itself.
+    public static func ticketBrief(for item: TodoItem, workspace: WorkspaceInfo? = nil) -> String {
         var lines = [
             "You are filing a ticket for a Crow Scratch item from this Manager session. Start now: read the item below, inspect related code in this working directory, and file one provider issue for the repo that owns the work.",
-            "Choose that repo yourself. Do not ask which repo to use, and do not stop for a repo picker.",
+        ]
+        if let workspace {
+            lines.append(contentsOf: ticketDestination(workspace))
+            lines.append("Do not ask which repo to use, and do not stop for a repo picker.")
+        } else {
+            lines.append("Choose that repo yourself. Do not ask which repo to use, and do not stop for a repo picker.")
+        }
+        lines.append(contentsOf: [
             "Write a title and body that stand on their own: what is wrong or wanted, where it lives, and how to tell it is done. Do not file the scratch text unchanged as the title when a clearer title is obvious.",
-            "File it with the provider CLI (`gh issue create`, `glab issue create`, or the workspace's Jira command). Do not create a worktree or start a work session.",
+            workspace == nil
+                ? "File it with the provider CLI (`gh issue create`, `glab issue create`, or the workspace's Jira command). Do not create a worktree or start a work session."
+                : "Do not create a worktree or start a work session.",
             "After the ticket exists, attach it to this Scratch item and stop. Replace the placeholders with the issue you just filed:",
             "crow todo link --id \(item.id.uuidString) --type ticket --url <ticket-url> --label \"Issue #<n>\"",
             "Do not run `crow todo ticket` — a second call within 15 minutes does nothing, and after that it opens another Manager.",
             "",
             "## Scratch item",
             item.text,
-        ]
+        ])
         if !item.note.isEmpty {
             lines.append(contentsOf: ["", "## Notes", item.note])
         }

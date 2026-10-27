@@ -201,24 +201,25 @@ crow job duplicate --id <job-uuid>              → {"job":{...}}   the copy sta
 Durable Scratch items (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. Lives in the shared `JSONStore` (not `config.json`) and is **not** reaped by session cleanup.
 
 ```
-crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME]
+crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME] [--agent KIND]
 crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
 crow todo get --id <uuid>
-crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--workspace NAME|""] [--add-tag ...] [--remove-tag ...]
+crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--workspace NAME|""] [--agent KIND|""] [--add-tag ...] [--remove-tag ...]
 crow todo done --id <uuid>
 crow todo reopen --id <uuid>
 crow todo park --id <uuid>
 crow todo drop --id <uuid>
 crow todo delete --id <uuid>
 crow todo link --id <uuid> --type session|ticket|pr|custom [--url ...] [--session <uuid>] [--label "..."]
-crow todo explore --id <uuid> [--agent claude-code]   → create-manager, seed an explore brief, state → exploring
-crow todo ticket --id <uuid> [--agent claude-code]    → create-manager, seed a file-ticket brief, state → exploring
+crow todo explore --id <uuid> [--agent KIND] [--workspace NAME]  → create-manager, seed an explore brief, state → exploring
+crow todo ticket --id <uuid> [--agent KIND] [--workspace NAME]   → create-manager, seed a file-ticket brief, state → exploring
 crow todo work --id <uuid>                            → /crow-workspace off the linked ticket, state → working
 crow todo talk --id <uuid> "..."                      → crow send to the item's linked Manager
 ```
 
 - Items persist until acted on — unlike completed sessions, they are exempt from the 24h cleanup reaper.
-- `explore` and `ticket` both open a Manager and seed a brief. The brief is written to `$TMPDIR/crow-explore-<session>.md`: a fresh Manager launches with that file as its prompt (argv, nothing pasted), and a Manager that is already up is typed one line, `Read and follow the instructions in <path>` (CROW-1327). `seeded` is false only when the file could not be written or the pane never appeared; `todo talk` (or that same one-liner) can finish it. `ticket` tells the agent to file the provider issue and attach it with `todo link --type ticket` (state → ticketed). There is no repo picker. A second `todo ticket` within 15 minutes is a no-op until that URL is linked — do not call it again from the filing Manager.
+- Every item carries an **agent** and a **workspace** (CROW-1387), echoed as `agent_kind` / `workspace`. `todo add` resolves each from its flag, then the Manager running it when that Manager is tagged with a workspace (`$CROW_SESSION_ID`), then the defaults (`defaults.managerWorkspace`; `agentsByKind.manager ?? defaultAgentKind`). It fails only when no workspace resolves — it never guesses one. Items from before CROW-1387 have neither and launch as they always did.
+- `explore` and `ticket` both open a Manager and seed a brief. The brief is written to `$TMPDIR/crow-explore-<session>.md`: a fresh Manager launches with that file as its prompt (argv, nothing pasted), and a Manager that is already up is typed one line, `Read and follow the instructions in <path>` (CROW-1327). `seeded` is false only when the file could not be written or the pane never appeared; `todo talk` (or that same one-liner) can finish it. `explore` / `ticket` launch a Manager tagged with the item's workspace and running its agent; `--agent` / `--workspace` override them for that launch only. `ticket` tells the agent to file into that workspace's ticket provider and repos, then attach the issue with `todo link --type ticket` (state → ticketed). There is no repo picker. When the item's linked Manager is still up, the brief goes there instead; if that Manager's workspace differs, the response carries a `warning` and the Manager is never re-tagged. A second `todo ticket` within 15 minutes is a no-op until that URL is linked — do not call it again from the filing Manager.
 - `work` needs a linked ticket (`todo link --type ticket`).
 - Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
 
