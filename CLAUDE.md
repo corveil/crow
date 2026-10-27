@@ -200,10 +200,10 @@ crow job duplicate --id <job-uuid>              → {"job":{...}}   the copy sta
 Durable Scratch items (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. Lives in the shared `JSONStore` (not `config.json`) and is **not** reaped by session cleanup.
 
 ```
-crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."]
+crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME]
 crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
 crow todo get --id <uuid>
-crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--add-tag ...] [--remove-tag ...]
+crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--workspace NAME|""] [--add-tag ...] [--remove-tag ...]
 crow todo done --id <uuid>
 crow todo reopen --id <uuid>
 crow todo park --id <uuid>

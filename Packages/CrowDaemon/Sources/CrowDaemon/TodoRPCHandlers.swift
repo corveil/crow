@@ -32,7 +32,9 @@ func makeTodoHandlers(
                     text: try TodoRPC.decodeText(params["text"]),
                     note: TodoRPC.decodeNote(params["note"]),
                     tags: try TodoRPC.decodeTags(params["tags"]),
-                    priority: try TodoRPC.decodePriority(params["priority"])
+                    priority: try TodoRPC.decodePriority(params["priority"]),
+                    workspace: try TodoRPC.decodeWorkspace(
+                        params["workspace"], config: todoConfig(params, devRoot: devRoot))
                 )
                 repo.save(item)
                 return ["todo": TodoRPC.todoJSON(item)]
@@ -41,7 +43,8 @@ func makeTodoHandlers(
         "todo-edit": { params in
             try await mapRPCError {
                 var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
-                item = try TodoRPC.applyingEdit(item, params: params)
+                item = try TodoRPC.applyingEdit(
+                    item, params: params, config: todoConfig(params, devRoot: devRoot))
                 repo.save(item)
                 return ["todo": TodoRPC.todoJSON(item)]
             }
@@ -144,6 +147,13 @@ func makeTodoHandlers(
         },
     ]
     return handlers
+}
+
+/// The config a `workspace` param resolves against. Only read from disk when
+/// the param is present, so add/edit without `--workspace` never touch it.
+private func todoConfig(_ params: [String: JSONValue], devRoot: String) -> AppConfig {
+    guard params["workspace"] != nil else { return AppConfig() }
+    return ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
 }
 
 private func requireTodo(id: UUID, repo: TodoRepository) throws -> TodoItem {

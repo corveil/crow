@@ -24,6 +24,14 @@ struct TodoItemTests {
         #expect(decoded.tags.isEmpty)
         #expect(decoded.links.isEmpty)
         #expect(decoded.ticketRequestedAt == nil)
+        #expect(decoded.workspace == nil)
+    }
+
+    @Test func workspaceRoundTrips() throws {
+        let item = TodoItem(text: "tagged", workspace: "Corveil")
+        let data = try JSONEncoder().encode(item)
+        let decoded = try JSONDecoder().decode(TodoItem.self, from: data)
+        #expect(decoded.workspace == "Corveil")
     }
 
     @Test func normalizePriorityAcceptsP1ThroughP4() throws {

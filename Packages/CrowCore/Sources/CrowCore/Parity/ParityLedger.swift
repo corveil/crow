@@ -464,7 +464,10 @@ public enum ParityLedger {
                 """),
 
         // Scratch / pre-ticket ideas (CROW-1231). Reads are MCP-exported at
-        // `todos:read`; writes stay CLI/web-only (ADR 0019).
+        // `todos:read`; writes stay CLI/web-only (ADR 0019). `TodoItem` lives in
+        // `store.json`, not `AppConfig`, so its fields have no `configFields` row:
+        // the item's `workspace` (CROW-1383) is covered by `todo add --workspace`
+        // / `todo edit --workspace` here and read back by `todo list` / `todo get`.
         .read("todo-list", cli: "todo list", mcp: .read(scope: .todosRead)),
         .read("todo-get", cli: "todo get", mcp: .read(scope: .todosRead)),
         .write("todo-add", cli: "todo add"),

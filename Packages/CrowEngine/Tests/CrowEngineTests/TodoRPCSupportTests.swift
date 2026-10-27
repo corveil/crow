@@ -20,6 +20,55 @@ struct TodoRPCSupportTests {
         #expect(throws: RPCError.self) { _ = try TodoRPC.decodePriority(.string("high")) }
     }
 
+    // MARK: - Workspace (CROW-1383)
+
+    private func workspaceConfig() -> AppConfig {
+        var config = AppConfig()
+        config.workspaces = [WorkspaceInfo(name: "Corveil"), WorkspaceInfo(name: "Acme")]
+        return config
+    }
+
+    @Test func decodeWorkspaceResolvesToCanonicalName() throws {
+        let config = workspaceConfig()
+        #expect(try TodoRPC.decodeWorkspace(.string(" corveil "), config: config) == "Corveil")
+        let acmeID = config.workspaces[1].id.uuidString
+        #expect(try TodoRPC.decodeWorkspace(.string(acmeID), config: config) == "Acme")
+    }
+
+    @Test func decodeWorkspaceBlankOrAbsentIsNil() throws {
+        let config = workspaceConfig()
+        #expect(try TodoRPC.decodeWorkspace(nil, config: config) == nil)
+        #expect(try TodoRPC.decodeWorkspace(.null, config: config) == nil)
+        #expect(try TodoRPC.decodeWorkspace(.string("  "), config: config) == nil)
+    }
+
+    @Test func decodeWorkspaceRejectsUnknownAndNonString() {
+        let config = workspaceConfig()
+        #expect(throws: RPCError.self) {
+            _ = try TodoRPC.decodeWorkspace(.string("Nope"), config: config)
+        }
+        #expect(throws: RPCError.self) {
+            _ = try TodoRPC.decodeWorkspace(.int(1), config: config)
+        }
+    }
+
+    @Test func applyingEditSetsAndClearsWorkspace() throws {
+        let config = workspaceConfig()
+        let item = TodoItem(text: "a")
+        let set = try TodoRPC.applyingEdit(
+            item, params: ["workspace": .string("acme")], config: config)
+        #expect(set.workspace == "Acme")
+        let untouched = try TodoRPC.applyingEdit(set, params: ["note": .string("n")], config: config)
+        #expect(untouched.workspace == "Acme")
+        let cleared = try TodoRPC.applyingEdit(set, params: ["workspace": .string("")], config: config)
+        #expect(cleared.workspace == nil)
+    }
+
+    @Test func todoJSONCarriesWorkspace() {
+        let json = TodoRPC.todoJSON(TodoItem(text: "a", workspace: "Corveil"))
+        #expect(json.objectValue?["workspace"]?.stringValue == "Corveil")
+    }
+
     @Test func decodeStateRejectsUnknown() {
         #expect(throws: RPCError.self) { _ = try TodoRPC.decodeState(.string("maybe")) }
     }

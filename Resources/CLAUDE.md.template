@@ -119,10 +119,10 @@ crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"ga
 
 ### Todo Commands
 ```
-crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."]
+crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME]
 crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
 crow todo get --id <uuid>
-crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--add-tag ...] [--remove-tag ...]
+crow todo edit --id <uuid> [--text ...] [--note ...] [--priority ...] [--workspace NAME|""] [--add-tag ...] [--remove-tag ...]
 crow todo done --id <uuid>
 crow todo reopen --id <uuid>
 crow todo park --id <uuid>
