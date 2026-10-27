@@ -201,11 +201,24 @@ public struct StartReview: ParsableCommand {
 public struct CreateManager: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "create-manager",
-        abstract: "Create an additional Manager session"
+        abstract: "Create an additional Manager session",
+        discussion: """
+        --workspace tags the new Manager with a workspace for its whole life: it \
+        launches with that workspace's AI gateway (falling back to the Manager \
+        gateway when the workspace has none), ships its transcripts when the \
+        workspace has session-log upload on, and starts with the workspace's \
+        provider, repos and custom instructions. Omit it to use \
+        `defaults.managerWorkspace` (`crow defaults set --manager-workspace`); pass \
+        `none` for an untagged, cross-workspace Manager. The tag cannot be changed \
+        later, and the primary Manager is never tagged.
+        """
     )
 
     @Option(name: .long, help: "Coding agent kind (claude-code, cursor, codex, opencode, antigravity, grok, muse); default agent when omitted")
     var agent: String?
+
+    @Option(name: .long, help: "Workspace to tag the Manager with (name or UUID), or 'none' for untagged; defaults.managerWorkspace when omitted")
+    var workspace: String?
 
     public init() {}
 
@@ -216,14 +229,21 @@ public struct CreateManager: ParsableCommand {
         if let agent, agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw ValidationError("--agent must not be blank (e.g. claude-code, cursor, codex, opencode, antigravity, grok, muse).")
         }
+        // Blank would silently mean "untagged" over the wire; make the caller
+        // say `none` so a missing shell variable can't do it by accident.
+        if let workspace, workspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ValidationError("--workspace must not be blank — pass a workspace name, or 'none' for an untagged Manager.")
+        }
     }
 
     public func run() throws {
         var params: [String: JSONValue] = [:]
         if let agent { params["agent_kind"] = .string(agent) }
+        if let workspace { params["workspace"] = .string(workspace) }
         // Spawns a tmux window and launches the agent in it.
         let result = try rpc("create-manager", params: params, timeoutSeconds: boardTimeout)
         printJSON(result)
+        if let warning = result["warning"]?.stringValue { warn(warning) }
     }
 }
 

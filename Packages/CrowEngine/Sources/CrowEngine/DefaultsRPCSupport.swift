@@ -77,6 +77,30 @@ public enum DefaultsRPC {
         return trimmed
     }
 
+    /// Raw `manager_workspace` param (CROW-1382): trimmed, with `""` meaning
+    /// "clear the default". Resolution against the workspace list happens in
+    /// ``resolveManagerWorkspace(_:in:)``, inside the config lock, so a
+    /// workspace removed between the read and the write can't be stored.
+    ///
+    /// - Returns: `nil` when the key is absent or null.
+    public static func patchManagerWorkspace(
+        _ params: [String: JSONValue], _ key: String = "manager_workspace"
+    ) throws -> String? {
+        try patchString(params, key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Resolve a decoded `manager_workspace` value to what gets stored: nil for
+    /// `""` (clear), otherwise the workspace's canonical name. Accepts a name
+    /// (case-insensitive) or a workspace UUID, through the same
+    /// `WorkspaceRPC.resolveIndex` every other `--workspace` flag uses.
+    ///
+    /// - Throws: `RPCError.invalidParams` for a name that matches no workspace,
+    ///   or more than one.
+    public static func resolveManagerWorkspace(_ raw: String, in config: AppConfig) throws -> String? {
+        guard !raw.isEmpty else { return nil }
+        return config.workspaces[try WorkspaceRPC.resolveIndex(raw, in: config)].name
+    }
+
     private static func patchString(
         _ params: [String: JSONValue], _ key: String
     ) throws -> String? {
@@ -320,7 +344,7 @@ public enum DefaultsRPC {
     /// shape reviewable at a glance and free of any Bool-vs-number coercion
     /// difference between Darwin Foundation and swift-corelibs-foundation.
     ///
-    /// All eleven fields are echoed even though `defaults-set` writes nine —
+    /// All twelve fields are echoed even though `defaults-set` writes ten —
     /// `exclude_dirs` and `mirror_claude_mcp_to_codex` have no web editor either,
     /// and hiding them would make `get` a worse answer to "what is my config?".
     /// Carries no credentials, so unlike `get-config` this needs no
@@ -338,6 +362,7 @@ public enum DefaultsRPC {
             "mirror_claude_mcp_to_codex": .bool(defaults.mirrorClaudeMCPToCodex),
             "corveil_auto_update": .bool(defaults.corveilAutoUpdate),
             "corveil_version": .string(defaults.corveilVersion),
+            "manager_workspace": defaults.managerWorkspace.map { .string($0) } ?? .null,
         ])
     }
 

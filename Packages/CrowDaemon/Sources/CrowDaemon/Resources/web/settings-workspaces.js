@@ -365,7 +365,12 @@
     document.body.appendChild(overlay);
 
     // A session is selectable when it hasn't already uploaded.
-    function bfSelectable(s) { return (s.upload_status || 'new') !== 'uploaded'; }
+    // Manager transcripts (workspace `.crow`) are never offered: the server
+    // refuses them under a workspace gateway (CROW-1382), and a tagged Manager
+    // ships its own as it runs.
+    function bfSelectable(s) {
+      return (s.upload_status || 'new') !== 'uploaded' && s.workspace !== '.crow';
+    }
 
     function setOptions(sel, opts, value) {
       sel.innerHTML = '';
@@ -493,7 +498,9 @@
       note = '';
       refresh();
       try {
-        const res = await rpc('backfill-upload', { workspace: workspaceName, sessions: uids });
+        // Ticking an orphan row here is the explicit opt-in the CLI spells
+        // `--allow-orphans`: the table labels its confidence (CROW-1382).
+        const res = await rpc('backfill-upload', { workspace: workspaceName, sessions: uids, allow_orphans: true });
         // Key results by (uid, harness): a UID shared by a Claude and a Codex row
         // maps each scan row to its own outcome instead of overwriting (CROW-1089).
         const outcomeKey = (o) => (o.uid || '') + ' ' + (o.harness || 'claude');

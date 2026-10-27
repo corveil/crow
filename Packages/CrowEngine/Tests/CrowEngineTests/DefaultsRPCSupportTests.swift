@@ -274,7 +274,7 @@ struct DefaultsRPCSupportTests {
 
     // MARK: - Response encoding
 
-    @Test func defaultsJSONEchoesAllElevenFieldsSnakeCased() throws {
+    @Test func defaultsJSONEchoesAllTwelveFieldsSnakeCased() throws {
         var defaults = ConfigDefaults()
         defaults.excludeReviewRepos = ["acme/docs"]
         defaults.binaries = ["corveil": "/opt/corveil"]
@@ -292,7 +292,38 @@ struct DefaultsRPCSupportTests {
             "mirror_claude_mcp_to_codex": .bool(true),
             "corveil_auto_update": .bool(true),
             "corveil_version": .string("latest"),
+            "manager_workspace": .null,
         ]))
+    }
+
+    // MARK: - manager_workspace (CROW-1382)
+
+    private func configWithWorkspaces(_ names: [String]) -> AppConfig {
+        var config = AppConfig()
+        config.workspaces = names.map { WorkspaceInfo(name: $0) }
+        return config
+    }
+
+    @Test func managerWorkspacePatchIsTrimmedAndAbsentIsNil() throws {
+        #expect(try DefaultsRPC.patchManagerWorkspace([:]) == nil)
+        #expect(try DefaultsRPC.patchManagerWorkspace(["manager_workspace": .null]) == nil)
+        #expect(try DefaultsRPC.patchManagerWorkspace(["manager_workspace": .string("  Corveil ")]) == "Corveil")
+        // "" survives decoding — it is the clear sentinel, resolved below.
+        #expect(try DefaultsRPC.patchManagerWorkspace(["manager_workspace": .string("")]) == "")
+        #expect(throws: RPCError.self) {
+            _ = try DefaultsRPC.patchManagerWorkspace(["manager_workspace": .int(3)])
+        }
+    }
+
+    @Test func managerWorkspaceResolvesToCanonicalNameOrClears() throws {
+        let config = configWithWorkspaces(["Corveil", "Radius"])
+        #expect(try DefaultsRPC.resolveManagerWorkspace("corveil", in: config) == "Corveil")
+        #expect(try DefaultsRPC.resolveManagerWorkspace(
+            config.workspaces[1].id.uuidString, in: config) == "Radius")
+        #expect(try DefaultsRPC.resolveManagerWorkspace("", in: config) == nil)
+        #expect(throws: RPCError.self) {
+            _ = try DefaultsRPC.resolveManagerWorkspace("Nope", in: config)
+        }
     }
 
     /// `defaults` carries binary paths (already remotely visible through un-gated

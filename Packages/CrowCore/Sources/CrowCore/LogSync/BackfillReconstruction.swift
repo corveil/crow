@@ -383,3 +383,37 @@ public enum BackfillReconstructor {
         return "https://\(remote.host)/\(remote.owner)/\(remote.repo)/\(segment)/\(number)"
     }
 }
+
+/// Which scanned rows `backfill upload` refuses unless the caller opts in
+/// (CROW-1382).
+///
+/// The upload destination and credential come from whichever workspace the
+/// caller names, and an explicit `--session <uid>` used to select *any* scanned
+/// row — so a Manager's transcript, or one Crow could not attribute to any
+/// repo, shipped under an unrelated workspace's gateway with nothing to say it
+/// didn't belong there. Live shipping already routes a tagged Manager through
+/// its own workspace; backfill now leaves those rows alone unless asked.
+public enum BackfillUploadGuard {
+    /// The dev-root directory extra Managers run in (`.crow/managers/<uuid>`,
+    /// ADR 0028). A transcript whose reconstructed workspace is this name was
+    /// written by a Manager, not a workspace session.
+    public static let managerWorkspaceName = ".crow"
+
+    /// Why `session` is refused, or nil when it may upload.
+    public static func refusalReason(
+        for session: BackfillSession, allowOrphans: Bool, allowManagerTranscripts: Bool
+    ) -> String? {
+        if session.workspace == managerWorkspaceName {
+            return allowManagerTranscripts
+                ? nil
+                : "manager_transcript: written by a Manager session, not this workspace "
+                    + "(pass --allow-manager-transcripts to upload it anyway)"
+        }
+        if session.confidence == .low {
+            return allowOrphans
+                ? nil
+                : "orphan: no repo could be attributed (pass --allow-orphans to upload it anyway)"
+        }
+        return nil
+    }
+}

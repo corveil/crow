@@ -99,6 +99,14 @@ unbounded.
   `crow backfill upload --workspace NAME (--session UID… | --all-high-confidence | --all)`.
   See [cli-reference.md](cli-reference.md#session-backfill-commands).
 
+Orphans (`low` confidence) and Manager transcripts (workspace `.crow`) are
+refused by `upload` unless the caller passes `--allow-orphans` /
+`--allow-manager-transcripts` (CROW-1382) — neither belongs to the workspace whose
+gateway would carry it. The Settings table counts a ticked orphan row as that
+opt-in and never offers Manager rows. A Manager tagged with a workspace ships its
+own transcripts live, one upload per harness conversation, through that
+workspace's gateway.
+
 ## Scope
 
 - **Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code** — the

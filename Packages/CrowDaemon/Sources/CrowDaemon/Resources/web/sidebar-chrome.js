@@ -182,7 +182,16 @@ function sidebarIconColumn() {
   const plus = el('button', 'nav-plus', '+');
   plus.title = 'New Manager session';
   plus.setAttribute('aria-label', 'New Manager session');
-  plus.onclick = () => openNewManagerMenu(plus);
+  // Plain click is the fast path; ⌥-click, right-click or a long press opens
+  // the Agent + Workspace dialog (CROW-1382). The agent menu also links to the
+  // dialog, since a phone has neither ⌥ nor a right button.
+  plus.onclick = (ev) => {
+    if (plus.__longPressed) { plus.__longPressed = false; return; }
+    if (ev.altKey) { openNewManagerDialog(); return; }
+    newManagerFastPath(plus);
+  };
+  plus.oncontextmenu = (ev) => { ev.preventDefault(); openNewManagerDialog(); };
+  attachLongPress(plus, () => { plus.__longPressed = true; openNewManagerDialog(); });
   col.appendChild(plus);
 
   // Select-sessions toggle (CROW-913 → moved into this column, CROW-917): toggles
@@ -266,9 +275,149 @@ function rcGlyph() {
   return span;
 }
 
-async function createManager(agentKind) {
-  try { await rpc('create-manager', agentKind ? { agent_kind: agentKind } : undefined); }
+// `workspace` is omitted to let the daemon apply `defaults.managerWorkspace`;
+// 'none' asks for an untagged Manager (CROW-1382).
+async function createManager(agentKind, workspace) {
+  const params = {};
+  if (agentKind) params.agent_kind = agentKind;
+  if (workspace) params.workspace = workspace;
+  try { await rpc('create-manager', Object.keys(params).length ? params : undefined); }
   catch (e) { alertModal('New manager failed: ' + (e.message || e)); }
+}
+
+// "+" plain click (CROW-1382): with a default Manager workspace configured,
+// create straight away with the default agent and that workspace. Without one,
+// fall through to the agent menu exactly as before.
+async function newManagerFastPath(anchorEl) {
+  let fallback = null;
+  try { const r = await rpc('defaults-get'); fallback = r && r.defaults && r.defaults.manager_workspace; }
+  catch (_) { /* app down — the menu path handles that */ }
+  if (fallback) { createManager(); return; }
+  openNewManagerMenu(anchorEl);
+}
+
+// Fire `onLongPress` after a held touch, for the touch screens that have no
+// right-click or ⌥ to reach the dialog with. Moving or lifting early cancels.
+function attachLongPress(target, onLongPress, ms = 550) {
+  let timer = null;
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  target.addEventListener('touchstart', () => {
+    cancel();
+    timer = setTimeout(() => { timer = null; onLongPress(); }, ms);
+  }, { passive: true });
+  target.addEventListener('touchend', cancel);
+  target.addEventListener('touchmove', cancel, { passive: true });
+  target.addEventListener('touchcancel', cancel);
+}
+
+// New-Manager dialog (CROW-1382): Agent and Workspace pickers, both seeded from
+// the configured defaults, plus "Make default" to write the choice back. The
+// workspace tag is permanent for that Manager, which the hint says.
+// Android fires both `contextmenu` and the long press for one hold, so a
+// second open while the first is still loading is dropped.
+let newManagerDialogPending = false;
+async function openNewManagerDialog() {
+  closeContextMenu();
+  if (newManagerDialogPending || document.querySelector('.new-manager-card')) return;
+  newManagerDialogPending = true;
+  let agents = [], workspaces = [], defaultAgent = null, defaultWorkspace = null;
+  try {
+    const [a, w, g, d] = await Promise.all([
+      rpc('list-agents'), rpc('workspace-list'), rpc('agents-get'), rpc('defaults-get'),
+    ]);
+    agents = (a && a.agents) || [];
+    workspaces = (w && w.workspaces) || [];
+    defaultAgent = g && g.agents && g.agents.effective && g.agents.effective.manager;
+    defaultWorkspace = d && d.defaults && d.defaults.manager_workspace;
+  } catch (e) {
+    alertModal('Could not load agents and workspaces: ' + (e.message || e));
+    return;
+  } finally { newManagerDialogPending = false; }
+  if (!defaultAgent) { const d = agents.find((x) => x.default); defaultAgent = d && d.kind; }
+  const known = workspaces.find((ws) => defaultWorkspace && ws.name.toLowerCase() === defaultWorkspace.toLowerCase());
+  const initialWorkspace = known ? known.name : 'none';
+
+  const backdrop = el('div', 'text-prompt-backdrop modal-dialog-backdrop');
+  const card = el('div', 'text-prompt-card new-manager-card');
+  card.appendChild(el('div', 'text-prompt-title', 'New Manager'));
+
+  const agentSel = el('select', 'text-prompt-input');
+  for (const a of agents) {
+    const enabled = a.available !== false;
+    const opt = el('option', null, (a.name || a.kind) + (enabled ? '' : ' (not installed)'));
+    opt.value = a.kind;
+    opt.disabled = !enabled;
+    if (a.kind === defaultAgent) opt.selected = true;
+    agentSel.appendChild(opt);
+  }
+  const wsSel = el('select', 'text-prompt-input');
+  const none = el('option', null, 'None (cross-workspace)');
+  none.value = 'none';
+  wsSel.appendChild(none);
+  for (const ws of workspaces) {
+    const opt = el('option', null, ws.name);
+    opt.value = ws.name;
+    wsSel.appendChild(opt);
+  }
+  wsSel.value = initialWorkspace;
+
+  const field = (label, control) => {
+    const row = el('label', 'new-manager-field');
+    row.appendChild(el('span', 'new-manager-label', label));
+    row.appendChild(control);
+    return row;
+  };
+  card.appendChild(field('Agent', agentSel));
+  card.appendChild(field('Workspace', wsSel));
+  card.appendChild(el('div', 'new-manager-hint',
+    'A workspace sets this Manager’s AI gateway, transcript upload and starting context. It can’t be changed later.'));
+  const makeDefault = el('input');
+  makeDefault.type = 'checkbox';
+  const check = el('label', 'new-manager-check');
+  check.append(makeDefault, el('span', null, 'Make default'));
+  card.appendChild(check);
+
+  const actions = el('div', 'text-prompt-actions');
+  const cancel = el('button', 'text-prompt-btn', 'Cancel');
+  const ok = el('button', 'text-prompt-btn primary', 'Create');
+  actions.append(cancel, ok);
+  card.appendChild(actions);
+  backdrop.appendChild(card);
+
+  let done = false;
+  function close() {
+    if (done) return;
+    done = true;
+    document.removeEventListener('keydown', onKey, true);
+    backdrop.remove();
+  }
+  async function submit() {
+    if (done) return;
+    const agent = agentSel.value || undefined;
+    const workspace = wsSel.value || 'none';
+    close();
+    if (makeDefault.checked) {
+      try {
+        await rpc('defaults-set', { manager_workspace: workspace === 'none' ? '' : workspace });
+        if (agent && agent !== defaultAgent) await rpc('agents-set', { by_kind: { manager: agent } });
+      } catch (e) { alertModal('Could not save the defaults: ' + (e.message || e)); }
+    }
+    createManager(agent, workspace);
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); submit(); }
+  }
+  cancel.onclick = close;
+  ok.onclick = submit;
+  backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) close(); });
+  // `.modal-dialog-backdrop` so a later modalDialog supersedes this one.
+  backdrop.__finish = close;
+  document.querySelectorAll('.modal-dialog-backdrop')
+    .forEach((b) => (b.__finish ? b.__finish(false) : b.remove()));
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(backdrop);
+  ok.focus();
 }
 
 // Help copy for an agent whose binary wasn't found on the daemon's PATH at
@@ -291,6 +440,8 @@ function agentUnavailableHint(a) {
 async function openNewManagerMenu(anchorEl) {
   let agents = [];
   try { const r = await rpc('list-agents'); agents = (r && r.agents) || []; } catch (_) { /* app down */ }
+  // A Manager created from this menu takes the agent picked here and no
+  // workspace: the menu only runs when no default workspace is set.
   if (agents.length < 2) { createManager(agents[0] && agents[0].kind); return; }
   closeContextMenu();
   const menu = el('div', 'ctx-menu');
@@ -308,6 +459,11 @@ async function openNewManagerMenu(anchorEl) {
     }
     menu.appendChild(item);
   }
+  // The dialog is otherwise reachable only by ⌥/right-click/long-press;
+  // listing it here keeps the workspace tag one tap away on a phone (CROW-1382).
+  const more = el('div', 'ctx-item', 'Agent & workspace…');
+  more.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); openNewManagerDialog(); };
+  menu.appendChild(more);
   document.body.appendChild(menu);
   const rect = anchorEl.getBoundingClientRect();
   const x = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8);

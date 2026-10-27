@@ -456,14 +456,16 @@ func makeSettingsHandlers(
                     try DefaultsRPC.patchStringList(params, "ignore_review_labels")
                 let corveilAutoUpdate = try SettingsRPC.patchBool(params, "corveil_auto_update")
                 let corveilVersion = try DefaultsRPC.patchCorveilVersion(params)
+                let managerWorkspace = try DefaultsRPC.patchManagerWorkspace(params)
 
                 guard provider != nil || cli != nil || branchPrefix != nil || binaries != nil
                         || excludeReviewRepos != nil || excludeTicketRepos != nil
                         || ignoreReviewLabels != nil
-                        || corveilAutoUpdate != nil || corveilVersion != nil else {
+                        || corveilAutoUpdate != nil || corveilVersion != nil
+                        || managerWorkspace != nil else {
                     throw RPCError.invalidParams(
                         "Nothing to set — provide at least one of provider, cli, branch_prefix, "
-                      + "binaries, corveil_auto_update, corveil_version, "
+                      + "binaries, corveil_auto_update, corveil_version, manager_workspace, "
                       + "or an add_/remove_/clear_ param for a list.")
                 }
 
@@ -496,6 +498,12 @@ func makeSettingsHandlers(
                         }
                     }
                     if let corveilVersion { config.defaults.corveilVersion = corveilVersion }
+                    if let managerWorkspace {
+                        // Resolved under the config lock, against the
+                        // workspace list this write is about to persist.
+                        config.defaults.managerWorkspace =
+                            try DefaultsRPC.resolveManagerWorkspace(managerWorkspace, in: config)
+                    }
                     return (before, config.defaults)
                 }
 

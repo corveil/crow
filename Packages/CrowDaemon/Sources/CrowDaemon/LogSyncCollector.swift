@@ -63,8 +63,18 @@ struct LogSyncCollector {
         // all filesystem/network work off it. The session's PRODUCED PR is resolved
         // here too (CROW-1115) — `producedPR` reads the actor-isolated
         // `prAttributions` and session `.pr` links, so it must run inside this hop.
-        let snapshot: [(session: Session, worktrees: [SessionWorktree], producedPR: (url: String, number: Int)?)] = await MainActor.run {
-            appState.sessions.map { ($0, appState.worktrees(for: $0.id), appState.producedPR(for: $0)) }
+        //
+        // A Manager has no worktree; what locates its transcripts is the cwd of
+        // its agent pane (the `.crow/managers/<uuid>` identity dir for an extra
+        // Manager), so that is snapshotted instead (CROW-1382).
+        let snapshot: [(session: Session, worktrees: [SessionWorktree], producedPR: (url: String, number: Int)?, managerCwd: String?)] = await MainActor.run {
+            appState.sessions.map { session in
+                let managerCwd = session.isManager
+                    ? appState.terminals(for: session.id)
+                        .first(where: { $0.isAgentSurface(session: session) })?.cwd
+                    : nil
+                return (session, appState.worktrees(for: session.id), appState.producedPR(for: session), managerCwd)
+            }
         }
 
         let nowDate = now()
@@ -77,9 +87,16 @@ struct LogSyncCollector {
         // the same actor via `shared(devRoot:)`.
         let ledgerStore = LogSyncLedgerStore.shared(devRoot: devRoot)
 
-        for (session, worktrees, producedPR) in snapshot {
-            // Manager sessions run at the dev root, not in a workspace worktree.
-            if session.isManager { continue }
+        for (session, worktrees, producedPR, managerCwd) in snapshot {
+            // Managers have no worktree to derive a workspace from. Only an
+            // extra Manager tagged with an opted-in workspace ships; untagged
+            // ones — the primary always among them — never do (CROW-1382).
+            if session.isManager {
+                await sweepManager(
+                    session: session, cwd: managerCwd, appConfig: appConfig, config: config,
+                    ledgerStore: ledgerStore, nowDate: nowDate, quietPeriod: quietPeriod)
+                continue
+            }
             guard let worktree = primaryWorktree(worktrees) else { continue }
 
             guard let workspaceName = SessionService.workspaceName(
@@ -195,7 +212,88 @@ struct LogSyncCollector {
         await ledgerStore.prune(retentionDays: config.retentionDays, now: nowEpoch)
     }
 
+    /// Ship a tagged Manager's transcripts (CROW-1382).
+    ///
+    /// Same opt-in and security invariant as a workspace session: the Manager's
+    /// tagged workspace must have `uploadSessionLogs` on, and the destination +
+    /// credential come solely from that workspace's local-only gateway — never
+    /// `AppConfig.managerGateway`, which the Manager may *launch* with when its
+    /// workspace has none, but which is no workspace's upload address.
+    ///
+    /// Unlike a work session, a Manager is long-lived and resumes: it can run
+    /// many harness conversations, and the server keeps one artifact per
+    /// `(uid, harness, kind)` forever. Uploading under the Crow session id
+    /// would ship the first conversation and 409 every later one. So each
+    /// conversation is its own upload, keyed — in the ledger and in the URL —
+    /// by the harness's conversation id. That is also the uid `backfill scan`
+    /// reports for the same file, so a conversation shipped here reads as
+    /// uploaded there too.
+    private func sweepManager(
+        session: Session, cwd: String?, appConfig: AppConfig, config: LogSyncConfig,
+        ledgerStore: LogSyncLedgerStore, nowDate: Date, quietPeriod: TimeInterval
+    ) async {
+        guard let tag = session.managerWorkspaceTag,
+              let workspace = appConfig.workspaces.first(where: { $0.id == tag }),
+              workspace.uploadSessionLogs,
+              let cwd
+        else { return }
+        guard let upload = Self.resolvedUpload(for: workspace, resolveSecret: resolveSecret) else {
+            LogSyncLog.warnOnce("log-sync: workspace \"\(workspace.name)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
+            return
+        }
+        let nowEpoch = nowDate.timeIntervalSince1970
+        let kind = LogSyncArtifactKind.sessionTranscript
+        for ref in Self.managerConversations(session) {
+            let harness = LogSyncHarness(agentKind: ref.agentKind)
+            let ledgerKey = LogSyncLedger.key(sessionUID: ref.id, harness: harness, kind: kind)
+            guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
+            // By conversation id, never by "whatever is in the cwd" — see
+            // `HarnessTranscriptLocator.transcriptFile`. Cursor and OpenCode
+            // have no per-conversation file and are skipped.
+            guard let located = HarnessTranscriptLocator.transcriptFile(
+                    kind: ref.agentKind, conversationID: ref.id, cwd: cwd) else { continue }
+            let file = URL(fileURLWithPath: located.path)
+            // The conversation still being written to can grow, and the
+            // server's write-once 409 forbids replacing it. A Manager is never
+            // `completed`, so quiescence is the only gate.
+            if let newest = Self.newestModification([file]),
+               nowDate.timeIntervalSince(newest) < quietPeriod { continue }
+            guard let transcript = TranscriptNormalizer.normalize(
+                    files: [file], format: located.format, maxBytes: max(1, config.maxUploadBytes))
+            else { continue }
+
+            let sha = Self.sha256Hex(transcript.data)
+            let metadata = LogSyncSessionMetadata(
+                name: session.name,
+                status: session.status.rawValue,
+                agentKind: ref.agentKind.rawValue,
+                orgGoal: session.orgGoal)
+            let result = await uploader.upload(
+                baseURL: upload.baseURL, apiKey: upload.apiKey,
+                sessionUID: ref.id,
+                harness: harness, kind: kind, format: located.format.artifactStamp,
+                transcript: transcript, metadata: metadata, agentSessionID: ref.id)
+            let entry = Self.ledgerEntry(for: result, sha: sha, size: transcript.data.count, at: nowEpoch)
+            await ledgerStore.record(key: ledgerKey, entry: entry)
+            if result.isSuccess {
+                LogSyncLog.info("uploaded Manager transcript \(ref.id) for session \(session.id.uuidString) (\(harness.rawValue), \(transcript.data.count) bytes)")
+            }
+        }
+    }
+
     // MARK: - Pure helpers (unit-tested)
+
+    /// Every conversation a Manager has run, oldest first: its recorded
+    /// history, plus the current id when it predates the history (a Manager
+    /// whose last hook fired before CROW-1382 recorded one).
+    static func managerConversations(_ session: Session) -> [HarnessConversationRef] {
+        var refs = session.harnessConversationHistory
+        if let current = session.harnessConversationID,
+           !refs.contains(where: { $0.id == current }) {
+            refs.append(HarnessConversationRef(agentKind: session.agentKind, id: current))
+        }
+        return refs
+    }
 
     /// The upload destination + credential for a workspace, derived **solely** from
     /// its local-only `gateway` (CROW-1070). This is the security invariant: the

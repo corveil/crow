@@ -81,6 +81,13 @@ public struct BackfillUpload: ParsableCommand {
         --workspace names the workspace whose AI gateway supplies the upload \
         destination and credential; it must have a gateway configured. Uploads are \
         serial and idempotent, so a re-run only fills gaps.
+
+        Two kinds of row are refused (reported as skipped, with a reason) unless \
+        you opt in, because neither belongs to the workspace whose gateway would \
+        carry it: orphans (low confidence — no repo could be attributed; \
+        --allow-orphans) and Manager transcripts (workspace `.crow`; \
+        --allow-manager-transcripts). A Manager tagged with a workspace ships its \
+        own transcripts through that workspace's gateway as it runs.
         """
     )
 
@@ -97,6 +104,12 @@ public struct BackfillUpload: ParsableCommand {
 
     @Flag(name: .customLong("all"), help: "Upload every not-yet-uploaded session in this workspace")
     var all = false
+
+    @Flag(name: .customLong("allow-orphans"), help: "Also upload selected rows no repo could be attributed to (confidence low)")
+    var allowOrphans = false
+
+    @Flag(name: .customLong("allow-manager-transcripts"), help: "Also upload selected Manager transcripts (workspace .crow) under this workspace's gateway")
+    var allowManagerTranscripts = false
 
     public init() {}
 
@@ -121,6 +134,8 @@ public struct BackfillUpload: ParsableCommand {
         } else if all {
             params["select"] = .string("all")
         }
+        if allowOrphans { params["allow_orphans"] = .bool(true) }
+        if allowManagerTranscripts { params["allow_manager_transcripts"] = .bool(true) }
         // A large upload run is serial network I/O — give it real headroom.
         printJSON(try rpc("backfill-upload", params: params, timeoutSeconds: 600))
     }

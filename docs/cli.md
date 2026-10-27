@@ -464,12 +464,14 @@ Disk- and git-only (no provider calls), so it's fast over hundreds of sessions. 
 Upload selected historical sessions (idempotent).
 
 ```
-crow backfill upload --workspace <workspace> [--session <session> ...] [--all-high-confidence] [--all]
+crow backfill upload --workspace <workspace> [--session <session> ...] [--all-high-confidence] [--all] [--allow-orphans] [--allow-manager-transcripts]
 ```
 
 Choose sessions with repeated --session <uid> (UIDs come from `crow backfill scan`), or bulk-select this workspace's history with --all-high-confidence (repo + validated ticket) or --all. Exactly one selection mode is required.
 
 --workspace names the workspace whose AI gateway supplies the upload destination and credential; it must have a gateway configured. Uploads are serial and idempotent, so a re-run only fills gaps.
+
+Two kinds of row are refused (reported as skipped, with a reason) unless you opt in, because neither belongs to the workspace whose gateway would carry it: orphans (low confidence — no repo could be attributed; --allow-orphans) and Manager transcripts (workspace `.crow`; --allow-manager-transcripts). A Manager tagged with a workspace ships its own transcripts through that workspace's gateway as it runs.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -477,6 +479,8 @@ Choose sessions with repeated --session <uid> (UIDs come from `crow backfill sca
 | `--session` | `<session>` _(repeatable)_ | no | A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence. |
 | `--all-high-confidence` | — | no | Upload every not-yet-uploaded high-confidence session in this workspace |
 | `--all` | — | no | Upload every not-yet-uploaded session in this workspace |
+| `--allow-orphans` | — | no | Also upload selected rows no repo could be attributed to (confidence low) |
+| `--allow-manager-transcripts` | — | no | Also upload selected Manager transcripts (workspace .crow) under this workspace's gateway |
 
 ---
 
@@ -809,12 +813,15 @@ Prints `{"ok": true|false, "message": "…", "path": "…"}`. Branch on `ok`, no
 Create an additional Manager session.
 
 ```
-crow create-manager [--agent <agent>]
+crow create-manager [--agent <agent>] [--workspace <workspace>]
 ```
+
+--workspace tags the new Manager with a workspace for its whole life: it launches with that workspace's AI gateway (falling back to the Manager gateway when the workspace has none), ships its transcripts when the workspace has session-log upload on, and starts with the workspace's provider, repos and custom instructions. Omit it to use `defaults.managerWorkspace` (`crow defaults set --manager-workspace`); pass `none` for an untagged, cross-workspace Manager. The tag cannot be changed later, and the primary Manager is never tagged.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--agent` | `<agent>` | no | Coding agent kind (claude-code, cursor, codex, opencode, antigravity, grok, muse); default agent when omitted |
+| `--workspace` | `<workspace>` | no | Workspace to tag the Manager with (name or UUID), or 'none' for untagged; defaults.managerWorkspace when omitted |
 
 ---
 
@@ -851,7 +858,7 @@ Echoes the whole defaults block, including `exclude_dirs` and `mirror_claude_mcp
 Change workspace and automation defaults.
 
 ```
-crow defaults set [--provider <provider>] [--cli <cli>] [--branch-prefix <branch-prefix>] [--binary <binary> ...] [--corveil-auto-update <corveil-auto-update>] [--corveil-version <corveil-version>] [--add-exclude-review-repo <add-exclude-review-repo> ...] [--remove-exclude-review-repo <remove-exclude-review-repo> ...] [--clear-exclude-review-repos] [--add-exclude-ticket-repo <add-exclude-ticket-repo> ...] [--remove-exclude-ticket-repo <remove-exclude-ticket-repo> ...] [--clear-exclude-ticket-repos] [--add-ignore-review-label <add-ignore-review-label> ...] [--remove-ignore-review-label <remove-ignore-review-label> ...] [--clear-ignore-review-labels]
+crow defaults set [--provider <provider>] [--cli <cli>] [--branch-prefix <branch-prefix>] [--binary <binary> ...] [--corveil-auto-update <corveil-auto-update>] [--corveil-version <corveil-version>] [--manager-workspace <manager-workspace>] [--add-exclude-review-repo <add-exclude-review-repo> ...] [--remove-exclude-review-repo <remove-exclude-review-repo> ...] [--clear-exclude-review-repos] [--add-exclude-ticket-repo <add-exclude-ticket-repo> ...] [--remove-exclude-ticket-repo <remove-exclude-ticket-repo> ...] [--clear-exclude-ticket-repos] [--add-ignore-review-label <add-ignore-review-label> ...] [--remove-ignore-review-label <remove-ignore-review-label> ...] [--clear-ignore-review-labels]
 ```
 
 Only the flags you pass change; at least one is required.
@@ -859,6 +866,8 @@ Only the flags you pass change; at least one is required.
 Most of these are live. The provider and CLI are re-read on each repo scan, the board lists are re-read on each board poll (about a minute), and the branch prefix is read when a workspace is created. --binary is the exception: agent binary discovery and the .claude/bin symlinks are both set up at startup, so a change there returns "restart_required" and needs a crowd restart — including when you remove one, since the stale symlink keeps shadowing PATH until then.
 
 --provider and --cli are stored independently and neither implies the other, matching how GitManager reads them; setting only one warns if the resulting pair is crossed. --corveil-auto-update is live and on by default: Crow downloads from corveil/corveil-releases, verifies checksums, and hot-swaps the symlink. When it is on, Crow owns binaries[corveil] (a previous source-build path is adopted, not skipped). Pass false to leave an operator path, including out/, alone.
+
+--manager-workspace is the workspace `crow create-manager` and the web "+" button tag a new extra Manager with when they name none. It is stored by name and never applies to the primary Manager; pass '' to clear it.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -868,6 +877,7 @@ Most of these are live. The provider and CLI are re-read on each repo scan, the 
 | `--binary` | `<binary>` _(repeatable)_ | no | Binary path override as NAME=PATH, e.g. corveil=/opt/corveil/bin/corveil; NAME= removes it (repeatable) |
 | `--corveil-auto-update` | `<corveil-auto-update>` | no | Download and link the host-platform corveil CLI from corveil/corveil-releases (true or false; default true) |
 | `--corveil-version` | `<corveil-version>` | no | corveil-releases tag to keep linked: 'latest' or a pin like v0.4.32 |
+| `--manager-workspace` | `<manager-workspace>` | no | Workspace new extra Managers are tagged with when create-manager names none (name or UUID; '' clears) |
 | `--add-exclude-review-repo` | `<add-exclude-review-repo>` _(repeatable)_ | no | Repo to hide from the review board; supports one wildcard, e.g. 'owner/*' (repeatable) |
 | `--remove-exclude-review-repo` | `<remove-exclude-review-repo>` _(repeatable)_ | no | Repo to stop hiding from the review board (repeatable) |
 | `--clear-exclude-review-repos` | — | no | Empty the review-board repo exclusions |

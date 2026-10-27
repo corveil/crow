@@ -191,12 +191,14 @@ final class ManagerSessionController {
                     sessionName: session.name,
                     autoPermissionMode: appState.managerAutoPermissionMode
                 )
-            // CROW-402: prefix the command with the Manager's own gateway
-            // (AppConfig.managerGateway) so the initial launch overrides any global
-            // ~/.zshrc export. The matching settings.local.json `env` block (for
-            // manual re-runs) is written by the terminal-creation / hydrate paths,
-            // which own the devRoot write site — keeping this builder pure.
-            cmd = ClaudeLaunchArgs.gatewayEnvPrefix(managerGatewayResolved()) + claudePath + suffix
+            // CROW-402: prefix the command with the Manager's own gateway (its
+            // tagged workspace's, else AppConfig.managerGateway — CROW-1382) so
+            // the initial launch overrides any global ~/.zshrc export. The
+            // matching settings.local.json `env` block (for manual re-runs) is
+            // written by the terminal-creation / hydrate paths, which own the
+            // devRoot write site — keeping this builder pure.
+            cmd = ClaudeLaunchArgs.gatewayEnvPrefix(
+                managerGatewayResolved(workspaceTag: session.managerWorkspaceTag)) + claudePath + suffix
         }
         if let cwd,
            let extra = ManagerIdentity.additionalDirectory(
@@ -222,11 +224,13 @@ final class ManagerSessionController {
 
     /// Write (or clear) the Manager gateway env block at `dirPath`. Extra
     /// Managers isolate their cwd (CROW-1281); the env must follow the terminal,
-    /// not always the shared `{devRoot}`.
-    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String) {
+    /// not always the shared `{devRoot}`. `workspaceTag` is the Manager's
+    /// ``Session/managerWorkspaceTag`` (CROW-1382) — nil for the primary and
+    /// for untagged extras, which keep `AppConfig.managerGateway`.
+    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String, workspaceTag: UUID? = nil) {
         if managerKind == .claudeCode {
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: dirPath, resolved: managerGatewayResolved())
+                dirPath: dirPath, resolved: managerGatewayResolved(workspaceTag: workspaceTag))
         } else if SessionService.readsClaudeCompatSettings(managerKind) {
             ClaudeHookConfigWriter.writeGatewayEnv(dirPath: dirPath, resolved: nil)
         }
@@ -373,29 +377,84 @@ final class ManagerSessionController {
         }
     }
 
-    /// Resolve the Manager's own AI gateway (`AppConfig.managerGateway`) from
-    /// disk, or nil when unset/empty (CROW-402).
-    private func managerGatewayResolved() -> GatewayResolver.Resolved? {
+    /// Resolve a Manager's AI gateway from disk, or nil when unset/empty
+    /// (CROW-402). `workspaceTag` is ``Session/managerWorkspaceTag``: a tagged
+    /// extra Manager takes its workspace's gateway when that workspace has one,
+    /// and `AppConfig.managerGateway` otherwise (CROW-1382) — see
+    /// ``managerGatewayMatch(workspaceTag:config:)`` for the rule.
+    ///
+    /// Every launch path funnels through here — fresh create, hydrate after a
+    /// reboot (#1282), Recreate, and the extra-Manager handoff (#1315) all
+    /// rebuild from the persisted `Session`, so the tag cannot be dropped by
+    /// one of them.
+    private func managerGatewayResolved(workspaceTag: UUID?) -> GatewayResolver.Resolved? {
         guard let devRoot = ConfigStore.loadDevRoot(),
-              let config = ConfigStore.loadConfig(devRoot: devRoot),
-              let gateway = config.managerGateway, !gateway.isEmpty
+              let config = ConfigStore.loadConfig(devRoot: devRoot)
         else { return nil }
+        let match = Self.managerGatewayMatch(workspaceTag: workspaceTag, config: config)
+        if let workspaceTag {
+            logManagerGatewayDecision(workspaceTag: workspaceTag, match: match)
+        }
+        guard let gateway = match.gateway, !gateway.isEmpty else { return nil }
         return GatewayResolver.resolve(gateway)
     }
 
-    /// The Manager's gateway as a ``SessionService.GatewayMatch``, for read paths that report a
-    /// session's gateway uniformly (CROW-969).
+    /// One line per tagged-Manager launch naming which gateway it got
+    /// (CROW-1382), the Manager counterpart of `logGatewayLaunchDecision`.
+    /// Header names only — values are credentials.
+    private func logManagerGatewayDecision(workspaceTag: UUID, match: SessionService.GatewayMatch) {
+        let prefix = "[SessionService] Manager gateway for workspace tag \(workspaceTag)"
+        guard match.source == .workspace else {
+            CrowLog.info("\(prefix): workspace no longer exists; using the Manager gateway")
+            return
+        }
+        let origin = match.gatewayFromWorkspace
+            ? "workspace '\(match.workspaceName ?? "—")'"
+            : "Manager gateway (workspace '\(match.workspaceName ?? "—")' has none)"
+        guard let gateway = match.gateway, !gateway.isEmpty else {
+            CrowLog.info("\(prefix): \(origin) — no gateway; ANTHROPIC_* will be unset")
+            return
+        }
+        let names = gateway.customHeaders.keys.sorted().joined(separator: ", ")
+        CrowLog.info("\(prefix): \(origin) -> \(gateway.baseURL), headers: \(names)")
+    }
+
+    /// A Manager's gateway as a ``SessionService.GatewayMatch``, for read paths
+    /// that report a session's gateway uniformly (CROW-969).
     ///
     /// A Manager session has no worktree and no PR links, so `gatewayMatch` can
     /// never claim one — without this arm, `crow get-session` would report
     /// "no gateway" for a Manager that has one, recreating the exact blind spot
-    /// this ticket exists to close. Cheap for the same reason as
+    /// CROW-969 exists to close. Cheap for the same reason as
     /// ``workspaceGatewayMatch(for:)``: config read only, no `op read`.
-    public func managerGatewayMatch() -> SessionService.GatewayMatch? {
+    public func managerGatewayMatch(for session: Session) -> SessionService.GatewayMatch? {
         guard let devRoot = ConfigStore.loadDevRoot(),
               let config = ConfigStore.loadConfig(devRoot: devRoot)
         else { return nil }
-        return SessionService.GatewayMatch(managerGateway: config.managerGateway)
+        return Self.managerGatewayMatch(workspaceTag: session.managerWorkspaceTag, config: config)
+    }
+
+    /// The Manager gateway rule (CROW-1382), pure so it is unit-testable:
+    ///
+    /// ```
+    /// resolved = workspace(id: tag)?.gateway ?? config.managerGateway
+    /// ```
+    ///
+    /// A tagged Manager whose workspace still exists reports
+    /// ``SessionService/GatewayMatchSource/workspace`` and that workspace's id,
+    /// whichever gateway it ends up with — the tag is what `get-session` is
+    /// asked about, and `gatewayFromWorkspace` says which gateway won. An empty
+    /// workspace gateway counts as none, matching the launch path's
+    /// `!gateway.isEmpty` test. A tag whose workspace was removed falls back to
+    /// the untagged answer rather than leaving the Manager with no gateway.
+    public nonisolated static func managerGatewayMatch(
+        workspaceTag: UUID?, config: AppConfig
+    ) -> SessionService.GatewayMatch {
+        guard let workspaceTag,
+              let workspace = config.workspaces.first(where: { $0.id == workspaceTag })
+        else { return SessionService.GatewayMatch(managerGateway: config.managerGateway) }
+        return SessionService.GatewayMatch(
+            taggedManagerWorkspace: workspace, managerGateway: config.managerGateway)
     }
 
     /// Resolve the AI gateway for a non-Manager session (CROW-402, CROW-891).
@@ -634,12 +693,8 @@ final class ManagerSessionController {
         // Manager actively CLEAR it (`resolved: nil`) so a prior Claude Manager's
         // token can't linger in a now-trusted devRoot. A Cursor/OpenCode/Antigravity
         // Manager never reads the file, so it's left untouched (no rewrite churn).
-        if session.agentKind == .claudeCode {
-            ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: cwd, resolved: managerGatewayResolved())
-        } else if SessionService.readsClaudeCompatSettings(session.agentKind) {
-            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: nil)
-        }
+        writeManagerGatewayEnv(
+            managerKind: session.agentKind, dirPath: cwd, workspaceTag: session.managerWorkspaceTag)
 
         // Persist the bare Manager command so recreate/hydrate still launches
         // the TUI. The explore brief is a one-shot pending launch (#408) —
@@ -720,14 +775,31 @@ final class ManagerSessionController {
     ///
     /// `initialPrompt` (Explore, CROW-1237) is fed as argv on first launch
     /// the way jobs feed `.crow-job-prompt.md` — not pasted into the composer.
+    ///
+    /// `workspaceID` tags the Manager with a workspace (CROW-1382) — callers
+    /// resolve and validate it first (`ManagerWorkspaceTag.resolve`). It is
+    /// written once here and never changed: the gateway, the transcript
+    /// opt-in and the starting brief all key off it. A tagged Manager's first
+    /// launch is seeded with ``ManagerWorkspaceBrief``, ahead of any
+    /// `initialPrompt`. An id that names no workspace is dropped rather than
+    /// persisted, so a stale tag can't be created.
     @discardableResult
     public func createManagerSession(
         name: String, cwd: String, agentKind override: AgentKind? = nil,
-        initialPrompt: String? = nil
+        initialPrompt: String? = nil, workspaceID: UUID? = nil
     ) -> UUID {
         let agentKind = resolvedManagerAgentKind(override)
-        let session = Session(name: name, status: .active, kind: .manager, agentKind: agentKind)
         let devRoot = ConfigStore.loadDevRoot()
+        let workspace = workspaceID.flatMap { id in
+            devRoot.flatMap { ConfigStore.loadConfig(devRoot: $0) }?
+                .workspaces.first(where: { $0.id == id })
+        }
+        let session = Session(
+            name: name, status: .active, kind: .manager, agentKind: agentKind,
+            workspaceID: workspace?.id)
+        let prompt = workspace.map {
+            ManagerWorkspaceBrief.prompt(workspace: $0, devRoot: devRoot, followUp: initialPrompt)
+        } ?? initialPrompt
         let isolated = ManagerIdentity.resolvedCwd(
             requested: cwd, sessionID: session.id, isPrimary: false, devRoot: devRoot)
         if isolated != cwd, let root = devRoot {
@@ -739,7 +811,7 @@ final class ManagerSessionController {
         // position does not choose the nav pill.
         appState.sessions.append(session)
         store.mutate { $0.sessions.append(session) }
-        createManagerTerminal(session: session, cwd: isolated, initialPrompt: initialPrompt)
+        createManagerTerminal(session: session, cwd: isolated, initialPrompt: prompt)
         return session.id
     }
 
@@ -924,10 +996,13 @@ extension SessionService {
         /// `alwaysInclude`/`autoReviewRepos` — the CROW-891 review-clone path.
         case repoSlug = "repo_slug"
         /// The Manager's own gateway, which belongs to no workspace. Produced
-        /// only by ``SessionService/managerGatewayMatch()``, never by the pure
+        /// only by ``SessionService/managerGatewayMatch(for:)``, never by the pure
         /// ``SessionService/gatewayMatch(worktreePath:prLinks:devRoot:config:)``,
         /// so it can't leak into the workspace launch log.
         case manager
+        /// An extra Manager tagged with a workspace at creation (CROW-1382).
+        /// Like ``manager``, produced only by the Manager match path.
+        case workspace
     }
 
     /// Which workspace claims a session, and how.
@@ -944,12 +1019,17 @@ extension SessionService {
         public var workspaceName: String?
         public var source: GatewayMatchSource
         public var gateway: WorkspaceGateway?
+        /// Whether `gateway` is the claimed workspace's own. False only for a
+        /// tagged Manager whose workspace has no gateway, which falls back to
+        /// `AppConfig.managerGateway` (CROW-1382), and for ``GatewayMatchSource/manager``.
+        public var gatewayFromWorkspace: Bool
 
         init(workspace: WorkspaceInfo, source: GatewayMatchSource) {
             self.workspaceID = workspace.id
             self.workspaceName = workspace.name
             self.source = source
             self.gateway = workspace.gateway
+            self.gatewayFromWorkspace = true
         }
 
         init(managerGateway: WorkspaceGateway?) {
@@ -957,6 +1037,20 @@ extension SessionService {
             self.workspaceName = nil
             self.source = .manager
             self.gateway = managerGateway
+            self.gatewayFromWorkspace = false
+        }
+
+        init(taggedManagerWorkspace workspace: WorkspaceInfo, managerGateway: WorkspaceGateway?) {
+            self.workspaceID = workspace.id
+            self.workspaceName = workspace.name
+            self.source = .workspace
+            if let own = workspace.gateway, !own.isEmpty {
+                self.gateway = own
+                self.gatewayFromWorkspace = true
+            } else {
+                self.gateway = managerGateway
+                self.gatewayFromWorkspace = false
+            }
         }
     }
 }
@@ -974,8 +1068,9 @@ extension SessionService {
     }
     func managerCommand(sessionName: String) -> String { manager.managerCommand(sessionName: sessionName) }
     func writeManagerGatewayEnv(managerKind: AgentKind) { manager.writeManagerGatewayEnv(managerKind: managerKind) }
-    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String) {
-        manager.writeManagerGatewayEnv(managerKind: managerKind, dirPath: dirPath)
+    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String, workspaceTag: UUID? = nil) {
+        manager.writeManagerGatewayEnv(
+            managerKind: managerKind, dirPath: dirPath, workspaceTag: workspaceTag)
     }
     func writeManagerHookConfig(for session: Session, dirPath: String) {
         manager.writeManagerHookConfig(for: session, dirPath: dirPath)
@@ -988,7 +1083,9 @@ extension SessionService {
         manager.workspaceGatewayResolved(for: sessionID)
     }
 
-    public func managerGatewayMatch() -> GatewayMatch? { manager.managerGatewayMatch() }
+    public func managerGatewayMatch(for session: Session) -> GatewayMatch? {
+        manager.managerGatewayMatch(for: session)
+    }
     public func workspaceGatewayMatch(for sessionID: UUID) -> GatewayMatch? {
         manager.workspaceGatewayMatch(for: sessionID)
     }
@@ -996,10 +1093,11 @@ extension SessionService {
     @discardableResult
     public func createManagerSession(
         name: String, cwd: String, agentKind override: AgentKind? = nil,
-        initialPrompt: String? = nil
+        initialPrompt: String? = nil, workspaceID: UUID? = nil
     ) -> UUID {
         manager.createManagerSession(
-            name: name, cwd: cwd, agentKind: override, initialPrompt: initialPrompt)
+            name: name, cwd: cwd, agentKind: override, initialPrompt: initialPrompt,
+            workspaceID: workspaceID)
     }
     func resolvedManagerAgentKind(_ explicit: AgentKind?) -> AgentKind {
         manager.resolvedManagerAgentKind(explicit)

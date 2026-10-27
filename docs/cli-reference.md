@@ -510,6 +510,8 @@ crow defaults set --clear-exclude-ticket-repos
 crow defaults set --binary corveil=/opt/corveil/bin/corveil
 crow defaults set --binary corveil=                       # remove the override
 crow defaults set --corveil-auto-update true --corveil-version latest
+crow defaults set --manager-workspace Corveil
+crow defaults set --manager-workspace ''                   # clear it
 ```
 
 | Flag                             | Required | Description                                                                 |
@@ -520,6 +522,7 @@ crow defaults set --corveil-auto-update true --corveil-version latest
 | `--binary NAME=PATH`             | no¹      | Absolute binary path override, repeatable; `NAME=` removes the entry        |
 | `--corveil-auto-update`        | no¹      | Download and link the host-platform corveil CLI from `corveil/corveil-releases` (`true` or `false`; default `true`) |
 | `--corveil-version`             | no¹      | Tag to keep linked: `latest` or a pin like `v0.4.32`                      |
+| `--manager-workspace`            | no¹      | Workspace new extra Managers are tagged with when `create-manager` names none (name or UUID); `''` clears. Stored by name; never applies to the primary Manager |
 | `--add-exclude-review-repo`      | no¹      | Hide a repo from the review board, repeatable; one `*` wildcard allowed     |
 | `--remove-exclude-review-repo`   | no¹      | Stop hiding a repo from the review board, repeatable                        |
 | `--clear-exclude-review-repos`   | no¹      | Empty the review-board repo exclusions                                      |
@@ -2018,13 +2021,24 @@ Create an additional Manager session, named with the lowest unused `Manager N` �
 ```bash
 crow create-manager
 crow create-manager --agent cursor
+crow create-manager --workspace Corveil
+crow create-manager --workspace none        # untagged, even with a default set
 ```
 
-| Flag      | Required | Description                                                                  |
-| --------- | -------- | ---------------------------------------------------------------------------- |
-| `--agent` | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`, `antigravity`, `grok`, `muse`); default agent when omitted |
+| Flag          | Required | Description                                                                  |
+| ------------- | -------- | ---------------------------------------------------------------------------- |
+| `--agent`     | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`, `antigravity`, `grok`, `muse`); default agent when omitted |
+| `--workspace` | no       | Workspace to tag the Manager with (name or UUID), or `none`; `defaults.managerWorkspace` when omitted |
 
-Returns `{"session_id": "...", "name": "Manager N"}`.
+Returns `{"session_id": "...", "name": "Manager N", "workspace_id": "..."|null, "workspace_name": "..."|null}`, plus a `warning` when `defaults.managerWorkspace` names a workspace that no longer exists (the Manager is then created untagged).
+
+**Workspace tag (CROW-1382).** A tagged Manager:
+
+- launches with its workspace's AI gateway, or `managerGateway` when that workspace has none — including after a reboot resume and an agent handoff;
+- ships its transcripts when the workspace has `--upload-session-logs` on, through that workspace's gateway. Each harness conversation is a separate upload keyed by its conversation id, so a resumed or `/clear`ed Manager ships its new conversation too. Untagged Managers never ship;
+- starts with a brief naming the workspace's provider, repos and `customInstructions`, so `/crow-create-ticket` knows where to file.
+
+`crow get-session` reports a tagged Manager as `workspace_match: "workspace"` with its `workspace_id`; `list-sessions` carries `manager_workspace_id` / `manager_workspace_name`. The tag is set at creation only — there is no re-tag verb — and the primary Manager is never tagged.
 
 `--agent` is used **as given**. `AgentKind` is an open `RawRepresentable` struct, so any non-empty string parses and an unrecognized kind is not rejected — a typo like `claude_code` stamps the Manager with a kind no agent is registered for (the terminal then launches with the registry's default agent, but the session record keeps the bogus kind). Only **omitting** `--agent` falls back to the configured Manager default. Same open-kind model as [`crow handoff-agent`](#crow-handoff-agent).
 
@@ -2227,6 +2241,10 @@ Uploads a chosen set through the live path, idempotently and serially. `--worksp
 | `--session <uid>` | A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan`) |
 | `--all-high-confidence` | Every not-yet-uploaded **high-confidence** session in this workspace |
 | `--all` | Every not-yet-uploaded session in this workspace |
+| `--allow-orphans` | Also upload selected rows no repo could be attributed to (`low` confidence) |
+| `--allow-manager-transcripts` | Also upload selected Manager transcripts (workspace `.crow`) under this workspace's gateway |
+
+Orphans and Manager transcripts are **refused by default** (CROW-1382), whichever selection picked them: neither belongs to the workspace whose gateway would carry it. They come back as `skipped` with a `reason`. A Manager tagged with a workspace ships its own transcripts through that workspace as it runs.
 
 Returns a per-session `results` list (each `uploaded` / `already` / `skipped` / `failed`, whether it was `linked` to a validated ticket, and a `reason` for a skip/failure) and a roll-up `summary`. Re-running never duplicates — a slot the ledger records as uploaded is skipped.
 

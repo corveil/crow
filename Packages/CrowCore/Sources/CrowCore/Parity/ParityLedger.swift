@@ -701,6 +701,10 @@ public enum ParityLedger {
         .field("defaults.binaries", read: "defaults get", write: "defaults set"),
         .field("defaults.corveilAutoUpdate", read: "defaults get", write: "defaults set"),
         .field("defaults.corveilVersion", read: "defaults get", write: "defaults set"),
+        // Default workspace tag for new extra Managers (CROW-1382). The per-call
+        // override is `create-manager --workspace`; the tag itself lives on the
+        // session (`get-session` / `list-sessions` report it), not in config.
+        .field("defaults.managerWorkspace", read: "defaults get", write: "defaults set"),
         .field(
             "defaults.corveilAutoUpdateOptOut",
             noCLI: """

@@ -82,13 +82,29 @@ func makeBackfillHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
                         "Provide sessions (a list of UIDs) or select (\"high\" | \"all\").")
                 }
 
+                // Manager transcripts and orphans are refused unless the caller
+                // opts in (CROW-1382): the gateway is the named workspace's, and
+                // neither kind of row belongs to it. Refused rows stay in the
+                // results as `skipped` with a reason, so nothing vanishes silently.
+                let allowOrphans = try SettingsRPC.patchBool(params, "allow_orphans") ?? false
+                let allowManager = try SettingsRPC.patchBool(params, "allow_manager_transcripts") ?? false
+                var results: [BackfillUploadOutcome] = []
+                toUpload = toUpload.filter { session in
+                    guard let reason = BackfillUploadGuard.refusalReason(
+                        for: session, allowOrphans: allowOrphans,
+                        allowManagerTranscripts: allowManager) else { return true }
+                    results.append(BackfillUploadOutcome(
+                        claudeSessionUID: session.claudeSessionUID, result: .skipped,
+                        harness: session.harness, reason: reason))
+                    return false
+                }
+
                 // Cap the batch — the user always chooses, never an unbounded
                 // flood (acceptance). A larger selection uploads in chunks.
                 let cap = 1000
                 if toUpload.count > cap { toUpload = Array(toUpload.prefix(cap)) }
 
-                var results: [BackfillUploadOutcome] = []
-                results.reserveCapacity(toUpload.count)
+                results.reserveCapacity(results.count + toUpload.count)
                 for session in toUpload {
                     let outcome = await service.upload(
                         session: session, upload: upload,

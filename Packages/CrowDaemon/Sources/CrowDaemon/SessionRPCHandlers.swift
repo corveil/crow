@@ -90,6 +90,16 @@ func makeSessionHandlers(
         // worktree), plus ticket labels and hook-activity state. Live PR status
         // is not here — it comes from `list-sessions-live`.
         "list-sessions": { _ in
+            // Workspace names for tagged extra Managers (CROW-1382). Read off
+            // the main actor, and only when some Manager is tagged at all.
+            let anyTagged = await MainActor.run {
+                appState.sessions.contains { $0.managerWorkspaceTag != nil }
+            }
+            let workspaceNames: [UUID: String] = anyTagged
+                ? Dictionary(
+                    (ConfigStore.loadConfig(devRoot: devRoot)?.workspaces ?? []).map { ($0.id, $0.name) },
+                    uniquingKeysWith: { first, _ in first })
+                : [:]
             let items: [JSONValue] = await MainActor.run {
                 // One pass per poll. Newest open item wins when more than one
                 // Scratch points at the same Manager (Explore itself is 1:1;
@@ -135,6 +145,13 @@ func makeSessionHandlers(
                         // "Exploring" badge so a bootstrap-only session isn't
                         // mistaken for a build. Additive; older clients ignore it.
                         "is_explore": .bool(session.isExplore),
+                        // Extra-Manager workspace tag (CROW-1382) — drives the
+                        // sidebar row's workspace label. Null for untagged and
+                        // non-Manager sessions; the name is null when the tagged
+                        // workspace has since been removed.
+                        "manager_workspace_id": session.managerWorkspaceTag.map { .string($0.uuidString) } ?? .null,
+                        "manager_workspace_name": session.managerWorkspaceTag.flatMap { workspaceNames[$0] }
+                            .map { .string($0) } ?? .null,
                         // Project-board "In Review" permission gate — mirrors the
                         // retired native `canSetProjectStatus(for:)` (GitHub/Jira
                         // yes, GitLab no). Gates the web "In Review" button (CROW-749).

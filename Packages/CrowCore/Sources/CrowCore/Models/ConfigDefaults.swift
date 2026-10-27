@@ -58,6 +58,14 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     /// `"v0.4.32"`. Ignored unless `corveilAutoUpdate` is on.
     public var corveilVersion: String
 
+    /// Workspace a new **extra** Manager is tagged with when its creator names
+    /// none (CROW-1382) — `crow create-manager` without `--workspace`, and the
+    /// web "+" fast path. Stored by canonical name, like `JobConfig.workspace`
+    /// and the Scratch item tag; a later rename leaves it pointing nowhere, and
+    /// an unknown name creates an untagged Manager rather than failing. Nil
+    /// means untagged. Never applies to the primary Manager.
+    public var managerWorkspace: String?
+
     /// Forge providers the Settings → Workspaces picker offers.
     ///
     /// Lives on the model, not in the CLI or the RPC layer, so `crow defaults
@@ -152,7 +160,8 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         mirrorClaudeMCPToCodex: Bool = true,
         corveilAutoUpdate: Bool = true,
         corveilAutoUpdateOptOut: Bool = false,
-        corveilVersion: String = ConfigDefaults.corveilVersionLatest
+        corveilVersion: String = ConfigDefaults.corveilVersionLatest,
+        managerWorkspace: String? = nil
     ) {
         self.provider = provider
         self.cli = cli
@@ -166,6 +175,7 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         self.corveilAutoUpdate = corveilAutoUpdate
         self.corveilAutoUpdateOptOut = corveilAutoUpdateOptOut
         self.corveilVersion = Self.normalizedCorveilVersion(corveilVersion) ?? Self.corveilVersionLatest
+        self.managerWorkspace = managerWorkspace
     }
 
     public init(from decoder: Decoder) throws {
@@ -187,10 +197,11 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         } else {
             corveilVersion = Self.corveilVersionLatest
         }
+        managerWorkspace = try container.decodeIfPresent(String.self, forKey: .managerWorkspace)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels, binaries, mirrorClaudeMCPToCodex, corveilAutoUpdate, corveilAutoUpdateOptOut, corveilVersion
+        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels, binaries, mirrorClaudeMCPToCodex, corveilAutoUpdate, corveilAutoUpdateOptOut, corveilVersion, managerWorkspace
     }
 
     /// Sticky OR for ``corveilAutoUpdateOptOut`` across a `set-config` replace
