@@ -382,10 +382,13 @@ function scratchLaunchDialog(item, pickers, label) {
 
     const agentSel = scratchAgentSelect(pickers.agents, item.agent_kind || pickers.defaultAgent);
     agentSel.className = 'text-prompt-input';
-    // An item captured before workspaces were recorded launches untagged, as
-    // it always did, unless a workspace is picked here.
+    // Every new Manager needs a workspace (CROW-1386). An item captured
+    // before workspaces were recorded starts on the default; with none, the
+    // button stays disabled until one is picked.
+    const known = pickers.workspaces.some((ws) => ws.name === item.workspace);
+    const initial = known ? item.workspace : (pickers.defaultWorkspace || '');
     const wsSel = scratchWorkspaceSelect(
-      pickers.workspaces, item.workspace || '', item.workspace ? null : 'None (cross-workspace)');
+      pickers.workspaces, initial, initial ? null : 'Choose a workspace…');
     wsSel.className = 'text-prompt-input';
     const field = (text, control) => {
       const row = el('label', 'new-manager-field');
@@ -401,6 +404,9 @@ function scratchLaunchDialog(item, pickers, label) {
     const actions = el('div', 'text-prompt-actions');
     const cancel = el('button', 'text-prompt-btn', 'Cancel');
     const ok = el('button', 'text-prompt-btn primary', label);
+    const syncOk = () => { ok.disabled = !wsSel.value; };
+    wsSel.addEventListener('change', syncOk);
+    syncOk();
     actions.append(cancel, ok);
     card.appendChild(actions);
     backdrop.appendChild(card);
@@ -413,7 +419,10 @@ function scratchLaunchDialog(item, pickers, label) {
       backdrop.remove();
       resolve(value);
     }
-    function submit() { finish({ agent: agentSel.value || null, workspace: wsSel.value || null }); }
+    function submit() {
+      if (!wsSel.value) return;
+      finish({ agent: agentSel.value || null, workspace: wsSel.value });
+    }
     function onKey(e) {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); }
       else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); submit(); }

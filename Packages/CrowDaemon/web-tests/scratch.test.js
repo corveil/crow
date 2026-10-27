@@ -266,6 +266,38 @@ async function flush() {
   check('Cancel launches nothing', !calls.some((c) => c.method === 'todo-explore'));
   check('Cancel closes the dialog', !window.document.querySelector('.scratch-launch-card'));
 
+  // CROW-1386: a legacy item (no workspace) starts on the default; with no
+  // default, the launch button stays disabled until a workspace is picked.
+  const legacy = { ...item, id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', workspace: undefined, agent_kind: undefined };
+  T.boardData.scratch = { todos: [legacy] };
+  T.renderBoard();
+  exploreBtn().click();
+  await flush();
+  let legacyDialog = window.document.querySelector('.scratch-launch-card');
+  let legacySel = legacyDialog && legacyDialog.querySelectorAll('select')[1];
+  check('legacy item starts on the default workspace', legacySel && legacySel.value === 'Acme');
+  check('no None (cross-workspace) option',
+    !!legacySel && ![...legacySel.options].some((o) => /None/.test(o.textContent)));
+  [...legacyDialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+  await flush();
+
+  pickerReplies['defaults-get'] = { defaults: {} };
+  T.resetScratchPickers();
+  T.renderBoard();
+  await flush();
+  exploreBtn().click();
+  await flush();
+  legacyDialog = window.document.querySelector('.scratch-launch-card');
+  legacySel = legacyDialog && legacyDialog.querySelectorAll('select')[1];
+  const legacyOk = legacyDialog && [...legacyDialog.querySelectorAll('button')].find((b) => b.textContent === 'Explore');
+  check('no default: placeholder chosen and launch disabled',
+    legacySel && legacySel.value === '' && legacyOk && legacyOk.disabled);
+  legacySel.value = 'Corveil';
+  legacySel.dispatchEvent(new window.Event('change'));
+  check('picking a workspace enables launch', legacyOk && !legacyOk.disabled);
+  [...legacyDialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+  await flush();
+
   const editable = {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
     text: 'native scratch list',
