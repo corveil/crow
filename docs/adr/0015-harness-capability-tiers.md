@@ -372,6 +372,40 @@ deliberate, documented gaps (full grid in the
 > auto-mode Read prompts into denials without dropping Containment Escape —
 > then re-evaluate for `.job` only, never Manager.
 
+> **Amendment (2026-10-27, CROW-1345):** Cursor's **Auto-review** run mode
+> (`--auto-review`) is now in the official
+> [Run Modes](https://cursor.com/docs/agent/security/run-modes) and
+> [permissions](https://cursor.com/docs/reference/permissions) docs, which
+> met #829's re-check condition. It is the closer *shape* to Claude's
+> classifier mode than `--force` (Run Everything), so the question was whether
+> it could replace `--force --approve-mcps` on any kind. Probed in a private
+> tmux server against `cursor-agent 2026.10.22-27dcf5f`:
+>
+> 1. **A block is a stall, not a denial.** Allowlisted and classifier-allowed
+>    calls run, but a block ends in a TUI "Run this command?" card that waits
+>    for a human. A sibling `git worktree add` (the Manager's core operation),
+>    an in-workspace `rm -rf build/*` (the v2026.10.08 delete rule), and a
+>    `git push` to `main` were all blocked. A feature-branch push ran in a fresh
+>    session but was blocked once the session's context had primed the
+>    classifier, so no kind gets a stable completion promise. This is the
+>    CROW-1176 stall class, with no honest pre-answer.
+> 2. **The flag does not win.** With the user's persisted
+>    `approvalMode: "unrestricted"` (Cursor offers to make Run Everything the
+>    default), the same `--auto-review` launch comes up as Run Everything. Crow
+>    could only label it honestly by writing `~/.cursor/cli-config.json` or
+>    `~/.cursor/permissions.json`, which is the global-config brittle-reject.
+> 3. **Review clones were already covered.** The concatenated
+>    `<clone>/.cursor/permissions.json` `autoRun.allow_instructions` would be
+>    attacker-controlled, but the launch-path strip
+>    (`shouldStripCursorReviewClone`) removes the whole `.cursor/` dir. That
+>    was not the blocker.
+>
+> **Declined.** `--force --approve-mcps` stays on every kind, and the matrix
+> now names it as Run Everything rather than "parity with Claude auto".
+> `--yolo` stays unused (it is an alias). Re-check only if a blocked call can
+> end as a TUI *denial* instead of an approval card **and** the flag overrides
+> a persisted `approvalMode`.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:

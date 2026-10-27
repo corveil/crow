@@ -13,7 +13,8 @@ struct CursorLaunchArgsTests {
         // Claude's `--permission-mode auto` (no sandbox) — #829 review.
         #expect(s == " --force --approve-mcps")
         // No sandbox (blocks network on job/review/Manager), no --yolo, no
-        // unstable classifier. `--trust` is intentionally absent *here* — the
+        // --auto-review (stalls unattended on an approval card and loses to a
+        // persisted Run Everything — CROW-1345). `--trust` is intentionally absent *here* — the
         // trust seed is a separate, unconditional suffix (see trustSuffix /
         // launchSuffix), not an auto-permission flag.
         #expect(s.contains("--sandbox") == false)
