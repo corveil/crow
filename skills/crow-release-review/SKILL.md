@@ -282,13 +282,13 @@ When the operator says they're done, asks where things stand, or before any tag:
 | `repos` | Per repo: items, steps, pass, fail, pending, holds. |
 | `failed` / `passed` | Steps with their evidence, `by` and `owner`. |
 | `to_run` | Steps not run yet whose `needs` is `agent` or `agent+aws` and that aren't optional, with `how`, `expect`, `exists`, `version`, `agent_may_write` and `write`. **This is the verify list.** |
-| `pins_needed` | Docs Claude may update whose version `readback` can't see (`out_dir` files carry none). Take each one's version from the list result, or `get` it, before the write. |
+| `pins_needed` | Every doc Claude may update whose version `readback` can't see (`out_dir` files carry none), checks and runbook steps alike: `{collection, id}`. Take each one's version from the list result, or `get` it, before the write. |
 | `for_people` | Steps not run yet that need a person (`human`, `agent+staff`). |
 | `baselines_needed` | Steps with a `baseline` and nothing recorded yet. |
 | `time_gated` | Steps not run yet that have a `when`. |
 | `decisions` | Item ids per value: `ship`, `question`, `hold`, `undecided`. |
 | `notes` | Every item with a note: `{id, repo, title, decision, text, at}`. |
-| `runbook` | `done`, `total`, `next` (the first step not done) and every step's state. |
+| `runbook` | `done`, `total`, `next` (the first step not done) and every step's state, with the same `owner`, `agent_may_write` and `write` as a check. |
 | `orphans` | Docs whose id is no longer on the page. |
 | `invalid` | Fields that break the contract. Each is read as not run, no decision, or ignored; never trusted. |
 | `items`, `steps` | One row per item and per step. |
@@ -349,7 +349,7 @@ The operator ticks things on the page while you work, so:
   ```
 
 - If a pinned write fails because the doc changed, `get` it. If a person has set it now, leave it; otherwise write again with the new version.
-- **Runbook:** you may tick a step you ran yourself (`{"done": true, "at": "…", "by": "agent"}`), with the same rules. Never untick one.
+- **Runbook:** you may tick a step you ran yourself (`{"done": true, "at": "…", "by": "agent"}`), following its `write` in `runbook.steps` exactly as for a check: `set` for a new doc, a pinned `update` (it's in `pins_needed` when the version is unknown), or `leave` when a person ticked or unticked it. Never untick one.
 - **Never write `notes` or `decisions`.**
 
 ## Republishing

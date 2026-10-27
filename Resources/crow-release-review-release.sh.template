@@ -596,7 +596,13 @@ def owner: if (.by | type) != "string" or .by == "" then null
         pending: ([$mine[] | select(.status == "")] | length) } ] as $irows
 | [ $page | list_of("runbook")[] | . as $r | ($rmap[$r.id] // null) as $d
     | {id: $r.id, phase: $r.phase, action: $r.action}
-      + (if $d != null and $d.ok then ($d | clean_runbook) else {done: false, at: null, by: null, version: ($d.version // null)} end) ] as $rb
+      + (if $d != null and $d.ok then ($d | clean_runbook) else {done: false, at: null, by: null, version: ($d.version // null)} end)
+      + {exists: ($d != null)}
+    | . + {owner: owner}
+    # The same write modes as a check. Claude may tick a step it ran: a new
+    # doc, its own tick, or an empty doc. A tick or untick by a person is left.
+    | . + {agent_may_write: ((.exists | not) or .owner == "agent" or (.done == false and .owner == null))}
+    | . + {write: (if (.exists | not) then "set" elif .agent_may_write then "update" else "leave" end)} ] as $rb
 | {
     status: "ok",
     title: $page.title,
@@ -628,7 +634,8 @@ def owner: if (.by | type) != "string" or .by == "" then null
     passed: [ $rows[] | select(.status == "pass") | brief ],
     to_run: [ $rows[] | select(in_repo) | select(.status == "" and (.needs == "agent" or .needs == "agent+aws") and (.optional | not))
               | {id, item, repo, step, how, expect, needs, when, baseline, note, exists, version, agent_may_write, write} ],
-    pins_needed: [ $rows[] | select(in_repo) | select(.write == "update" and .version == null) | {collection: "checks", id} ],
+    pins_needed: ([ $rows[] | select(in_repo) | select(.write == "update" and .version == null) | {collection: "checks", id} ]
+                  + [ $rb[] | select(.write == "update" and .version == null) | {collection: "runbook", id} ]),
     for_people: [ $rows[] | select(in_repo) | select(.status == "" and (.needs == "human" or .needs == "agent+staff")) | {id, item, repo, step, needs, when} ],
     baselines_needed: [ $rows[] | select(in_repo) | select(.baseline != null and .status == "" and .note == "") | {id, item, repo, step, baseline, needs} ],
     time_gated: [ $rows[] | select(in_repo) | select(.when != null and .status == "") | {id, item, repo, step, when, needs} ],

@@ -347,7 +347,9 @@ check "an unreadable runbook doc reads as not done" "false" "$(jq -r '.runbook.s
 check "out_dir files carry no version" "null" "$(jq -c '.steps[0].version' <<<"$out")"
 check "write says how to record each step" '{"api-51-1":"update","api-51-2":"set","api-52-1":"update","api-52-2":"set","infra-7-1":"leave"}' \
   "$(jq -c '[.steps[] | {(.id): .write}] | add' <<<"$out")"
-check "docs Claude may update with no version known need a pin" '["api-51-1","api-52-1"]' "$(jq -c '[.pins_needed[].id]' <<<"$out")"
+check "docs Claude may update with no version known need a pin" '["checks:api-51-1","checks:api-52-1","runbook:rb-02"]' \
+  "$(jq -c '[.pins_needed[] | "\(.collection):\(.id)"]' <<<"$out")"
+check "a runbook tick with no by is a person's" '{"owner":null,"write":"leave"}' "$(jq -c '.runbook.steps[0] | {owner, write}' <<<"$out")"
 check "to_run carries the write mode" '{"exists":true,"write":"update"}' "$(jq -c '.to_run[0] | {exists, write}' <<<"$out")"
 check "items carry their step counts" '{"id":"api-51","pass":1,"fail":0,"pending":1}' "$(jq -c '.items[0] | {id, pass, fail, pending}' <<<"$out")"
 
@@ -369,7 +371,7 @@ echo '{"status": "", "note": "Holding this one", "by": "u_operator1234567890abcd
 out=$(rr readback --items "$ITEMS" --data "$RAW")
 check "a person's note is not safe to overwrite" "false" "$(jq -r '.to_run[] | select(.id == "api-52-1") | .agent_may_write' <<<"$out")"
 check "and its write mode is leave" "leave" "$(jq -r '.to_run[] | select(.id == "api-52-1") | .write' <<<"$out")"
-check "a leave is never in pins_needed" '["api-51-1"]' "$(jq -c '[.pins_needed[].id]' <<<"$out")"
+check "a leave is never in pins_needed" '["api-51-1"]' "$(jq -c '[.pins_needed[] | select(.collection == "checks") | .id]' <<<"$out")"
 # A page that couldn't learn the viewer's id writes by "viewer": still a person.
 echo '{"status": "pass", "note": "Baseline: 412 sessions", "by": "viewer", "at": "x"}' > "$RAW/checks/api-52-1.json"
 out=$(rr readback --items "$ITEMS" --data "$RAW")
@@ -408,6 +410,21 @@ check "an array of docs reads the same" '["infra-9"]' "$(jq -c .decisions.questi
 check "an array keeps the decision's version" "2" "$(jq -r '.items[] | select(.id == "infra-9") | .decision_version' <<<"$out")"
 check "an {id: doc} map reads the same" '{"id":"rb-02","done":true}' "$(jq -c '.runbook.steps[1] | {id, done}' <<<"$out")"
 check "with versions known, nothing needs a pin" '[]' "$(jq -c '.pins_needed' <<<"$out")"
+
+# Runbook write modes: Claude ticks only a new doc, its own, or an empty one.
+mkdir -p "$TMP/rb/runbook"
+echo '{"done": true, "at": "x", "by": "agent"}' > "$TMP/rb/runbook/rb-01.json"
+out=$(rr readback --items "$ITEMS" --data "$TMP/rb")
+check "an absent runbook doc is a set" "set" "$(jq -r '.runbook.steps[1].write' <<<"$out")"
+check "Claude's own tick is an update that needs a pin" '{"owner":"agent","write":"update","pin":["runbook:rb-01"]}' \
+  "$(jq -c '{owner: .runbook.steps[0].owner, write: .runbook.steps[0].write, pin: [.pins_needed[] | "\(.collection):\(.id)"]}' <<<"$out")"
+echo '{"done": false, "at": "x", "by": "u_operator1234567890abcd"}' > "$TMP/rb/runbook/rb-01.json"
+out=$(rr readback --items "$ITEMS" --data "$TMP/rb")
+check "a person's untick is left alone" '{"owner":"viewer","write":"leave"}' "$(jq -c '.runbook.steps[0] | {owner, write}' <<<"$out")"
+check "and is not in pins_needed" '[]' "$(jq -c '.pins_needed' <<<"$out")"
+echo '{"done": false, "at": "x"}' > "$TMP/rb/runbook/rb-01.json"
+out=$(rr readback --items "$ITEMS" --data "$TMP/rb")
+check "an empty runbook doc is safe to update" "update" "$(jq -r '.runbook.steps[0].write' <<<"$out")"
 
 echo "== report =="
 md=$(rr report --items "$ITEMS" --data "$RAW"); rc=$?
