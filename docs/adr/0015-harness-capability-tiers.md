@@ -384,6 +384,40 @@ deliberate, documented gaps (full grid in the
 > auto-mode Read prompts into denials without dropping Containment Escape —
 > then re-evaluate for `.job` only, never Manager.
 
+> **Amendment (2026-10-27, CROW-1345):** Cursor's **Auto-review** run mode
+> (`--auto-review`) is now in the official
+> [Run Modes](https://cursor.com/docs/agent/security/run-modes) and
+> [permissions](https://cursor.com/docs/reference/permissions) docs, which
+> met #829's re-check condition. It is the closer *shape* to Claude's
+> classifier mode than `--force` (Run Everything), so the question was whether
+> it could replace `--force --approve-mcps` on any kind. Probed in a private
+> tmux server against `cursor-agent 2026.10.22-27dcf5f`:
+>
+> 1. **A block is a stall, not a denial.** Allowlisted and classifier-allowed
+>    calls run, but a block ends in a TUI "Run this command?" card that waits
+>    for a human. A sibling `git worktree add` (the Manager's core operation),
+>    an in-workspace `rm -rf build/*` (the v2026.10.08 delete rule), and a
+>    `git push` to `main` were all blocked. A feature-branch push ran in a fresh
+>    session but was blocked once the session's context had primed the
+>    classifier, so no kind gets a stable completion promise. This is the
+>    CROW-1176 stall class, with no honest pre-answer.
+> 2. **The flag does not win.** With the user's persisted
+>    `approvalMode: "unrestricted"` (Cursor offers to make Run Everything the
+>    default), the same `--auto-review` launch comes up as Run Everything. Crow
+>    could only label it honestly by writing `~/.cursor/cli-config.json` or
+>    `~/.cursor/permissions.json`, which is the global-config brittle-reject.
+> 3. **Review clones were already covered.** The concatenated
+>    `<clone>/.cursor/permissions.json` `autoRun.allow_instructions` would be
+>    attacker-controlled, but the launch-path strip
+>    (`shouldStripCursorReviewClone`) removes the whole `.cursor/` dir. That
+>    was not the blocker.
+>
+> **Declined.** `--force --approve-mcps` stays on every kind, and the matrix
+> now names it as Run Everything rather than "parity with Claude auto".
+> `--yolo` stays unused (it is an alias). Re-check only if a blocked call can
+> end as a TUI *denial* instead of an approval card **and** the flag overrides
+> a persisted `approvalMode`.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -538,7 +572,11 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   TTY-detach via a second tmux server; no-ops when `$TMUX` is set). Claude
   `--permission-prompts none` (2.1.259) was the same kind of re-check of
   CROW-1176's stall and **declined** ([CROW-1215](https://github.com/corveil/crow/issues/1215) —
-  print-mode / `-p` only; Crow launches the interactive TUI). The canonical
+  print-mode / `-p` only; Crow launches the interactive TUI). Cursor
+  `--auto-review` was the same kind of re-check and **declined**
+  ([CROW-1345](https://github.com/corveil/crow/issues/1345) — a classifier block
+  ends in a TUI approval card, not a denial, and a persisted Run Everything
+  `approvalMode` overrides the flag). The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);
@@ -547,7 +585,9 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
   Claude's recap subagent (**≥ 2.1.108**), Claude's extra-workdir auto-mode
   Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall; no silent bypass;
-  `--permission-prompts none` declined CROW-1215),
+  `--permission-prompts none` declined CROW-1215), Cursor `--auto-review`
+  (documented run mode; declined CROW-1345 — approval-card stall, loses to a
+  persisted Run Everything),
   OpenCode's `session.status` done
   signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
   `session.idle` question), and the one still-unpinned empirical timing
@@ -582,7 +622,7 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
 
 ## References
 
-- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175); `--permission-prompts none` re-check: [#1215](https://github.com/corveil/crow/issues/1215)
+- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175); `--permission-prompts none` re-check: [#1215](https://github.com/corveil/crow/issues/1215); Cursor `--auto-review` re-check: [#1345](https://github.com/corveil/crow/issues/1345)
 - Related ADRs: [0014](./0014-pluggable-coding-agent-adapter.md) (the adapter),
   [0004](./0004-manager-auto-permission-mode.md) (`--permission-mode auto`),
   [0011](./0011-agent-handoff-preserves-session-not-chat.md) (handoff)

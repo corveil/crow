@@ -96,12 +96,13 @@ public enum CursorLaunchArgs {
     /// is on). Returns a leading-space suffix — e.g. `" --force --approve-mcps"`
     /// — or `""` when auto-permission is off.
     ///
-    /// **Genuine parity with Claude's `--permission-mode auto`.** `--force`
-    /// turns per-call approval off; `--approve-mcps` auto-approves configured
-    /// MCP servers (e.g. the bridged `jira` MCP, see `CursorMCPConfigWriter`) so
-    /// an unattended run doesn't block on the MCP-approval prompt. Claude's auto
-    /// mode imposes no filesystem/network sandbox, so this now matches it exactly
-    /// (the earlier "bounded" framing was a Cursor-only enhancement — see below).
+    /// **Cursor's Run Everything mode.** `--force` turns per-call approval off;
+    /// `--approve-mcps` auto-approves configured MCP servers (e.g. the bridged
+    /// `jira` MCP, see `CursorMCPConfigWriter`) so an unattended run doesn't
+    /// block on the MCP-approval prompt. Like Claude's auto mode it imposes no
+    /// filesystem/network sandbox. Unlike Claude's auto mode it has no
+    /// classifier, so it is more permissive. Cursor's classifier mode
+    /// (`--auto-review`) was evaluated and declined; see below.
     ///
     /// **`--sandbox enabled` is intentionally NOT set** (was `#829`, dropped in
     /// review). It blocks **network** by default ([Cursor 2.5](https://cursor.com/changelog/2-5)),
@@ -116,9 +117,31 @@ public enum CursorLaunchArgs {
     /// rather than imposing (or disabling) one.
     ///
     /// Still deliberately **not** used: `--yolo` (alias for `--force`, no added
-    /// value) and the undocumented/unstable `--auto-review`. (`--trust` *is* now
-    /// emitted — but as the separate, unconditional `trustSuffix` workspace-trust
-    /// seed, not an auto-permission flag; see `trustSuffix` / `launchSuffix`.)
+    /// value) and `--auto-review`. (`--trust` *is* now emitted — but as the
+    /// separate, unconditional `trustSuffix` workspace-trust seed, not an
+    /// auto-permission flag; see `trustSuffix` / `launchSuffix`.)
+    ///
+    /// **`--auto-review` is declined (CROW-1345).** It is now documented (Run
+    /// Modes + `permissions.json` `autoRun`), and it is the closer *shape* to
+    /// Claude's classifier mode. But two things block it, both probed in a tmux
+    /// PTY on `agent 2026.10.22`:
+    ///
+    /// 1. **It stalls unattended.** A classifier block ends in a TUI "Run this
+    ///    command?" card that waits forever. A sibling `git worktree add` (the
+    ///    Manager's `/crow-workspace`), `rm -rf build/*` inside the workspace,
+    ///    and `git push` to `main` were all blocked. A plain feature-branch push
+    ///    was allowed in a fresh session but blocked later in a session whose
+    ///    context had primed the classifier, so the decision is not stable
+    ///    enough to promise any kind finishes.
+    /// 2. **The flag does not win.** A persisted `approvalMode: "unrestricted"`
+    ///    in `~/.cursor/cli-config.json` (set by choosing Run Everything and
+    ///    accepting Cursor's "make it your default" prompt) overrides
+    ///    `--auto-review`. The session silently runs as Run Everything. The only
+    ///    fix is writing the user's global config, which Crow must not do.
+    ///
+    /// Re-check only if a blocked call can end as a *denial* in the TUI
+    /// (instead of an approval card) **and** the flag overrides a persisted
+    /// `approvalMode`.
     public static func autoPermissionSuffix(_ autoPermissionMode: Bool) -> String {
         guard autoPermissionMode else { return "" }
         return " --force --approve-mcps"

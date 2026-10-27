@@ -281,7 +281,8 @@ struct CursorAgentTests {
     @Test func autoLaunchCommandJobAutoPermissionBounded() {
         // With auto-permission on, a first job launch carries the `--trust`
         // seed + the auto flags (approval off, no sandbox — parity with Claude
-        // auto + trust seed) and NOT --yolo/--auto-review (#829 review, CROW-890).
+        // auto + trust seed) and NOT --yolo/--auto-review (#829 review, CROW-890;
+        // --auto-review declined in CROW-1345).
         // Positional prompt still fed, flags precede it.
         let session = Session(name: "job", kind: .job, agentKind: .cursor)
         let cmd = agent.autoLaunchCommand(
@@ -394,6 +395,55 @@ struct CursorAgentTests {
         let handoff = try await agent.launchCommand(
             sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "hello")
         #expect(containsPersistToken(handoff) == false)
+    }
+
+    /// CROW-1345: `--auto-review` was evaluated and declined. A classifier block
+    /// ends in a TUI approval card that waits forever, and a persisted Run
+    /// Everything `approvalMode` silently overrides the flag. Pin that no
+    /// launch path emits `--auto-review`, and that the Manager and job/review
+    /// auto-launches keep `--force --approve-mcps`. (Handoff applies only the
+    /// trust seed, so it is pinned negatively.) Wiring `--auto-review` has to
+    /// fail this first.
+    @Test func autoPermissionNeverEmitsAutoReview() async throws {
+        var resumedReview = Session(name: "review", kind: .review, agentKind: .cursor)
+        resumedReview.reviewPromptDispatched = true
+        var resumedJob = Session(name: "job", kind: .job, agentKind: .cursor)
+        resumedJob.reviewPromptDispatched = true
+        let unattended: [Session] = [
+            Session(name: "job", kind: .job, agentKind: .cursor),
+            Session(name: "review", kind: .review, agentKind: .cursor),
+            resumedReview,
+            resumedJob,
+        ]
+        for session in unattended {
+            let cmd = agent.autoLaunchCommand(
+                session: session,
+                worktreePath: "/tmp/wt",
+                remoteControlEnabled: false,
+                autoPermissionMode: true,
+                telemetryPort: nil)
+            #expect(cmd?.contains("--force --approve-mcps") == true, "\(session.kind) auto-launch lost --force --approve-mcps")
+        }
+        let sessions = unattended + [Session(name: "work", kind: .work, agentKind: .cursor)]
+        for session in sessions {
+            let cmd = agent.autoLaunchCommand(
+                session: session,
+                worktreePath: "/tmp/wt",
+                remoteControlEnabled: false,
+                autoPermissionMode: true,
+                telemetryPort: nil)
+            #expect(cmd?.contains("--auto-review") != true, "\(session.kind) auto-launch emitted --auto-review")
+        }
+
+        let manager = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: true, telemetryPort: nil)
+        #expect(manager.contains("--force --approve-mcps"))
+        #expect(manager.contains("--auto-review") == false)
+
+        let handoff = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "hello")
+        #expect(handoff.contains("--auto-review") == false)
     }
 
     @Test func findBinaryReturnsNilWhenAbsent() {
