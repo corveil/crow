@@ -107,6 +107,14 @@ function sessionRow(s) {
     }
     badges.appendChild(tb);
   }
+  // Workspace an extra Manager was tagged with (CROW-1382). A removed
+  // workspace still shows that the Manager is tagged.
+  if (s.kind === 'manager' && s.manager_workspace_id) {
+    const name = s.manager_workspace_name || 'removed workspace';
+    const ws = el('span', 'badge workspace-badge', name);
+    ws.title = 'Workspace: ' + name + ' — sets this Manager’s gateway and transcript upload';
+    badges.appendChild(ws);
+  }
   if (s.is_explore) {
     const exp = el('span', 'explore-badge', 'Exploring');
     exp.title = 'Exploration session — read/explain only, no build';

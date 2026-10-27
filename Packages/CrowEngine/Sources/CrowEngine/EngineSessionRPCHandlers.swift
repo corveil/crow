@@ -67,7 +67,8 @@ func makeEngineSessionHandlers(
                 // it came from — so a rejected credential can be traced to a
                 // workspace without launching a session to find out. A Manager
                 // has no worktree and no PR links, so it reports its own
-                // gateway rather than a workspace's.
+                // gateway — or, when tagged (CROW-1382), `workspace_match:
+                // "workspace"` and its workspace's id.
                 //
                 // ⚠️ `workspaceGatewayMatch`, NOT `workspaceGatewayResolved`:
                 // the latter shells out to `op read` with a 15s timeout PER
@@ -75,7 +76,7 @@ func makeEngineSessionHandlers(
                 // whose `op` is blocked on a biometric prompt would wedge the
                 // whole daemon. The match path is config-read only.
                 let match = s.kind == .manager
-                    ? capturedService.managerGatewayMatch()
+                    ? capturedService.managerGatewayMatch(for: s)
                     : capturedService.workspaceGatewayMatch(for: id)
                 return [
                     "id": .string(s.id.uuidString),

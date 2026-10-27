@@ -105,11 +105,12 @@ crow version set [--enabled true|false] [--interval-hours N]            → patc
 `AppConfig.defaults` — Settings → Workspaces (provider, branch prefix), → Automation (board filter lists), → General (corveil binary path).
 
 ```
-crow defaults get                                                       → {"defaults":{…all 11 fields…},"config_readable":bool}
+crow defaults get                                                       → {"defaults":{…all 12 fields…},"config_readable":bool}
 crow defaults set [--provider github|gitlab] [--cli gh|glab] [--branch-prefix 'feat/']
 crow defaults set --binary NAME=PATH ...                                → merge; NAME= removes. LOCAL-ONLY; needs a crowd restart
 crow defaults set --corveil-auto-update true|false [--corveil-version latest|vX.Y.Z]
  → download/link corveil from corveil/corveil-releases (CROW-1210); default on (CROW-1229). When on, Crow owns binaries["corveil"] (CROW-1247)
+crow defaults set --manager-workspace NAME|''                          → workspace new extra Managers are tagged with (CROW-1382); '' clears
 crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R | --clear-exclude-review-repos
                   --add-exclude-ticket-repo R | --remove-exclude-ticket-repo R | --clear-exclude-ticket-repos
                   --add-ignore-review-label L | --remove-ignore-review-label L | --clear-ignore-review-labels
@@ -117,7 +118,7 @@ crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R |
 
 Patch; at least one flag required. Lists are edited incrementally (add/remove compose, remove applied first; `--clear-X` is exclusive with add/remove **for that list only**) and matched case-insensitively, like the board filters. `--add-*-repo` takes one `*` wildcard; labels are exact.
 
-Everything is live except `--binary` (agent discovery + `.claude/bin` symlinks are set up at startup) — that returns `restart_required`, *including on removal*. A non-executable path is saved with a warning, not rejected; `crow` is rejected as a binary name. `--provider`/`--cli` are independent — setting one warns via `provider_cli_mismatch` if the pair ends up crossed. `get` echoes all 11 fields, including the two `set` doesn't write (`exclude_dirs`, `mirror_claude_mcp_to_codex`). `--corveil-auto-update` is **on by default** (CROW-1229): Crow downloads from public `corveil/corveil-releases`, checksum-verifies, and hot-swaps the symlink. When it is on, Crow owns `binaries["corveil"]` (a previous source-build path is adopted, not skipped — CROW-1247). Pass `false` to leave an operator path, including `out/`, alone.
+Everything is live except `--binary` (agent discovery + `.claude/bin` symlinks are set up at startup) — that returns `restart_required`, *including on removal*. A non-executable path is saved with a warning, not rejected; `crow` is rejected as a binary name. `--provider`/`--cli` are independent — setting one warns via `provider_cli_mismatch` if the pair ends up crossed. `get` echoes all 12 fields, including the two `set` doesn't write (`exclude_dirs`, `mirror_claude_mcp_to_codex`). `--corveil-auto-update` is **on by default** (CROW-1229): Crow downloads from public `corveil/corveil-releases`, checksum-verifies, and hot-swaps the symlink. When it is on, Crow owns `binaries["corveil"]` (a previous source-build path is adopted, not skipped — CROW-1247). Pass `false` to leave an operator path, including `out/`, alone.
 
 The review board filters on defaults ∪ every workspace's own `excludeReviewRepos`, so `--clear-exclude-review-repos` won't unhide a repo a workspace excludes.
 ### Agent Commands
@@ -298,7 +299,7 @@ crow batch-work-on-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"
 crow explore-issue --url "..."                  → {"ok":true}   (types /crow-workspace --explore <url> into the Manager)
 crow batch-explore-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
 crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
-crow create-manager [--agent claude-code|cursor|codex|opencode]           → {"session_id":"<uuid>","name":"Manager N"}
+crow create-manager [--agent claude-code|cursor|codex|opencode] [--workspace NAME|none]  → {"session_id":"<uuid>","name":"Manager N","workspace_id":…,"workspace_name":…}
 crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixChecks|mergePR|reReview
                                                 → {"dispatched":bool,"action":"...","reason":"..."}
 ```
@@ -311,6 +312,7 @@ crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixCheck
 - `quick-action` returns `dispatched:false` + `reason` with a **zero** exit code when the session has no agent terminal or no linked PR — branch on `dispatched`, not the exit code.
 - `refresh-tickets` awaits the poll, so a following `list-tickets` sees the new data. It returns `{"ok":true}` without polling when a refresh is already in flight or the provider is rate-limited.
 - `create-manager --agent` is used as given — an unrecognized kind is not rejected, so a typo stamps the Manager with a kind no agent is registered for. Omit `--agent` to get the configured Manager default.
+- `create-manager --workspace` tags the extra Manager with a workspace for life (CROW-1382): it launches with that workspace's gateway (else `managerGateway`), ships its transcripts per harness conversation when the workspace has `--upload-session-logs` on, and starts with the workspace's provider, repos and custom instructions. Omitted means `defaults.managerWorkspace`; `none` means untagged. There is no re-tag verb, and the primary Manager is never tagged. `get-session` reports a tagged Manager as `workspace_match: "workspace"`.
 
 ### Notification Commands
 
@@ -412,11 +414,11 @@ The historical session backfill (CROW-1075) — reconcile the coding-session tra
 
 ```
 crow backfill scan                                                      → {"sessions":[{uid,harness,workspace,repo_name,owner_repo,ticket_number,confidence,upload_status,...}],"summary":{total,uploaded,linkable,repo_only,orphan}}
-crow backfill upload --workspace NAME (--session UID … | --all-high-confidence | --all)   → {"results":[{uid,result,linked,owner_repo,ticket_number,reason}],"summary":{...}}
+crow backfill upload --workspace NAME (--session UID … | --all-high-confidence | --all) [--allow-orphans] [--allow-manager-transcripts]   → {"results":[{uid,result,linked,owner_repo,ticket_number,reason}],"summary":{...}}
 ```
 
 - `scan` is disk- and git-only (no provider calls) — fast over hundreds of sessions. Reconstructs each session's workspace/repo/ticket from the transcript's own `cwd`/`gitBranch` (authoritative, not the lossy slug) plus live git remotes; `confidence` is `high` (repo + ticket) · `medium` (repo only) · `low` (orphan).
-- `upload` reuses the **live path** and is **idempotent** (local ledger + server write-once 409). `--workspace` names the workspace whose local-only gateway supplies the destination + credential (same security invariant as the live collector). Choose exactly one selection mode; `--all-high-confidence`/`--all` scope to that workspace's sessions.
+- `upload` reuses the **live path** and is **idempotent** (local ledger + server write-once 409). `--workspace` names the workspace whose local-only gateway supplies the destination + credential (same security invariant as the live collector). Choose exactly one selection mode; `--all-high-confidence`/`--all` scope to that workspace's sessions. Orphans and Manager transcripts (workspace `.crow`) are refused — returned as `skipped` with a reason — unless `--allow-orphans` / `--allow-manager-transcripts` is passed (CROW-1382).
 - A reconstructed ticket becomes a **REFERENCE only when the provider (`gh`/`glab`) confirms it exists** — otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Never automatic or unbounded — the user always chooses.
 
 ### MCP

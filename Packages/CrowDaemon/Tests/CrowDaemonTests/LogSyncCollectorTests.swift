@@ -394,6 +394,23 @@ import CrowCore
 
     // MARK: Result → ledger mapping
 
+    // MARK: Manager conversations (CROW-1382)
+
+    /// Each conversation a Manager ran ships separately, so the collector walks
+    /// the history — and the current id too, for a Manager whose last hook
+    /// predates the history field.
+    @Test func managerConversationsIncludeLegacyCurrentID() {
+        var session = Session(name: "Manager 2", kind: .manager, agentKind: .claudeCode)
+        session.recordHarnessConversationID("conv-a")
+        session.recordHarnessConversationID("conv-b")
+        #expect(LogSyncCollector.managerConversations(session).map(\.id) == ["conv-a", "conv-b"])
+
+        let legacy = Session(
+            name: "Manager 3", kind: .manager, agentKind: .codex, harnessConversationID: "old")
+        #expect(LogSyncCollector.managerConversations(legacy)
+            == [HarnessConversationRef(agentKind: .codex, id: "old")])
+    }
+
     @Test func ledgerEntryMapping() {
         #expect(LogSyncCollector.ledgerEntry(for: .created, sha: "s", size: 1, at: 0).status == .uploaded)
         #expect(LogSyncCollector.ledgerEntry(for: .alreadyExists, sha: "s", size: 1, at: 0).status == .uploaded)

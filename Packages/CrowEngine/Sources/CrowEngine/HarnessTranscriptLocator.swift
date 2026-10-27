@@ -15,7 +15,10 @@ import CrowMuse
 /// (`CursorStore.messageLines` is what LogSync uploads). Copying those lines
 /// into the brief would migrate the transcript, which this ADR refuses. A miss
 /// returns nil so the handoff brief falls back to the pane's scrollback.
-enum HarnessTranscriptLocator {
+///
+/// LogSync ships tagged Managers' transcripts through ``transcriptFile(kind:conversationID:cwd:)``
+/// (CROW-1382): one file per conversation id, never a cwd guess.
+public enum HarnessTranscriptLocator {
     struct Roots: Sendable {
         var claudeProjectsDir: String
         var grokSessionsDir: String
@@ -61,6 +64,28 @@ enum HarnessTranscriptLocator {
         // Cursor's `store.db` and OpenCode's shared database are not a
         // readable transcript for this conversation. The pane tail covers them.
         return nil
+    }
+
+    /// One conversation's transcript file and the format LogSync normalizes it
+    /// as, or nil when the harness has no per-conversation file (Cursor,
+    /// OpenCode) or the file is not on disk (CROW-1382).
+    ///
+    /// The Manager collector's lookup. It is keyed on the harness's own
+    /// conversation id and never falls back to "newest file in the cwd" — that
+    /// guess, which the chat view makes below, can pick a sibling conversation;
+    /// harmless for a read-only view, wrong for an upload the server keeps
+    /// forever. Formats match each harness's `logSources`: one Codex rollout or
+    /// Muse journal is the `.logDir` case with a single file.
+    public static func transcriptFile(
+        kind: AgentKind, conversationID: String, cwd: String
+    ) -> (path: String, format: AgentLogFormat)? {
+        let format: AgentLogFormat
+        switch kind {
+        case .claudeCode, .grok, .antigravity: format = .jsonl
+        case .codex, .muse: format = .logDir
+        default: return nil
+        }
+        return path(kind: kind, conversationID: conversationID, cwd: cwd).map { ($0, format) }
     }
 
     /// A single path component: no separators, no `..`, no control characters.

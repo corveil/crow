@@ -243,6 +243,7 @@ body.mgr-reordering, body.mgr-reordering * { cursor: grabbing; }
   font-weight: 600;
 }
 /* #792: closed-issue ticket pill — purple, matching the merged-PR pill. */
+.workspace-badge { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge-closed { color: var(--purple); background: color-mix(in srgb, var(--purple) 14%, transparent); }
 .row-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .pr-badge {
@@ -1503,6 +1504,12 @@ select.text-prompt-input { cursor: pointer; }
   margin-bottom: 14px;
 }
 .text-prompt-btn.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+
+/* New-Manager dialog (CROW-1382): Agent + Workspace pickers. */
+.new-manager-field { display: block; margin-bottom: 10px; }
+.new-manager-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+.new-manager-hint { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin: 2px 0 10px; }
+.new-manager-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-primary); cursor: pointer; }
 .text-prompt-btn.danger:hover { border-color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 
 /* The row kebab is a touch affordance — desktop uses right-click. Hide it (and

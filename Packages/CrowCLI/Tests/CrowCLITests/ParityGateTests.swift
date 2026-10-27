@@ -169,7 +169,8 @@ struct ParityGateTests {
                 excludeReviewRepos: ["owner/repo"],
                 excludeTicketRepos: ["owner/repo"],
                 ignoreReviewLabels: ["wip"],
-                binaries: ["claude": "/usr/local/bin/claude"]
+                binaries: ["claude": "/usr/local/bin/claude"],
+                managerWorkspace: "probe"
             ),
             notifications: NotificationSettings(eventSettings: [.taskComplete: EventNotificationConfig()]),
             telemetry: TelemetryConfig(),

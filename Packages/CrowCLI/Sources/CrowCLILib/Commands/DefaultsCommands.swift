@@ -87,6 +87,11 @@ public struct DefaultsSet: ParsableCommand {
         checksums, and hot-swaps the symlink. When it is on, Crow owns \
         binaries[corveil] (a previous source-build path is adopted, not \
         skipped). Pass false to leave an operator path, including out/, alone.
+
+        --manager-workspace is the workspace `crow create-manager` and the web \
+        "+" button tag a new extra Manager with when they name none. It is \
+        stored by name and never applies to the primary Manager; pass '' to \
+        clear it.
         """
     )
 
@@ -115,6 +120,11 @@ public struct DefaultsSet: ParsableCommand {
         name: .customLong("corveil-version"),
         help: "corveil-releases tag to keep linked: 'latest' or a pin like v0.4.32")
     var corveilVersion: String?
+
+    @Option(
+        name: .customLong("manager-workspace"),
+        help: "Workspace new extra Managers are tagged with when create-manager names none (name or UUID; '' clears)")
+    var managerWorkspace: String?
 
     @Option(
         name: .customLong("add-exclude-review-repo"), parsing: .singleValue,
@@ -177,9 +187,10 @@ public struct DefaultsSet: ParsableCommand {
 
     public func validate() throws {
         guard provider != nil || cli != nil || branchPrefix != nil || !binary.isEmpty
-                || hasListEdit || corveilAutoUpdate != nil || corveilVersion != nil else {
+                || hasListEdit || corveilAutoUpdate != nil || corveilVersion != nil
+                || managerWorkspace != nil else {
             throw ValidationError(
-                "Nothing to set — provide at least one of --provider, --cli, --branch-prefix, --binary, --corveil-auto-update, --corveil-version, or an --add-/--remove-/--clear- flag for a list.")
+                "Nothing to set — provide at least one of --provider, --cli, --branch-prefix, --binary, --corveil-auto-update, --corveil-version, --manager-workspace, or an --add-/--remove-/--clear- flag for a list.")
         }
         if let provider { try validateProvider(provider) }
         if let cli { try validateForgeCLI(cli) }
@@ -215,6 +226,7 @@ public struct DefaultsSet: ParsableCommand {
         }
         if let corveilAutoUpdate { params["corveil_auto_update"] = .bool(corveilAutoUpdate) }
         if let corveilVersion { params["corveil_version"] = .string(corveilVersion) }
+        if let managerWorkspace { params["manager_workspace"] = .string(managerWorkspace) }
         for edit in listEdits {
             if !edit.add.isEmpty {
                 params["add_\(edit.field)"] = .array(

@@ -54,14 +54,15 @@ import CrowPersistence
         #expect(defaults?["branch_prefix"] == .string("feature/"))
         #expect(defaults?["exclude_review_repos"] == .array([]))
         #expect(defaults?["binaries"] == .object([:]))
-        // Echoes all eleven even though `set` writes nine — hiding the two
+        // Echoes all twelve even though `set` writes ten — hiding the two
         // without a CLI flag would make `get` a worse answer to "what is my
         // config?", and neither has a web editor either.
         #expect(defaults?["mirror_claude_mcp_to_codex"] == .bool(true))
         #expect(defaults?["corveil_auto_update"] == .bool(true))
         #expect(defaults?["corveil_version"] == .string("latest"))
         #expect(defaults?["exclude_dirs"] != nil)
-        #expect(defaults?.count == 11)
+        #expect(defaults?["manager_workspace"] == .null)
+        #expect(defaults?.count == 12)
         // No config on disk, so the defaults genuinely do apply.
         #expect(resp.result?["config_readable"] == .bool(true))
     }
@@ -85,6 +86,35 @@ import CrowPersistence
     }
 
     // MARK: - Patch semantics
+
+    // CROW-1382: the default workspace tag for new extra Managers is stored by
+    // canonical name, resolved against the workspaces under the config lock.
+    @Test @MainActor func setManagerWorkspaceStoresCanonicalNameAndClears() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var seed = AppConfig()
+        seed.workspaces = [WorkspaceInfo(name: "Corveil")]
+        try ConfigStore.saveConfig(seed, devRoot: devRoot)
+
+        let set = await call("defaults-set", ["manager_workspace": .string("corveil")], devRoot: devRoot)
+        #expect(set.error == nil)
+        #expect(set.result?["defaults"]?.objectValue?["manager_workspace"] == .string("Corveil"))
+        #expect(try #require(ConfigStore.loadConfig(devRoot: devRoot)).defaults.managerWorkspace == "Corveil")
+
+        let cleared = await call("defaults-set", ["manager_workspace": .string("")], devRoot: devRoot)
+        #expect(cleared.error == nil)
+        #expect(try #require(ConfigStore.loadConfig(devRoot: devRoot)).defaults.managerWorkspace == nil)
+    }
+
+    @Test @MainActor func setManagerWorkspaceRejectsUnknownWorkspaceWithoutWriting() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let resp = await call("defaults-set", ["manager_workspace": .string("Nope")], devRoot: devRoot)
+        #expect(resp.error != nil)
+        #expect(try #require(ConfigStore.loadConfig(devRoot: devRoot)).defaults.managerWorkspace == nil)
+    }
 
     @Test @MainActor func setPatchesCorveilAutoUpdateAndVersion() async throws {
         let devRoot = tempDevRoot()

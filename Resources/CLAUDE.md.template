@@ -61,11 +61,12 @@ crow version --check                                                    → comp
 crow version check                                                      → same as --check
 crow version get                                                        → {"version_update":{…},"status":{…}}
 crow version set [--enabled true|false] [--interval-hours N]            → patch; interval floored at 1h
-crow defaults get                                                       → {"defaults":{…11 fields…},"config_readable":bool}
+crow defaults get                                                       → {"defaults":{…12 fields…},"config_readable":bool}
 crow defaults set [--provider github|gitlab] [--cli gh|glab] [--branch-prefix 'feat/']
 crow defaults set --binary NAME=PATH                                    → merge; NAME= removes. Local-only; needs a crowd restart
 crow defaults set --corveil-auto-update true|false [--corveil-version latest|vX.Y.Z]
                                                                         → download/link corveil from corveil/corveil-releases; default on
+crow defaults set --manager-workspace NAME|''                          → workspace new extra Managers are tagged with; '' clears
 crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R | --clear-exclude-review-repos
                   (same trio for --…-exclude-ticket-repo and --…-ignore-review-label)
 ```
@@ -191,7 +192,7 @@ crow batch-work-on-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"
 crow explore-issue --url "..."                  → {"ok":true}   (types /crow-workspace --explore <url> into the Manager)
 crow batch-explore-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
 crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
-crow create-manager [--agent claude-code|cursor|codex|opencode]           → {"session_id":"<uuid>","name":"Manager N"}
+crow create-manager [--agent claude-code|cursor|codex|opencode] [--workspace NAME|none]  → {"session_id":"<uuid>","name":"Manager N"}
 crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixChecks|mergePR|reReview
                                                 → {"dispatched":bool,"action":"...","reason":"..."}
 ```
@@ -203,6 +204,7 @@ crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixCheck
 - `quick-action` returns `dispatched:false` + `reason` with a **zero** exit code when the session has no agent terminal or no linked PR — branch on `dispatched`, not the exit code.
 - `refresh-tickets` awaits the poll, so a following `list-tickets` sees the new data. It returns `{"ok":true}` without polling when a refresh is already in flight or the provider is rate-limited.
 - `create-manager --agent` is used as given — an unrecognized kind is not rejected, so a typo stamps the Manager with a kind no agent is registered for. Omit `--agent` to get the configured Manager default.
+- `create-manager --workspace` tags the extra Manager with a workspace for life: that workspace's gateway (else `managerGateway`), transcript upload when the workspace opts in, and its provider/repos/custom instructions in the starting brief. Omitted means `defaults.managerWorkspace`; `none` means untagged. The primary Manager is never tagged.
 
 ## Important Notes
 

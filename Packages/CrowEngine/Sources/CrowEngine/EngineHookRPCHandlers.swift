@@ -349,16 +349,20 @@ func makeEngineHookHandlers(
                 // cold-start Manager relaunch can resume-by-id. Latest id wins
                 // (`/clear` starts a new Claude session). Never overwrite with
                 // Crow's own UUID (that's the `--session` baked into the hook).
+                // A Manager also appends the id to its conversation history, so
+                // log sync can still ship the conversation this one replaced
+                // (CROW-1382).
                 if sessionIsLive,
                    let hid = HarnessConversationID.extract(
                         fields: payload.compactMapValues { $0.stringValue },
                         crowSessionID: sessionID),
                    let idx = capturedAppState.sessions.firstIndex(where: { $0.id == sessionID }),
-                   capturedAppState.sessions[idx].harnessConversationID != hid {
-                    capturedAppState.sessions[idx].harnessConversationID = hid
+                   capturedAppState.sessions[idx].recordHarnessConversationID(hid) {
+                    let updated = capturedAppState.sessions[idx]
                     capturedStore.mutate { data in
                         if let i = data.sessions.firstIndex(where: { $0.id == sessionID }) {
-                            data.sessions[i].harnessConversationID = hid
+                            data.sessions[i].harnessConversationID = updated.harnessConversationID
+                            data.sessions[i].harnessConversationHistory = updated.harnessConversationHistory
                         }
                     }
                 }

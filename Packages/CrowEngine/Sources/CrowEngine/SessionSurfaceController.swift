@@ -223,7 +223,8 @@ final class SessionSurfaceController {
                 if let managerCwd {
                     owner.writeManagerHookConfig(for: reconciled, dirPath: managerCwd)
                     owner.writeManagerGatewayEnv(
-                        managerKind: reconciled.agentKind, dirPath: managerCwd)
+                        managerKind: reconciled.agentKind, dirPath: managerCwd,
+                        workspaceTag: reconciled.managerWorkspaceTag)
                     // CROW-600: pre-trust the Manager's cwd so a fresh identity
                     // dir (or a new devRoot) doesn't block on the trust dialog.
                     if reconciled.agentKind == .claudeCode {

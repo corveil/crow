@@ -32,6 +32,24 @@ func makeLifecycleHandlers(
             }
             let requestedAgentKind = params["agent_kind"]?.stringValue
                 .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
+            // Workspace tag (CROW-1382). Absent → `defaults.managerWorkspace`;
+            // "" / "none" → untagged. This verb only ever creates an *extra*
+            // Manager, so there is no way to address — and so tag — the
+            // primary; `Session.managerWorkspaceTag` ignores a tag on it anyway.
+            let requestedWorkspace: String?
+            if let value = params["workspace"], value != .null {
+                guard let string = value.stringValue else {
+                    throw DaemonRPCError.invalidParams("workspace must be a string")
+                }
+                requestedWorkspace = string
+            } else {
+                requestedWorkspace = nil
+            }
+            let tag = try await mapRPCError {
+                try ManagerWorkspaceTag.resolve(
+                    requested: requestedWorkspace,
+                    config: ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
+            }
             return await MainActor.run {
                 // Lowest unused "Manager N", matching the app's picker so a
                 // delete-in-the-middle doesn't collide (AppDelegate.onCreateManager).
@@ -39,8 +57,16 @@ func makeLifecycleHandlers(
                 var n = 2
                 while existing.contains("Manager \(n)") { n += 1 }
                 let id = sessionService.createManagerSession(
-                    name: "Manager \(n)", cwd: devRoot, agentKind: requestedAgentKind)
-                return ["session_id": .string(id.uuidString), "name": .string("Manager \(n)")]
+                    name: "Manager \(n)", cwd: devRoot, agentKind: requestedAgentKind,
+                    workspaceID: tag.workspaceID)
+                var result: [String: JSONValue] = [
+                    "session_id": .string(id.uuidString),
+                    "name": .string("Manager \(n)"),
+                    "workspace_id": tag.workspaceID.map { .string($0.uuidString) } ?? .null,
+                    "workspace_name": tag.workspaceName.map { .string($0) } ?? .null,
+                ]
+                if let warning = tag.warning { result["warning"] = .string(warning) }
+                return result
             }
         },
         // Session-lifecycle verbs, shared by the web session menu and the `crow`

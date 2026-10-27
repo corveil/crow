@@ -105,6 +105,37 @@ public struct Session: Identifiable, Codable, Sendable {
     // prior agent's id is meaningless to the incoming harness).
     public var harnessConversationID: String?
 
+    // Workspace an **extra** Manager was tagged with at creation (CROW-1382).
+    // Picks the Manager's AI gateway (the workspace's, falling back to
+    // `AppConfig.managerGateway`) and opts its transcripts into the
+    // workspace's `uploadSessionLogs`. Immutable once created — there is no
+    // re-tag verb. Nil means cross-workspace (the pre-CROW-1382 behavior), and
+    // is the only legal value for the primary Manager and for every non-Manager
+    // session: read it through `managerWorkspaceTag`, never directly.
+    public var workspaceID: UUID?
+
+    // Every harness conversation this Manager has run, oldest first (CROW-1382).
+    // `harnessConversationID` keeps only the latest, so a `/clear`, a resume
+    // that mints a new id, or an agent handoff would otherwise orphan the
+    // earlier transcript before the log-sync collector could ship it. Only
+    // Managers record here — work sessions upload per Crow session. Capped at
+    // `conversationHistoryLimit`.
+    public var harnessConversationHistory: [HarnessConversationRef]
+
+    /// Most conversations `harnessConversationHistory` keeps. Older entries
+    /// drop off the front; a Manager that clears this often has long since
+    /// shipped (or given up on) the early ones.
+    public static let conversationHistoryLimit = 50
+
+    /// The workspace tag that is actually in force: `workspaceID` for an extra
+    /// Manager, nil for the primary Manager and every other kind. The primary
+    /// can never be tagged (CROW-1382), so a hand-edited store cannot route it
+    /// through a workspace gateway either.
+    public var managerWorkspaceTag: UUID? {
+        guard kind == .manager, id != AppState.managerSessionID else { return nil }
+        return workspaceID
+    }
+
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
@@ -200,6 +231,14 @@ public struct Session: Identifiable, Codable, Sendable {
         guard let sanitized = HarnessConversationID.sanitize(raw, rejecting: id) else { return false }
         if harnessConversationID == sanitized { return false }
         harnessConversationID = sanitized
+        if kind == .manager {
+            let ref = HarnessConversationRef(agentKind: agentKind, id: sanitized)
+            if !harnessConversationHistory.contains(ref) {
+                harnessConversationHistory.append(ref)
+                let overflow = harnessConversationHistory.count - Self.conversationHistoryLimit
+                if overflow > 0 { harnessConversationHistory.removeFirst(overflow) }
+            }
+        }
         return true
     }
 
@@ -239,7 +278,9 @@ public struct Session: Identifiable, Codable, Sendable {
         ticketPriority: TicketPriority? = nil,
         reviewAuthor: String? = nil,
         isExplore: Bool = false,
-        harnessConversationID: String? = nil
+        harnessConversationID: String? = nil,
+        workspaceID: UUID? = nil,
+        harnessConversationHistory: [HarnessConversationRef] = []
     ) {
         self.id = id
         self.name = name
@@ -265,6 +306,8 @@ public struct Session: Identifiable, Codable, Sendable {
         self.reviewAuthor = reviewAuthor
         self.isExplore = isExplore
         self.harnessConversationID = harnessConversationID
+        self.workspaceID = workspaceID
+        self.harnessConversationHistory = harnessConversationHistory
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -309,6 +352,9 @@ public struct Session: Identifiable, Codable, Sendable {
         reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
         isExplore = try container.decodeIfPresent(Bool.self, forKey: .isExplore) ?? false
         harnessConversationID = try container.decodeIfPresent(String.self, forKey: .harnessConversationID)
+        workspaceID = try container.decodeIfPresent(UUID.self, forKey: .workspaceID)
+        harnessConversationHistory = try container.decodeIfPresent(
+            [HarnessConversationRef].self, forKey: .harnessConversationHistory) ?? []
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.
@@ -325,5 +371,19 @@ public struct Session: Identifiable, Codable, Sendable {
     /// writes the current key names.
     private enum LegacyCodingKeys: String, CodingKey {
         case pinned
+    }
+}
+
+/// One harness conversation a Manager ran: which CLI wrote it and that CLI's
+/// own conversation id (CROW-1382). The kind travels with the id because a
+/// handoff changes `Session.agentKind` but the earlier transcript is still the
+/// earlier harness's file.
+public struct HarnessConversationRef: Codable, Sendable, Equatable, Hashable {
+    public var agentKind: AgentKind
+    public var id: String
+
+    public init(agentKind: AgentKind, id: String) {
+        self.agentKind = agentKind
+        self.id = id
     }
 }
