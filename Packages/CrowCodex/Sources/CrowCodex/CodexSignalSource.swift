@@ -67,10 +67,15 @@ public struct CodexSignalSource: StateSignalSource {
             // Aborted turn. Upstream `Stop` and `Interrupt` are exclusive
             // paths (`run_turn_stop_hooks` on natural completion;
             // `run_turn_interrupt_hooks` on TurnAborted — openai/codex#40511).
+            // Only a real abort (Esc / Ctrl+C) reaches here. A `crow send`
+            // paste while working is a `turn/steer`, not an abort: it fires
+            // `UserPromptSubmit` inside the same turn, and under
+            // `instant_interrupt` (default-on since 0.162.0) the preempted
+            // step sets `needs_follow_up`, so no `Stop` lands until the turn
+            // really ends (CROW-1344, live-traced on 0.163.0).
             // Mapping to `.done` would complete `.job` runs
-            // (`JobScheduler.finishDecision` keys only on `.done`) and a
-            // `crow send` follow-up that aborts-then-submits would race the
-            // job settle window. `.waiting` is the same cancel/error bucket
+            // (`JobScheduler.finishDecision` keys only on `.done`) on a
+            // cancel. `.waiting` is the same cancel/error bucket
             // as Claude's `StopFailure`: the card leaves `.working`,
             // jobs/reviews stay open. Stay `.done` if a Stop already landed
             // (defensive; the paths shouldn't overlap). Interrupt is

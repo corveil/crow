@@ -138,9 +138,11 @@ struct CodexSignalSourceTests {
     }
 
     @Test func interruptThenUserPromptSubmitResumesWorking() {
-        // `crow send` (tmux paste + Enter) while a turn is running aborts it
-        // (Interrupt) then submits the follow-up (UserPromptSubmit). The card
-        // must not complete in the gap — `.waiting` then `.working`.
+        // Esc while a turn is running aborts it (Interrupt, no Stop), then the
+        // next prompt opens a new turn (UserPromptSubmit). The card must not
+        // complete in the gap — `.waiting` then `.working`. Live trace on
+        // codex 0.163.0 (CROW-1344): turn A `Interrupt`; turn B
+        // `UserPromptSubmit` → `Stop`.
         var activityState: AgentActivityState = .working
         var lastTopLevelStopAt: Date? = nil
 
@@ -163,6 +165,33 @@ struct CodexSignalSourceTests {
         #expect(lastTopLevelStopAt == nil, "Interrupt must not look like a Stop")
         apply("UserPromptSubmit")
         #expect(activityState == .working)
+    }
+
+    @Test func steeredPromptMidTurnNeverCompletesBeforeStop() {
+        // `crow send` (tmux paste + Enter) while working is a `turn/steer`,
+        // not an abort. Under `instant_interrupt` (default-on since codex
+        // 0.162.0) it preempts the in-flight step, which returns
+        // `needs_follow_up: true`, so `Stop` only runs when the turn really
+        // ends. The exact sequence live-traced on 0.163.0 (CROW-1344), all
+        // one `turn_id`: no `Interrupt`, a second `UserPromptSubmit` for the
+        // steered input (here mid-tool), one `Stop`. `.done` (the only state
+        // `JobScheduler.finishDecision` completes on) must appear only at the end.
+        var activityState: AgentActivityState = .idle
+        var lastTopLevelStopAt: Date? = nil
+        var states: [AgentActivityState] = []
+
+        for name in ["UserPromptSubmit", "PreToolUse", "UserPromptSubmit", "PostToolUse", "Stop"] {
+            let t = source.transition(
+                for: event(name, toolName: name.hasSuffix("ToolUse") ? "Bash" : nil),
+                currentActivityState: activityState,
+                currentNotificationType: nil,
+                currentLastTopLevelStopAt: lastTopLevelStopAt)
+            if let s = t.newActivityState { activityState = s }
+            if case .set(let d) = t.lastTopLevelStopAt { lastTopLevelStopAt = d }
+            states.append(activityState)
+        }
+
+        #expect(states == [.working, .working, .working, .working, .done])
     }
 
     @Test func permissionRequestWaits() {

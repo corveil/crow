@@ -291,6 +291,18 @@ deliberate, documented gaps (full grid in the
 > clamp). Pre-0.150 Codex ignores the unknown key (`HookEventsToml` has no
 > `deny_unknown_fields`), so emitting it does not drop the other six hooks.
 
+> **Amendment (2026-10-27, CROW-1344):** Codex turned `instant_interrupt` on
+> by default in 0.162.0. A live TUI trace on 0.163.0 corrects one clause of
+> the CROW-1177 amendment above: a `crow send` follow-up does **not** abort
+> the in-flight turn. The TUI submits a paste plus Enter while working as a
+> `turn/steer`. The preempted step returns `needs_follow_up: true` rather than
+> `TurnAborted`, so the hooks are `UserPromptSubmit` inside the same turn, no
+> `Interrupt`, and one `Stop` when the turn really ends. Esc still gives
+> `Interrupt` and no `Stop`. The completion contract holds without a version
+> gate or a `-c features.instant_interrupt=false` override. The trace and the
+> `turn.rs` pin are in
+> [`docs/agent-harness-matrix.md`](../agent-harness-matrix.md).
+
 > **Amendment (2026-09-02, CROW-1176):** Claude Code **≥ 2.1.257** added a
 > **one-time prompt in auto mode** before the first file Read outside the
 > working directories, plus `permissions.blockReadsOutsideWorkingDirectories`

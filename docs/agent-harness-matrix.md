@@ -671,8 +671,10 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   (`run_turn_interrupt_hooks` before the interrupted-abort event) — `Stop`
   still fires only on natural completion (`run_turn_stop_hooks`), so the two
   are exclusive. Crow maps `Interrupt` → `.waiting` (not `.done`): a
-  cancelled turn, or a `crow send` follow-up that aborts-then-submits
-  (`Interrupt` then `UserPromptSubmit`), must not complete a `.job`. Official
+  cancelled turn (Esc / Ctrl+C) must not complete a `.job`. A `crow send`
+  paste while working is **not** an abort: the TUI submits it as a
+  `turn/steer`, so it fires `UserPromptSubmit` inside the running turn and
+  never fires `Interrupt` (CROW-1344). Official
   hooks docs still omit `Interrupt` and still claim async command hooks are
   unsupported — that page is stale vs source; the pin is
   `codex-rs/hooks/src/engine/discovery.rs` (`interrupt_normalizes_timeout_and_supports_async_execution`)
@@ -684,11 +686,30 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   clamp does not skip the command. Unknown `Interrupt` keys are ignored by
   pre-0.150 `HookEventsToml` (no `deny_unknown_fields` on that struct), so
   emitting the event is fail-closed for older Codex — the other six hooks
-  still load. A live TUI trace of Esc / `crow send` while working remains a
-  nice-to-have human re-check; the mapping is pinned by
+  still load. The mapping is pinned by
   `interruptFromWorkingMarksWaitingWithoutCompleting` /
   `interruptThenUserPromptSubmitResumesWorking` /
-  `interruptDoesNotUncompleteADoneTurn`.
+  `interruptDoesNotUncompleteADoneTurn` /
+  `steeredPromptMidTurnNeverCompletesBeforeStop`.
+  **`instant_interrupt` (CROW-1344).** Codex turned this feature on by default
+  in 0.162.0 (`#51812`). It changes how a steer lands, not whether `Stop`
+  fires early. Each step gets a `preempt` token, and `watch_user_input` cancels
+  the in-flight sampling stream as soon as user input is queued. The step then
+  returns `needs_follow_up: true` (not `TurnAborted`), the queued input is
+  drained inside the same turn through `inspect_pending_input`, which runs
+  `UserPromptSubmit`, and `run_turn_stop_hooks` runs only on the
+  `!needs_follow_up` branch (`core/src/session/turn.rs`, `rust-v0.163.0`).
+  A live TUI trace on **0.163.0** (2026-10-27) confirmed it. A paste plus
+  Enter mid-stream gave `UserPromptSubmit` → `UserPromptSubmit` → `Stop`,
+  all with one `turn_id` and the essay cut off mid-sentence. A steer during a
+  running `sleep` tool gave `UserPromptSubmit` → `PreToolUse` →
+  `UserPromptSubmit` → `PostToolUse` → `Stop`, with the tool not killed.
+  Esc gave `Interrupt` with no `Stop`, and the next prompt opened a new turn
+  (`UserPromptSubmit` → `Stop`). No premature `Stop` reaches a `.job`/`.review`,
+  so there is no version gate and no `-c features.instant_interrupt=false`.
+  One unrelated window is unchanged: a steer that arrives after the
+  post-sampling `has_pending_input` check misses the turn. It becomes a new
+  turn after a genuine `Stop`.
 - **Cursor:** declares `PostToolUse` / `Notification` async, but the timing is
   "one of the three things to confirm empirically" (`CursorSignalSource`).
 - **OpenCode:** event *names* are verified, and the "done" signal is now the
@@ -1205,7 +1226,7 @@ against current upstream CLIs.
 | Reason | Pin | Source | Last verified |
 |---|---|---|---|
 | Codex honors `async: true` (below the pin it *skips* the entry, breaking state detection) | Codex **≥ 0.148.0** (gate lives in `CodexVersionProbe.minimumAsyncHookVersion`) | `CodexVersionProbe` / `CodexHookConfigWriter.asyncEvents` | 2026-08-20 (CROW-1065) — **closed**. Upstream `discovery.rs` on `rust-v0.148.0` computes `runs_async = async && event != SessionEnd` (the "not supported yet" skip is gone). `0.148.0` shipped **stable** on 2026-08-18 (npm `latest` = `0.149.0` on 2026-08-20), so the gate now passes on real installs — earlier the reason held (2026-08-13, CROW-999) but `0.148.0` was still pre-release. Async **timing** is now resolved **by construction**: `PostToolUse` is the only async event and its sole mutation (`lastToolActivity`) is persistence-excluded + reader-less, while completion is owned by the sync `Stop` — so no straggler-after-`Stop` ordering is observable on the card (proof over all orderings; pinned by `lateAsyncPostToolUseAfterStopStaysDone`). A live 0.148.0+ TUI trace stays a nice-to-have human re-check. **CROW-1177 keeps this proof:** `Interrupt` is registered but **sync** (it mutates `activityState` → `.waiting`) |
-| Codex `Interrupt` hook (abort path; must not look like `Stop`) | Codex **≥ 0.150.0** (`#40511`); executor coverage **0.152.0** (`#41432`). Official hooks docs still omit it | `CodexHookConfigWriter.allEvents` / `CodexSignalSource` | 2026-09-02 (CROW-1177) — **wired**. `Stop` = natural completion → `.done`; `Interrupt` = `TurnAborted` → `.waiting` (jobs/reviews stay open). `crow send` while working is abort-then-submit (`Interrupt` then `UserPromptSubmit`). Timeout written 3s (upstream clamp). No `async: true` (would reopen CROW-1065). Pre-0.150 ignores the unknown key (`HookEventsToml` has no `deny_unknown_fields`). Live Esc/`crow send` TUI trace is a nice-to-have |
+| Codex `Interrupt` hook (abort path; must not look like `Stop`) | Codex **≥ 0.150.0** (`#40511`); executor coverage **0.152.0** (`#41432`). Official hooks docs still omit it | `CodexHookConfigWriter.allEvents` / `CodexSignalSource` | 2026-09-02 (CROW-1177) — **wired**. `Stop` = natural completion → `.done`; `Interrupt` = `TurnAborted` → `.waiting` (jobs/reviews stay open). Timeout written 3s (upstream clamp). No `async: true` (would reopen CROW-1065). Pre-0.150 ignores the unknown key (`HookEventsToml` has no `deny_unknown_fields`). **Re-verified 2026-10-27 (CROW-1344) on codex 0.163.0, with `instant_interrupt` default-on since 0.162.0:** Esc gives `Interrupt` and no `Stop`. `crow send` while working is a **steer**, not abort-then-submit: `UserPromptSubmit` inside the same turn, no `Interrupt`, and one `Stop` at the real end (live TUI trace plus `turn.rs`; the same `!needs_follow_up` Stop gate is in the `rust-v0.164.0` source). No gate needed |
 | Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
