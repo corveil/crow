@@ -197,6 +197,10 @@ func makeSnapshotHandlers(
                     // existed (so a later opt-out sticks).
                     ManagedWorkspaceDefaults.applyToNewWorkspaces(
                         in: &m, previousWorkspaceIDs: Set((current?.workspaces ?? []).map(\.id)))
+                    // Settings → Workspaces deletes and renames land here as a
+                    // whole-config write: keep `defaults.managerWorkspace`
+                    // following them, as `workspace-remove`/`-edit` do (CROW-1386).
+                    m.reconcileManagerWorkspaceDefault(previousWorkspaces: current?.workspaces ?? [])
                     try ConfigStore.saveConfig(m, devRoot: devRoot)
                     return m
                 }

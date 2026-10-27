@@ -89,9 +89,12 @@ public struct DefaultsSet: ParsableCommand {
         skipped). Pass false to leave an operator path, including out/, alone.
 
         --manager-workspace is the workspace `crow create-manager` and the web \
-        "+" button tag a new extra Manager with when they name none. It is \
-        stored by name and never applies to the primary Manager; pass '' to \
-        clear it.
+        "+" button tag a new extra Manager with when they name none. Every \
+        extra Manager needs a workspace, so with this unset, `create-manager` \
+        without --workspace fails and "+" opens the workspace dialog. It is \
+        stored by name, follows a workspace rename, is cleared when that \
+        workspace is removed, and never applies to the primary Manager; pass \
+        '' to clear it.
         """
     )
 

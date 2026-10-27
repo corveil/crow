@@ -208,7 +208,7 @@ async function handoffAgent(sessionId, agentKind) {
 }
 
 // Pick a different coding agent for an existing work/job session (CROW-627).
-// Reuses the list-agents menu pattern from openNewManagerMenu, including the
+// Uses the list-agents ctx-menu pattern (as the new-Manager dialog does), with the
 // #879 surface-but-disable treatment: off-PATH agents show as disabled rows
 // (handing off to one only fails server-side with a raw internal error).
 async function openHandoffAgentMenu(session, anchorEl) {

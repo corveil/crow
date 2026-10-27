@@ -522,7 +522,7 @@ crow defaults set --manager-workspace ''                   # clear it
 | `--binary NAME=PATH`             | no¹      | Absolute binary path override, repeatable; `NAME=` removes the entry        |
 | `--corveil-auto-update`        | no¹      | Download and link the host-platform corveil CLI from `corveil/corveil-releases` (`true` or `false`; default `true`) |
 | `--corveil-version`             | no¹      | Tag to keep linked: `latest` or a pin like `v0.4.32`                      |
-| `--manager-workspace`            | no¹      | Workspace new extra Managers are tagged with when `create-manager` names none (name or UUID); `''` clears. Stored by name; never applies to the primary Manager |
+| `--manager-workspace`            | no¹      | Workspace new extra Managers are tagged with when `create-manager` names none (name or UUID); `''` clears. Stored by name — a workspace rename rewrites it and a removal clears it. Unset, `create-manager` without `--workspace` fails and the web "+" opens the workspace dialog. Never applies to the primary Manager |
 | `--add-exclude-review-repo`      | no¹      | Hide a repo from the review board, repeatable; one `*` wildcard allowed     |
 | `--remove-exclude-review-repo`   | no¹      | Stop hiding a repo from the review board, repeatable                        |
 | `--clear-exclude-review-repos`   | no¹      | Empty the review-board repo exclusions                                      |
@@ -1809,7 +1809,7 @@ crow workspace edit --workspace Acme --name Acme2 --force
 
 ¹ At least one of `--name` or a field flag is required; `--force` alone is not a change.
 
-Returns `{"workspace": {...}, "saved": <bool>}`, plus `renamed_from`, `orphaned_sessions` and `orphaned_jobs` when the name changed.
+Returns `{"workspace": {...}, "saved": <bool>}`, plus `renamed_from`, `orphaned_sessions` and `orphaned_jobs` when the name changed, and `manager_default_renamed` (the new name) when the renamed workspace was `defaults.managerWorkspace` — the default is stored by name, so a rename rewrites it (CROW-1386).
 
 **Renaming is guarded.** Nothing stores a workspace id: a session is tied to its workspace only by its worktree living at `{devRoot}/{workspace}/{repo}`, and a job only by the `job.workspace` string. Renaming moves no directory, so it silently breaks AI-gateway resolution for those sessions, code-provider detection (which falls back to GitHub), job launches, and the `/crow-workspace` skill's config lookups — while the daemon scaffolds a *new* empty directory beside the old populated one. So a rename with live references is refused; `--force` proceeds and reports the counts.
 
@@ -1839,7 +1839,8 @@ Returns:
   "worktree_dir_kept": "/Users/you/Dev/Acme",
   "gateway_discarded": true,
   "orphaned_sessions": 0,
-  "orphaned_jobs": 0
+  "orphaned_jobs": 0,
+  "manager_default_cleared": false
 }
 ```
 
@@ -1848,6 +1849,7 @@ Notes:
 - This removes the **config entry only**. The workspace directory under the dev root, its worktrees, and its branches are left on disk — same as the web UI. `worktree_dir_kept` names the path so a script can clean up deliberately.
 - Any AI gateway stored for the workspace is discarded with it, and there is no undo. `gateway_discarded` says whether one was lost; the CLI also warns on stderr.
 - Like rename, removal is refused while sessions or jobs still reference the workspace unless `--force` is passed.
+- Removing the workspace `defaults.managerWorkspace` names clears that default (CROW-1386), with or without `--force`; `manager_default_cleared` says so and the CLI warns on stderr. Settings → Workspaces' delete does the same.
 
 ### Workspace field flags
 
@@ -2022,20 +2024,21 @@ Create an additional Manager session, named with the lowest unused `Manager N` �
 crow create-manager
 crow create-manager --agent cursor
 crow create-manager --workspace Corveil
-crow create-manager --workspace none        # untagged, even with a default set
 ```
 
 | Flag          | Required | Description                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------- |
 | `--agent`     | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`, `antigravity`, `grok`, `muse`); default agent when omitted |
-| `--workspace` | no       | Workspace to tag the Manager with (name or UUID), or `none`; `defaults.managerWorkspace` when omitted |
+| `--workspace` | no       | Workspace to tag the Manager with (name or UUID); when omitted, the calling Manager's workspace, then `defaults.managerWorkspace` |
 
-Returns `{"session_id": "...", "name": "Manager N", "workspace_id": "..."|null, "workspace_name": "..."|null}`, plus a `warning` when `defaults.managerWorkspace` names a workspace that no longer exists (the Manager is then created untagged).
+Returns `{"session_id": "...", "name": "Manager N", "workspace_id": "...", "workspace_name": "..."}`.
+
+**Every extra Manager has a workspace (CROW-1386).** Crow never guesses one. It is resolved, in order, from `--workspace`; then the context the Manager is created from — run inside a tagged Manager (`$CROW_SESSION_ID`), the new one takes that Manager's workspace; `crow todo explore` / `todo ticket` use the Scratch item's workspace; then `defaults.managerWorkspace`. If none of these names an existing workspace, the command fails with a message naming `--workspace` and `crow defaults set --manager-workspace`. A default naming a workspace that no longer exists counts as unset. With no workspaces configured at all, creating an extra Manager is refused. `--workspace none` is no longer accepted. Extra Managers created untagged before this keep running unchanged and show an **untagged** badge in the sidebar.
 
 **Workspace tag (CROW-1382).** A tagged Manager:
 
 - launches with its workspace's AI gateway, or `managerGateway` when that workspace has none — including after a reboot resume and an agent handoff;
-- ships its transcripts when the workspace has `--upload-session-logs` on, through that workspace's gateway. Each harness conversation is a separate upload keyed by its conversation id, so a resumed or `/clear`ed Manager ships its new conversation too. Untagged Managers never ship;
+- ships its transcripts when the workspace has `--upload-session-logs` on, through that workspace's gateway. Each harness conversation is a separate upload keyed by its conversation id, so a resumed or `/clear`ed Manager ships its new conversation too. The primary Manager and pre-CROW-1386 untagged ones never ship;
 - starts with a brief naming the workspace's provider, repos and `customInstructions`, so `/crow-create-ticket` knows where to file.
 
 `crow get-session` reports a tagged Manager as `workspace_match: "workspace"` with its `workspace_id`; `list-sessions` carries `manager_workspace_id` / `manager_workspace_name`. The tag is set at creation only — there is no re-tag verb — and the primary Manager is never tagged.

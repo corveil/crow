@@ -32,22 +32,22 @@ func makeLifecycleHandlers(
             }
             let requestedAgentKind = params["agent_kind"]?.stringValue
                 .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
-            // Workspace tag (CROW-1382). Absent → `defaults.managerWorkspace`;
-            // "" / "none" → untagged. This verb only ever creates an *extra*
-            // Manager, so there is no way to address — and so tag — the
-            // primary; `Session.managerWorkspaceTag` ignores a tag on it anyway.
-            let requestedWorkspace: String?
-            if let value = params["workspace"], value != .null {
-                guard let string = value.stringValue else {
-                    throw DaemonRPCError.invalidParams("workspace must be a string")
+            // Workspace tag (CROW-1382). Every new extra Manager has one
+            // (CROW-1386): explicit `workspace`, else the tagged Manager the
+            // request came from (`from_session`), else
+            // `defaults.managerWorkspace` — and if none resolves, this throws
+            // rather than creating an untagged Manager. This verb only ever
+            // creates an *extra* Manager; the primary is never tagged.
+            let requestedWorkspace = try optionalString(params, "workspace")
+            var context: String?
+            if let raw = try optionalString(params, "from_session"), let id = UUID(uuidString: raw) {
+                context = await MainActor.run {
+                    appState.sessions.first { $0.id == id }?.managerWorkspaceTag?.uuidString
                 }
-                requestedWorkspace = string
-            } else {
-                requestedWorkspace = nil
             }
             let tag = try await mapRPCError {
                 try ManagerWorkspaceTag.resolve(
-                    requested: requestedWorkspace,
+                    requested: requestedWorkspace, context: context,
                     config: ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
             }
             return await MainActor.run {
@@ -59,14 +59,12 @@ func makeLifecycleHandlers(
                 let id = sessionService.createManagerSession(
                     name: "Manager \(n)", cwd: devRoot, agentKind: requestedAgentKind,
                     workspaceID: tag.workspaceID)
-                var result: [String: JSONValue] = [
+                return [
                     "session_id": .string(id.uuidString),
                     "name": .string("Manager \(n)"),
-                    "workspace_id": tag.workspaceID.map { .string($0.uuidString) } ?? .null,
-                    "workspace_name": tag.workspaceName.map { .string($0) } ?? .null,
+                    "workspace_id": .string(tag.workspaceID.uuidString),
+                    "workspace_name": .string(tag.workspaceName),
                 ]
-                if let warning = tag.warning { result["warning"] = .string(warning) }
-                return result
             }
         },
         // Session-lifecycle verbs, shared by the web session menu and the `crow`
@@ -364,4 +362,14 @@ private func validateJobWorkspace(_ workspace: String, config: AppConfig) throws
     guard config.workspaces.contains(where: { $0.name == workspace }) else {
         throw RPCError.invalidParams("Unknown workspace '\(workspace)'")
     }
+}
+
+/// A string param that may be absent or null; any other non-string type is
+/// rejected rather than read as "absent".
+private func optionalString(_ params: [String: JSONValue], _ key: String) throws -> String? {
+    guard let value = params[key], value != .null else { return nil }
+    guard let string = value.stringValue else {
+        throw DaemonRPCError.invalidParams("\(key) must be a string")
+    }
+    return string
 }

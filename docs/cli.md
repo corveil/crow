@@ -816,12 +816,12 @@ Create an additional Manager session.
 crow create-manager [--agent <agent>] [--workspace <workspace>]
 ```
 
---workspace tags the new Manager with a workspace for its whole life: it launches with that workspace's AI gateway (falling back to the Manager gateway when the workspace has none), ships its transcripts when the workspace has session-log upload on, and starts with the workspace's provider, repos and custom instructions. Omit it to use `defaults.managerWorkspace` (`crow defaults set --manager-workspace`); pass `none` for an untagged, cross-workspace Manager. The tag cannot be changed later, and the primary Manager is never tagged.
+--workspace tags the new Manager with a workspace for its whole life: it launches with that workspace's AI gateway (falling back to the Manager gateway when the workspace has none), ships its transcripts when the workspace has session-log upload on, and starts with the workspace's provider, repos and custom instructions. Every extra Manager needs one. Omitted, it comes from the tagged Manager this runs in ($CROW_SESSION_ID), then `defaults.managerWorkspace` (`crow defaults set --manager-workspace`); if neither resolves, the command fails rather than guess. The tag cannot be changed later, and the primary Manager is never tagged.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--agent` | `<agent>` | no | Coding agent kind (claude-code, cursor, codex, opencode, antigravity, grok, muse); default agent when omitted |
-| `--workspace` | `<workspace>` | no | Workspace to tag the Manager with (name or UUID), or 'none' for untagged; defaults.managerWorkspace when omitted |
+| `--workspace` | `<workspace>` | no | Workspace to tag the Manager with (name or UUID); when omitted, the calling Manager's workspace, then defaults.managerWorkspace |
 
 ---
 
@@ -867,7 +867,7 @@ Most of these are live. The provider and CLI are re-read on each repo scan, the 
 
 --provider and --cli are stored independently and neither implies the other, matching how GitManager reads them; setting only one warns if the resulting pair is crossed. --corveil-auto-update is live and on by default: Crow downloads from corveil/corveil-releases, verifies checksums, and hot-swaps the symlink. When it is on, Crow owns binaries[corveil] (a previous source-build path is adopted, not skipped). Pass false to leave an operator path, including out/, alone.
 
---manager-workspace is the workspace `crow create-manager` and the web "+" button tag a new extra Manager with when they name none. It is stored by name and never applies to the primary Manager; pass '' to clear it.
+--manager-workspace is the workspace `crow create-manager` and the web "+" button tag a new extra Manager with when they name none. Every extra Manager needs a workspace, so with this unset, `create-manager` without --workspace fails and "+" opens the workspace dialog. It is stored by name, follows a workspace rename, is cleared when that workspace is removed, and never applies to the primary Manager; pass '' to clear it.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |

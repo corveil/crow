@@ -61,9 +61,11 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     /// Workspace a new **extra** Manager is tagged with when its creator names
     /// none (CROW-1382) — `crow create-manager` without `--workspace`, and the
     /// web "+" fast path. Stored by canonical name, like `JobConfig.workspace`
-    /// and the Scratch item tag; a later rename leaves it pointing nowhere, and
-    /// an unknown name creates an untagged Manager rather than failing. Nil
-    /// means untagged. Never applies to the primary Manager.
+    /// and the Scratch item tag. A workspace rename rewrites it and a removal
+    /// clears it (`AppConfig.reconcileManagerWorkspaceDefault`, CROW-1386); a
+    /// name that still resolves to nothing is treated as unset, so creation
+    /// fails rather than producing an untagged Manager. Never applies to the
+    /// primary Manager.
     public var managerWorkspace: String?
 
     /// Forge providers the Settings → Workspaces picker offers.

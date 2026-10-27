@@ -102,8 +102,10 @@ func makeWorkspaceHandlers(
                     }
                 }
 
+                var defaultChange: ManagerWorkspaceDefaultChange?
                 let (changed, workspace) = try mutateConfigIfChanged(devRoot: devRoot) {
                     config -> (changed: Bool, value: WorkspaceInfo) in
+                    let previous = config.workspaces
                     // Re-resolve *and* re-validate under the lock: another writer
                     // may have reordered the array or claimed the new name since
                     // the pre-flight read above, and name uniqueness is only
@@ -115,6 +117,10 @@ func makeWorkspaceHandlers(
                     }
                     let changed = try WorkspaceRPC.applyPatch(
                         params, to: &config.workspaces[index], name: name)
+                    // A rename carries `defaults.managerWorkspace` with it
+                    // (CROW-1386) — it is stored by name.
+                    defaultChange = config.reconcileManagerWorkspaceDefault(
+                        previousWorkspaces: previous)
                     return (changed, config.workspaces[index])
                 }
 
@@ -126,6 +132,9 @@ func makeWorkspaceHandlers(
                     result["renamed_from"] = .string(current.name)
                     result["orphaned_sessions"] = .int(references.sessions)
                     result["orphaned_jobs"] = .int(references.jobs)
+                }
+                if case .renamed(_, let to) = defaultChange {
+                    result["manager_default_renamed"] = .string(to)
                 }
                 return result
             }
@@ -147,9 +156,15 @@ func makeWorkspaceHandlers(
                     throw RPCError.invalidParams(denial)
                 }
 
-                let removed = try mutateConfig(devRoot: devRoot) { config -> WorkspaceInfo in
+                let (removed, defaultChange) = try mutateConfig(devRoot: devRoot) {
+                    config -> (WorkspaceInfo, ManagerWorkspaceDefaultChange?) in
+                    let previous = config.workspaces
                     let index = try WorkspaceRPC.resolveIndex(ref, in: config)
-                    return config.workspaces.remove(at: index)
+                    let removed = config.workspaces.remove(at: index)
+                    // Removing the default Manager workspace clears the
+                    // default (CROW-1386), so "+" opens the dialog instead of
+                    // failing on a name that no longer exists.
+                    return (removed, config.reconcileManagerWorkspaceDefault(previousWorkspaces: previous))
                 }
                 return [
                     "removed": .bool(true),
@@ -163,6 +178,7 @@ func makeWorkspaceHandlers(
                     "gateway_discarded": .bool(!(removed.gateway?.isEmpty ?? true)),
                     "orphaned_sessions": .int(references.sessions),
                     "orphaned_jobs": .int(references.jobs),
+                    "manager_default_cleared": .bool(defaultChange != nil),
                 ]
             }
         },
