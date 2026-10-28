@@ -566,13 +566,13 @@ function chatBubble(role, text) {
   if (!src) return b;
   b.appendChild(chatCopyButton('chat-copy chat-msg-copy', 'Copy message as markdown', () => src));
   // Desktop right-click, like the terminal's menu. Not on touch: Android fires
-  // contextmenu for the long press that starts a text selection.
-  if (!isCoarsePointer()) {
-    b.oncontextmenu = (e) => {
-      const sel = chatSelectionIn(b);
-      showCardMenu(e, [{ label: 'Copy', url: sel }, { label: 'Copy as markdown', url: src }]);
-    };
-  }
+  // contextmenu for the long press that starts a text selection. Checked per
+  // event, so a convertible that switches pointer mid-transcript follows it.
+  b.oncontextmenu = (e) => {
+    if (isCoarsePointer()) return;
+    const sel = chatSelectionIn(b);
+    showCardMenu(e, [{ label: 'Copy', url: sel }, { label: 'Copy as markdown', url: src }]);
+  };
   return b;
 }
 

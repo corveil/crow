@@ -2018,7 +2018,9 @@ select.text-prompt-input { cursor: pointer; }
   display: flex; flex-direction: column; gap: 8px;
 }
 .chat-msg {
-  max-width: min(760px, 92%);
+  /* Reserve a gutter for the desktop Copy beside the bubble (.chat-msg-copy):
+     92% alone clipped "Copied" against #chat-log with the sidebar open. */
+  max-width: min(760px, calc(100% - 64px));
   padding: 8px 12px;
   border-radius: 14px;
   line-height: 1.45;
@@ -2189,6 +2191,10 @@ select.text-prompt-input { cursor: pointer; }
 }
 @media (pointer: coarse), (max-width: 720px) {
   .chat-msg-copy { position: static; display: block; margin: 6px 0 0 auto; }
+}
+/* In-flow there, so no gutter to reserve. */
+@media (pointer: coarse) and (min-width: 721px) {
+  .chat-msg { max-width: min(760px, 92%); }
 }
 /* Always-visible on touch: give the code block's first line room under it. */
 @media (pointer: coarse) {

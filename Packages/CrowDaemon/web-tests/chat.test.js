@@ -184,6 +184,15 @@ check('right-click offers Copy as markdown (no Copy without a selection)',
   ctxItems.length === 1 && ctxItems[0].textContent === 'Copy as markdown');
 ctxItems[0].click();
 check('Copy as markdown copies the source', copied.pop() === SRC && !doc.querySelector('.ctx-menu'));
+const h1 = cB.querySelector('h1');
+window.getSelection().selectAllChildren(h1);
+cB.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+const selItems = [...doc.querySelectorAll('.ctx-menu .ctx-item')];
+check('with a selection in the bubble, right-click also offers Copy',
+  selItems.map((i) => i.textContent).join(',') === 'Copy,Copy as markdown');
+selItems[0].click();
+check('Copy copies the selected text', copied.pop() === 'Title');
+window.getSelection().removeAllRanges();
 
 // markdown-it failed to load: the fallback renderer gets the same controls.
 T.chatMd = null;
