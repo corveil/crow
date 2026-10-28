@@ -76,10 +76,40 @@ public enum WorktreePathPolicy {
         }
 
         switch components.count {
-        case 2: return .success(placement)
+        case 2: break
         case 1: return reject("it is the '\(folder)' folder itself, not a folder inside it")
         default: return reject("it is nested \(components.count - 2) level\(components.count == 3 ? "" : "s") too deep inside '\(folder)'")
         }
+
+        // The resolved path says where the files land; the *spelled* path is
+        // what Crow stores and later reads the workspace from
+        // (`workspaceName(forWorktreePath:)` never resolves a symlink). Both
+        // must name the same folder, or `{devRoot}/alias/x` with `alias` →
+        // `Corveil` would be accepted yet attributed to `alias` (PR #1398 review).
+        let spelledRoot = collapse(devRoot)
+        let spelled = collapse(path)
+        guard spelled.hasPrefix(spelledRoot + "/") else {
+            return reject("it does not spell out the dev root \(spelledRoot) (it reaches it only through a symlink)")
+        }
+        let spelledFolder = spelled.dropFirst(spelledRoot.count + 1)
+            .split(separator: "/").first.map(String.init) ?? ""
+        guard spelledFolder.lowercased() == folder.lowercased() else {
+            return reject("'\(spelledFolder)' is a symlink to '\(folder)'; use '\(folder)' itself so Crow attributes the worktree to that workspace")
+        }
+        return .success(placement)
+    }
+
+    /// Collapse `.`, `..` and empty components without touching the filesystem.
+    static func collapse(_ path: String) -> String {
+        var parts: [Substring] = []
+        for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+            switch component {
+            case ".": continue
+            case "..": if !parts.isEmpty { parts.removeLast() }
+            default: parts.append(component)
+            }
+        }
+        return "/" + parts.joined(separator: "/")
     }
 
     /// The full error: what was given, the expected form, the configured

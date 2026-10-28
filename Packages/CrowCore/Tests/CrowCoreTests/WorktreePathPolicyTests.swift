@@ -57,8 +57,11 @@ import Testing
         #expect(throws: WorktreePathPolicy.Rejection.self) { try validate("\(root)/Corveil/x", root).get() }
     }
 
-    /// A dev root given through a symlink still accepts its own children.
-    @Test func acceptsDevRootGivenThroughSymlink() throws {
+    /// A dev root configured as a symlink accepts children spelled through
+    /// that same symlink — but not ones spelled through the real path (or vice
+    /// versa): `workspaceName(forWorktreePath:)` compares the strings, so it
+    /// would find no workspace for them.
+    @Test func devRootSymlinkMustBeSpelledConsistently() throws {
         let real = try makeDevRoot()
         let link = real + "-link"
         try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: real)
@@ -66,8 +69,31 @@ import Testing
             try? FileManager.default.removeItem(atPath: link)
             try? FileManager.default.removeItem(atPath: real)
         }
-        #expect(try validate("\(real)/Corveil/x", link).get() == .workspace("Corveil"))
-        #expect(try validate("\(link)/Corveil/x", real).get() == .workspace("Corveil"))
+        #expect(try validate("\(link)/Corveil/x", link).get() == .workspace("Corveil"))
+        for (path, root) in [("\(real)/Corveil/x", link), ("\(link)/Corveil/x", real)] {
+            guard case .failure(let rejection) = validate(path, root) else {
+                Issue.record("expected \(path) under \(root) to be rejected")
+                continue
+            }
+            #expect(rejection.reason.contains("does not spell out the dev root"), "\(rejection.reason)")
+        }
+    }
+
+    /// `{devRoot}/alias/x` with `alias` → `Corveil` lands in Corveil on disk,
+    /// but Crow would read the stored path's first folder — `alias` — as the
+    /// workspace (PR #1398 review). Refused, naming the real folder.
+    @Test func rejectsSymlinkAliasOfAWorkspaceFolder() throws {
+        let root = try makeDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try FileManager.default.createDirectory(atPath: "\(root)/Corveil", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: "\(root)/alias", withDestinationPath: "\(root)/Corveil")
+        guard case .failure(let rejection) = validate("\(root)/alias/x", root) else {
+            Issue.record("expected the alias path to be rejected")
+            return
+        }
+        #expect(rejection.reason.contains("'alias' is a symlink to 'Corveil'"), "\(rejection.reason)")
+        // The real folder is still fine.
+        #expect(try validate("\(root)/Corveil/x", root).get() == .workspace("Corveil"))
     }
 
     @Test(arguments: [

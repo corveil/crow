@@ -780,6 +780,24 @@ resolve_physical_path() {
 
 lowercase() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# Collapse `.`, `..` and empty components without touching the filesystem.
+# Mirrors WorktreePathPolicy.collapse: the spelled path is what Crow stores and
+# later reads the workspace from, so it must name the same folder as the
+# resolved one.
+collapse_path() {
+  local comp parts=()
+  local IFS='/'
+  for comp in $1; do
+    case "$comp" in
+      ""|.) ;;
+      ..) [[ ${#parts[@]} -gt 0 ]] && unset "parts[$(( ${#parts[@]} - 1 ))]" ;;
+      *) parts+=("$comp") ;;
+    esac
+    parts=(${parts[@]+"${parts[@]}"})
+  done
+  printf '/%s\n' "${parts[*]-}"
+}
+
 # Refuse a --worktree-path outside {devRoot}/{workspace}/{dir} (CROW-1396),
 # BEFORE `git worktree add` creates anything. The workspace is derived from the
 # path alone, so a worktree elsewhere silently loses its gateway, custom
@@ -835,6 +853,25 @@ validate_worktree_path() {
       local extra=$((depth - 1)) plural="s"
       [[ "$extra" -eq 1 ]] && plural=""
       reason="it is nested $extra level$plural too deep inside '$folder'"
+    else
+      # The spelled path must name the same folder (PR #1398 review): a
+      # `{devRoot}/alias/x` with `alias` -> `Corveil` lands in Corveil but would
+      # be attributed to `alias`.
+      local spelled_root spelled spelled_folder=""
+      spelled_root=$(collapse_path "$DEV_ROOT")
+      spelled=$(collapse_path "$WORKTREE_PATH")
+      if [[ "$spelled" != "$spelled_root"/* ]]; then
+        reason="it does not spell out the dev root $spelled_root (it reaches it only through a symlink)"
+      else
+        spelled_folder="${spelled#"$spelled_root"/}"
+        spelled_folder="${spelled_folder%%/*}"
+        if [[ "$(lowercase "$spelled_folder")" != "$(lowercase "$folder")" ]]; then
+          reason="'$spelled_folder' is a symlink to '$folder'; use '$folder' itself so Crow attributes the worktree to that workspace"
+        fi
+      fi
+    fi
+    if [[ -n "$reason" ]]; then
+      :
     elif [[ "$matched" != "crow-reviews" && "$(lowercase "$matched")" != "$(lowercase "$WORKSPACE")" ]]; then
       reason="it is inside workspace '$matched', but --workspace is '$WORKSPACE'"
     fi

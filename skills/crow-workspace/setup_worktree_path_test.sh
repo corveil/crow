@@ -59,7 +59,8 @@ check "review clone" "OK" "$(run Corveil "$DEV_ROOT/crow-reviews/crow-pr-1")"
 check "trailing slash" "OK" "$(run Corveil "$DEV_ROOT/Corveil/x/")"
 check "'..' that stays inside a workspace" "OK" "$(run Corveil "$DEV_ROOT/personal/../Corveil/x")"
 ln -s "$DEV_ROOT" "$TMP/devroot-link"
-check "dev root reached through a symlink" "OK" "$(run Corveil "$TMP/devroot-link/Corveil/x")"
+check "dev root configured as a symlink, path spelled the same way" "OK" \
+  "$(DEV_ROOT="$TMP/devroot-link"; run Corveil "$TMP/devroot-link/Corveil/x")"
 
 echo "== rejected =="
 out=$(run Corveil "$DEV_ROOT/corveil-3004-dock-greeting")
@@ -81,6 +82,11 @@ contains "the workspace folder itself" "$(run Corveil "$DEV_ROOT/Corveil")" "the
 contains "the dev root itself" "$(run Corveil "$DEV_ROOT")" "the dev root itself"
 contains "path's workspace differs from --workspace" "$(run personal "$DEV_ROOT/Corveil/x")" \
   "inside workspace 'Corveil', but --workspace is 'personal'"
+contains "path spelled through a dev-root symlink" "$(run Corveil "$TMP/devroot-link/Corveil/x")" \
+  "does not spell out the dev root"
+ln -s "$DEV_ROOT/Corveil" "$DEV_ROOT/alias"
+contains "symlink alias of a workspace folder" "$(run Corveil "$DEV_ROOT/alias/x")" \
+  "'alias' is a symlink to 'Corveil'"
 mkdir -p "$TMP/outside-ws"
 ln -s "$TMP/outside-ws" "$DEV_ROOT/personal"
 contains "workspace folder symlinked out of the dev root" "$(run personal "$DEV_ROOT/personal/x")" "outside the dev root"
