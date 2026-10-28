@@ -2169,6 +2169,9 @@ select.text-prompt-input { cursor: pointer; }
   border: 1px solid var(--border-subtle);
   background: var(--bg-card); color: var(--text-secondary);
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  /* The gutter chip sits past its containing block's edge, so shrink-to-fit
+     would fall back to min-content and stack the label one letter per line. */
+  white-space: nowrap;
 }
 .chat-copy::before { content: 'Copy'; }
 .chat-copy.copied::before { content: 'Copied'; }
