@@ -1257,7 +1257,9 @@ crow add-worktree \
 | `--repo-path` | no       | Main repo path (used when shelling out to git against the primary repo)    |
 | `--primary`   | no       | Flag — mark this as the primary worktree for the session. The **first** worktree of a session is primary even without this flag (CROW-1218). |
 
-> Note: `add-worktree` does **not** support a `--workspace` flag. Workspace association is derived from `--repo-path`.
+> Note: `add-worktree` does **not** support a `--workspace` flag. Workspace association is derived from `--path`: its first folder under the dev root is the workspace.
+>
+> `--path` must be exactly `{devRoot}/{workspace}/{dir}`, where `{workspace}` is a configured workspace (case-insensitive), or `{devRoot}/crow-reviews/{dir}` for review clones (CROW-1396). Symlinks and `..` are resolved first, and the path as written must name that same folder — `{devRoot}/alias/x` where `alias` is a symlink to a workspace folder is refused, because Crow reads the workspace from the stored string. Anything else — directly in the dev root, nested deeper, an unconfigured folder, outside the dev root — is rejected with `invalid_params` before git runs or a row is stored; the error names the configured workspaces and the fix (`crow workspace add`). Worktrees registered before this check are left alone.
 
 ### `crow list-worktrees`
 

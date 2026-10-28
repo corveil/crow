@@ -15,6 +15,14 @@ import CrowPersistence
             devRoot: devRoot, cockpit: nil)
     }
 
+    /// `add-worktree` only accepts `{devRoot}/{workspace}/{dir}` (CROW-1396),
+    /// so the fixture's worktrees live under a configured `corveil` workspace.
+    private func configureWorkspace(devRoot: String) throws {
+        var config = AppConfig()
+        config.workspaces = [WorkspaceInfo(name: "corveil")]
+        try ConfigStore.saveConfig(config, devRoot: devRoot)
+    }
+
     private func materialize(_ path: String) throws {
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         try "gitdir: /dev/null".write(
@@ -26,7 +34,8 @@ import CrowPersistence
         let root = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("crow-1218-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(atPath: root) }
-        let wt = (root as NSString).appendingPathComponent("wt-1")
+        try configureWorkspace(devRoot: root)
+        let wt = (root as NSString).appendingPathComponent("corveil/wt-1")
         try materialize(wt)
 
         let appState = AppState()
@@ -53,8 +62,9 @@ import CrowPersistence
         let root = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("crow-1218-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(atPath: root) }
-        let wt1 = (root as NSString).appendingPathComponent("wt-1")
-        let wt2 = (root as NSString).appendingPathComponent("wt-2")
+        try configureWorkspace(devRoot: root)
+        let wt1 = (root as NSString).appendingPathComponent("corveil/wt-1")
+        let wt2 = (root as NSString).appendingPathComponent("corveil/wt-2")
         try materialize(wt1)
         try materialize(wt2)
 
@@ -93,7 +103,8 @@ import CrowPersistence
         let root = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("crow-1218-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(atPath: root) }
-        let wt = (root as NSString).appendingPathComponent("wt-1")
+        try configureWorkspace(devRoot: root)
+        let wt = (root as NSString).appendingPathComponent("corveil/wt-1")
         try materialize(wt)
 
         let appState = AppState()

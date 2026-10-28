@@ -224,6 +224,8 @@ These values are used in worktree creation, session linking, and the prompt temp
 
 **CRITICAL: Worktrees go DIRECTLY under the workspace folder, at the same level as the main repo clone. NOT in a subfolder.**
 
+**This is enforced (CROW-1396).** `setup.sh` refuses a `--worktree-path` that is not exactly `{devRoot}/{workspace}/{dir}` — `{workspace}` a configured workspace (case-insensitive) that matches `--workspace` — or `{devRoot}/crow-reviews/{dir}`, before `git worktree add` runs, with `"step": "validate_worktree_path"`. `crow add-worktree` applies the same rule in the daemon. Crow derives a session's workspace from this path alone, so a worktree anywhere else would silently lose its gateway, custom instructions and session-log upload. If you hit it, fix the path; if the folder really is a workspace that isn't configured, the operator adds it with `crow workspace add --name <folder>` — don't work around it.
+
 **For ticket URLs (no existing PR):**
 ```
 {devRoot}/{workspace}/{repo}-{ticket_number}-{brief_slug}
