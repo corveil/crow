@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowPersistence
 @testable import CrowDaemon
 
 @Suite struct LogSyncCollectorTests {
@@ -425,4 +426,157 @@ import CrowCore
 
         #expect(LogSyncCollector.ledgerEntry(for: .transient, sha: "s", size: 1, at: 0).status == .failedTransient)
     }
+
+    // MARK: Skip reasons are logged once (CROW-1395)
+
+    /// Every way a session can fail to reach Corveil is logged once, with what
+    /// was looked at, and a second sweep repeats none of it. The two quiet
+    /// exits — a workspace with uploads off and a transcript still inside the
+    /// quiet period — say nothing.
+    @Test @MainActor func everySkipIsLoggedOnceWithItsReason() async throws {
+        let root = try tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let devRoot = root.path
+        let logsDir = root.appendingPathComponent("harness-logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+
+        let gateway = WorkspaceGateway(
+            baseURL: "https://corveil.example", customHeaders: ["x-citadel-api-key": "sk-test"])
+        let corveil = WorkspaceInfo(name: "Corveil", uploadSessionLogs: true, gateway: gateway)
+        let off = WorkspaceInfo(name: "Off", uploadSessionLogs: false, gateway: gateway)
+        try ConfigStore.saveConfig(
+            AppConfig(workspaces: [corveil, off],
+                      logSync: LogSyncConfig(quietPeriodMinutes: 30, maxUploadBytes: 64)),
+            devRoot: devRoot)
+
+        let sweepTime = Date(timeIntervalSince1970: 2_000_000_000)
+        let appState = AppState()
+        var sourcesByWorktree: [String: [AgentLogSource]] = [:]
+
+        /// A work session whose primary worktree is `folder/name` under the dev
+        /// root (or `worktreePath` verbatim), optionally backed by a log dir.
+        func work(
+            _ name: String, folder: String = "Corveil", worktreePath: String? = nil,
+            agent: AgentKind = .claudeCode, status: SessionStatus = .completed,
+            logLines: [String]? = nil, logMTime: Date? = nil
+        ) throws -> Session {
+            let session = Session(name: name, status: status, agentKind: agent)
+            appState.sessions.append(session)
+            let path = worktreePath ?? root.appendingPathComponent("\(folder)/\(name)").path
+            appState.worktrees[session.id] = [SessionWorktree(
+                sessionID: session.id, repoName: "repo", repoPath: path,
+                worktreePath: path, branch: "b", isPrimary: true)]
+            let dir = logsDir.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if let logLines {
+                let file = dir.appendingPathComponent("conv.jsonl")
+                try logLines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes(
+                    [.modificationDate: logMTime ?? sweepTime.addingTimeInterval(-86_400)],
+                    ofItemAtPath: file.path)
+            }
+            sourcesByWorktree[path] = [.directory(dir.path, format: .jsonl, fileExtension: "jsonl")]
+            return session
+        }
+
+        let noWorktree = Session(name: "no-worktree")
+        appState.sessions.append(noWorktree)
+        let outsideRoot = try work("outside-root", worktreePath: "/elsewhere/outside-root")
+        let unknownFolder = try work("unknown-folder", folder: "Unknown")
+        let optedOut = try work("opted-out", folder: "Off", logLines: ["{}"])
+        let noAgent = try work("no-agent", agent: .codex)
+        let noSources = try work("no-sources", agent: .cursor)
+        let noTranscript = try work("no-transcript")
+        let emptyTranscript = try work("empty-transcript", logLines: [""])
+        let truncated = try work("truncated", logLines: (0..<20).map { "{\"n\":\($0)}" })
+        let quiet = try work("quiet", status: .active, logLines: ["{}"], logMTime: sweepTime)
+
+        func manager(_ name: String, tag: UUID?, cwd: String?, conversation: String? = nil) -> Session {
+            var session = Session(name: name, kind: .manager, agentKind: .claudeCode, workspaceID: tag)
+            if let conversation { session.recordHarnessConversationID(conversation) }
+            appState.sessions.append(session)
+            if let cwd {
+                appState.terminals[session.id] = [SessionTerminal(
+                    sessionID: session.id, cwd: cwd, command: "claude", isManaged: true)]
+            }
+            return session
+        }
+        let managerGone = manager("mgr-gone", tag: UUID(), cwd: devRoot)
+        let managerNoCwd = manager("mgr-no-cwd", tag: corveil.id, cwd: nil)
+        let managerNoConv = manager("mgr-no-conv", tag: corveil.id, cwd: devRoot)
+        let managerNoFile = manager("mgr-no-file", tag: corveil.id, cwd: devRoot, conversation: "conv-404")
+        let managerOff = manager("mgr-off", tag: off.id, cwd: devRoot, conversation: "conv-off")
+
+        let sources = sourcesByWorktree
+        let lines = LockedLines()
+        let collector = LogSyncCollector(
+            devRoot: devRoot,
+            uploader: TranscriptUploader(transport: StatusTransport(status: 201)),
+            resolveSecret: { _ in nil },
+            now: { sweepTime },
+            logSources: { kind, worktree in
+                switch kind {
+                case .codex: return nil   // no registered agent
+                case .cursor: return []   // agent, but no transcript source wired
+                default: return sources[worktree] ?? []
+                }
+            },
+            locateConversation: { _, _, _ in nil },
+            log: LogSyncLog(sink: { lines.append($0) }))
+
+        await collector.sweep(appState: appState)
+        let first = lines.snapshot()
+        await collector.sweep(appState: appState)
+        #expect(lines.snapshot() == first, "a second sweep must not repeat a line")
+
+        func skipLines(_ session: Session) -> [String] {
+            first.filter { $0.hasPrefix("log-sync: session \(session.id.uuidString) ") }
+        }
+        func expectOne(_ session: Session, _ needle: String) {
+            let got = skipLines(session)
+            #expect(got.count == 1, "\(session.name): \(got)")
+            #expect(got.first?.contains(needle) == true, "\(session.name): \(got)")
+            #expect(got.first?.contains("\"\(session.name)\"") == true)
+        }
+
+        expectOne(noWorktree, "has no worktree; skipping")
+        expectOne(outsideRoot, "worktree /elsewhere/outside-root is not under the dev root")
+        expectOne(unknownFolder, "no configured workspace \"Unknown\"")
+        expectOne(noAgent, "no registered agent for codex")
+        expectOne(noSources, "cursor has no on-disk transcript source wired")
+        expectOne(noTranscript, "no claude-code transcript under ")
+        #expect(skipLines(noTranscript).first?.contains("harness-logs/no-transcript") == true)
+        expectOne(emptyTranscript, "transcript normalized to nothing")
+        expectOne(managerGone, "which is no longer configured")
+        expectOne(managerNoCwd, "no agent terminal")
+        expectOne(managerNoConv, "no harness conversation ID recorded")
+        expectOne(managerNoFile, "no claude-code transcript file for conversation conv-404")
+
+        // Truncated at the cap: still uploaded, logged once with both sizes.
+        expectOne(truncated, "truncated at the 64-byte cap")
+        let onDisk = try FileManager.default.attributesOfItem(
+            atPath: logsDir.appendingPathComponent("truncated/conv.jsonl").path)[.size] as? Int
+        #expect(skipLines(truncated).first?.contains("(\(onDisk ?? -1) bytes on disk, ") == true)
+        #expect(skipLines(truncated).first?.contains("skipping") == false)
+        #expect(first.contains { $0.hasPrefix("uploaded transcript for session \(truncated.id.uuidString)") })
+
+        // Quiet on purpose: uploads off, and a transcript still being written.
+        #expect(skipLines(optedOut).isEmpty)
+        #expect(skipLines(managerOff).isEmpty)
+        #expect(skipLines(quiet).isEmpty)
+    }
+}
+
+/// Collects the collector's log lines across concurrent sweeps.
+private final class LockedLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func append(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+    func snapshot() -> [String] { lock.lock(); defer { lock.unlock() }; return lines }
+}
+
+/// Answers every upload with a fixed HTTP status.
+private struct StatusTransport: TranscriptUploadTransport {
+    let status: Int
+    func perform(_ request: URLRequest) async throws -> Int { status }
 }

@@ -22,13 +22,21 @@ import CrowPersistence
 ///   repeated sweep converge without re-uploading.
 /// - **No AWS credentials on the laptop.** The client only POSTs bytes with the
 ///   user's Corveil API key; the server uploads to object storage itself.
-struct LogSyncCollector {
+struct LogSyncCollector: Sendable {
     let devRoot: String
     let uploader: TranscriptUploader
     /// Resolves an `op://…` reference to a secret (defaults to 1Password `op read`).
-    let resolveSecret: (String) -> String?
+    let resolveSecret: @Sendable (String) -> String?
     /// Injected clock for testability.
-    let now: () -> Date
+    let now: @Sendable () -> Date
+    /// A session's harness log sources for its agent kind and worktree path;
+    /// nil when no agent is registered for that kind. Injected for tests.
+    let logSources: @Sendable (AgentKind, String) -> [AgentLogSource]?
+    /// Finds one Manager conversation's transcript file by agent kind,
+    /// conversation id and cwd. Injected for tests.
+    let locateConversation: @Sendable (AgentKind, String, String) -> (path: String, format: AgentLogFormat)?
+    /// Where skip reasons and upload lines go (once per key for skips).
+    let log: LogSyncLog
 
     /// Don't re-attempt a transiently-failed upload for this long.
     private let retryBackoff: TimeInterval = 30 * 60
@@ -36,13 +44,24 @@ struct LogSyncCollector {
     init(
         devRoot: String,
         uploader: TranscriptUploader = TranscriptUploader(),
-        resolveSecret: @escaping (String) -> String? = { GatewayResolver.opRead($0) },
-        now: @escaping () -> Date = { Date() }
+        resolveSecret: @escaping @Sendable (String) -> String? = { GatewayResolver.opRead($0) },
+        now: @escaping @Sendable () -> Date = { Date() },
+        logSources: @escaping @Sendable (AgentKind, String) -> [AgentLogSource]? = { kind, worktreePath in
+            AgentRegistry.shared.agent(for: kind)?
+                .logSources(worktreePath: worktreePath, harnessSessionID: nil)
+        },
+        locateConversation: @escaping @Sendable (AgentKind, String, String) -> (path: String, format: AgentLogFormat)? = {
+            HarnessTranscriptLocator.transcriptFile(kind: $0, conversationID: $1, cwd: $2)
+        },
+        log: LogSyncLog = .shared
     ) {
         self.devRoot = devRoot
         self.uploader = uploader
         self.resolveSecret = resolveSecret
         self.now = now
+        self.logSources = logSources
+        self.locateConversation = locateConversation
+        self.log = log
     }
 
     /// One collection pass. Reads config fresh so a Settings edit applies within
@@ -97,16 +116,33 @@ struct LogSyncCollector {
                     ledgerStore: ledgerStore, nowDate: nowDate, quietPeriod: quietPeriod)
                 continue
             }
-            guard let worktree = primaryWorktree(worktrees) else { continue }
+            // Every skip below is logged once per session (and harness) with
+            // what was looked at, so a session that never reaches Corveil says
+            // why (CROW-1395). Two exits stay quiet on purpose: a workspace
+            // with `uploadSessionLogs` off (the operator's choice) and a
+            // transcript still inside the quiet period (waiting, not skipped).
+            guard let worktree = primaryWorktree(worktrees) else {
+                skip(session, "no-worktree", "has no worktree")
+                continue
+            }
 
             guard let workspaceName = SessionService.workspaceName(
                     forWorktreePath: worktree.worktreePath, devRoot: devRoot)
-            else { continue }
+            else {
+                skip(session, "no-workspace",
+                     "worktree \(Self.displayPath(worktree.worktreePath)) is not under the dev root \(Self.displayPath(devRoot))")
+                continue
+            }
             // The per-workspace checkbox is the whole opt-in (matched
             // case-insensitively, like every other workspace lookup).
             guard let workspace = appConfig.workspaces.first(where: {
                 $0.name.lowercased() == workspaceName.lowercased()
-            }), workspace.uploadSessionLogs else { continue }
+            }) else {
+                skip(session, "no-workspace",
+                     "no configured workspace \"\(workspaceName)\" for worktree \(Self.displayPath(worktree.worktreePath))")
+                continue
+            }
+            guard workspace.uploadSessionLogs else { continue }
 
             // Destination + credential come SOLELY from this workspace's local-only
             // `gateway` (CROW-1070) — never a browser-flippable / web-writable
@@ -115,7 +151,7 @@ struct LogSyncCollector {
             // gateway (or no resolvable key / blank base URL) ⇒ nothing to reuse ⇒
             // skip. This is the security invariant, asserted in the tests.
             guard let upload = Self.resolvedUpload(for: workspace, resolveSecret: resolveSecret) else {
-                LogSyncLog.warnOnce("log-sync: workspace \"\(workspaceName)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
+                log.warnOnce("log-sync: workspace \"\(workspaceName)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
                 continue
             }
             let baseURL = upload.baseURL
@@ -135,12 +171,23 @@ struct LogSyncCollector {
             // and Grok partition by worktree directly; an OpenCode source
             // (`.openCodeStore`) is the single `opencode.db` file, cwd-attributed by
             // row inside `OpenCodeStore` rather than by dropping files.
-            guard let agent = AgentRegistry.shared.agent(for: session.agentKind) else { continue }
-            let sources = agent.logSources(worktreePath: worktree.worktreePath, harnessSessionID: nil)
-            guard !sources.isEmpty else { continue }
+            let agentName = session.agentKind.rawValue
+            guard let sources = logSources(session.agentKind, worktree.worktreePath) else {
+                skip(session, harness: harness, "no-agent", "no registered agent for \(agentName)")
+                continue
+            }
+            guard !sources.isEmpty else {
+                skip(session, harness: harness, "no-log-sources",
+                     "\(agentName) has no on-disk transcript source wired for log sync")
+                continue
+            }
 
             let files = sources.flatMap { Self.resolveFiles($0) }
-            guard !files.isEmpty else { continue }
+            guard !files.isEmpty else {
+                skip(session, harness: harness, "no-transcript",
+                     "no \(agentName) transcript under \(Self.describe(sources))")
+                continue
+            }
 
             // The source format and (for OpenCode) the worktree cwd drive both the
             // quiescence signal and the transcript build below.
@@ -178,7 +225,13 @@ struct LogSyncCollector {
             } else {
                 transcript = TranscriptNormalizer.normalize(files: files, format: format, maxBytes: cap)
             }
-            guard let transcript else { continue }
+            guard let transcript else {
+                skip(session, harness: harness, "empty-transcript",
+                     "\(agentName) transcript normalized to nothing (\(files.count) file(s) under \(Self.describe(sources)))")
+                continue
+            }
+            logTruncation(session, harness: harness, scope: nil,
+                          transcript: transcript, files: files, cap: cap)
 
             let sha = Self.sha256Hex(transcript.data)
             // OpenCode's single `opencode.db` backs many sessions, so its filename
@@ -205,7 +258,7 @@ struct LogSyncCollector {
             let entry = Self.ledgerEntry(for: result, sha: sha, size: transcript.data.count, at: nowEpoch)
             await ledgerStore.record(key: ledgerKey, entry: entry)
             if result.isSuccess {
-                LogSyncLog.info("uploaded transcript for session \(session.id.uuidString) (\(harness.rawValue), \(transcript.data.count) bytes)")
+                log.info("uploaded transcript for session \(session.id.uuidString) (\(harness.rawValue), \(transcript.data.count) bytes)")
             }
         }
 
@@ -232,35 +285,56 @@ struct LogSyncCollector {
         session: Session, cwd: String?, appConfig: AppConfig, config: LogSyncConfig,
         ledgerStore: LogSyncLedgerStore, nowDate: Date, quietPeriod: TimeInterval
     ) async {
-        guard let tag = session.managerWorkspaceTag,
-              let workspace = appConfig.workspaces.first(where: { $0.id == tag }),
-              workspace.uploadSessionLogs,
-              let cwd
-        else { return }
+        // Untagged — the primary Manager is always among them — never ships,
+        // by design; that is not a skip worth stating.
+        guard let tag = session.managerWorkspaceTag else { return }
+        guard let workspace = appConfig.workspaces.first(where: { $0.id == tag }) else {
+            skip(session, "no-workspace", "tagged with workspace \(tag.uuidString), which is no longer configured")
+            return
+        }
+        guard workspace.uploadSessionLogs else { return }
+        guard let cwd else {
+            skip(session, "no-cwd", "Manager has no agent terminal to read a working directory from")
+            return
+        }
         guard let upload = Self.resolvedUpload(for: workspace, resolveSecret: resolveSecret) else {
-            LogSyncLog.warnOnce("log-sync: workspace \"\(workspace.name)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
+            log.warnOnce("log-sync: workspace \"\(workspace.name)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
             return
         }
         let nowEpoch = nowDate.timeIntervalSince1970
         let kind = LogSyncArtifactKind.sessionTranscript
-        for ref in Self.managerConversations(session) {
+        let conversations = Self.managerConversations(session)
+        if conversations.isEmpty {
+            skip(session, "no-conversation", "Manager has no harness conversation ID recorded yet")
+        }
+        for ref in conversations {
             let harness = LogSyncHarness(agentKind: ref.agentKind)
             let ledgerKey = LogSyncLedger.key(sessionUID: ref.id, harness: harness, kind: kind)
             guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
             // By conversation id, never by "whatever is in the cwd" — see
             // `HarnessTranscriptLocator.transcriptFile`. Cursor and OpenCode
             // have no per-conversation file and are skipped.
-            guard let located = HarnessTranscriptLocator.transcriptFile(
-                    kind: ref.agentKind, conversationID: ref.id, cwd: cwd) else { continue }
+            guard let located = locateConversation(ref.agentKind, ref.id, cwd) else {
+                skip(session, harness: harness, scope: ref.id, "no-transcript",
+                     "no \(ref.agentKind.rawValue) transcript file for conversation \(ref.id) (cwd \(Self.displayPath(cwd)))")
+                continue
+            }
             let file = URL(fileURLWithPath: located.path)
             // The conversation still being written to can grow, and the
             // server's write-once 409 forbids replacing it. A Manager is never
             // `completed`, so quiescence is the only gate.
             if let newest = Self.newestModification([file]),
                nowDate.timeIntervalSince(newest) < quietPeriod { continue }
+            let cap = max(1, config.maxUploadBytes)
             guard let transcript = TranscriptNormalizer.normalize(
-                    files: [file], format: located.format, maxBytes: max(1, config.maxUploadBytes))
-            else { continue }
+                    files: [file], format: located.format, maxBytes: cap)
+            else {
+                skip(session, harness: harness, scope: ref.id, "empty-transcript",
+                     "\(ref.agentKind.rawValue) transcript for conversation \(ref.id) normalized to nothing (\(Self.displayPath(located.path)))")
+                continue
+            }
+            logTruncation(session, harness: harness, scope: ref.id,
+                          transcript: transcript, files: [file], cap: cap)
 
             let sha = Self.sha256Hex(transcript.data)
             let metadata = LogSyncSessionMetadata(
@@ -276,9 +350,60 @@ struct LogSyncCollector {
             let entry = Self.ledgerEntry(for: result, sha: sha, size: transcript.data.count, at: nowEpoch)
             await ledgerStore.record(key: ledgerKey, entry: entry)
             if result.isSuccess {
-                LogSyncLog.info("uploaded Manager transcript \(ref.id) for session \(session.id.uuidString) (\(harness.rawValue), \(transcript.data.count) bytes)")
+                log.info("uploaded Manager transcript \(ref.id) for session \(session.id.uuidString) (\(harness.rawValue), \(transcript.data.count) bytes)")
             }
         }
+    }
+
+    // MARK: - Skip logging (CROW-1395)
+
+    /// State why `session` is not uploading, once per session, harness,
+    /// `scope` (a Manager conversation id) and `reason`. The message names what
+    /// was looked at — paths, ids, the agent — and never transcript text or a
+    /// credential.
+    private func skip(
+        _ session: Session, harness: LogSyncHarness? = nil, scope: String? = nil,
+        _ reason: String, _ detail: String
+    ) {
+        let key = [session.id.uuidString, harness?.rawValue ?? "", scope ?? "", reason]
+            .joined(separator: "|")
+        log.once(key: key, "log-sync: session \(session.id.uuidString) \"\(session.name)\": \(detail); skipping")
+    }
+
+    /// A transcript cut at the size cap still uploads; say so once, with how
+    /// much was on disk and how much was sent.
+    private func logTruncation(
+        _ session: Session, harness: LogSyncHarness, scope: String?,
+        transcript: NormalizedTranscript, files: [URL], cap: Int
+    ) {
+        guard transcript.truncated else { return }
+        let key = [session.id.uuidString, harness.rawValue, scope ?? "", "truncated"]
+            .joined(separator: "|")
+        let onDisk = files.reduce(0) { $0 + Self.fileSize($1) }
+        let which = scope.map { "conversation \($0) " } ?? ""
+        log.once(key: key, "log-sync: session \(session.id.uuidString) \"\(session.name)\": \(which)transcript truncated at the \(cap)-byte cap (\(onDisk) bytes on disk, \(transcript.data.count) bytes sent)")
+    }
+
+    /// The paths a harness's sources point at, home-abbreviated, plus the cwd
+    /// filter when one narrows a shared tree.
+    static func describe(_ sources: [AgentLogSource]) -> String {
+        sources.map { source in
+            let path = displayPath(source.path)
+            guard let cwd = source.cwdFilter else { return path }
+            return "\(path) (matching cwd \(displayPath(cwd)))"
+        }.joined(separator: ", ")
+    }
+
+    /// `path` with the home directory shown as `~`.
+    static func displayPath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path == home { return "~" }
+        if !home.isEmpty, path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
+    }
+
+    static func fileSize(_ url: URL) -> Int {
+        (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
     }
 
     // MARK: - Pure helpers (unit-tested)
@@ -519,19 +644,34 @@ struct LogSyncCollector {
 }
 
 /// Rate-limited logging for the collector so a persistent misconfiguration
-/// (e.g. an unresolvable API key) is stated once, not every tick.
-enum LogSyncLog {
-    private static let lock = NSLock()
-    private nonisolated(unsafe) static var warned: Set<String> = []
+/// (e.g. an unresolvable API key) or a skipped session is stated once, not
+/// every tick. `shared` writes to `CrowLog`; a test passes its own `sink`.
+final class LogSyncLog: @unchecked Sendable {
+    static let shared = LogSyncLog()
 
-    static func info(_ message: String) {
-        CrowLog.info("[LogSync] \(message)")
+    private let lock = NSLock()
+    /// Only touched while holding `lock`.
+    private var seen: Set<String> = []
+    private let sink: @Sendable (String) -> Void
+
+    init(sink: @escaping @Sendable (String) -> Void = { CrowLog.info("[LogSync] \($0)") }) {
+        self.sink = sink
     }
 
-    static func warnOnce(_ message: String) {
+    func info(_ message: String) {
+        sink(message)
+    }
+
+    func warnOnce(_ message: String) {
+        once(key: message, message)
+    }
+
+    /// Emit `message` the first time `key` is seen, so a message whose detail
+    /// changes between sweeps (a size, a path) still logs once.
+    func once(key: String, _ message: String) {
         lock.lock()
-        let firstTime = warned.insert(message).inserted
+        let firstTime = seen.insert(key).inserted
         lock.unlock()
-        if firstTime { CrowLog.info("[LogSync] \(message)") }
+        if firstTime { sink(message) }
     }
 }
