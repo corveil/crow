@@ -28,6 +28,14 @@ import CrowPersistence
 
     /// Mirror `setup.sh`: register the checkout on disk so `add-worktree` records
     /// metadata only instead of shelling out to `git worktree add`.
+    /// `add-worktree` only accepts `{devRoot}/{workspace}/{dir}` (CROW-1396),
+    /// so the fixture's worktrees live under a configured `corveil` workspace.
+    private func configureWorkspace(devRoot: String) throws {
+        var config = AppConfig()
+        config.workspaces = [WorkspaceInfo(name: "corveil")]
+        try ConfigStore.saveConfig(config, devRoot: devRoot)
+    }
+
     private func materialize(_ path: String) throws {
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         try "gitdir: /dev/null".write(
@@ -55,7 +63,8 @@ import CrowPersistence
         let root = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("crow-1301-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(atPath: root) }
-        let wt = (root as NSString).appendingPathComponent("wt-1")
+        try configureWorkspace(devRoot: root)
+        let wt = (root as NSString).appendingPathComponent("corveil/wt-1")
         try materialize(wt)
 
         let appState = AppState()
@@ -88,6 +97,7 @@ import CrowPersistence
         let root = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("crow-1301-burst-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(atPath: root) }
+        try configureWorkspace(devRoot: root)
 
         let appState = AppState()
         let store = JSONStore.temporary()
@@ -111,7 +121,7 @@ import CrowPersistence
             appState.sessions.append(session)
             store.mutate { $0.sessions.append(session) }
 
-            let wt = (root as NSString).appendingPathComponent("wt-\(i)")
+            let wt = (root as NSString).appendingPathComponent("corveil/wt-\(i)")
             try materialize(wt)
             let resp = await addWorktree(
                 r, session: session, path: wt, branch: "feature/burst-\(i)", id: i)

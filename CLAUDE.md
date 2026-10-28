@@ -498,7 +498,11 @@ git worktree add /path -b feature/name --no-track origin/main   # Retry
 ```
 WRONG: /Users/jane/Dev/Corveil/acme-api-worktrees/197-fix-tab
 WRONG: /Users/jane/Dev/Corveil/worktrees/acme-api-197-fix-tab
+WRONG: /Users/jane/Dev/acme-api-197-fix-tab              (directly in the dev root)
+WRONG: /Users/jane/Dev/not-a-workspace/acme-api-197-fix  (folder isn't a configured workspace)
 ```
+
+**Enforced (CROW-1396):** `crow add-worktree` and `setup.sh` reject any path that isn't exactly `{devRoot}/{workspace}/{dir}` for a configured workspace (case-insensitive), or `{devRoot}/crow-reviews/{dir}`, after resolving symlinks and `..` — before anything is created. The error names the configured workspaces; add a missing one with `crow workspace add`. Existing worktrees are not re-checked.
 
 ### Always use `--no-track` for new branches
 Prevents accidental push to main:

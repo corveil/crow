@@ -321,9 +321,20 @@ func makeSessionHandlers(
             guard sessionExists else {
                 throw DaemonRPCError.invalidParams("Unknown session_id (no such session)")
             }
-            // Path-traversal guard: worktree + repo paths must live under devRoot.
-            guard Validation.isPathWithinRoot(path, root: devRoot) else {
-                throw DaemonRPCError.invalidParams("Worktree path must be within the configured devRoot")
+            // Layout guard (CROW-1396), which subsumes the old path-traversal
+            // check: the worktree must be `{devRoot}/{workspace}/{dir}` for a
+            // configured workspace, or a review clone. The workspace is derived
+            // from this path alone, so a worktree anywhere else silently loses
+            // its gateway, instructions and session-log upload. Checked before
+            // anything is created; existing rows are never re-checked.
+            let (config, configReadable) = loadConfigReportingReadability(devRoot: devRoot)
+            if case .failure(let rejection) = WorktreePathPolicy.validate(
+                path, devRoot: devRoot, workspaceNames: config.workspaces.map(\.name)
+            ) {
+                throw DaemonRPCError.invalidParams(
+                    configReadable
+                        ? rejection.message
+                        : rejection.message + " (\(devRoot)/.claude/config.json could not be read, so no workspaces were found.)")
             }
             let repoPath = params["repo_path"]?.stringValue ?? path
             guard Validation.isPathWithinRoot(repoPath, root: devRoot) else {

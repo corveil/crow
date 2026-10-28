@@ -749,6 +749,106 @@ resolve_base_branch() {
   fi
 }
 
+# Print PATH with symlinks resolved in its longest existing prefix and `.`/`..`
+# collapsed in the not-yet-existing tail. Mirrors WorktreePathPolicy.resolve in
+# Packages/CrowCore so setup.sh and the daemon agree on what a path means.
+resolve_physical_path() {
+  local existing="$1" base comp
+  local tail=() parts=()
+  while [[ "$existing" == */ && "$existing" != "/" ]]; do existing="${existing%/}"; done
+  while [[ -n "$existing" && "$existing" != "/" && ! -e "$existing" ]]; do
+    tail=("${existing##*/}" ${tail[@]+"${tail[@]}"})
+    # A relative path has no '/' left to strip; stop rather than spin.
+    if [[ "$existing" == */* ]]; then existing="${existing%/*}"; else existing=""; fi
+    while [[ "$existing" == */ && "$existing" != "/" ]]; do existing="${existing%/}"; done
+  done
+  [[ -z "$existing" ]] && existing="/"
+  base=$(cd -P "$existing" 2>/dev/null && pwd -P) || base="$existing"
+  local IFS='/'
+  for comp in $base; do [[ -n "$comp" ]] && parts+=("$comp"); done
+  for comp in ${tail[@]+"${tail[@]}"}; do
+    case "$comp" in
+      ""|.) ;;
+      ..) [[ ${#parts[@]} -gt 0 ]] && unset "parts[$(( ${#parts[@]} - 1 ))]" ;;
+      *) parts+=("$comp") ;;
+    esac
+    parts=(${parts[@]+"${parts[@]}"})
+  done
+  printf '/%s' "${parts[*]-}"
+  echo
+}
+
+lowercase() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# Refuse a --worktree-path outside {devRoot}/{workspace}/{dir} (CROW-1396),
+# BEFORE `git worktree add` creates anything. The workspace is derived from the
+# path alone, so a worktree elsewhere silently loses its gateway, custom
+# instructions and session-log upload. The daemon's `add-worktree` enforces the
+# same rule (WorktreePathPolicy); this check exists so a bad path fails before
+# the checkout is on disk rather than after. The folder must also be the
+# --workspace this run resolves gateway / session-env / task provider for.
+validate_worktree_path() {
+  local config_path="$DEV_ROOT/.claude/config.json"
+  local names=()
+  if [[ -f "$config_path" ]]; then
+    if ! command -v jq >/dev/null 2>&1; then
+      log "WARNING: jq not found; skipping the local worktree-path check (crow add-worktree still enforces it)"
+      return 0
+    fi
+    local name
+    while IFS= read -r name; do
+      [[ -n "$name" ]] && names+=("$name")
+    done < <(jq -r '.workspaces[]?.name // empty' "$config_path" 2>/dev/null)
+  fi
+
+  local root full reason="" folder="" rel matched=""
+  root=$(resolve_physical_path "$DEV_ROOT")
+  full=$(resolve_physical_path "$WORKTREE_PATH")
+  if [[ "$WORKTREE_PATH" != /* ]]; then
+    reason="it is not an absolute path"
+  elif [[ "$full" == "$root" ]]; then
+    reason="it is the dev root itself"
+  elif [[ "$full" != "$root"/* ]]; then
+    reason="it is outside the dev root"
+  else
+    rel="${full#"$root"/}"
+    folder="${rel%%/*}"
+    local depth
+    depth=$(printf '%s' "$rel" | tr -cd '/' | wc -c | tr -d ' ')
+    if [[ "$(lowercase "$folder")" == "crow-reviews" ]]; then
+      matched="crow-reviews"
+    else
+      local n
+      for n in ${names[@]+"${names[@]}"}; do
+        if [[ "$(lowercase "$n")" == "$(lowercase "$folder")" ]]; then matched="$n"; break; fi
+      done
+    fi
+    if [[ -z "$matched" ]]; then
+      if [[ "$depth" -eq 0 ]]; then
+        reason="it sits directly in the dev root, not inside a workspace folder"
+      else
+        reason="'$folder' is not a configured workspace"
+      fi
+    elif [[ "$depth" -eq 0 ]]; then
+      reason="it is the '$folder' folder itself, not a folder inside it"
+    elif [[ "$depth" -gt 1 ]]; then
+      local extra=$((depth - 1)) plural="s"
+      [[ "$extra" -eq 1 ]] && plural=""
+      reason="it is nested $extra level$plural too deep inside '$folder'"
+    elif [[ "$matched" != "crow-reviews" && "$(lowercase "$matched")" != "$(lowercase "$WORKSPACE")" ]]; then
+      reason="it is inside workspace '$matched', but --workspace is '$WORKSPACE'"
+    fi
+  fi
+  [[ -z "$reason" ]] && return 0
+
+  local configured="(none configured)"
+  if [[ ${#names[@]} -gt 0 ]]; then
+    configured=$(IFS=,; printf '%s' "${names[*]}" | sed 's/,/, /g')
+  fi
+  local display_root="${DEV_ROOT%/}"
+  die "validate_worktree_path" "Worktree path '$WORKTREE_PATH' is not allowed: $reason. Expected $display_root/{workspace}/{dir} (one folder directly inside a configured workspace) or $display_root/crow-reviews/{dir}. Configured workspaces: $configured. Fix: create the worktree under one of those workspaces, or add its folder as a workspace with \`crow workspace add --name <folder>\`."
+}
+
 setup_worktree() {
   log "Fetching origin..."
   if ! git -C "$REPO_PATH" fetch origin >&2 2>&1; then
@@ -1695,6 +1795,7 @@ main() {
   parse_args "$@"
   preflight
 
+  validate_worktree_path
   setup_worktree
   create_session
   write_settings_local
