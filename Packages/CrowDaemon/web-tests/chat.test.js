@@ -18,6 +18,7 @@ const epilogue = `
   insertChatText, chatDrafts,
   set chatViewFlag(v){ uiConfig.chatViewEnabled = v; },
   set rpc(v){ rpc = v; },
+  set copyToClipboard(v){ copyToClipboard = v; },
 };
 `;
 
@@ -150,6 +151,61 @@ const resA = log.querySelector('.chat-tool-result a');
 check('URL in tool output is clickable', resA && resA.href === 'https://github.com/corveil/crow/pull/2'
   && log.querySelector('.chat-tool-result').textContent === 'Created https://github.com/corveil/crow/pull/2 ok');
 check('URL in a notice is clickable', log.querySelector('.chat-notice a').href === 'https://example.com/d');
+
+console.log('copy as markdown');
+const copied = [];
+T.copyToClipboard = (t) => copied.push(t);
+const SRC = '# Title\n\n- **one**\n- two\n\n```swift\nlet x = 1\nprint(x)\n```\n\nDone.';
+T.applyChatPage(st, { supported: true, reset: true, cursor: 3, path: '/c.jsonl', events: [
+  { kind: 'assistant', text: SRC },
+  { kind: 'user', text: 'Use `rg`' },
+] });
+const cB = log.querySelector('.chat-assistant');
+const msgCopy = cB.querySelector(':scope > .chat-msg-copy');
+check('each bubble has a message Copy', msgCopy && log.querySelector('.chat-user > .chat-msg-copy'));
+msgCopy.click();
+check('message Copy puts the exact source markdown on the clipboard', copied.pop() === SRC);
+check('button reads Copied after a click', msgCopy.classList.contains('copied')
+  && msgCopy.getAttribute('aria-label') === 'Copied');
+log.querySelector('.chat-user > .chat-msg-copy').click();
+check('user message copies its source too', copied.pop() === 'Use `rg`');
+const codeCopy = cB.querySelector('.chat-code-block > .chat-code-copy');
+check('fenced block gets its own Copy', codeCopy && cB.querySelectorAll('.chat-code-copy').length === 1);
+codeCopy.click();
+check('code Copy copies only the block body (no fences, no lang, no trailing newline)',
+  copied.pop() === 'let x = 1\nprint(x)');
+check('copy controls add no text to the message', !/Copy/.test(cB.textContent)
+  && cB.querySelector('.chat-msg-body').textContent === cB.textContent);
+check('rendered markdown still lives in the body', cB.querySelector('.chat-msg-body.md h1')
+  && cB.querySelector('.chat-msg-body pre code').textContent === 'let x = 1\nprint(x)\n');
+cB.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+const ctxItems = [...doc.querySelectorAll('.ctx-menu .ctx-item')];
+check('right-click offers Copy as markdown (no Copy without a selection)',
+  ctxItems.length === 1 && ctxItems[0].textContent === 'Copy as markdown');
+ctxItems[0].click();
+check('Copy as markdown copies the source', copied.pop() === SRC && !doc.querySelector('.ctx-menu'));
+const h1 = cB.querySelector('h1');
+window.getSelection().selectAllChildren(h1);
+cB.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+const selItems = [...doc.querySelectorAll('.ctx-menu .ctx-item')];
+check('with a selection in the bubble, right-click also offers Copy',
+  selItems.map((i) => i.textContent).join(',') === 'Copy,Copy as markdown');
+selItems[0].click();
+check('Copy copies the selected text', copied.pop() === 'Title');
+window.getSelection().removeAllRanges();
+
+// markdown-it failed to load: the fallback renderer gets the same controls.
+T.chatMd = null;
+T.applyChatPage(st, { supported: true, reset: true, cursor: 4, path: '/f.jsonl', events: [
+  { kind: 'assistant', text: 'Run **this**:\n\n```sh\nmake test\n```' },
+] });
+const fB = log.querySelector('.chat-assistant');
+check('fallback renders without markdown-it', !fB.querySelector('.md') && fB.querySelector('pre.chat-code'));
+fB.querySelector('.chat-msg-copy').click();
+check('fallback message Copy is the source', copied.pop() === 'Run **this**:\n\n```sh\nmake test\n```');
+fB.querySelector('.chat-code-copy').click();
+check('fallback code Copy is the block body', copied.pop() === 'make test');
+T.chatMd = T.buildChatMarkdown();
 
 console.log('sending');
 const calls = [];
