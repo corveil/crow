@@ -552,10 +552,73 @@ function formatChatDuration(ms) {
   return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
 }
 
+// A message bubble: the rendered markdown in .chat-msg-body, plus Copy
+// controls that hand back the *source* markdown (CROW-1392). The controls'
+// labels are CSS content (no text nodes) and user-select:none, so they never
+// land in a hand-made selection or in textContent.
 function chatBubble(role, text) {
+  const src = text || '';
   const b = el('div', 'chat-msg chat-' + role);
-  renderChatMarkdown(b, text || '');
+  const body = el('div', 'chat-msg-body');
+  renderChatMarkdown(body, src);
+  addChatCodeCopy(body);
+  b.appendChild(body);
+  if (!src) return b;
+  b.appendChild(chatCopyButton('chat-copy chat-msg-copy', 'Copy message as markdown', () => src));
+  // Desktop right-click, like the terminal's menu. Not on touch: Android fires
+  // contextmenu for the long press that starts a text selection.
+  if (!isCoarsePointer()) {
+    b.oncontextmenu = (e) => {
+      const sel = chatSelectionIn(b);
+      showCardMenu(e, [{ label: 'Copy', url: sel }, { label: 'Copy as markdown', url: src }]);
+    };
+  }
   return b;
+}
+
+// Selected text inside `root`, or '' when the selection is empty or elsewhere.
+function chatSelectionIn(root) {
+  const sel = window.getSelection && window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
+  const range = sel.getRangeAt(0);
+  return root.contains(range.commonAncestorContainer) ? sel.toString() : '';
+}
+
+function chatCopyButton(className, label, getText) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = className;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  let timer = 0;
+  btn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    copyToClipboard(getText());
+    btn.classList.add('copied');
+    btn.setAttribute('aria-label', 'Copied');
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.setAttribute('aria-label', label);
+    }, 1500);
+  };
+  return btn;
+}
+
+// Wrap each code block (markdown-it's <pre><code>, or the fallback's
+// pre.chat-code) so it gets its own Copy, which copies just the block's
+// contents — the rendered text is the fence body, minus fences and the
+// language tag. The trailing newline is dropped so a pasted shell line
+// doesn't run on its own.
+function addChatCodeCopy(root) {
+  for (const pre of [...root.querySelectorAll('pre')]) {
+    const wrap = el('div', 'chat-code-block');
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    wrap.appendChild(chatCopyButton('chat-copy chat-code-copy', 'Copy code',
+      () => pre.textContent.replace(/\n$/, '')));
+  }
 }
 
 function renderChatMarkdown(root, text) {

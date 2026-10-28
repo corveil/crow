@@ -2026,7 +2026,7 @@ select.text-prompt-input { cursor: pointer; }
   overflow-wrap: anywhere;
 }
 .chat-msg p { margin: 0; white-space: pre-wrap; }
-.chat-msg p + p, .chat-msg p + pre, .chat-msg pre + p { margin-top: 8px; }
+.chat-msg p + p, .chat-msg p + .chat-code-block, .chat-msg .chat-code-block + p { margin-top: 8px; }
 .chat-msg code {
   font-family: var(--font-mono); font-size: 12.5px;
   background: var(--badge-wash); border-radius: 4px; padding: 0 4px;
@@ -2123,34 +2123,81 @@ select.text-prompt-input { cursor: pointer; }
      on its own line so the name never collides with it. */
   .detail-top { flex-wrap: wrap; }
 }
-/* markdown-it output inside chat bubbles (chat.js renderChatMarkdown). */
-.chat-msg.md p { white-space: normal; }
-.chat-msg.md > :first-child { margin-top: 0; }
-.chat-msg.md > :last-child { margin-bottom: 0; }
-.chat-msg.md p, .chat-msg.md ul, .chat-msg.md ol, .chat-msg.md pre,
-.chat-msg.md blockquote, .chat-msg.md table { margin: 0 0 8px; }
-.chat-msg.md h1, .chat-msg.md h2, .chat-msg.md h3,
-.chat-msg.md h4, .chat-msg.md h5, .chat-msg.md h6 {
+/* markdown-it output inside chat bubbles (chat.js renderChatMarkdown → .chat-msg-body.md). */
+.chat-msg .md p { white-space: normal; }
+.chat-msg .md > :first-child { margin-top: 0; }
+.chat-msg .md > :last-child { margin-bottom: 0; }
+.chat-msg .md p, .chat-msg .md ul, .chat-msg .md ol, .chat-msg .md pre,
+.chat-msg .md blockquote, .chat-msg .md table { margin: 0 0 8px; }
+.chat-msg .md h1, .chat-msg .md h2, .chat-msg .md h3,
+.chat-msg .md h4, .chat-msg .md h5, .chat-msg .md h6 {
   margin: 12px 0 6px; font-size: 14px; font-weight: 700; color: var(--text-primary);
 }
-.chat-msg.md h1 { font-size: 16px; }
-.chat-msg.md h2 { font-size: 15px; }
-.chat-msg.md ul, .chat-msg.md ol { padding-left: 20px; }
-.chat-msg.md li + li { margin-top: 2px; }
-.chat-msg.md pre {
+.chat-msg .md h1 { font-size: 16px; }
+.chat-msg .md h2 { font-size: 15px; }
+.chat-msg .md ul, .chat-msg .md ol { padding-left: 20px; }
+.chat-msg .md li + li { margin-top: 2px; }
+.chat-msg .md pre {
   font-family: var(--font-mono); font-size: 12px;
   background: var(--term-bg); color: var(--term-fg);
   border-radius: 6px; padding: 8px 10px;
   overflow-x: auto; white-space: pre;
 }
-.chat-msg.md pre code { background: none; padding: 0; font-size: inherit; }
-.chat-msg.md blockquote {
+.chat-msg .md pre code { background: none; padding: 0; font-size: inherit; }
+.chat-msg .md blockquote {
   padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--text-secondary);
 }
-.chat-msg.md hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 10px 0; }
-.chat-msg.md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13px; }
-.chat-msg.md th, .chat-msg.md td { border: 1px solid var(--border-subtle); padding: 4px 8px; text-align: left; }
-.chat-msg.md th { background: var(--badge-wash); }
+.chat-msg .md hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 10px 0; }
+.chat-msg .md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13px; }
+.chat-msg .md th, .chat-msg .md td { border: 1px solid var(--border-subtle); padding: 4px 8px; text-align: left; }
+.chat-msg .md th { background: var(--badge-wash); }
+.chat-msg .md .chat-code-block { margin: 0 0 8px; }
+.chat-msg .md > .chat-code-block:last-child { margin-bottom: 0; }
+.chat-msg .md .chat-code-block > pre { margin: 0; }
+
+/* Copy controls (chat.js chatBubble, CROW-1392). The label is CSS content, not
+   a text node, and user-select is off, so a hand-made selection or the copied
+   markdown never picks it up. Desktop: shown on hover/focus. Touch: always shown,
+   the message one in its own row under the text so it covers nothing. */
+.chat-msg { position: relative; }
+.chat-code-block { position: relative; }
+.chat-copy {
+  font: inherit; font-size: 11px; font-weight: 600; line-height: 1;
+  padding: 4px 7px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card); color: var(--text-secondary);
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.chat-copy::before { content: 'Copy'; }
+.chat-copy.copied::before { content: 'Copied'; }
+.chat-copy.copied { color: var(--accent); }
+.chat-copy:hover { color: var(--text-primary); }
+/* Desktop: beside the bubble, in the gutter its max-width leaves, so it never
+   covers the text (a short bubble is narrower than the button). */
+.chat-msg-copy { position: absolute; top: 2px; }
+.chat-assistant > .chat-msg-copy { left: calc(100% + 6px); }
+.chat-user > .chat-msg-copy { right: calc(100% + 6px); }
+.chat-code-copy {
+  position: absolute; top: 4px; right: 4px;
+  background: var(--term-bg); color: var(--term-fg); border-color: var(--border-strong);
+}
+@media (pointer: fine) {
+  .chat-copy { opacity: 0; transition: opacity 0.12s; }
+  .chat-msg:hover > .chat-msg-copy,
+  .chat-code-block:hover > .chat-code-copy,
+  .chat-copy:hover, .chat-copy:focus-visible, .chat-copy.copied { opacity: 1; }
+}
+@media (pointer: coarse), (max-width: 720px) {
+  .chat-msg-copy { position: static; display: block; margin: 6px 0 0 auto; }
+}
+/* Always-visible on touch: give the code block's first line room under it. */
+@media (pointer: coarse) {
+  .chat-msg .chat-code-block > pre { padding-top: 28px; }
+}
+@media (pointer: fine) and (max-width: 720px) {
+  .chat-msg-copy { opacity: 1; }
+}
+
 .chat-msg a, .chat-notice a, .chat-tool-result a {
   color: var(--accent); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere;
 }
