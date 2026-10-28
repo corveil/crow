@@ -207,6 +207,7 @@ function ensureChatDom() {
   input.addEventListener('input', () => { autosizeChatInput(input); updateChatMenu(); });
   input.addEventListener('click', () => updateChatMenu());
   input.addEventListener('blur', () => { setTimeout(closeChatMenu, 150); });
+  input.addEventListener('paste', onChatPaste);
   input.addEventListener('keydown', (e) => {
     if (chatMenuKeydown(e)) return;
     if (chatHistoryKeydown(e, input)) return;
@@ -244,7 +245,91 @@ function ensureChatDom() {
   jump.hidden = true;
   jump.onclick = () => { log.scrollTop = log.scrollHeight; jump.hidden = true; };
   view.appendChild(jump);
+  enableChatFileDrop(view);
   return view;
+}
+
+// ---------------------------------------------------------------------------
+// Files into the composer (#1390) — parity with the terminal drop (#644/#652,
+// terminal.js). A drop anywhere on the view (or an image pasted from the
+// clipboard) is uploaded to the session's artifacts dir and its escaped host
+// path is inserted at the caret. Never sent: the user adds a prompt and presses
+// Enter, and the path reaches the agent through `send` like any typed text.
+// The whole view takes the drop, so a near-miss on the log never makes the
+// browser open the file and navigate away from Crow.
+// ---------------------------------------------------------------------------
+function enableChatFileDrop(view) {
+  view.addEventListener('dragover', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    const ok = chatCanAttach();
+    e.dataTransfer.dropEffect = ok ? 'copy' : 'none';
+    view.classList.toggle('drop-target', ok);
+  });
+  view.addEventListener('dragleave', (e) => {
+    // Moving between children fires dragleave too; only clear on leaving the view.
+    if (e.relatedTarget && view.contains(e.relatedTarget)) return;
+    view.classList.remove('drop-target');
+  });
+  view.addEventListener('drop', (e) => {
+    view.classList.remove('drop-target');
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return; // not a file drop → leave to the browser
+    e.preventDefault();                   // never navigate the app away on a file drop
+    attachChatFiles(Array.from(files));
+  });
+}
+
+// ⌘V of a screenshot: the clipboard carries an image file and no text. A text
+// paste (even one that also carries a file, like a Finder copy) stays native.
+function onChatPaste(e) {
+  const cd = e.clipboardData;
+  if (!cd || !cd.files || !cd.files.length) return;
+  if (Array.from(cd.types || []).includes('text/plain')) return;
+  e.preventDefault();
+  attachChatFiles(Array.from(cd.files));
+}
+
+// The composer is enabled only once the transcript names a target terminal.
+function chatCanAttach() {
+  const input = document.getElementById('chat-input');
+  return !!(selectedId && chatState && chatState.sessionId === selectedId
+    && chatState.terminalId && input && !input.disabled);
+}
+
+async function attachChatFiles(files) {
+  if (!chatCanAttach()) return;
+  const sid = chatState.sessionId;
+  const paths = await uploadFilesAsArtifacts(sid, files);
+  if (!paths.length) return;
+  const text = paths.join(' ');
+  const input = document.getElementById('chat-input');
+  // Switched sessions mid-upload: the paths belong to the session they were
+  // uploaded to, so they land in that session's draft, not this composer.
+  if (!input || !chatState || chatState.sessionId !== sid) {
+    chatDrafts.set(sid, insertChatText(chatDrafts.get(sid) || '', null, null, text).value);
+    return;
+  }
+  const r = insertChatText(input.value, input.selectionStart, input.selectionEnd, text);
+  input.value = r.value;
+  try { input.setSelectionRange(r.caret, r.caret); } catch (_) { /* jsdom */ }
+  autosizeChatInput(input);
+  chatDrafts.set(sid, input.value);
+  if (!isCoarsePointer()) {
+    try { input.focus({ preventScroll: true }); } catch (_) { input.focus(); }
+  }
+}
+
+// Splice `text` over [start, end) (the end of `value` when unknown), with a
+// space before it unless it opens the text or follows whitespace, and one after
+// it unless whitespace already follows. Returns the new value and the caret.
+function insertChatText(value, start, end, text) {
+  const s = start == null ? value.length : start;
+  const e = end == null ? s : end;
+  const before = value.slice(0, s);
+  const after = value.slice(e);
+  const ins = (before && !/\s$/.test(before) ? ' ' : '') + text + (/^\s/.test(after) ? '' : ' ');
+  return { value: before + ins + after, caret: before.length + ins.length };
 }
 
 // Put the caret in the composer after a session switch (or opening Chat) so

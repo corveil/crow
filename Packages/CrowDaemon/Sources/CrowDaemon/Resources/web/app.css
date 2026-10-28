@@ -2000,6 +2000,14 @@ select.text-prompt-input { cursor: pointer; }
 }
 #app.board-active #chat-view,
 #app:not(.has-selection) #chat-view { display: none; }
+/* A file dragged over the view (chat.js enableChatFileDrop). */
+#chat-view.drop-target::after {
+  content: 'Drop to attach'; position: absolute; inset: 8px; z-index: 6;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent-line); border-radius: 12px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 14px; font-weight: 600; pointer-events: none;
+}
 
 #chat-log {
   flex: 1; min-height: 0;
