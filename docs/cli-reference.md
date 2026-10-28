@@ -2214,7 +2214,7 @@ crow logsync set --quiet-period-minutes 15 --max-upload-bytes 4000000
 | --- | --- |
 | `--retention-days N` | Local upload-ledger retention (0 = forever, default 30) |
 | `--quiet-period-minutes N` | Wait this long after a session's last activity before uploading (default 30) |
-| `--max-upload-bytes N` | Per-transcript upload cap (default 8000000) |
+| `--max-upload-bytes N` | Per-transcript upload cap, after gzip (default 8388608) |
 
 Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code transcripts are collected today (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096 / CROW-1106): Claude's and Grok's logs are partitioned by working directory (Grok URL-encodes the cwd into its `~/.grok/sessions` directory name), while Codex's globally-stored `~/.codex/sessions` rollouts, Cursor's globally-stored `~/.cursor/chats` stores, and Muse's globally-stored `~/.local/share/muse/sessions` journals are attributed by the `cwd` each records (Codex in its rollout head, Cursor in the sibling `meta.json`, Muse in its line-1 `runtime.session.metadata` record's `payload.record.workspace_root`), and OpenCode's `~/.local/share/opencode/opencode.db` SQLite store is attributed by each session row's `directory` column and reassembled from its `message`/`part` rows. Other harnesses are wired as their on-disk log locations are confirmed. Changes are live — the collector re-reads config each tick, so they apply within a few minutes with no restart.
 

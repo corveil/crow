@@ -99,17 +99,19 @@ struct BackfillService: Sendable {
         // Produce the NDJSON transcript. Claude/Codex normalize through the shared
         // file path; OpenCode reassembles the one session (by id) from its
         // `opencode.db` — `session.filePath` is the database, shared by every
-        // OpenCode row (CROW-1096).
+        // OpenCode row (CROW-1096). Then gzip it, capping the compressed body
+        // exactly as the live collector does (CROW-1394).
         let cap = max(1, maxUploadBytes)
-        let transcript: NormalizedTranscript?
+        let budget = TranscriptNormalizer.rawReadBudget(forCompressedCap: cap)
+        let raw: NormalizedTranscript?
         if harness == .opencode {
-            transcript = OpenCodeStore.normalizeSession(
-                databasePath: session.filePath, sessionID: uid, maxBytes: cap)
+            raw = OpenCodeStore.normalizeSession(
+                databasePath: session.filePath, sessionID: uid, maxBytes: budget)
         } else {
             let file = URL(fileURLWithPath: session.filePath)
-            transcript = TranscriptNormalizer.normalize(files: [file], format: format, maxBytes: cap)
+            raw = TranscriptNormalizer.normalize(files: [file], format: format, maxBytes: budget)
         }
-        guard let transcript else {
+        guard let transcript = raw.flatMap({ TranscriptNormalizer.gzipForUpload($0, maxBytes: cap) }) else {
             return BackfillUploadOutcome(
                 claudeSessionUID: uid, result: .skipped, harness: harness,
                 ownerRepo: session.ownerRepo, reason: "empty_or_unreadable")

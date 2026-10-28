@@ -7,7 +7,7 @@ import CrowCore
         let c = LogSyncConfig()
         #expect(c.retentionDays == 30)
         #expect(c.quietPeriodMinutes == 30)
-        #expect(c.maxUploadBytes == 8_000_000)
+        #expect(c.maxUploadBytes == 8_388_608)
     }
 
     @Test func codableRoundTrip() throws {
@@ -23,7 +23,7 @@ import CrowCore
         let decoded = try JSONDecoder().decode(LogSyncConfig.self, from: Data(json.utf8))
         #expect(decoded.retentionDays == 7)
         #expect(decoded.quietPeriodMinutes == 30) // defaulted
-        #expect(decoded.maxUploadBytes == 8_000_000) // defaulted
+        #expect(decoded.maxUploadBytes == 8_388_608) // defaulted
     }
 
     @Test func decodeIgnoresRemovedKeysAndReEncodeDropsThem() throws {

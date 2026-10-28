@@ -108,6 +108,12 @@ public final class SessionService {
     /// fallback, and the auto-cleanup reaper — clean up through one choke
     /// point. Optional: telemetry-off hosts and unit tests pass nil.
     let telemetryDeleteProvider: (@Sendable (UUID) async -> Void)?
+    /// Uploads a session's unshipped transcripts before `deleteSession` tears
+    /// it down (CROW-1394), through the same choke point as telemetry cleanup
+    /// so the CLI, web and reaper deletes all get it. Called while the
+    /// session, its worktree and its terminals are still in place. The
+    /// provider bounds its own run time; nil on hosts without the collector.
+    let logUploadBeforeDeleteProvider: (@Sendable (UUID) async -> Void)?
     /// Host-only affordances (clipboard, editor/terminal launching, hook
     /// notifications). Defaults to a headless no-op so tests and the daemon
     /// need not supply one; the macOS app injects a real `AppHostBridge`.
@@ -122,6 +128,7 @@ public final class SessionService {
         telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil,
         managerUsageProvider: (@Sendable (UUID, Date, Date) async -> SessionAnalytics)? = nil,
         telemetryDeleteProvider: (@Sendable (UUID) async -> Void)? = nil,
+        logUploadBeforeDeleteProvider: (@Sendable (UUID) async -> Void)? = nil,
         hostBridge: HostBridge = NoopHostBridge()
     ) {
         self.store = store
@@ -132,6 +139,7 @@ public final class SessionService {
         self.telemetrySessionIDsProvider = telemetrySessionIDsProvider
         self.managerUsageProvider = managerUsageProvider
         self.telemetryDeleteProvider = telemetryDeleteProvider
+        self.logUploadBeforeDeleteProvider = logUploadBeforeDeleteProvider
         self.hostBridge = hostBridge
     }
 

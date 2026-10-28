@@ -1402,7 +1402,7 @@ Live: the collector re-reads config each tick, so changes apply within a few min
 | --- | --- | --- | --- |
 | `--retention-days` | `<retention-days>` | no | Days to keep the local upload ledger (0 = forever, default 30) |
 | `--quiet-period-minutes` | `<quiet-period-minutes>` | no | Wait this long after a session's last activity before uploading (default 30) |
-| `--max-upload-bytes` | `<max-upload-bytes>` | no | Per-transcript upload cap in bytes (default 8000000) |
+| `--max-upload-bytes` | `<max-upload-bytes>` | no | Per-transcript upload cap in bytes, after gzip (default 8388608) |
 
 ---
 

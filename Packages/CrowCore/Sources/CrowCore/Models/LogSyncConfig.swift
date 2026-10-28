@@ -26,14 +26,19 @@ public struct LogSyncConfig: Codable, Sendable, Equatable {
     /// for the transcript to go quiescent before capturing it once. Terminal
     /// sessions (completed/archived) bypass this. Default 30 minutes.
     public var quietPeriodMinutes: Int
-    /// Per-artifact upload cap in bytes. A larger transcript is truncated and
-    /// flagged. Kept at/under the server's own limit. Default 8,000,000.
+    /// Per-artifact upload cap in bytes, measured on the **gzip-compressed**
+    /// body as sent (CROW-1394). A transcript still over it after compression
+    /// is truncated and flagged. Default 8,388,608 — Corveil's own limit
+    /// (`CORVEIL_WORKER_ARTIFACT_MAX_BYTES`, 8 MiB).
     public var maxUploadBytes: Int
+
+    /// Corveil's per-artifact body limit, and the default `maxUploadBytes`.
+    public static let defaultMaxUploadBytes = 8 * 1024 * 1024
 
     public init(
         retentionDays: Int = 30,
         quietPeriodMinutes: Int = 30,
-        maxUploadBytes: Int = 8_000_000
+        maxUploadBytes: Int = LogSyncConfig.defaultMaxUploadBytes
     ) {
         self.retentionDays = retentionDays
         self.quietPeriodMinutes = quietPeriodMinutes
@@ -49,7 +54,7 @@ public struct LogSyncConfig: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 30
         quietPeriodMinutes = try c.decodeIfPresent(Int.self, forKey: .quietPeriodMinutes) ?? 30
-        maxUploadBytes = try c.decodeIfPresent(Int.self, forKey: .maxUploadBytes) ?? 8_000_000
+        maxUploadBytes = try c.decodeIfPresent(Int.self, forKey: .maxUploadBytes) ?? Self.defaultMaxUploadBytes
     }
 
     enum CodingKeys: String, CodingKey {

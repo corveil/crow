@@ -110,8 +110,7 @@ extension CrowDaemon {
     /// takes effect within one tick. The whole pass is a cheap no-op while the
     /// feature is off (the default), and every upload is best-effort — a failure
     /// never touches session state.
-    static func startLogSyncPoll(appState: AppState, devRoot: String) {
-        let collector = LogSyncCollector(devRoot: devRoot)
+    static func startLogSyncPoll(appState: AppState, collector: LogSyncCollector) {
         Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)

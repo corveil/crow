@@ -488,7 +488,8 @@ import CrowPersistence
         let noSources = try work("no-sources", agent: .cursor)
         let noTranscript = try work("no-transcript")
         let emptyTranscript = try work("empty-transcript", logLines: [""])
-        let truncated = try work("truncated", logLines: (0..<20).map { "{\"n\":\($0)}" })
+        // Enough lines that even gzipped they're over the 64-byte cap (CROW-1394).
+        let truncated = try work("truncated", logLines: (0..<400).map { "{\"n\":\($0)}" })
         let quiet = try work("quiet", status: .active, logLines: ["{}"], logMTime: sweepTime)
 
         func manager(_ name: String, tag: UUID?, cwd: String?, conversation: String? = nil) -> Session {
@@ -564,6 +565,294 @@ import CrowPersistence
         #expect(skipLines(optedOut).isEmpty)
         #expect(skipLines(managerOff).isEmpty)
         #expect(skipLines(quiet).isEmpty)
+    }
+    // MARK: Upload on delete + every harness (CROW-1394)
+
+    /// Records every upload request; optionally stalls before answering.
+    final class RecordingTransport: TranscriptUploadTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _requests: [URLRequest] = []
+        let status: Int
+        let delay: Duration?
+
+        init(status: Int = 201, delay: Duration? = nil) {
+            self.status = status
+            self.delay = delay
+        }
+
+        var requests: [URLRequest] { lock.withLock { _requests } }
+
+        /// The `harness` query item of each request, in order.
+        var harnesses: [String] {
+            requests.compactMap { req in
+                URLComponents(url: req.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "harness" })?.value
+            }
+        }
+
+        func perform(_ request: URLRequest) async throws -> Int {
+            lock.withLock { _requests.append(request) }
+            if let delay { try await Task.sleep(for: delay) }
+            return status
+        }
+    }
+
+    /// A dev root holding one opted-in workspace with a gateway, plus fake
+    /// Claude and Codex log roots the injected harness list points at.
+    struct Fixture {
+        let root: URL
+        let devRoot: String
+        let workspace: WorkspaceInfo
+        let claudeRoot: URL
+        let codexRoot: URL
+
+        init() throws {
+            root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("logsync-1394-\(UUID().uuidString)", isDirectory: true)
+            devRoot = root.appendingPathComponent("dev").path
+            claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+            codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+            for dir in [URL(fileURLWithPath: devRoot), claudeRoot, codexRoot] {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
+            workspace = WorkspaceInfo(
+                name: "Corveil", uploadSessionLogs: true,
+                gateway: WorkspaceGateway(
+                    baseURL: "https://corveil.example",
+                    customHeaders: ["x-citadel-api-key": "Bearer sk-test"]))
+        }
+
+        var worktreePath: String { devRoot + "/Corveil/crow-1394-thing" }
+
+        /// Claude partitions by worktree, like the real agent's slug directory.
+        func claudeDir(_ worktreePath: String) -> URL {
+            claudeRoot.appendingPathComponent(AgentLogSource.posixPathSlug(worktreePath), isDirectory: true)
+        }
+
+        func writeClaudeLog(name: String = "c1") throws {
+            let dir = claudeDir(worktreePath)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try "{\"type\":\"user\",\"h\":\"claude\"}\n".write(
+                to: dir.appendingPathComponent("\(name).jsonl"), atomically: true, encoding: .utf8)
+        }
+
+        func writeCodexLog() throws {
+            try "{\"type\":\"session_meta\",\"h\":\"codex\"}\n".write(
+                to: codexRoot.appendingPathComponent("rollout-x.jsonl"), atomically: true, encoding: .utf8)
+        }
+
+        func collector(
+            transport: RecordingTransport, timeout: Duration = .seconds(10),
+            managerTranscript: String? = nil
+        ) -> LogSyncCollector {
+            let config = AppConfig(workspaces: [workspace])
+            let claudeRoot = claudeRoot, codexRoot = codexRoot
+            return LogSyncCollector(
+                devRoot: devRoot,
+                uploader: TranscriptUploader(transport: transport),
+                resolveSecret: { _ in nil },
+                logSources: { kind, wt in
+                    switch kind {
+                    case .claudeCode:
+                        return [.directory(
+                            claudeRoot.appendingPathComponent(AgentLogSource.posixPathSlug(wt)).path,
+                            format: .jsonl, fileExtension: "jsonl")]
+                    case .codex:
+                        return [.directory(codexRoot.path, format: .logDir, fileExtension: "jsonl")]
+                    default:
+                        return nil
+                    }
+                },
+                harnessKinds: { [.claudeCode, .codex] },
+                locateConversation: { _, _, _ in managerTranscript.map { ($0, .jsonl) } },
+                loadConfig: { _ in config },
+                log: LogSyncLog(sink: { _ in }),
+                deleteUploadTimeout: timeout)
+        }
+
+        func ledger() async -> LogSyncLedger {
+            await LogSyncLedgerStore.shared(devRoot: devRoot).snapshot()
+        }
+
+        @MainActor
+        func appState(with session: Session) -> AppState {
+            let state = AppState()
+            state.sessions = [session]
+            if session.isManager {
+                state.terminals[session.id] = [SessionTerminal(
+                    sessionID: session.id, name: "Manager",
+                    cwd: devRoot + "/.crow/managers/\(session.id.uuidString)", command: "claude")]
+            } else {
+                state.worktrees[session.id] = [SessionWorktree(
+                    sessionID: session.id, repoName: "crow", repoPath: devRoot + "/Corveil/crow",
+                    worktreePath: worktreePath, branch: "feature/x")]
+            }
+            return state
+        }
+    }
+
+    private func taggedManager(_ fixture: Fixture, id: UUID = UUID()) -> Session {
+        var session = Session(
+            id: id, name: "Manager 2", kind: .manager, agentKind: .claudeCode,
+            workspaceID: fixture.workspace.id)
+        _ = session.recordHarnessConversationID("conv-a")
+        return session
+    }
+
+    /// A Manager deleted inside its quiet period: the tick waits for the
+    /// transcript to go quiet, the delete does not. A second run finds it in
+    /// the ledger and uploads nothing.
+    @Test @MainActor func deletingTaggedManagerUploadsUnshippedConversations() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let transcript = f.root.appendingPathComponent("conv-a.jsonl")
+        try "{\"type\":\"user\"}\n".write(to: transcript, atomically: true, encoding: .utf8)
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport, managerTranscript: transcript.path)
+        let session = taggedManager(f)
+        let state = f.appState(with: session)
+
+        await collector.sweep(appState: state)
+        #expect(transport.requests.isEmpty) // written just now ⇒ inside the quiet period
+
+        await collector.uploadBeforeDelete(sessionID: session.id, appState: state)
+        #expect(transport.requests.count == 1)
+        #expect(transport.requests.first?.url?.path == "/api/crow-sessions/conv-a/artifacts")
+        let key = LogSyncLedger.key(sessionUID: "conv-a", harness: .claude, kind: .sessionTranscript)
+        #expect(await f.ledger().entries[key]?.status == .uploaded)
+
+        await collector.uploadBeforeDelete(sessionID: session.id, appState: state)
+        #expect(transport.requests.count == 1)
+    }
+
+    /// An active work session deleted before any tick reached it still ships,
+    /// gzipped, with the ledger describing the body as sent.
+    @Test @MainActor func deletingWorkSessionBeforeAnyCheckUploadsIt() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try f.writeClaudeLog()
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport)
+        let session = Session(name: "thing", status: .active, kind: .work, agentKind: .claudeCode)
+        let state = f.appState(with: session)
+
+        await collector.uploadBeforeDelete(sessionID: session.id, appState: state)
+
+        let request = try #require(transport.requests.first)
+        #expect(transport.requests.count == 1)
+        #expect(request.value(forHTTPHeaderField: "Content-Encoding") == "gzip")
+        let body = try #require(request.httpBody)
+        let key = LogSyncLedger.key(sessionUID: session.id.uuidString, harness: .claude, kind: .sessionTranscript)
+        let entry = try #require(await f.ledger().entries[key])
+        #expect(entry.status == .uploaded)
+        #expect(entry.sizeBytes == body.count)
+        #expect(entry.sha256 == LogSyncCollector.sha256Hex(body))
+    }
+
+    /// A stalled upload can't hold the delete: the call returns at the
+    /// deadline and the slot is recorded `failedTransient` for backfill.
+    @Test @MainActor func timedOutUploadBeforeDeleteRecordsFailedTransient() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try f.writeClaudeLog()
+        let transport = RecordingTransport(delay: .seconds(60))
+        let collector = f.collector(transport: transport, timeout: .milliseconds(300))
+        let session = Session(name: "thing", kind: .work, agentKind: .claudeCode)
+        let state = f.appState(with: session)
+
+        let clock = ContinuousClock()
+        let elapsed = await clock.measure {
+            await collector.uploadBeforeDelete(sessionID: session.id, appState: state)
+        }
+        #expect(elapsed < .seconds(10))
+        let key = LogSyncLedger.key(sessionUID: session.id.uuidString, harness: .claude, kind: .sessionTranscript)
+        #expect(await f.ledger().entries[key]?.status == .failedTransient)
+    }
+
+    @Test @MainActor func failedUploadBeforeDeleteRecordsFailedTransient() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try f.writeClaudeLog()
+        let collector = f.collector(transport: RecordingTransport(status: 503))
+        let session = Session(name: "thing", kind: .work, agentKind: .claudeCode)
+
+        await collector.uploadBeforeDelete(sessionID: session.id, appState: f.appState(with: session))
+
+        let key = LogSyncLedger.key(sessionUID: session.id.uuidString, harness: .claude, kind: .sessionTranscript)
+        #expect(await f.ledger().entries[key]?.status == .failedTransient)
+    }
+
+    /// Handed from Codex to Claude in one terminal: the label still says
+    /// Codex, but the Claude transcript is what's on disk, and it ships as Claude.
+    @Test @MainActor func codexLabelledSessionWithClaudeLogsUploadsAsClaude() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try f.writeClaudeLog()
+        let transport = RecordingTransport()
+        let session = Session(name: "thing", status: .completed, kind: .work, agentKind: .codex)
+
+        await f.collector(transport: transport).sweep(appState: f.appState(with: session))
+
+        #expect(transport.harnesses == ["claude"])
+        let items = URLComponents(url: try #require(transport.requests.first?.url), resolvingAgainstBaseURL: false)?.queryItems
+        #expect(items?.first(where: { $0.name == "agent_kind" })?.value == "claude-code")
+    }
+
+    /// `claude` is no registered kind; the session still ships.
+    @Test @MainActor func claudeLabelledSessionUploads() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try f.writeClaudeLog()
+        let transport = RecordingTransport()
+        let session = Session(
+            name: "thing", status: .completed, kind: .work, agentKind: AgentKind(rawValue: "claude"))
+
+        await f.collector(transport: transport).sweep(appState: f.appState(with: session))
+
+        #expect(transport.harnesses == ["claude"])
+    }
+
+    @Test @MainActor func sessionWithCodexAndClaudeLogsUploadsOneArtifactPerHarness() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try f.writeClaudeLog()
+        try f.writeCodexLog()
+        let transport = RecordingTransport()
+        let session = Session(name: "thing", status: .completed, kind: .work, agentKind: .codex)
+        let state = f.appState(with: session)
+        let collector = f.collector(transport: transport)
+
+        await collector.sweep(appState: state)
+        #expect(transport.harnesses.sorted() == ["claude", "codex"])
+        let ledger = await f.ledger()
+        for harness in [LogSyncHarness.claude, .codex] {
+            let key = LogSyncLedger.key(sessionUID: session.id.uuidString, harness: harness, kind: .sessionTranscript)
+            #expect(ledger.entries[key]?.status == .uploaded)
+        }
+
+        // Both are in the ledger now; neither a tick nor a delete repeats them.
+        await collector.sweep(appState: state)
+        await collector.uploadBeforeDelete(sessionID: session.id, appState: state)
+        #expect(transport.requests.count == 2)
+    }
+
+    /// The primary Manager never ships — not on a tick, not on a delete, even
+    /// with a (hand-edited) workspace tag and a transcript on disk.
+    @Test @MainActor func primaryManagerIsNeverUploaded() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let transcript = f.root.appendingPathComponent("conv-a.jsonl")
+        try "{\"type\":\"user\"}\n".write(to: transcript, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1000)], ofItemAtPath: transcript.path)
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport, managerTranscript: transcript.path)
+        let state = f.appState(with: taggedManager(f, id: AppState.managerSessionID))
+
+        await collector.sweep(appState: state)
+        await collector.uploadBeforeDelete(sessionID: AppState.managerSessionID, appState: state)
+
+        #expect(transport.requests.isEmpty)
     }
 }
 
