@@ -680,7 +680,8 @@ final class ManagerSessionController {
         // path can't forget the strip (#861 review r8/r17). Manager sessions are
         // never `.review`, so here the shared helper only seeds (the strip no-ops).
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: session.agentKind, sessionKind: session.kind, worktreePath: cwd,
+            agentKind: session.agentKind, sessionKind: session.kind, sessionID: session.id,
+            worktreePath: cwd,
             ownership: SessionService.HookOwnership.snapshot(
                 appState,
                 crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot())))

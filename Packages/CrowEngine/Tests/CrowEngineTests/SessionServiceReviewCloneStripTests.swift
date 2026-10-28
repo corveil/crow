@@ -232,7 +232,8 @@ struct SessionServiceReviewCloneStripTests {
             atomically: true, encoding: .utf8)
 
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .antigravity, sessionKind: .review, worktreePath: clone, ownership: .empty)
+            agentKind: .antigravity, sessionKind: .review, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(!FileManager.default.fileExists(atPath: agentsDir))
     }
@@ -247,7 +248,8 @@ struct SessionServiceReviewCloneStripTests {
             atPath: agentsDir, withIntermediateDirectories: true)
 
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .antigravity, sessionKind: .work, worktreePath: clone, ownership: .empty)
+            agentKind: .antigravity, sessionKind: .work, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(FileManager.default.fileExists(atPath: agentsDir))
     }
@@ -299,7 +301,8 @@ struct SessionServiceReviewCloneStripTests {
             atomically: true, encoding: .utf8)
 
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .cursor, sessionKind: .review, worktreePath: clone, ownership: .empty)
+            agentKind: .cursor, sessionKind: .review, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(!FileManager.default.fileExists(atPath: cursorDir))
     }
@@ -314,7 +317,8 @@ struct SessionServiceReviewCloneStripTests {
             atPath: cursorDir, withIntermediateDirectories: true)
 
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .cursor, sessionKind: .work, worktreePath: clone, ownership: .empty)
+            agentKind: .cursor, sessionKind: .work, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(FileManager.default.fileExists(atPath: cursorDir))
     }

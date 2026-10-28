@@ -140,7 +140,7 @@ final class AgentHandoffController {
         // retired Cursor's own handoff arm below). Seed is a no-op for `.review` /
         // trustless agents.
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: target.kind, sessionKind: session.kind,
+            agentKind: target.kind, sessionKind: session.kind, sessionID: sessionID,
             worktreePath: worktree.worktreePath,
             ownership: SessionService.HookOwnership.snapshot(
                 appState,

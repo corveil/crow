@@ -84,8 +84,13 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     /// registration (CROW-999).
     public let asyncHooksSupported: Bool
 
-    public init(asyncHooksSupported: Bool = false) {
+    /// The `config.toml` whose `hooks.state` entries `removeHookConfig` prunes.
+    /// `nil` is the real `$CODEX_HOME/config.toml`; tests pass a temp file.
+    let codexConfigPath: String?
+
+    public init(asyncHooksSupported: Bool = false, codexConfigPath: String? = nil) {
         self.asyncHooksSupported = asyncHooksSupported
+        self.codexConfigPath = codexConfigPath
     }
 
     // MARK: - Hook document
@@ -125,6 +130,37 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             ]
         }
         return ["hooks": hooks]
+    }
+
+    /// Codex's per-hook trust hash for each entry `writeHookConfig` writes for
+    /// this session, keyed by the event's `hooks.state` label (`stop`,
+    /// `pre_tool_use`, …). `CodexTrustSeeder` persists these so Codex runs
+    /// Crow's hooks without its "Hooks need review" gate (CROW-1381).
+    ///
+    /// Derived from `generateDocument` — the same document the writer puts on
+    /// disk — so the two can't drift. If the file on disk differs (a
+    /// git-tracked or user-owned `hooks.json` the writer declined to touch),
+    /// its hashes won't match and Codex keeps gating it.
+    public func hookTrustHashes(sessionID: UUID, crowPath: String) -> [String: String] {
+        let document = Self.generateDocument(
+            sessionID: sessionID,
+            crowPath: crowPath,
+            asyncHooksSupported: asyncHooksSupported)
+        guard let hooks = document["hooks"] as? [String: Any] else { return [:] }
+        var hashes: [String: String] = [:]
+        for (event, value) in hooks {
+            guard let label = CodexHookTrust.eventKeyLabel(event),
+                  let groups = value as? [[String: Any]],
+                  let entry = (groups.first?["hooks"] as? [[String: Any]])?.first,
+                  let command = entry["command"] as? String,
+                  let timeout = entry["timeout"] as? Int else { continue }
+            hashes[label] = CodexHookTrust.commandHash(
+                eventLabel: label,
+                command: command,
+                timeout: timeout,
+                async: entry["async"] as? Bool ?? false)
+        }
+        return hashes
     }
 
     // MARK: - HookConfigWriter Conformance
@@ -185,6 +221,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            Self.isCrowOwned(parsed) {
             try? FileManager.default.removeItem(atPath: filePath)
+            // Drop the per-hook trust `CodexTrustSeeder` recorded for this
+            // file, or `config.toml` gains seven dead tables per session. Only
+            // after removing a Crow-owned file: a user's own `hooks.json` keeps
+            // the trust they gave it.
+            if case let .failed(msg) = CodexTrustSeeder.removeHookTrust(
+                projectPath: worktreePath, codexConfigPath: codexConfigPath) {
+                CrowLog.info("[CodexHookConfigWriter] could not prune hook trust for \(worktreePath): \(msg)")
+            }
         }
         Self.removeIfEmpty(codexDir)
     }

@@ -536,7 +536,15 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   **project-trust** seeded into `config.toml` (`[projects."<worktree>"]
   trust_level = "trusted"`, `CodexTrustSeeder`) so Codex's folder-trust gate
   never blocks an unattended launch — and so the project hooks actually load
-  (project hooks run only in trusted folders). **`.review` clones are
+  (project hooks run only in trusted folders). Folder trust alone is not
+  enough: Codex also runs each non-managed hook only when `config.toml` holds
+  a matching `[hooks.state."<worktree>/.codex/hooks.json:<event>:0:0"]
+  trusted_hash`, and shows *"Hooks need review"* (or, in `codex exec`, skips
+  the hook) otherwise. So the same seed also writes those hashes for the
+  hooks.json Crow generates for the session (CROW-1381; the hash is
+  reproduced in `CodexHookTrust`). They are hashes of Crow's own commands, so
+  a hooks.json Crow didn't write stays gated, and `removeHookConfig` prunes
+  them when the session goes. **`.review` clones are
   deliberately not trust-seeded** — their working tree is `gh repo clone` output
   at the PR author's head (attacker-controlled), and trusting it would arm a
   committed `.codex/hooks.json`; they fall back to Codex's folder-trust prompt
