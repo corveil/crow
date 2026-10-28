@@ -1,4 +1,3 @@
-import Crypto
 import Foundation
 
 /// Codex's **per-hook** trust identity, reproduced so Crow can pre-approve its
@@ -73,8 +72,7 @@ enum CodexHookTrust {
             + "\"command\":\(jsonString(command)),"
             + "\"timeout\":\(timeout),"
             + "\"type\":\"command\"}]}"
-        let digest = SHA256.hash(data: Data(json.utf8))
-        return "sha256:" + digest.map { String(format: "%02x", $0) }.joined()
+        return "sha256:" + SHA256Digest.hex(Array(json.utf8))
     }
 
     /// A JSON string literal escaped exactly as `serde_json` does: `"` and `\`,

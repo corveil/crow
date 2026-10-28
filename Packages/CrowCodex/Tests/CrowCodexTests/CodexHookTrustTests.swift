@@ -42,6 +42,16 @@ struct CodexHookTrustTests {
             timeout: 5, async: true) == Self.golden["post_tool_use"])
     }
 
+    @Test func sha256MatchesFIPSVectors() {
+        #expect(SHA256Digest.hex([]) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        #expect(SHA256Digest.hex(Array("abc".utf8)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        // 56 bytes: the padding spills into a second block.
+        #expect(SHA256Digest.hex(Array("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".utf8))
+            == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+        #expect(SHA256Digest.hex(Array(repeating: UInt8(ascii: "a"), count: 1000))
+            == "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3")
+    }
+
     @Test func jsonStringEscapesLikeSerdeJSON() {
         // `/` and non-ASCII stay verbatim; controls use lowercase `\u00xx`.
         #expect(CodexHookTrust.jsonString("a\"b\\c/d\u{01}é\n") == "\"a\\\"b\\\\c/d\\u0001é\\n\"")
