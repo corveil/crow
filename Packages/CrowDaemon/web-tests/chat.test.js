@@ -15,6 +15,7 @@ const epilogue = `
   set chatState(v){ chatState = v; },
   get chatState(){ return chatState; },
   applyChatView, setChatViewActive, chatHeaderMeter, chatToggleControl, onChatConfigLoaded,
+  insertChatText, chatDrafts,
   set chatViewFlag(v){ uiConfig.chatViewEnabled = v; },
   set rpc(v){ rpc = v; },
 };
@@ -356,6 +357,106 @@ check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.que
   check('a rebuilt header refills the meter from chat state', !rebuilt.hidden && rebuilt.textContent.includes('tokens'));
   check('model names', T.formatChatModel('claude-haiku-5-5') === 'Haiku 5.5' && T.formatChatModel('gpt-5.5') === 'gpt-5.5');
   check('token formatting', T.formatChatTokens(999) === '999' && T.formatChatTokens(1500) === '1.5k' && T.formatChatTokens(1000000) === '1M');
+
+  console.log('file drop into the composer (#1390)');
+  const uploads = [];
+  window.fetch = async (url, opts) => {
+    uploads.push({ url, name: decodeURIComponent(opts.headers['X-Filename']), type: opts.headers['Content-Type'] });
+    const name = decodeURIComponent(opts.headers['X-Filename']);
+    if (name === 'bad.bin') return { ok: false, json: async () => ({}) };
+    return { ok: true, json: async () => ({ path: '/art/' + name }) };
+  };
+  const flush = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r)); };
+  const view = doc.getElementById('chat-view');
+  const fileEvent = (type, files, types) => {
+    const ev = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: {
+      files, types: types || (files.length ? ['Files'] : ['text/plain']), dropEffect: 'none' } });
+    return ev;
+  };
+  const dropOn = (node, files, types) => { const ev = fileEvent('drop', files, types); node.dispatchEvent(ev); return ev; };
+  const png = { name: 'shot.png', type: 'image/png' };
+  const md = { name: 'notes.md', type: '' };
+
+  T.selectedId = 'FD-1';
+  T.applyChatView();
+  T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/fd', terminal_id: 'T-FD',
+    agent_kind: 'claude-code', events: [] });
+  const over = fileEvent('dragover', []);
+  over.dataTransfer.types = ['Files'];
+  view.dispatchEvent(over);
+  check('dragover accepts a file drag', over.defaultPrevented && over.dataTransfer.dropEffect === 'copy');
+  check('dragover highlights the view', view.classList.contains('drop-target'));
+  input.value = 'look at  please';
+  input.setSelectionRange(8, 8);
+  const ev1 = dropOn(log, [png, md]);
+  check('a drop on the log is caught (no navigation)', ev1.defaultPrevented);
+  check('drop clears the highlight', !view.classList.contains('drop-target'));
+  await flush();
+  check('each file is uploaded to the session artifacts', uploads.length === 2
+    && uploads[0].url === '/artifacts/FD-1' && uploads[1].type === 'application/octet-stream');
+  check('paths insert at the caret, not sent', input.value === 'look at /art/shot.png /art/notes.md please');
+  check('caret lands after the inserted paths', input.selectionStart === 'look at /art/shot.png /art/notes.md'.length);
+  check('the draft is updated', T.chatDrafts.get('FD-1') === input.value);
+
+  input.value = 'see';
+  input.setSelectionRange(3, 3);
+  uploads.length = 0;
+  dropOn(view, [{ name: 'bad.bin', type: '' }, { name: 'my file.txt', type: 'text/plain' }]);
+  await flush();
+  check('failed uploads are skipped; paths are shell-escaped, spaced, trailing space', input.value === 'see /art/my\\ file.txt ');
+
+  const textDrop = dropOn(view, [], ['text/plain']);
+  check('a non-file drop is left to the browser', !textDrop.defaultPrevented);
+
+  // No target terminal: composer disabled → still swallowed, nothing uploaded.
+  T.selectedId = 'FD-2';
+  T.applyChatView();
+  input.value = '';
+  uploads.length = 0;
+  const over2 = fileEvent('dragover', []);
+  over2.dataTransfer.types = ['Files'];
+  view.dispatchEvent(over2);
+  check('no terminal: dragover still blocks navigation, shows no-drop', over2.defaultPrevented
+    && over2.dataTransfer.dropEffect === 'none' && !view.classList.contains('drop-target'));
+  const ev2 = dropOn(view, [png]);
+  await flush();
+  check('no terminal: drop is prevented but nothing uploads or inserts', ev2.defaultPrevented
+    && uploads.length === 0 && input.value === '');
+
+  // Paste a screenshot (image file, no text) → uploaded; a text paste stays native.
+  T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/fd2', terminal_id: 'T-FD2',
+    agent_kind: 'claude-code', events: [] });
+  const pasteEvent = (files, types) => {
+    const ev = new window.Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'clipboardData', { value: { files, types } });
+    return ev;
+  };
+  const p1 = pasteEvent([png], ['Files']);
+  input.dispatchEvent(p1);
+  await flush();
+  check('pasting an image uploads and inserts it', p1.defaultPrevented && input.value === '/art/shot.png ');
+  const p2 = pasteEvent([png], ['text/plain', 'Files']);
+  input.dispatchEvent(p2);
+  check('a paste with text stays native', !p2.defaultPrevented);
+
+  // Session switched mid-upload: the path goes to the uploading session's draft.
+  let release;
+  window.fetch = () => new Promise((r) => { release = () => r({ ok: true, json: async () => ({ path: '/art/late.png' }) }); });
+  input.value = 'mine';
+  dropOn(view, [png]);
+  await flush();
+  T.selectedId = 'FD-3';
+  T.applyChatView();
+  release();
+  await flush();
+  check('a mid-upload switch does not insert into the other session', input.value === '');
+  check('…the path lands in the uploading session\'s draft', T.chatDrafts.get('FD-2') === 'mine /art/late.png ');
+
+  check('insertChatText: empty composer', T.insertChatText('', 0, 0, '/a').value === '/a ');
+  check('insertChatText: after a newline adds no leading space', T.insertChatText('x\n', 2, 2, '/a').value === 'x\n/a ');
+  check('insertChatText: replaces a selection', T.insertChatText('a SEL b', 2, 5, '/p').value === 'a /p b');
+  delete window.fetch;
 
   console.log('chat view flag (crow ui set --chat-view)');
   const app = doc.getElementById('app');

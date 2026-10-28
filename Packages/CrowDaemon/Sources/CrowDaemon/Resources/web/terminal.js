@@ -647,7 +647,7 @@ function enableFileDrop(node) {
   node.addEventListener('dragover', (e) => {
     // dataTransfer.files is empty during dragover — only .types is populated —
     // so accept any file drag here (all types are handled on drop).
-    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+    if (isFileDrag(e)) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
     }
@@ -660,6 +660,10 @@ function enableFileDrop(node) {
   });
 }
 
+function isFileDrag(e) {
+  return !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+}
+
 // Backslash-escape whitespace and shell metacharacters, matching what
 // Terminal.app/iTerm insert on a Finder drop (the byte stream the agent TUIs
 // already parse). In practice the artifacts path has none of these, so this is
@@ -668,8 +672,10 @@ function shellEscapePath(p) {
   return p.replace(/([\s'"\\$`&|;<>()*?!#~\[\]{}])/g, '\\$1');
 }
 
-async function uploadDroppedFiles(files) {
-  const sid = selectedId;
+// Upload each file to the session's artifacts dir and return the escaped host
+// paths, in order. A file that fails to upload is skipped. Shared by the
+// terminal drop and the Chat composer (chat.js, #1390).
+async function uploadFilesAsArtifacts(sid, files) {
   const paths = [];
   for (const file of files) {
     try {
@@ -689,6 +695,11 @@ async function uploadDroppedFiles(files) {
       if (data && data.path) paths.push(shellEscapePath(data.path));
     } catch (_) { /* skip this file */ }
   }
+  return paths;
+}
+
+async function uploadDroppedFiles(files) {
+  const paths = await uploadFilesAsArtifacts(selectedId, files);
   if (paths.length && term) {
     term.focus();
     // Route through xterm's paste so bracketed-paste mode wraps it (same path as
