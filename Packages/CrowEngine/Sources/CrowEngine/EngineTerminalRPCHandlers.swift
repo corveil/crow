@@ -402,6 +402,7 @@ func makeEngineTerminalHandlers(
                         SessionService.prepareWorktreeForAgentLaunch(
                             agentKind: session.agentKind,
                             sessionKind: session.kind,
+                            sessionID: sessionID,
                             worktreePath: wtPath,
                             ownership: SessionService.HookOwnership.snapshot(
                                 capturedAppState, crowPath: crowPath))

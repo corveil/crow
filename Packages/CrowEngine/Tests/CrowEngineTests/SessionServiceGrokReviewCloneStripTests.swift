@@ -184,7 +184,8 @@ struct SessionServiceGrokReviewCloneStripTests {
         // Grok + .review → strip fires; seed is skipped (shouldSeedFolderTrust is
         // false for `.review`), so no global trust file is written by this call.
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .grok, sessionKind: .review, worktreePath: clone, ownership: .empty)
+            agentKind: .grok, sessionKind: .review, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(!FileManager.default.fileExists(atPath: grokDir))
     }
@@ -203,7 +204,8 @@ struct SessionServiceGrokReviewCloneStripTests {
         // Cursor + .review → strip gate false (not Grok), seed gate false (no trust
         // store): a pure no-op that leaves the tree untouched.
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .cursor, sessionKind: .review, worktreePath: clone, ownership: .empty)
+            agentKind: .cursor, sessionKind: .review, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(FileManager.default.fileExists(atPath: grokDir))
     }

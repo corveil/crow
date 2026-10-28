@@ -106,7 +106,8 @@ struct SessionServiceMuseReviewCloneStripTests {
             atomically: true, encoding: .utf8)
 
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .muse, sessionKind: .review, worktreePath: clone, ownership: .empty)
+            agentKind: .muse, sessionKind: .review, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(!FileManager.default.fileExists(atPath: museDir))
     }
@@ -119,7 +120,8 @@ struct SessionServiceMuseReviewCloneStripTests {
             atPath: museDir, withIntermediateDirectories: true)
 
         SessionService.prepareWorktreeForAgentLaunch(
-            agentKind: .muse, sessionKind: .work, worktreePath: clone, ownership: .empty)
+            agentKind: .muse, sessionKind: .work, sessionID: UUID(),
+            worktreePath: clone, ownership: .empty)
 
         #expect(FileManager.default.fileExists(atPath: museDir))
     }

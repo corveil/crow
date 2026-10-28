@@ -233,7 +233,10 @@ a single adapter + its launcher + hook writer + tests change together).
 > `~/.codex/hooks.json` entries). `CodexTrustSeeder` addresses the first. Whether
 > the second blocks unattended auto-launch is untested here and is not this
 > ticket's scope, but it is the natural next probe if a `.job` on Codex ever
-> stalls at startup.
+> stalls at startup. **Resolved by [CROW-1381](https://github.com/corveil/crow/issues/1381):**
+> seeded folder trust does *not* clear the second gate (`codex app-server`
+> `hooks/list` reports Crow's hooks `untrusted`), so `CodexTrustSeeder` now
+> also seeds each Crow hook's `hooks.state` `trusted_hash`.
 
 Spin-off tickets are opened against `corveil/crow` and reference this audit + [#828](https://github.com/corveil/crow/issues/828).
 

@@ -77,6 +77,7 @@ final class AgentLaunchController {
                 Self.prepareWorktreeForAgentLaunch(
                     agentKind: session.agentKind,
                     sessionKind: session.kind,
+                    sessionID: sessionID,
                     worktreePath: worktreePath,
                     ownership: HookOwnership.snapshot(appState, crowPath: crowPath))
             }
@@ -225,7 +226,9 @@ final class AgentLaunchController {
     ///     gate remains the next-process backstop if the agent skips that step.
     ///  2. **Seed** the agent's folder trust (Claude and — via the per-launch
     ///     `--trust` flag, not this step — Cursor on every kind; Codex/Grok on
-    ///     everything but `.review`), gated via `shouldSeedFolderTrust`.
+    ///     everything but `.review`), gated via `shouldSeedFolderTrust`. For
+    ///     Codex this also trusts each of Crow's own `.codex/hooks.json` entries
+    ///     for `sessionID` (CROW-1381), which is why the gate takes the session.
     ///  3. **Reconcile the main clone's** hook block (#915). A linked worktree
     ///     loads the main clone's `.claude/settings.local.json` in addition to
     ///     its own, so a stale block there breaks hooks and telemetry for every
@@ -249,8 +252,8 @@ final class AgentLaunchController {
     /// launch path silently skip step 3, which is the drift this gate exists to
     /// prevent.
     nonisolated static func prepareWorktreeForAgentLaunch(
-        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String,
-        ownership: HookOwnership) {
+        agentKind: AgentKind, sessionKind: SessionKind, sessionID: UUID,
+        worktreePath: String, ownership: HookOwnership) {
         if SessionService.shouldStripGrokReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
             SessionService.stripGrokConfigFromReviewClone(clonePath: worktreePath)
         }
@@ -264,7 +267,8 @@ final class AgentLaunchController {
             SessionService.stripMuseConfigFromReviewClone(clonePath: worktreePath)
         }
         seedTrustIfNeeded(
-            agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
+            agentKind: agentKind, sessionKind: sessionKind, sessionID: sessionID,
+            worktreePath: worktreePath, crowPath: ownership.crowPath)
         reconcileMainCloneHooks(worktreePath: worktreePath, ownership: ownership)
     }
 
@@ -328,14 +332,29 @@ final class AgentLaunchController {
     /// MainActor. Callers route through `prepareWorktreeForAgentLaunch`, not here
     /// directly, so the strip can't be forgotten alongside the seed.
     /// Gating lives in `shouldSeedFolderTrust`; a real seed failure is audible.
+    ///
+    /// Codex also gets per-hook trust for the hooks.json Crow writes for
+    /// `sessionID` (CROW-1381): folder trust alone leaves Crow's hooks behind
+    /// Codex's "Hooks need review" gate. The hashes come from the registered
+    /// writer, so they match its `asyncHooksSupported` setting; with no
+    /// `crowPath` there is no hooks.json to trust, and only folder trust is
+    /// seeded.
     nonisolated static func seedTrustIfNeeded(
-        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
+        agentKind: AgentKind, sessionKind: SessionKind, sessionID: UUID,
+        worktreePath: String, crowPath: String?) {
         guard Self.shouldSeedFolderTrust(agentKind: agentKind, sessionKind: sessionKind) else { return }
         switch agentKind {
         case .claudeCode:
             ClaudeTrustSeeder.seedTrust(projectPath: worktreePath)
         case .codex:
-            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktreePath) {
+            var hookHashes: [String: String] = [:]
+            if let crowPath,
+               let writer = AgentRegistry.shared.agent(for: .codex)?.hookConfigWriter
+                as? CodexHookConfigWriter {
+                hookHashes = writer.hookTrustHashes(sessionID: sessionID, crowPath: crowPath)
+            }
+            if case let .failed(msg) = CodexTrustSeeder.seedTrust(
+                projectPath: worktreePath, hookHashes: hookHashes) {
                 CrowLog.info("[SessionService] Codex trust seed failed for \(worktreePath): \(msg)")
             }
         case .grok:
@@ -382,7 +401,7 @@ final class AgentLaunchController {
         // agent (never `--dangerously-bypass`; Claude CROW-600, Codex #830, Grok #859).
         let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot())
         Self.prepareWorktreeForAgentLaunch(
-            agentKind: agent.kind, sessionKind: session.kind,
+            agentKind: agent.kind, sessionKind: session.kind, sessionID: sessionID,
             worktreePath: worktree.worktreePath,
             ownership: HookOwnership.snapshot(appState, crowPath: crowPath))
 
@@ -547,11 +566,11 @@ extension SessionService {
 
     /// The one pre-launch worktree gate (see `AgentLaunchController.prepareWorktreeForAgentLaunch`).
     nonisolated static func prepareWorktreeForAgentLaunch(
-        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String,
-        ownership: HookOwnership
+        agentKind: AgentKind, sessionKind: SessionKind, sessionID: UUID,
+        worktreePath: String, ownership: HookOwnership
     ) {
         AgentLaunchController.prepareWorktreeForAgentLaunch(
-            agentKind: agentKind, sessionKind: sessionKind,
+            agentKind: agentKind, sessionKind: sessionKind, sessionID: sessionID,
             worktreePath: worktreePath, ownership: ownership)
     }
 
@@ -565,9 +584,11 @@ extension SessionService {
     }
 
     nonisolated static func seedTrustIfNeeded(
-        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
+        agentKind: AgentKind, sessionKind: SessionKind, sessionID: UUID,
+        worktreePath: String, crowPath: String?) {
         AgentLaunchController.seedTrustIfNeeded(
-            agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
+            agentKind: agentKind, sessionKind: sessionKind, sessionID: sessionID,
+            worktreePath: worktreePath, crowPath: crowPath)
     }
 
     nonisolated static func reconcileMainCloneHooks(worktreePath: String, ownership: HookOwnership) {
