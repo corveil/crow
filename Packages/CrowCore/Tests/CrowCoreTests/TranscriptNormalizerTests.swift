@@ -178,4 +178,17 @@ import CrowCore
         #expect(TranscriptNormalizer.rawReadBudget(forCompressedCap: 0) == 16)
         #expect(TranscriptNormalizer.rawReadBudget(forCompressedCap: Int.max) == Int.max)
     }
+
+    /// A cap no line-bounded prefix compresses under still ships something:
+    /// the head, uncompressed and flagged, instead of nothing.
+    @Test func capTooSmallForAnyCompressedLineFallsBackUncompressed() throws {
+        let raw = incompressibleNDJSON(lines: 3)
+        let cap = 20 // under gzip's own header + trailer, so nothing compressed fits
+        let t = try #require(TranscriptNormalizer.finalize(raw, truncated: false))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap))
+        #expect(!out.gzipped)
+        #expect(out.truncated)
+        #expect(out.data.count <= cap)
+        #expect(raw.prefix(out.data.count) == out.data)
+    }
 }

@@ -643,7 +643,8 @@ import CrowPersistence
 
         func collector(
             transport: RecordingTransport, timeout: Duration = .seconds(10),
-            managerTranscript: String? = nil
+            managerTranscript: String? = nil,
+            extraLogDirs: [AgentKind: URL] = [:]
         ) -> LogSyncCollector {
             let config = AppConfig(workspaces: [workspace])
             let claudeRoot = claudeRoot, codexRoot = codexRoot
@@ -660,10 +661,12 @@ import CrowPersistence
                     case .codex:
                         return [.directory(codexRoot.path, format: .logDir, fileExtension: "jsonl")]
                     default:
-                        return nil
+                        return extraLogDirs[kind].map {
+                            [.directory($0.path, format: .jsonl, fileExtension: "jsonl")]
+                        }
                     }
                 },
-                harnessKinds: { [.claudeCode, .codex] },
+                harnessKinds: { [.claudeCode, .codex] + extraLogDirs.keys.sorted { $0.rawValue < $1.rawValue } },
                 locateConversation: { _, _, _ in managerTranscript.map { ($0, .jsonl) } },
                 loadConfig: { _ in config },
                 log: LogSyncLog(sink: { _ in }),
@@ -834,6 +837,37 @@ import CrowPersistence
         await collector.sweep(appState: state)
         await collector.uploadBeforeDelete(sessionID: session.id, appState: state)
         #expect(transport.requests.count == 2)
+    }
+
+    /// Grok and Muse both go out as harness `unknown`, so the server holds one
+    /// of them per session. The second must be skipped — not recorded as
+    /// uploaded off a 409 — and logged once.
+    @Test @MainActor func wireCollidingHarnessesUploadOnceAndSkipTheRest() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        var dirs: [AgentKind: URL] = [:]
+        for kind in [AgentKind.grok, .muse] {
+            let dir = f.root.appendingPathComponent(kind.rawValue, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try "{\"h\":\"\(kind.rawValue)\"}\n".write(
+                to: dir.appendingPathComponent("s.jsonl"), atomically: true, encoding: .utf8)
+            dirs[kind] = dir
+        }
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport, extraLogDirs: dirs)
+        let session = Session(name: "thing", status: .completed, kind: .work, agentKind: .grok)
+        let state = f.appState(with: session)
+
+        await collector.sweep(appState: state)
+        await collector.sweep(appState: state)
+
+        #expect(transport.harnesses == ["unknown"])
+        let ledger = await f.ledger()
+        let key = { (h: LogSyncHarness) in
+            LogSyncLedger.key(sessionUID: session.id.uuidString, harness: h, kind: .sessionTranscript)
+        }
+        #expect(ledger.entries[key(.grok)]?.status == .uploaded) // the label goes first
+        #expect(ledger.entries[key(.muse)] == nil)               // never marked uploaded
     }
 
     /// The primary Manager never ships — not on a tick, not on a delete, even

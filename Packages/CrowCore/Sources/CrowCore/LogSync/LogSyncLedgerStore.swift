@@ -48,6 +48,22 @@ public actor LogSyncLedgerStore {
         persist()
     }
 
+    /// Record `entry` unless the slot already holds a settled outcome
+    /// (`uploaded` / `skippedPermanent`), which it would wrongly reopen. For
+    /// writers that can lose a race with the real upload — the delete
+    /// timeout's `failedTransient` (CROW-1394). Returns whether it wrote.
+    @discardableResult
+    public func recordUnlessSettled(key: String, entry: LogSyncLedger.Entry) -> Bool {
+        ensureLoaded()
+        switch ledger.entries[key]?.status {
+        case .uploaded?, .skippedPermanent?: return false
+        case .failedTransient?, nil:
+            ledger.record(key: key, entry: entry)
+            persist()
+            return true
+        }
+    }
+
     /// Prune aged entries and persist.
     public func prune(retentionDays: Int, now: Double) {
         ensureLoaded()

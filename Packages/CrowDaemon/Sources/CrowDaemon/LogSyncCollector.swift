@@ -181,8 +181,10 @@ struct LogSyncCollector: Sendable {
         // its own ledger write replaces this one.
         work.cancel()
         let stranded = await inFlight.drain()
+        // Never over a settled outcome: an upload that finished between the
+        // drain and this write already recorded `uploaded`, and that stands.
         for key in stranded {
-            await pass.ledgerStore.record(key: key, entry: LogSyncLedger.Entry(
+            await pass.ledgerStore.recordUnlessSettled(key: key, entry: LogSyncLedger.Entry(
                 status: .failedTransient, sha256: "", sizeBytes: 0, at: pass.nowEpoch,
                 reason: "delete_timeout"))
         }
@@ -274,19 +276,34 @@ struct LogSyncCollector: Sendable {
         // The session's own label first, then every other known kind. A kind
         // that resolves no agent doesn't claim its harness slot, so an
         // unregistered label (`claude`) can't hide the registered one that
-        // shares nothing with it but the logs. Kinds that do share a slot
-        // (every unrecognized kind is `.unknown`) are asked once.
+        // shares nothing with it but the logs.
+        //
+        // Slots are claimed by **wire** value, not local harness: the server
+        // keys an artifact on `(session, wireValue, kind)`, and Grok, Muse and
+        // Antigravity all send `unknown`. A second of those would 409, which
+        // reads as success, and its transcript would be marked uploaded without
+        // ever being stored. So the first wire-colliding harness with logs owns
+        // the slot, and the rest are skipped — not recorded — until the server
+        // enumerates them. A harness claims its slot only once it has files, so
+        // one with nothing on disk never blocks another.
         var kinds = [session.agentKind]
         for kind in harnessKinds() where !kinds.contains(kind) { kinds.append(kind) }
-        var seen = Set<LogSyncHarness>()
+        var claimed: [String: LogSyncHarness] = [:]
         var foundAny = false
         for kind in kinds {
             let harness = LogSyncHarness(agentKind: kind)
-            guard !seen.contains(harness), let sources = logSources(kind, worktree.worktreePath) else { continue }
-            seen.insert(harness)
+            guard let sources = logSources(kind, worktree.worktreePath) else { continue }
+            if let owner = claimed[harness.wireValue] {
+                if owner != harness, !sources.flatMap({ Self.resolveFiles($0) }).isEmpty {
+                    skip(session, harness: harness, "wire-collision",
+                         "\(kind.rawValue) transcript shares the server's \"\(harness.wireValue)\" harness slot with \(owner.rawValue), which already holds it")
+                }
+                continue
+            }
             if await collectHarness(
                 kind, harness: harness, sources: sources, entry: entry, worktree: worktree,
                 upload: upload, pass) {
+                claimed[harness.wireValue] = harness
                 foundAny = true
             }
         }

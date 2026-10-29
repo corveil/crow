@@ -79,8 +79,9 @@ public enum TranscriptNormalizer {
     /// When the whole transcript compresses under the cap it ships whole, and
     /// `truncated` stays whatever the read reported. Only when it is still over
     /// is the NDJSON cut, keeping the oldest lines as before, and `truncated`
-    /// set. Event counts describe the lines actually kept. If zlib fails, the
-    /// plain NDJSON is cut to the cap and sent uncompressed rather than dropped.
+    /// set. Event counts describe the lines actually kept. If zlib fails, or no
+    /// whole-line prefix compresses under the cap, the plain NDJSON is cut to
+    /// the cap and sent uncompressed rather than dropped.
     public static func gzipForUpload(_ transcript: NormalizedTranscript, maxBytes: Int) -> NormalizedTranscript? {
         guard maxBytes > 0 else { return nil }
         let raw = transcript.data
@@ -99,9 +100,9 @@ public enum TranscriptNormalizer {
         for _ in 0..<12 {
             let scaled = Double(keep) * Double(maxBytes) / Double(compressedSize) * 0.95
             keep = min(keep - 1, Int(scaled))
-            guard keep > 0 else { return nil }
+            guard keep > 0 else { break }
             let kept = trimToLastNewline(raw.prefix(keep))
-            guard !kept.isEmpty, let gz = Gzip.compress(kept) else { return nil }
+            guard !kept.isEmpty, let gz = Gzip.compress(kept) else { break }
             if gz.count <= maxBytes {
                 let (events, toolCalls) = countEvents(kept)
                 return NormalizedTranscript(
@@ -110,7 +111,10 @@ public enum TranscriptNormalizer {
             keep = kept.count
             compressedSize = gz.count
         }
-        return nil
+        // No line-bounded prefix compresses under the cap (a tiny cap, or a
+        // first line too big for it): send the head uncompressed rather than
+        // drop the transcript.
+        return uncompressedFallback(raw, transcript, maxBytes)
     }
 
     private static func uncompressedFallback(
