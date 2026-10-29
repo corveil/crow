@@ -469,11 +469,36 @@
         + sm.linkable + ' fully linkable · ' + (sm.repo_only + sm.orphan) + ' repo-only/orphan';
     }
 
+    // backfill-scan returns counts unless asked for rows, and pages the rows so
+    // a large history fits one reply (CROW-1378). Walk every page of one
+    // snapshot (scan_id) until next_offset is null. A daemon from before paging
+    // ignores the params and sends every row with no next_offset, so this still
+    // reads it in one call.
+    async function fetchAllSessions() {
+      const rows = [];
+      let res = await rpc('backfill-scan', { view: 'sessions', limit: 1000 });
+      const first = res;
+      rows.push(...(res.sessions || []));
+      while (res.next_offset != null) {
+        const offset = res.next_offset;
+        summary.textContent = 'Loading sessions… ' + rows.length + ' of ' + (first.total_matching || '?');
+        res = await rpc('backfill-scan', {
+          view: 'sessions', limit: 1000, scan_id: first.scan_id, offset,
+        });
+        rows.push(...(res.sessions || []));
+        // A page that doesn't move forward would loop forever.
+        if (res.next_offset != null && res.next_offset <= offset) {
+          throw new Error('backfill-scan paging did not advance at offset ' + offset);
+        }
+      }
+      return { sessions: rows, summary: first.summary };
+    }
+
     async function scan() {
       summary.textContent = 'Scanning ~/.claude/projects, ~/.codex/sessions and ~/.cursor/chats…';
       try {
-        const res = await rpc('backfill-scan', {});
-        sessions = res.sessions || [];
+        const res = await fetchAllSessions();
+        sessions = res.sessions;
         // Default-select this workspace's high-confidence, not-yet-uploaded rows —
         // the safe "import my history" starting point; everything else is opt-in.
         sessions.forEach((s) => {
