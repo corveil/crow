@@ -76,7 +76,7 @@ public struct LogsyncSet: ParsableCommand {
 
     @Option(
         name: .customLong("max-upload-bytes"),
-        help: "Per-transcript upload cap in bytes (default 8000000)")
+        help: "Per-transcript upload cap in bytes, after gzip (default 8388608)")
     var maxUploadBytes: Int?
 
     public init() {}

@@ -27,6 +27,7 @@ final class SessionDeletionController {
     private var store: JSONStore { owner.store }
     private var providerManager: ProviderManager? { owner.providerManager }
     private var telemetryDeleteProvider: (@Sendable (UUID) async -> Void)? { owner.telemetryDeleteProvider }
+    private var logUploadBeforeDeleteProvider: (@Sendable (UUID) async -> Void)? { owner.logUploadBeforeDeleteProvider }
 
     init(owner: SessionService) { self.owner = owner }
 
@@ -89,6 +90,14 @@ final class SessionDeletionController {
 
         appState.isDeletingSession[id] = true
         appState.sessionDeletionError.removeValue(forKey: id)
+
+        // Ship any transcript the session hasn't uploaded yet while its
+        // worktree, Manager identity dir and harness logs still exist
+        // (CROW-1394). Best-effort and time-bounded by the provider; the
+        // delete goes ahead whatever happens.
+        if let logUploadBeforeDeleteProvider {
+            await logUploadBeforeDeleteProvider(id)
+        }
 
         // Slow git + filesystem work runs on a background thread so the main actor
         // stays free to render the spinner and respond to other input.

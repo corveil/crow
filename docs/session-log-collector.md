@@ -91,11 +91,35 @@ just not harness-typed. Every other kind maps to `unknown`.
 CrowDaemon.startLogSyncPoll (5-min tick, config read fresh each tick)
   └─ LogSyncCollector.sweep(appState):
        for each live session on an OPTED-IN workspace (SessionService.workspaceName):
-         agent.logSources(worktree) → resolve files → normalize to NDJSON
+         for EVERY known harness: agent.logSources(worktree) → resolve files
          (skip until quiescent: terminal status, or newest file older than quietPeriod)
+         → normalize to NDJSON → gzip (cap on the compressed body)
          → TranscriptUploader → POST /api/crow-sessions/{sessionUID}/artifacts
          → record in the local ledger (idempotent)
+
+SessionService.deleteSession (CLI, web UI, cleanup reaper)
+  └─ LogSyncCollector.uploadBeforeDelete(id) — before any teardown:
+       the same path for that one session, no quiet period, bounded at 10 s
 ```
+
+- **Every harness, one artifact each** (CROW-1394). A work session's worktree
+  is checked against every known agent's `logSources`, not only the session's
+  `agentKind`: a session handed from Codex to Claude keeps its Codex label, and a
+  `claude` label matches no registered agent. Each harness that left files
+  uploads its own artifact under its own ledger key, and `agent_kind` names that
+  harness. Codex, Cursor and Muse filter their shared stores by the worktree cwd,
+  so attribution stays exact. Manager conversations are still shipped per
+  conversation id (CROW-1382).
+- **Upload on delete** (CROW-1394). A sweep sees only sessions that still exist,
+  so a Manager deleted inside its quiet period, or a work session deleted between
+  ticks, used to upload nothing. `deleteSession` now runs the collector for that
+  session first, while its worktree, Manager identity dir and harness logs are on
+  disk. Anything the ledger already has as `uploaded`/`skippedPermanent` is
+  skipped, and the opt-in and gateway rules are unchanged. After 10 seconds the
+  delete goes ahead regardless; an upload that failed or was still in flight is
+  recorded `failedTransient` (reason `delete_timeout` for the latter) and the
+  transcript stays on disk for `crow backfill upload`. The primary Manager is
+  never uploaded.
 
 - **Attribution** is by worktree-path match (`AppState.sessionIDs(forWorktreePath:)`),
   the same resolution the hook-event handler uses. Metadata attached as untrusted
@@ -110,9 +134,13 @@ CrowDaemon.startLogSyncPoll (5-min tick, config read fresh each tick)
   (`Authorization: Bearer …`, resolved from an `op://…` reference via the same
   `GatewayResolver.opRead` the gateway uses). The server performs the
   object-storage upload — **no AWS credentials live on the laptop**.
-- **Format**: uncompressed NDJSON. The server sniffs content-encoding from magic
-  bytes, so plain NDJSON is stored with an empty `content_encoding`; gzip is a
-  future size optimization (it would let larger transcripts fit under the cap).
+- **Format**: gzip-compressed NDJSON, sent with `Content-Encoding: gzip`
+  (CROW-1394; zlib via the `CZlib` system-library target, since Foundation has no
+  gzip on Linux). Corveil's `CORVEIL_WORKER_ARTIFACT_MAX_BYTES` (8 MiB) applies to
+  the body as sent, so `maxUploadBytes` (default 8,388,608) is measured on the
+  compressed size. Transcripts compress about 5×; one is cut only if it is still
+  over the cap once compressed — oldest lines kept, `truncated=true`. The ledger's
+  `sha256`/`sizeBytes` describe the compressed body.
 
 ## Guarantees (acceptance)
 

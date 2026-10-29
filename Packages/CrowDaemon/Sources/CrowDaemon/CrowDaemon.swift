@@ -262,6 +262,11 @@ public enum CrowDaemon {
         let telemetryPort: UInt16? = nil
         #endif
 
+        // The session-log collector (CROW-1056): the 5-minute poll below and
+        // SessionService's delete path share it, so a delete gets one last
+        // upload pass under the same rules as a tick (CROW-1394).
+        let logSyncCollector = LogSyncCollector(devRoot: options.devRoot)
+
         // Host the real SessionService so the daemon can spawn Manager (and
         // later review/job) workspaces headlessly with the app down (ADR 0007;
         // CROW-581, M-E2). It drives tmux through the process-global
@@ -309,6 +314,10 @@ public enum CrowDaemon {
             let managerUsageProvider: (@Sendable (UUID, Date, Date) async -> SessionAnalytics)? = nil
             let telemetryDeleteProvider: (@Sendable (UUID) async -> Void)? = nil
             #endif
+            // Deleting a session first uploads what it hasn't shipped (CROW-1394).
+            let logUploadBeforeDeleteProvider: @Sendable (UUID) async -> Void = { id in
+                await logSyncCollector.uploadBeforeDelete(sessionID: id, appState: appState)
+            }
             let service = SessionService(
                 store: store, appState: appState,
                 telemetryPort: telemetryPort,
@@ -317,6 +326,7 @@ public enum CrowDaemon {
                 telemetrySessionIDsProvider: telemetrySessionIDsProvider,
                 managerUsageProvider: managerUsageProvider,
                 telemetryDeleteProvider: telemetryDeleteProvider,
+                logUploadBeforeDeleteProvider: logUploadBeforeDeleteProvider,
                 hostBridge: NoopHostBridge())
             service.wireTerminalReadiness()
             let coordinator = AutoRespondCoordinator(
@@ -400,7 +410,7 @@ public enum CrowDaemon {
         // First carry any legacy global `logSync` opt-in over to the per-workspace
         // checkbox (CROW-1070), once, under the config lock before the poll starts.
         ConfigStore.migrateLogSyncAtBoot(devRoot: options.devRoot)
-        startLogSyncPoll(appState: appState, devRoot: options.devRoot)
+        startLogSyncPoll(appState: appState, collector: logSyncCollector)
 
         // Wire the IssueTracker's config-flag providers and its notification-only
         // outcome hooks. Terminal-INDEPENDENT, so this runs whenever `crowd` runs —

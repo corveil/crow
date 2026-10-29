@@ -24,6 +24,32 @@ import Testing
         #expect(onDisk.entries[key]?.status == .uploaded)
     }
 
+    /// The delete timeout's `failedTransient` may lose a race with the real
+    /// upload; it must never reopen a settled slot (CROW-1394).
+    @Test func recordUnlessSettledKeepsSettledOutcomes() async throws {
+        let store = LogSyncLedgerStore(devRoot: try tempDevRoot())
+        let failed = LogSyncLedger.Entry(
+            status: .failedTransient, sha256: "", sizeBytes: 0, at: 9, reason: "delete_timeout")
+        func key(_ uid: String) -> String {
+            LogSyncLedger.key(sessionUID: uid, harness: .claude, kind: .sessionTranscript)
+        }
+
+        await store.record(key: key("up"), entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+        await store.record(key: key("perm"), entry: .init(status: .skippedPermanent, sha256: "s", sizeBytes: 1, at: 1))
+        await store.record(key: key("retry"), entry: .init(status: .failedTransient, sha256: "s", sizeBytes: 1, at: 1))
+
+        #expect(await store.recordUnlessSettled(key: key("up"), entry: failed) == false)
+        #expect(await store.recordUnlessSettled(key: key("perm"), entry: failed) == false)
+        #expect(await store.recordUnlessSettled(key: key("retry"), entry: failed))
+        #expect(await store.recordUnlessSettled(key: key("new"), entry: failed))
+
+        let snap = await store.snapshot()
+        #expect(snap.entries[key("up")]?.status == .uploaded)
+        #expect(snap.entries[key("perm")]?.status == .skippedPermanent)
+        #expect(snap.entries[key("retry")]?.reason == "delete_timeout")
+        #expect(snap.entries[key("new")]?.reason == "delete_timeout")
+    }
+
     @Test func concurrentRecordsLoseNoUpdates() async throws {
         let devRoot = try tempDevRoot()
         let store = LogSyncLedgerStore(devRoot: devRoot)

@@ -98,4 +98,32 @@ struct SessionServiceTelemetryDeleteTests {
         #expect(appState.sessions.count == 1)
         #expect(recorder.ids.isEmpty)
     }
+
+    /// The log upload runs BEFORE teardown (CROW-1394): when it is called the
+    /// session, its worktree and its terminals must all still be there, or the
+    /// collector can't find the transcript it is meant to ship.
+    @Test @MainActor
+    func logUploadRunsBeforeTeardown() async {
+        let session = Session(name: "__TEST__LogUploadBeforeDelete", kind: .work)
+        let appState = AppState()
+        appState.sessions = [session]
+        appState.terminals[session.id] = [SessionTerminal(sessionID: session.id, cwd: "/tmp", isManaged: true)]
+        let seen = DeleteRecorder()
+
+        let service = SessionService(
+            store: Self.tempStore(), appState: appState,
+            logUploadBeforeDeleteProvider: { id in
+                await MainActor.run {
+                    // Still present when the provider runs.
+                    if appState.sessions.contains(where: { $0.id == id }),
+                       appState.terminals[id]?.isEmpty == false {
+                        seen.ids.append(id)
+                    }
+                }
+            })
+        await service.deleteSession(id: session.id)
+
+        #expect(seen.ids == [session.id])
+        #expect(appState.sessions.isEmpty) // and the delete still completed
+    }
 }

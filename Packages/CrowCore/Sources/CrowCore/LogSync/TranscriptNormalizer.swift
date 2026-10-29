@@ -3,9 +3,10 @@ import Foundation
 /// A harness log normalized to the NDJSON bytes the upload endpoint stores, plus
 /// the cheap hint counts the server-side derivation can use (corveil#2426).
 public struct NormalizedTranscript: Sendable, Equatable {
-    /// The artifact body — NDJSON, uploaded verbatim (uncompressed; the server
-    /// sniffs the content encoding from magic bytes, so plain NDJSON is stored
-    /// with an empty `content_encoding`).
+    /// The artifact body, uploaded verbatim: plain NDJSON as the normalizer
+    /// produces it, or gzip-compressed NDJSON once `gzipForUpload` has run
+    /// (`gzipped`). The server sniffs the encoding from the magic bytes either
+    /// way. `sha256`/`sizeBytes` in the ledger describe these exact bytes.
     public let data: Data
     /// Number of NDJSON events (non-empty lines). A hint; the server treats it as
     /// optional.
@@ -14,12 +15,15 @@ public struct NormalizedTranscript: Sendable, Equatable {
     public let toolCallCount: Int
     /// Whether the transcript was cut to fit `maxBytes`.
     public let truncated: Bool
+    /// Whether `data` is gzip-compressed (sent with `Content-Encoding: gzip`).
+    public let gzipped: Bool
 
-    public init(data: Data, eventCount: Int, toolCallCount: Int, truncated: Bool) {
+    public init(data: Data, eventCount: Int, toolCallCount: Int, truncated: Bool, gzipped: Bool = false) {
         self.data = data
         self.eventCount = eventCount
         self.toolCallCount = toolCallCount
         self.truncated = truncated
+        self.gzipped = gzipped
     }
 }
 
@@ -55,6 +59,72 @@ public enum TranscriptNormalizer {
             // harness (CROW-1095).
             return concatenateCursorStores(files: files, maxBytes: maxBytes)
         }
+    }
+
+    /// How many raw NDJSON bytes to read for an upload whose **compressed** body
+    /// is capped at `compressedCap` (CROW-1394). Transcripts gzip about 5×, so
+    /// 16× leaves room for unusually repetitive logs; a transcript that hits
+    /// this budget would not have fit the compressed cap at any realistic
+    /// ratio, so stopping the read here loses nothing `gzipForUpload` would
+    /// have kept.
+    public static func rawReadBudget(forCompressedCap compressedCap: Int) -> Int {
+        let (budget, overflow) = max(1, compressedCap).multipliedReportingOverflow(by: 16)
+        return overflow ? Int.max : budget
+    }
+
+    /// gzip an NDJSON transcript for upload, keeping the **compressed** body at
+    /// or under `maxBytes` (CROW-1394). Corveil's artifact limit applies to the
+    /// body as sent, so the cap is measured after compression.
+    ///
+    /// When the whole transcript compresses under the cap it ships whole, and
+    /// `truncated` stays whatever the read reported. Only when it is still over
+    /// is the NDJSON cut, keeping the oldest lines as before, and `truncated`
+    /// set. Event counts describe the lines actually kept. If zlib fails, or no
+    /// whole-line prefix compresses under the cap, the plain NDJSON is cut to
+    /// the cap and sent uncompressed rather than dropped.
+    public static func gzipForUpload(_ transcript: NormalizedTranscript, maxBytes: Int) -> NormalizedTranscript? {
+        guard maxBytes > 0 else { return nil }
+        let raw = transcript.data
+        guard let whole = Gzip.compress(raw) else { return uncompressedFallback(raw, transcript, maxBytes) }
+        if whole.count <= maxBytes {
+            return NormalizedTranscript(
+                data: whole, eventCount: transcript.eventCount, toolCallCount: transcript.toolCallCount,
+                truncated: transcript.truncated, gzipped: true)
+        }
+
+        // Still over the cap: shrink the kept prefix by the observed ratio
+        // (with a little headroom) and recompress until it fits. Converges in
+        // a few rounds because compression ratio is near-linear in length.
+        var keep = raw.count
+        var compressedSize = whole.count
+        for _ in 0..<12 {
+            let scaled = Double(keep) * Double(maxBytes) / Double(compressedSize) * 0.95
+            keep = min(keep - 1, Int(scaled))
+            guard keep > 0 else { break }
+            let kept = trimToLastNewline(raw.prefix(keep))
+            guard !kept.isEmpty, let gz = Gzip.compress(kept) else { break }
+            if gz.count <= maxBytes {
+                let (events, toolCalls) = countEvents(kept)
+                return NormalizedTranscript(
+                    data: gz, eventCount: events, toolCallCount: toolCalls, truncated: true, gzipped: true)
+            }
+            keep = kept.count
+            compressedSize = gz.count
+        }
+        // No line-bounded prefix compresses under the cap (a tiny cap, or a
+        // first line too big for it): send the head uncompressed rather than
+        // drop the transcript.
+        return uncompressedFallback(raw, transcript, maxBytes)
+    }
+
+    private static func uncompressedFallback(
+        _ raw: Data, _ transcript: NormalizedTranscript, _ maxBytes: Int
+    ) -> NormalizedTranscript? {
+        guard raw.count > maxBytes else { return transcript }
+        let kept = trimToLastNewline(raw.prefix(maxBytes))
+        guard !kept.isEmpty, kept.count <= maxBytes else { return nil }
+        let (events, toolCalls) = countEvents(kept)
+        return NormalizedTranscript(data: kept, eventCount: events, toolCallCount: toolCalls, truncated: true)
     }
 
     /// Wrap already-assembled NDJSON `data` in a `NormalizedTranscript`, computing

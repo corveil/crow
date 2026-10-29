@@ -115,7 +115,7 @@
       [30, '30 days (default)'], [90, '90 days'], [180, '6 months'], [365, '1 year'], [0, 'Forever'],
     ], { number: true, help: 'How long the local upload ledger keeps a record of each session before pruning.' }));
     body.appendChild(S.textField('Max upload size (bytes)', S.cfg.logSync, 'maxUploadBytes',
-      { number: true, type: 'number', help: 'Per-transcript upload cap (default 8000000). Larger transcripts are truncated and flagged.' }));
+      { number: true, type: 'number', help: 'Per-transcript upload cap, measured after gzip compression (default 8388608, Corveil’s limit). Transcripts still larger once compressed are truncated and flagged.' }));
   }
 
   // Local to this browser (localStorage). Not part of the daemon config, so it

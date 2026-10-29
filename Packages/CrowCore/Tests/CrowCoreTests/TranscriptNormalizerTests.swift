@@ -97,4 +97,98 @@ import CrowCore
         #expect(AgentLogFormat.logDir.artifactStamp == .logDir)
         #expect(AgentLogFormat.sqlite.artifactStamp == .sqlite)
     }
+
+    // MARK: gzip + compressed cap (CROW-1394)
+
+    /// NDJSON lines that compress well, like real transcripts do.
+    private func ndjson(lines: Int) -> Data {
+        var s = ""
+        for i in 0..<lines {
+            s += "{\"type\":\"assistant\",\"i\":\(i),\"text\":\"the quick brown fox jumps over the lazy dog\"}\n"
+        }
+        return Data(s.utf8)
+    }
+
+    /// NDJSON whose bytes barely compress, so the compressed size stays over a
+    /// small cap and forces a cut.
+    private func incompressibleNDJSON(lines: Int) -> Data {
+        var rng = SystemRandomNumberGenerator()
+        var s = ""
+        for _ in 0..<lines {
+            let noise = (0..<48).map { _ in String(UInt8.random(in: 0...255, using: &rng), radix: 16) }.joined()
+            s += "{\"n\":\"\(noise)\"}\n"
+        }
+        return Data(s.utf8)
+    }
+
+    @Test func gzipRoundTrips() throws {
+        let raw = ndjson(lines: 500)
+        let gz = try #require(Gzip.compress(raw))
+        #expect(gz.prefix(2) == Data([0x1F, 0x8B])) // gzip magic, which Corveil sniffs
+        #expect(gz.count < raw.count / 3)
+        #expect(Gzip.decompress(gz) == raw)
+        // Empty input is still a valid gzip member.
+        #expect(Gzip.decompress(try #require(Gzip.compress(Data()))) == Data())
+        // A truncated stream does not inflate.
+        #expect(Gzip.decompress(gz.prefix(gz.count / 2)) == nil)
+    }
+
+    /// The cap is on the compressed body: a transcript several times the cap
+    /// raw ships whole, untruncated, once it compresses under it.
+    @Test func capAppliesToCompressedSize() throws {
+        let raw = ndjson(lines: 2_000)
+        let cap = raw.count / 4
+        let t = try #require(TranscriptNormalizer.finalize(raw, truncated: false))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap))
+        #expect(out.gzipped)
+        #expect(out.truncated == false)
+        #expect(out.data.count <= cap)
+        #expect(out.eventCount == 2_000)
+        #expect(Gzip.decompress(out.data) == raw)
+    }
+
+    /// Still over the cap once compressed ⇒ cut on a line boundary, oldest
+    /// lines kept, flagged truncated, counts describing what was kept.
+    @Test func truncatesOnlyWhenCompressedSizeIsStillOver() throws {
+        let raw = incompressibleNDJSON(lines: 2_000)
+        let cap = 20_000
+        let t = try #require(TranscriptNormalizer.finalize(raw, truncated: false))
+        #expect(try #require(Gzip.compress(raw)).count > cap)
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap))
+        #expect(out.gzipped)
+        #expect(out.truncated)
+        #expect(out.data.count <= cap)
+        let kept = try #require(Gzip.decompress(out.data))
+        #expect(kept.count < raw.count)
+        #expect(raw.prefix(kept.count) == kept) // oldest bytes kept
+        #expect(kept.last == 0x0A)              // whole lines only
+        #expect(out.eventCount == kept.filter { $0 == 0x0A }.count)
+    }
+
+    /// A read that already stopped at the raw budget stays flagged truncated
+    /// even when what was read compresses under the cap.
+    @Test func readTruncationSurvivesCompression() throws {
+        let t = try #require(TranscriptNormalizer.finalize(ndjson(lines: 10), truncated: true))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: 1 << 20))
+        #expect(out.truncated)
+    }
+
+    @Test func rawReadBudgetScalesTheCompressedCap() {
+        #expect(TranscriptNormalizer.rawReadBudget(forCompressedCap: 8_388_608) == 16 * 8_388_608)
+        #expect(TranscriptNormalizer.rawReadBudget(forCompressedCap: 0) == 16)
+        #expect(TranscriptNormalizer.rawReadBudget(forCompressedCap: Int.max) == Int.max)
+    }
+
+    /// A cap no line-bounded prefix compresses under still ships something:
+    /// the head, uncompressed and flagged, instead of nothing.
+    @Test func capTooSmallForAnyCompressedLineFallsBackUncompressed() throws {
+        let raw = incompressibleNDJSON(lines: 3)
+        let cap = 20 // under gzip's own header + trailer, so nothing compressed fits
+        let t = try #require(TranscriptNormalizer.finalize(raw, truncated: false))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap))
+        #expect(!out.gzipped)
+        #expect(out.truncated)
+        #expect(out.data.count <= cap)
+        #expect(raw.prefix(out.data.count) == out.data)
+    }
 }

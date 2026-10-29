@@ -76,6 +76,28 @@ final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable 
         #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer sk-citadel-abc")
         #expect(req.value(forHTTPHeaderField: "Content-Type") == "application/x-ndjson")
         #expect(req.httpBody == transcript.data)
+        // Plain NDJSON carries no encoding header.
+        #expect(req.value(forHTTPHeaderField: "Content-Encoding") == nil)
+    }
+
+    /// A gzipped transcript goes out as-is with `Content-Encoding: gzip`, and the
+    /// body inflates back to the NDJSON it was built from (CROW-1394).
+    @Test func gzippedTranscriptIsSentWithContentEncoding() throws {
+        let ndjson = Data("{\"a\":1}\n{\"b\":2}\n".utf8)
+        let raw = try #require(TranscriptNormalizer.finalize(ndjson, truncated: false))
+        let gz = try #require(TranscriptNormalizer.gzipForUpload(raw, maxBytes: 1 << 20))
+        let req = try #require(TranscriptUploader.makeRequest(
+            baseURL: "https://api.x", apiKey: "k", sessionUID: "S", harness: .claude,
+            kind: .sessionTranscript, format: .jsonl, transcript: gz,
+            metadata: meta(), agentSessionID: nil))
+        #expect(req.value(forHTTPHeaderField: "Content-Encoding") == "gzip")
+        #expect(req.value(forHTTPHeaderField: "Content-Type") == "application/x-ndjson")
+        #expect(req.httpBody == gz.data)
+        #expect(Gzip.decompress(try #require(req.httpBody)) == ndjson)
+        let comps = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        let items = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value) })
+        #expect(items["truncated"] == "false")
+        #expect(items["event_count"] == "2")
     }
 
     @Test func makeRequestOmitsEmptySidecarHints() throws {

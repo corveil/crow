@@ -128,6 +128,11 @@ public struct TranscriptUploader: Sendable {
         request.httpMethod = "POST"
         request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Content-Type")
+        // The body stays gzip on the wire and at rest: Corveil stores it as
+        // sent and records the encoding (CROW-1394).
+        if transcript.gzipped {
+            request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+        }
         request.httpBody = transcript.data
         return request
     }
