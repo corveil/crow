@@ -227,6 +227,18 @@ are touch/coarse not "has visualViewport", sampler fields (`arrived_at_top`,
 zero `tui-sample`/`resize` frames, `not_active` clearing `sessionStorage`, and
 playback never `text()`-slurping the streamed GET.
 
+## `backfill-dialog.test.js` — Settings backfill-history paging (CROW-1378)
+
+Opens Settings → Workspaces → **Backfill history…** against a mocked
+`backfill-scan` that pages its rows the way `crowd` does. Pins three things:
+- The dialog asks for `view: "sessions"`.
+- It walks every page of one snapshot (`scan_id` + `next_offset`), so the table
+  lists every session and the default selection covers every page.
+- A page that doesn't advance surfaces an error instead of looping.
+
+Also covers an older daemon that sends every row in one reply, with no
+`next_offset`: the dialog still loads it in one call.
+
 ## Run
 
 Tests must not evaluate a single concern file in isolation: `load-client.js`

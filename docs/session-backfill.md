@@ -95,6 +95,8 @@ unbounded.
   confidence) with filters, multi-select, select-all-by-filter, and a counted
   "Backfill (N)" action that reports per-session outcomes. Gated on the workspace
   having a gateway (the upload reuses it), like the opt-in checkbox beside it.
+  It loads the rows by walking every `backfill-scan` page of one snapshot
+  (`view: "sessions"`, `scan_id`, `next_offset`), so it lists the whole history.
 - **CLI** — `crow backfill scan` (counts by default; `--sessions` pages the
   rows from one cached snapshot, so a large history never overflows the 1 MB
   socket reply — CROW-1378) and
