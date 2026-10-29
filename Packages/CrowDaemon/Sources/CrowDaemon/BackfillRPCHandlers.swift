@@ -61,8 +61,15 @@ func makeBackfillHandlers(
                 // workspace (the "import all high-confidence" convenience).
                 let explicit = (params["sessions"]?.arrayValue ?? []).compactMap(\.stringValue)
                 var toUpload: [BackfillSession] = []
+                var results: [BackfillUploadOutcome] = []
                 if !explicit.isEmpty {
-                    let scanned = await cache.snapshot(refresh: false).sessions
+                    // The cached scan can predate a transcript the caller just
+                    // read off a newer listing: re-scan once if any UID is missing.
+                    var scanned = await cache.snapshot(refresh: false).sessions
+                    let wanted = Set(explicit)
+                    if !wanted.isSubset(of: Set(scanned.map(\.claudeSessionUID))) {
+                        scanned = await cache.snapshot(refresh: true).sessions
+                    }
                     // Select every scanned row whose UID was requested — a set
                     // membership test, not a uid→session map. A UID shared across
                     // harnesses (a Claude and a Codex session) therefore uploads
@@ -70,8 +77,14 @@ func makeBackfillHandlers(
                     // own harness-scoped ledger slot (CROW-1089). Cross-harness UID
                     // collisions are vanishingly rare, but keeping both reachable
                     // costs nothing and matches `--all`/`--all-high-confidence`.
-                    let wanted = Set(explicit)
                     toUpload = scanned.filter { wanted.contains($0.claudeSessionUID) }
+                    // Still missing after a fresh scan: report it, never drop it.
+                    let found = Set(toUpload.map(\.claudeSessionUID))
+                    var reported = Set<String>()
+                    for uid in explicit where !found.contains(uid) && reported.insert(uid).inserted {
+                        results.append(BackfillUploadOutcome(
+                            claudeSessionUID: uid, result: .skipped, reason: "not_found"))
+                    }
                 } else if let selectMode = params["select"]?.stringValue {
                     let scanned = await cache.snapshot(refresh: false).sessions
                     let scope = scanned.filter { $0.workspace?.lowercased() == workspaceName.lowercased() }
@@ -91,7 +104,6 @@ func makeBackfillHandlers(
                 // results as `skipped` with a reason, so nothing vanishes silently.
                 let allowOrphans = try SettingsRPC.patchBool(params, "allow_orphans") ?? false
                 let allowManager = try SettingsRPC.patchBool(params, "allow_manager_transcripts") ?? false
-                var results: [BackfillUploadOutcome] = []
                 toUpload = toUpload.filter { session in
                     guard let reason = BackfillUploadGuard.refusalReason(
                         for: session, allowOrphans: allowOrphans,
@@ -229,6 +241,9 @@ actor BackfillScanCache {
     private let now: @Sendable () -> Date
     private var current: Snapshot?
     private var inFlight: Task<Snapshot, Never>?
+    /// Bumped by `invalidate()`. A scan that started under an older generation
+    /// read the ledger before the invalidating upload, so it is never published.
+    private var generation = 0
 
     init(
         ttl: TimeInterval = BackfillScanCache.defaultTTL,
@@ -247,14 +262,19 @@ actor BackfillScanCache {
             return current
         }
         if let inFlight { return await inFlight.value }
+        let startedAt = generation
         let task = Task { [scan, now] in
             let sessions = BackfillScanQuery.ordered(await scan())
             return Snapshot(id: UUID().uuidString, scannedAt: now(), sessions: sessions)
         }
         inFlight = task
         let snapshot = await task.value
-        inFlight = nil
-        current = snapshot
+        // `invalidate()` already cleared `inFlight` if it ran mid-scan; only the
+        // task that is still current may clear it.
+        if startedAt == generation {
+            inFlight = nil
+            current = snapshot
+        }
         return snapshot
     }
 
@@ -269,6 +289,8 @@ actor BackfillScanCache {
     /// Drop the snapshot (its upload statuses went stale).
     func invalidate() {
         current = nil
+        inFlight = nil
+        generation += 1
     }
 }
 

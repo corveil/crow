@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowIPC
+import CrowPersistence
 @testable import CrowDaemon
 
 // MARK: - `backfill-scan` fits the socket cap (CROW-1378)
@@ -20,22 +21,49 @@ private actor ScanCounter {
         let confidences: [BackfillConfidence] = [.high, .medium, .low]
         let statuses: [BackfillUploadStatus] = [.new, .uploaded, .failed]
         let pad = String(repeating: "deep-directory-segment/", count: 6)
-        return (0..<n).map { i in
-            BackfillSession(
-                claudeSessionUID: String(format: "%08d-0000-0000-0000-000000000000", i),
-                filePath: "/Users/someone/.claude/projects/\(pad)session-\(i).jsonl",
+        // Typed locals keep each expression small: one big init with nested
+        // ternaries and interpolations times out the type checker.
+        return (0..<n).map { (i: Int) -> BackfillSession in
+            let uid: String = String(format: "%08d-0000-0000-0000-000000000000", i)
+            let filePath: String = "/Users/someone/.claude/projects/" + pad + "session-\(i).jsonl"
+            let cwd: String = "/Users/someone/Dev/Corveil/" + pad + "crow-\(i)-a-long-worktree-slug"
+            let workspace: String?
+            if i % 5 == 0 {
+                workspace = nil
+            } else {
+                workspace = i % 2 == 0 ? "Corveil" : "Other"
+            }
+            let modifiedAt: Double = Double(i % 97)  // plenty of ties, exercising the tie-break order
+            let harness: LogSyncHarness = harnesses[i % 3]
+            let confidence: BackfillConfidence = confidences[i % 3]
+            let status: BackfillUploadStatus = statuses[(i / 3) % 3]
+            return BackfillSession(
+                claudeSessionUID: uid,
+                filePath: filePath,
                 slug: "-Users-someone-Dev-Corveil-crow-\(i)",
-                harness: harnesses[i % 3],
-                cwd: "/Users/someone/Dev/Corveil/\(pad)crow-\(i)-a-long-worktree-slug",
+                harness: harness,
+                cwd: cwd,
                 gitBranch: "feature/crow-\(i)-a-long-branch-name",
-                modifiedAt: Double(i % 97),  // plenty of ties, exercising the tie-break order
+                modifiedAt: modifiedAt,
                 sizeBytes: 1000 + i,
-                workspace: i % 5 == 0 ? nil : (i % 2 == 0 ? "Corveil" : "Other"),
+                workspace: workspace,
                 worktreeName: "crow-\(i)-a-long-worktree-slug",
                 repoName: "crow", ownerRepo: "corveil/crow", host: "github.com",
                 ticketNumber: i, worktreeExists: i % 2 == 0,
-                confidence: confidences[i % 3], uploadStatus: statuses[(i / 3) % 3])
+                confidence: confidence, uploadStatus: status)
         }
+    }
+
+    /// `harness/uid`, the identity a page walk must return exactly once.
+    private static func sessionKey(_ s: BackfillSession) -> String {
+        s.harness.rawValue + "/" + s.claudeSessionUID
+    }
+
+    private static func rowKey(_ row: JSONValue) -> String? {
+        guard let obj: [String: JSONValue] = row.objectValue,
+              let harness: String = obj["harness"]?.stringValue,
+              let uid: String = obj["uid"]?.stringValue else { return nil }
+        return harness + "/" + uid
     }
 
     private static func encodedSize(_ result: [String: JSONValue]) throws -> Int {
@@ -86,11 +114,7 @@ private actor ScanCounter {
             if page["truncated_by_size"] == .bool(true) { anyTruncated = true }
             let rows = try #require(page["sessions"]?.arrayValue)
             #expect(page["returned"] == .int(rows.count))
-            seen += rows.compactMap { row in
-                guard let obj = row.objectValue, let h = obj["harness"]?.stringValue,
-                      let uid = obj["uid"]?.stringValue else { return nil }
-                return "\(h)/\(uid)"
-            }
+            seen += rows.compactMap(Self.rowKey)
             offset = page["next_offset"]?.intValue
             pages += 1
             #expect(pages < 100)
@@ -99,14 +123,16 @@ private actor ScanCounter {
         #expect(anyTruncated)
         #expect(seen.count == sessions.count)
         #expect(Set(seen).count == seen.count)
-        #expect(Set(seen) == Set(sessions.map { "\($0.harness.rawValue)/\($0.claudeSessionUID)" }))
+        let expectedKeys: Set<String> = Set(sessions.map(Self.sessionKey))
+        #expect(Set(seen) == expectedKeys)
     }
 
     @Test func filtersNarrowBothBreakdownAndPages() async throws {
         let sessions = Self.syntheticSessions(300)
         let (scan, _) = handler(sessions: sessions)
-        let expected = sessions.filter {
-            $0.workspace == "Corveil" && $0.confidence == .high && $0.uploadStatus != .uploaded
+        let expected: [BackfillSession] = sessions.filter { (s: BackfillSession) -> Bool in
+            guard s.workspace == "Corveil", s.confidence == .high else { return false }
+            return s.uploadStatus != .uploaded
         }
         let page = try await scan([
             "view": .string("sessions"), "workspace": .string("corveil"),
@@ -177,6 +203,71 @@ private actor ScanCounter {
         clock.now = clock.now.addingTimeInterval(61)
         _ = await expiring.snapshot(refresh: false)
         #expect(await counter.count == 4)
+    }
+}
+
+// MARK: - Review follow-ups (PR #1400)
+
+extension BackfillScanRPCTests {
+    @Test func explicitUIDMissingFromSnapshotRescansOnceThenReportsNotFound() async throws {
+        let devRoot = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("backfill-notfound-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(atPath: devRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var config = AppConfig()
+        config.workspaces = [
+            WorkspaceInfo(
+                name: "Acme",
+                gateway: WorkspaceGateway(
+                    baseURL: "https://gw.corveil.example",
+                    customHeaders: ["x-citadel-api-key": "sk-citadel-test"])),
+        ]
+        try ConfigStore.saveConfig(config, devRoot: devRoot)
+
+        let counter = ScanCounter()
+        let cache = BackfillScanCache(scan: {
+            await counter.bump()
+            return []
+        })
+        _ = await cache.snapshot(refresh: false)
+        let upload = makeBackfillHandlers(devRoot: devRoot, scanCache: cache)["backfill-upload"]!
+        let reply = try await upload([
+            "workspace": .string("Acme"),
+            "sessions": .array([.string("ghost"), .string("ghost")]),
+        ])
+        // One re-scan for the missing UID, not one per UID.
+        #expect(await counter.count == 2)
+        let results = try #require(reply["results"]?.arrayValue)
+        #expect(results.count == 1)
+        let row = try #require(results.first?.objectValue)
+        #expect(row["uid"] == .string("ghost"))
+        #expect(row["result"] == .string("skipped"))
+        #expect(row["reason"] == .string("not_found"))
+    }
+
+    @Test func invalidateDuringScanDiscardsThatScan() async throws {
+        let counter = ScanCounter()
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        let cache = BackfillScanCache(scan: {
+            await counter.bump()
+            if await counter.count == 1 {
+                for await _ in gate { break }  // hold the first scan open
+            }
+            return []
+        })
+        let stale = Task { await cache.snapshot(refresh: false) }
+        while await counter.count < 1 { await Task.yield() }
+
+        await cache.invalidate()  // an upload finished mid-scan
+        release.yield()
+        let staleSnapshot = await stale.value
+
+        // The pre-upload scan was not published …
+        #expect(await cache.snapshot(id: staleSnapshot.id) == nil)
+        // … so the next call scans again instead of reusing it.
+        let fresh = await cache.snapshot(refresh: false)
+        #expect(fresh.id != staleSnapshot.id)
+        #expect(await counter.count == 2)
     }
 }
 
