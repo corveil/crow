@@ -29,7 +29,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow autostart status`](#crow-autostart-status) | Report whether crowd is set to start at login, and whether it's running |
 | [`crow autostart uninstall`](#crow-autostart-uninstall) | Remove the login item (leaves a running crowd alone) |
 | [`crow backfill`](#crow-backfill) | Reconcile and upload historical on-disk session transcripts |
-| [`crow backfill scan`](#crow-backfill-scan) | List on-disk sessions with reconstructed metadata and upload status |
+| [`crow backfill scan`](#crow-backfill-scan) | Summarize on-disk sessions, or list them a page at a time |
 | [`crow backfill upload`](#crow-backfill-upload) | Upload selected historical sessions (idempotent) |
 | [`crow batch-explore-issues`](#crow-batch-explore-issues) | Start exploring several tickets in one batch |
 | [`crow batch-work-on-issues`](#crow-batch-work-on-issues) | Start working on several tickets in one batch |
@@ -449,13 +449,31 @@ Subcommands: [`scan`](#crow-backfill-scan), [`upload`](#crow-backfill-upload).
 
 ## `crow backfill scan`
 
-List on-disk sessions with reconstructed metadata and upload status.
+Summarize on-disk sessions, or list them a page at a time.
 
 ```
-crow backfill scan
+crow backfill scan [--sessions] [--limit <limit>] [--offset <offset>] [--scan-id <scan-id>] [--workspace <workspace>] [--confidence <confidence>] [--status <status>] [--harness <harness>] [--refresh]
 ```
 
-Disk- and git-only (no provider calls), so it's fast over hundreds of sessions. Each row carries the recovered workspace/repo/ticket, a confidence tier (high = repo + ticket, medium = repo only, low = orphan), and its ledger upload status. Ticket links are validated at upload, not here.
+Disk- and git-only (no provider calls). Reconstructs each transcript's workspace/repo/ticket, a confidence tier (high = repo + ticket, medium = repo only, low = orphan), and its ledger upload status. Ticket links are validated at upload, not here.
+
+By default it prints counts only — totals plus a breakdown by harness, workspace, confidence and upload status — because a large history does not fit in one reply. Pass --sessions to list rows, a page at a time (--limit, --offset); a page may hold fewer than --limit rows when the rows are large, so follow next_offset, not offset + limit. A note on stderr says when output was summarized or paged.
+
+Every reply names a scan_id. The daemon keeps that scan for reuse (about 15 minutes for an unpinned call); pass --scan-id with each later page so the walk reads one snapshot and returns every session exactly once. --refresh takes a new scan; so does an upload, which retires the snapshot.
+
+Filters (--workspace, --confidence, --status, --harness) narrow both the breakdown and the rows; the summary block always covers the whole scan.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--sessions` | — | no | List session rows (paged) instead of the summary |
+| `--limit` | `<limit>` | no | Rows per page with --sessions (default 200, max 1000) |
+| `--offset` | `<offset>` | no | Row to start the page at with --sessions (use the previous page's next_offset) |
+| `--scan-id` | `<scan-id>` | no | Page through the snapshot a previous call returned, instead of the latest scan |
+| `--workspace` | `<workspace>` | no | Only rows reconstructed to this workspace (case-insensitive) |
+| `--confidence` | `<confidence>` | no | Only rows of this confidence: high, medium, or low |
+| `--status` | `<status>` | no | Only rows with this upload status: new, uploaded, skipped, failed, or not-uploaded |
+| `--harness` | `<harness>` | no | Only rows from this harness (claude, codex, cursor, opencode, grok, antigravity, muse) |
+| `--refresh` | — | no | Re-scan the disk instead of reusing the daemon's recent scan |
 
 ---
 
@@ -467,16 +485,16 @@ Upload selected historical sessions (idempotent).
 crow backfill upload --workspace <workspace> [--session <session> ...] [--all-high-confidence] [--all] [--allow-orphans] [--allow-manager-transcripts]
 ```
 
-Choose sessions with repeated --session <uid> (UIDs come from `crow backfill scan`), or bulk-select this workspace's history with --all-high-confidence (repo + validated ticket) or --all. Exactly one selection mode is required.
+Choose sessions with repeated --session <uid> (UIDs come from `crow backfill scan --sessions`), or bulk-select this workspace's history with --all-high-confidence (repo + validated ticket) or --all. Exactly one selection mode is required.
 
---workspace names the workspace whose AI gateway supplies the upload destination and credential; it must have a gateway configured. Uploads are serial and idempotent, so a re-run only fills gaps.
+--workspace names the workspace whose AI gateway supplies the upload destination and credential; it must have a gateway configured. Uploads are serial and idempotent, so a re-run only fills gaps. Bulk selection runs inside the daemon over its own scan, so it works however large the history is; a run uploads at most 1000 sessions, and re-running picks up the rest.
 
 Two kinds of row are refused (reported as skipped, with a reason) unless you opt in, because neither belongs to the workspace whose gateway would carry it: orphans (low confidence — no repo could be attributed; --allow-orphans) and Manager transcripts (workspace `.crow`; --allow-manager-transcripts). A Manager tagged with a workspace ships its own transcripts through that workspace's gateway as it runs.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--workspace` | `<workspace>` | yes | Workspace whose gateway supplies the upload destination + credential |
-| `--session` | `<session>` _(repeatable)_ | no | A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence. |
+| `--session` | `<session>` _(repeatable)_ | no | A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan --sessions`). Mutually exclusive with --all/--all-high-confidence. |
 | `--all-high-confidence` | — | no | Upload every not-yet-uploaded high-confidence session in this workspace |
 | `--all` | — | no | Upload every not-yet-uploaded session in this workspace |
 | `--allow-orphans` | — | no | Also upload selected rows no repo could be attributed to (confidence low) |
