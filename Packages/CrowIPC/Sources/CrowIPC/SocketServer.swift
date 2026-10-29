@@ -23,7 +23,7 @@ public final class SocketServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.corveil.crow.socket", qos: .userInitiated)
 
     /// Maximum size of a single JSON-RPC message (1 MB).
-    static let maxMessageSize = 1_048_576
+    public static let maxMessageSize = 1_048_576
 
     public init(socketPath: String? = nil, router: CommandRouter) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()

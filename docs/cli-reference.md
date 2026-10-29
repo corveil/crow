@@ -2229,10 +2229,25 @@ It reuses the live upload path, so it inherits its guarantees: the destination +
 ### `crow backfill scan`
 
 ```bash
-crow backfill scan
+crow backfill scan                                        # counts only
+crow backfill scan --workspace Corveil --status not-uploaded
+crow backfill scan --sessions --limit 200                 # first page of rows
+crow backfill scan --sessions --scan-id <id> --offset <next_offset>
 ```
 
-Reconciles every on-disk Claude transcript (`~/.claude/projects/**/*.jsonl`), Codex rollout (`~/.codex/sessions/**/rollout-*.jsonl`), and Cursor store (`~/.cursor/chats/**/store.db`) against the upload ledger and returns the reconstructed rows plus a `summary`. Disk- and git-only (no provider calls), so it stays fast over hundreds of sessions. Each row carries its `harness` (`claude`/`codex`/`cursor`), the recovered `workspace` / `repo_name` / `owner_repo` / `ticket_number`, a `confidence` tier, and its ledger `upload_status`:
+Reconciles every on-disk Claude transcript (`~/.claude/projects/**/*.jsonl`), Codex rollout (`~/.codex/sessions/**/rollout-*.jsonl`), and Cursor store (`~/.cursor/chats/**/store.db`) against the upload ledger. Disk- and git-only (no provider calls), though a large history can take minutes.
+
+A whole scan can exceed the 1 MB socket reply (CROW-1378), so by default it prints **counts only**: a `summary` over the whole scan plus a `breakdown` (`by_harness`, `by_workspace`, `by_confidence`, `by_upload_status`) over the rows matching any filters. `--sessions` lists the rows one page at a time:
+
+| Flag | Description |
+| --- | --- |
+| `--sessions` | List rows (paged) instead of the summary |
+| `--limit N` / `--offset N` | Page size (default 200, max 1000) and start row. A page is also cut to a byte budget, so follow `next_offset` (`null` on the last page) |
+| `--scan-id ID` | Read the snapshot an earlier call returned, so a page walk returns every session exactly once. Errors once the snapshot is replaced (`--refresh`, an upload) |
+| `--workspace` / `--confidence` / `--status` / `--harness` | Filter. `--status not-uploaded` is everything except `uploaded` |
+| `--refresh` | Re-scan instead of reusing the daemon's recent scan (kept ~15 min) |
+
+A note on stderr says whether the output was summarized or paged, and prints the next-page command. Each row carries its `harness` (`claude`/`codex`/`cursor`), the recovered `workspace` / `repo_name` / `owner_repo` / `ticket_number`, a `confidence` tier, and its ledger `upload_status`:
 
 | Confidence | Meaning |
 | --- | --- |
@@ -2254,7 +2269,7 @@ Uploads a chosen set through the live path, idempotently and serially. `--worksp
 
 | Flag | Description |
 | --- | --- |
-| `--session <uid>` | A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan`) |
+| `--session <uid>` | A session UID to upload (repeatable; Claude Code, Codex, Grok Build, Cursor, OpenCode, or Muse Code — UIDs come from `crow backfill scan --sessions`) |
 | `--all-high-confidence` | Every not-yet-uploaded **high-confidence** session in this workspace |
 | `--all` | Every not-yet-uploaded session in this workspace |
 | `--allow-orphans` | Also upload selected rows no repo could be attributed to (`low` confidence) |
