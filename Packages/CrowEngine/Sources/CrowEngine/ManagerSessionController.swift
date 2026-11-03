@@ -703,7 +703,7 @@ final class ManagerSessionController {
         let seedCommand = Self.exploreSeedLaunchCommand(
             session: session, baseCommand: command, prompt: initialPrompt,
             promptPath: promptPath)
-        var rawTerminal = SessionTerminal(
+        let rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,
             cwd: cwd,
@@ -717,10 +717,12 @@ final class ManagerSessionController {
             appState.pendingLaunchCommands[rawTerminal.id] = seedCommand
             appState.autoLaunchTerminals.insert(rawTerminal.id)
         }
-        var toRegister = rawTerminal
-        if deferSeed { toRegister.command = nil }
-        var terminal = owner.prepareTerminal(toRegister, trackReadiness: deferSeed)
-        terminal.command = command
+        // Register the row as persisted, `command` included, and skip only the
+        // paste: the seeded launch runs from `pendingLaunchCommands`. A
+        // command-less copy would classify as a plain shell and leave the
+        // window without `alternate-screen` (CROW-1404).
+        let terminal = owner.prepareTerminal(
+            rawTerminal, trackReadiness: deferSeed, pasteCommand: !deferSeed)
 
         // `preserving` carries command-less Shell tabs to keep across an
         // extra-Manager handoff (CROW-1283 / CROW-1297); it is empty on the

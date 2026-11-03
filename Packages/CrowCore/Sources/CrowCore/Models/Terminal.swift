@@ -116,7 +116,11 @@ extension SessionTerminal {
     /// with no command. Those are line-streaming surfaces and must keep the
     /// unified 50k scrollback; only the terminal that actually launches the
     /// agent gets the alt-buffer model. `createManagerTerminal` always passes a
-    /// non-nil `managerCommand(for:)`, so the two are cleanly separable.
+    /// non-nil `managerCommand(for:)`, so the two are cleanly separable. That
+    /// holds only if the window is classified from the row as persisted: a
+    /// seeded launch defers its paste with `prepareTerminal(pasteCommand:
+    /// false)` and keeps `command`. Registering a command-less copy instead
+    /// gave seeded extra Managers a plain-shell window (CROW-1404).
     ///
     /// Deliberately NOT `agentKind` (it always resolves to a configured
     /// default, so it never discriminates) and NOT `trackReadiness` (false for

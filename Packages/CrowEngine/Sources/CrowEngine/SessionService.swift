@@ -118,6 +118,9 @@ public final class SessionService {
     /// notifications). Defaults to a headless no-op so tests and the daemon
     /// need not supply one; the macOS app injects a real `AppHostBridge`.
     let hostBridge: HostBridge
+    /// Opens the tmux window for every terminal `prepareTerminal` registers.
+    /// Tests replace it to record what each launch path asked for (CROW-1404).
+    var terminalRegistrar: TerminalRegistrar = { try SessionService.registerWithTmux($0) }
 
     public init(
         store: JSONStore,
@@ -792,33 +795,83 @@ public final class SessionService {
     /// it, `registerTerminal` pastes the stored `claude` command into the tmux
     /// window directly. If tmux is unavailable or registration fails the row is
     /// returned unbound and simply won't render.
+    ///
+    /// Pass the row exactly as it will be persisted. Its `command` decides the
+    /// window's scroll model through ``SessionTerminal/isAgentSurface(session:)``,
+    /// so a caller that launches later must keep `command` and pass
+    /// `pasteCommand: false` instead of handing over a command-less copy. A
+    /// seeded extra Manager did the latter and was born without
+    /// `alternate-screen`, so Claude Code painted into the main buffer and its
+    /// earlier history was lost (CROW-1404).
     @MainActor
-    func prepareTerminal(_ terminal: SessionTerminal, trackReadiness: Bool) -> SessionTerminal {
+    func prepareTerminal(
+        _ terminal: SessionTerminal, trackReadiness: Bool, pasteCommand: Bool = true
+    ) -> SessionTerminal {
         var t = terminal
-        guard !TmuxBackend.shared.tmuxBinary.isEmpty else {
-            CrowLog.info("[SessionService] tmux not configured; terminal \(t.id) will not render")
-            return t
-        }
         let session = appState.sessions.first(where: { $0.id == t.sessionID })
+        let registration = TerminalRegistration(
+            id: t.id,
+            name: t.name,
+            cwd: t.cwd,
+            command: pasteCommand ? t.command : nil,
+            trackReadiness: trackReadiness,
+            agentKind: session?.agentKind,
+            // Covers the Manager, whose terminal is built without
+            // `isManaged` but still runs a repainting agent (ADR-0013).
+            agentSurface: t.isAgentSurface(session: session),
+            usesAlternateScreen: AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind),
+            extraEnv: Self.artifactsEnv(sessionID: t.sessionID)
+        )
         do {
-            let binding = try TmuxBackend.shared.registerTerminal(
-                id: t.id,
-                name: t.name,
-                cwd: t.cwd,
-                command: t.command,
-                trackReadiness: trackReadiness,
-                agentKind: session?.agentKind,
-                // Covers the Manager, whose terminal is built without
-                // `isManaged` but still runs a repainting agent (ADR-0013).
-                agentSurface: t.isAgentSurface(session: session),
-                usesAlternateScreen: AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind),
-                extraEnv: Self.artifactsEnv(sessionID: t.sessionID)
-            )
+            guard let binding = try terminalRegistrar(registration) else {
+                CrowLog.info("[SessionService] tmux not configured; terminal \(t.id) will not render")
+                return t
+            }
             t.tmuxBinding = binding
         } catch {
             CrowLog.info("[SessionService] tmux registerTerminal failed (\(error)); terminal \(t.id) will not render")
         }
         return t
     }
+
+    /// `prepareTerminal`'s default backend: open the window on the shared tmux
+    /// server. Nil when tmux isn't configured.
+    @MainActor
+    static func registerWithTmux(_ r: TerminalRegistration) throws -> TmuxBinding? {
+        guard !TmuxBackend.shared.tmuxBinary.isEmpty else { return nil }
+        return try TmuxBackend.shared.registerTerminal(
+            id: r.id,
+            name: r.name,
+            cwd: r.cwd,
+            command: r.command,
+            trackReadiness: r.trackReadiness,
+            agentKind: r.agentKind,
+            agentSurface: r.agentSurface,
+            usesAlternateScreen: r.usesAlternateScreen,
+            extraEnv: r.extraEnv
+        )
+    }
 }
+
+/// The window `SessionService.prepareTerminal` asks the terminal backend to
+/// open (CROW-1404). Tests swap the backend to see what each launch path
+/// asked for.
+struct TerminalRegistration: Equatable, Sendable {
+    let id: UUID
+    let name: String
+    let cwd: String
+    /// Typed into the window as soon as it opens. Nil when there is nothing
+    /// to run or the launch is deferred until the shell is ready (#408).
+    let command: String?
+    let trackReadiness: Bool
+    let agentKind: AgentKind?
+    /// ADR-0013 scroll model: true gives the window `alternate-screen on`.
+    let agentSurface: Bool
+    let usesAlternateScreen: Bool
+    let extraEnv: [String: String]
+}
+
+/// Opens the window for a ``TerminalRegistration``. Returns nil when no
+/// backend is configured; the row is then left unbound and won't render.
+typealias TerminalRegistrar = @MainActor (TerminalRegistration) throws -> TmuxBinding?
 
