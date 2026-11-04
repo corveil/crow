@@ -987,7 +987,7 @@ Header values are blanked by default so the output is safe to share. Pass --reve
 Set a gateway's base URL and headers.
 
 ```
-crow gateway set [--manager] [--workspace <workspace>] --base-url <base-url> [--header <header> ...]
+crow gateway set [--manager] [--workspace <workspace>] --base-url <base-url> [--header <header> ...] [--codex-upstream <codex-upstream>]
 ```
 
 Replaces the whole gateway: --base-url and at least one --header are both required (a gateway needs both, or neither). A --header with a blank value keeps the secret already stored under that name, so the base URL can be changed without restating credentials:
@@ -998,12 +998,20 @@ crow gateway set --manager --base-url https://gw.example.com --header "X-Api-Key
 
 Header values may be op:// 1Password references, resolved at agent launch so the secret never rests in config.json.
 
+--codex-upstream opts Codex launches into the same gateway (CROW-1407). The gateway must carry an x-citadel-api-key header; Codex keeps its own sign-in and sends the key as X-Corveil-Key. `auto` picks chatgpt_codex or openai_api from how Codex is signed in; `off` stops routing Codex. Omitted, the stored setting is kept (Codex is not routed by default):
+
+```
+crow gateway set --workspace corveil --base-url https://corveil.io \
+--header "x-citadel-api-key:" --codex-upstream auto
+```
+
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--manager` | — | no | Target the Manager AI gateway |
 | `--workspace` | `<workspace>` | no | Target a workspace's AI gateway (workspace name or UUID) |
 | `--base-url` | `<base-url>` | yes | Gateway base URL |
 | `--header` | `<header>` _(repeatable)_ | no | Header as 'Name: Value' (repeatable) |
+| `--codex-upstream` | `<codex-upstream>` | no | Route Codex through this gateway: auto \| chatgpt_codex \| openai_api \| off (omit to keep) |
 
 ---
 

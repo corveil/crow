@@ -143,7 +143,8 @@ struct ParityGateTests {
     /// `probeIsFullyPopulated` fails if this drifts, so a new nested field cannot
     /// hide behind an unpopulated container.
     static func parityProbeConfig() -> AppConfig {
-        let gateway = WorkspaceGateway(baseURL: "https://gw.example", customHeaders: ["X-Probe": "1"])
+        let gateway = WorkspaceGateway(
+            baseURL: "https://gw.example", customHeaders: ["X-Probe": "1"], codexUpstream: .auto)
         return AppConfig(
             workspaces: [
                 WorkspaceInfo(

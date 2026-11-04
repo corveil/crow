@@ -594,8 +594,10 @@ public enum ParityLedger {
         // Gateways and the web password are local-socket only (CROW-815).
         .field("managerGateway.baseURL", read: "gateway get", write: "gateway set"),
         .field("managerGateway.customHeaders", read: "gateway get", write: "gateway set"),
+        .field("managerGateway.codexUpstream", read: "gateway get", write: "gateway set"),
         .field("workspaces[].gateway.baseURL", read: "gateway get", write: "gateway set"),
         .field("workspaces[].gateway.customHeaders", read: "gateway get", write: "gateway set"),
+        .field("workspaces[].gateway.codexUpstream", read: "gateway get", write: "gateway set"),
 
         // Session-log collector behavior knobs (CROW-1056; slimmed in CROW-1070).
         // No longer local-only: the block holds no credential and no opt-in (both

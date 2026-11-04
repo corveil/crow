@@ -118,6 +118,26 @@ enum SecretsRPC {
             "gateway_set": .bool(true),
             "base_url": .string(gateway.baseURL),
             "headers": .object(headers),
+            // CROW-1407: not a secret, so never redacted. `off` = Codex not routed.
+            "codex_upstream": .string(gateway.codexUpstream?.rawValue ?? "off"),
         ]
+    }
+
+    /// Decode `gateway-set`'s optional `codex_upstream` (CROW-1407). Absent →
+    /// `.keep` (the stored opt-in survives a base-URL/header edit); `"off"` →
+    /// `.set(nil)`; a ``CodexUpstream`` raw value → `.set(value)`.
+    enum CodexUpstreamChange: Equatable { case keep, set(CodexUpstream?) }
+
+    static func decodeCodexUpstream(_ value: JSONValue?) throws -> CodexUpstreamChange {
+        guard let value, value != .null else { return .keep }
+        guard let raw = value.stringValue else {
+            throw DaemonRPCError.invalidParams("codex_upstream must be a string")
+        }
+        if raw == "off" { return .set(nil) }
+        guard let mode = CodexUpstream(rawValue: raw) else {
+            throw DaemonRPCError.invalidParams(
+                "codex_upstream must be one of: auto, chatgpt_codex, openai_api, off (got '\(raw)')")
+        }
+        return .set(mode)
     }
 }

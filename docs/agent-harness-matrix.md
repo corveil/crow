@@ -41,7 +41,7 @@ capabilities, update this table in the same PR.
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ✅ mirrored from `~/.claude.json` into `opencode.json` (CROW-831) | ✅ mirrored from `~/.claude.json` into `~/.grok/config.toml` (CROW-1205) | ✅ mirrored from `~/.claude.json` into `~/.gemini/config/mcp_config.json` (CROW-1207) | ✅ mirrored from `~/.claude.json` into `~/.config/muse/settings.json` (CROW-1209) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ positional `[PROMPT]` (`.work` seed, CROW-1144); run-then-`-c` (`.job`/`.review`) | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
-| Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ | ⚠️ trust seed only (`--trust-workspace`, per-launch, withheld from `.review`) |
+| Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed (`[projects."…"]` in `config.toml`) + gateway **opt-in per gateway** (`-c` provider overrides → Corveil `/v1/responses`, CROW-1407 / ADR 0030); no telemetry | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ | ⚠️ trust seed only (`--trust-workspace`, per-launch, withheld from `.review`) |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) | ❌ unverified (documented slash set has no `/rename`; opt-out `nil`) |
 | Interactive TUI uses alt screen (`smcup`) | ✅ Claude Code requests it | ❌ inline renderer — unified 50k scrollback like a shell (CROW-1010) | ❌ **verified** inline (`alternate_on=0`, 0.141.0, CROW-1001); 0.157+ defaults to an alt-screen transcript it won't mouse-scroll under `mouse off`, so Crow launches `--no-alt-screen` (CROW-1319) | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default |
 | Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) | ❌ **permanent** — closed-source, Meta-auth-locked (browser sign-in or `META_API_KEY`; default model Muse Spark 1.2) |
@@ -993,9 +993,10 @@ else.
 
 Three capabilities the protocol doesn't abstract — historically Claude-specific
 and gated on Claude identity (`if …kind == .claudeCode`). Trust seeding now has
-bounded per-harness analogues (Cursor's `--trust`, Codex's `config.toml`); the
-AI-gateway env and telemetry legs remain Claude-only (gating is exhaustive,
-including the two Manager gateway writes noted below):
+bounded per-harness analogues (Cursor's `--trust`, Codex's `config.toml`), and
+the AI gateway has a Codex leg of its own shape (below, CROW-1407). The
+`ANTHROPIC_*` gateway env and telemetry legs remain Claude-only (gating is
+exhaustive, including the two Manager gateway writes noted below):
 
 - **Trust seeding** — `ClaudeTrustSeeder.seedTrust` pre-trusts the worktree in
   `~/.claude.json` so the "Do you trust the files in this folder?" dialog never
@@ -1056,6 +1057,26 @@ including the two Manager gateway writes noted below):
   by worktree path, falling back to the PR's `owner/repo` for review clones,
   which live outside any workspace folder (CROW-891) — see
   [configuration.md](configuration.md#which-gateway-applies).
+- **AI gateway (Codex, CROW-1407 / [ADR 0030](adr/0030-codex-through-the-workspace-gateway.md))**
+  — Codex does **not** get the `ANTHROPIC_*` block above (that stays cleared for
+  it). When the session's gateway (same resolution as Claude: workspace by path
+  then PR slug; Manager → tagged workspace, else `managerGateway`) sets
+  `codexUpstream` **and** carries a Corveil key header, every Codex launch gets
+  per-run `-c` overrides defining a `crow-corveil` model provider: `base_url`
+  = gateway + `/v1`, `wire_api=responses`, `requires_openai_auth=true`,
+  `X-Corveil-Upstream` (`auto` reads `$CODEX_HOME/auth.json`), and
+  `env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY`. Codex keeps its own
+  sign-in in `Authorization`. The overrides carry no secret — they are built by
+  `CodexGatewayArgs.configOverrides` (Swift: `launchAgent`, `handoffAgent`,
+  `managerCommand` / hydrate) and `codex_gateway_overrides` (`setup.sh`) — and
+  the key is exported **only at paste time** (`codexGatewayKeyPrefix`, keyed on
+  the override's presence) by `launchAgent`, `pasteDeferredLaunch`,
+  `prepareTerminal` and `rehydrateTerminalSurface`, so it is never in argv, a
+  stored terminal `command`, `config.toml` or `settings.local.json`. A Codex →
+  Claude handoff builds a plain Claude command in a fresh pane (no Codex
+  setting survives); Claude → Codex still clears the `ANTHROPIC_*` block. Off by
+  default; `resume --last` is provider-filtered, so toggling routing makes the
+  next `.work` restart open a fresh thread (resume-by-id is unaffected).
 - **OTEL telemetry env** — `AgentLaunch.prepareAgentLaunchText` prepends the
   `OTEL_*` exporter vars, gated on `agent.kind == .claudeCode` (Codex has no OTLP
   equivalent).

@@ -90,6 +90,11 @@ final class AgentLaunchController {
                 telemetryPort: telemetryPort
             ).text
         }
+        // CROW-1407: a routed Codex command — from `setup.sh`'s `--command`, a
+        // handoff, or a Codex Manager's explore seed — needs its gateway key
+        // exported first. Added here, at paste time, so the key never rides in
+        // `crow new-terminal`'s argv or in `pendingLaunchCommands`.
+        text = owner.codexGatewayKeyPrefix(sessionID: sessionID, command: text) + text
         // Ensure a trailing newline so TmuxBackend.sendText delivers Enter.
         TerminalRouter.send(routedTerminal, text: text.hasSuffix("\n") ? text : text + "\n")
         appState.terminalReadiness[terminalID] = .agentLaunched
@@ -481,13 +486,27 @@ final class AgentLaunchController {
         // command goes out.
         let reviewPromptJustDispatched = (session.kind == .review || session.kind == .job)
             && !session.reviewPromptDispatched
-        guard let command = agent.autoLaunchCommand(
-            session: session,
-            worktreePath: worktree.worktreePath,
-            remoteControlEnabled: rcEnabled,
-            autoPermissionMode: autoPermissionMode,
-            telemetryPort: telemetryPort
-        ) else {
+        // CROW-1407: a Codex launch routes through the same workspace gateway
+        // when that gateway opted Codex in. The overrides go into the command
+        // (non-secret); the key export is prepended at send time below.
+        let builtCommand: String?
+        if let codexAgent = agent as? OpenAICodexAgent {
+            builtCommand = codexAgent.autoLaunchCommand(
+                session: session,
+                worktreePath: worktree.worktreePath,
+                remoteControlEnabled: rcEnabled,
+                autoPermissionMode: autoPermissionMode,
+                telemetryPort: telemetryPort,
+                gatewayRoute: owner.codexGatewayRoute(for: session))
+        } else {
+            builtCommand = agent.autoLaunchCommand(
+                session: session,
+                worktreePath: worktree.worktreePath,
+                remoteControlEnabled: rcEnabled,
+                autoPermissionMode: autoPermissionMode,
+                telemetryPort: telemetryPort)
+        }
+        guard let command = builtCommand else {
             CrowLog.info("[SessionService] Agent \(agent.kind.rawValue) could not build a launch command for session \(sessionID.uuidString) (kind=\(String(describing: session.kind)))")
             // Surface the failure where the user is already looking — paste a
             // shell-comment + echo line into the terminal so they aren't stuck
@@ -526,9 +545,12 @@ final class AgentLaunchController {
         // Route through TerminalRouter so tmux-backed terminals get the text
         // via tmux send-keys. The gateway prefix (empty for non-Claude agents)
         // is prepended here so it composes in front of any OTEL `export … &&`
-        // prefix the agent baked into `command` (CROW-402).
+        // prefix the agent baked into `command` (CROW-402). A routed Codex
+        // command gets its key export the same way (CROW-1407) — typed, never
+        // argv, never stored.
         if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
-            TerminalRouter.send(routedTerminal, text: gatewayPrefix + command)
+            let codexKeyPrefix = owner.codexGatewayKeyPrefix(for: session, command: command)
+            TerminalRouter.send(routedTerminal, text: gatewayPrefix + codexKeyPrefix + command)
         } else {
             CrowLog.info("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")
         }

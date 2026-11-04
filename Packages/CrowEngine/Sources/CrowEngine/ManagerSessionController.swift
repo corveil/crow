@@ -172,7 +172,21 @@ final class ManagerSessionController {
         let resolved = AgentRegistry.shared.agent(for: agentKind)
             ?? AgentRegistry.shared.defaultAgent
         var cmd: String
-        if let agent = resolved {
+        if let codexAgent = resolved as? OpenAICodexAgent {
+            // CROW-1407: a Codex Manager routes through its gateway (tagged
+            // workspace's, else managerGateway) when that gateway opted Codex
+            // in. The command is persisted as the terminal's `command`, so it
+            // carries only the non-secret overrides; the paste sites
+            // (`prepareTerminal`, `rehydrateTerminalSurface`,
+            // `pasteDeferredLaunch`) type the key export in front of it.
+            cmd = codexAgent.managerLaunchCommand(
+                sessionName: session.name,
+                remoteControlEnabled: appState.remoteControlEnabled,
+                autoPermissionMode: appState.managerAutoPermissionMode,
+                telemetryPort: telemetryPort,
+                conversationID: session.harnessConversationID,
+                gatewayRoute: owner.codexGatewayRoute(for: session))
+        } else if let agent = resolved {
             cmd = agent.managerLaunchCommand(
                 sessionName: session.name,
                 remoteControlEnabled: appState.remoteControlEnabled,

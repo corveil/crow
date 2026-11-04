@@ -61,6 +61,7 @@ func makeSecretsHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
             let target = try SecretsRPC.decodeTarget(params)
             let clear = params["clear"]?.boolValue ?? false
             let headers = clear ? nil : try SecretsRPC.decodeHeaderLines(params["header_lines"])
+            let codexChange: SecretsRPC.CodexUpstreamChange = clear ? .keep : try SecretsRPC.decodeCodexUpstream(params["codex_upstream"])
             let body = SecretRoutes.GatewayBody(
                 baseURL: params["base_url"]?.stringValue, headers: headers, clear: clear)
             let incoming: WorkspaceGateway?
@@ -68,21 +69,30 @@ func makeSecretsHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
             case .failure(let error): throw DaemonRPCError.invalidParams(error.message)
             case .success(let gateway): incoming = gateway
             }
+            // CROW-1407: the merge carries the stored Codex opt-in; an explicit
+            // `codex_upstream` then overrides it (`off` clears it).
+            func applyingCodex(_ gateway: WorkspaceGateway?) -> WorkspaceGateway? {
+                guard var gateway, case .set(let mode) = codexChange else { return gateway }
+                gateway.codexUpstream = mode
+                return gateway
+            }
             return try mapGatewayError {
                 try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
                     switch target {
                     case .manager:
-                        let merged = try SecretRoutes.mergingPreservedHeaders(
-                            incoming: incoming, stored: config.managerGateway).get()
+                        let merged = applyingCodex(try SecretRoutes.mergingPreservedHeaders(
+                            incoming: incoming, stored: config.managerGateway).get())
                         config.managerGateway = merged
                         return ["saved": .bool(true), "gateway_set": .bool(merged != nil),
+                                "codex_upstream": .string(merged?.codexUpstream?.rawValue ?? "off"),
                                 "target": .string("manager")]
                     case .workspace(let ref):
                         let index = try SecretsRPC.resolveWorkspace(ref, in: config)
-                        let merged = try SecretRoutes.mergingPreservedHeaders(
-                            incoming: incoming, stored: config.workspaces[index].gateway).get()
+                        let merged = applyingCodex(try SecretRoutes.mergingPreservedHeaders(
+                            incoming: incoming, stored: config.workspaces[index].gateway).get())
                         config.workspaces[index].gateway = merged
                         return ["saved": .bool(true), "gateway_set": .bool(merged != nil),
+                                "codex_upstream": .string(merged?.codexUpstream?.rawValue ?? "off"),
                                 "workspace_id": .string(config.workspaces[index].id.uuidString),
                                 "workspace_name": .string(config.workspaces[index].name)]
                     }

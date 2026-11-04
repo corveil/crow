@@ -112,12 +112,26 @@ final class AgentHandoffController {
         )
         let launchCommand: String
         do {
-            launchCommand = try await target.launchCommand(
-                sessionID: sessionID,
-                worktreePath: worktree.worktreePath,
-                prompt: prompt,
-                sessionKind: session.kind
-            )
+            if let codexTarget = target as? OpenAICodexAgent {
+                // CROW-1407: a Claude → Codex handoff routes Codex through the
+                // workspace gateway too (when it opted Codex in). Only the
+                // non-secret overrides land here; `pasteDeferredLaunch` adds the
+                // key export when the command is typed. A Codex → Claude handoff
+                // takes the `else` arm, so no Codex setting follows it, and the
+                // new pane is a fresh shell with no exported key.
+                launchCommand = try await codexTarget.launchCommand(
+                    sessionID: sessionID,
+                    worktreePath: worktree.worktreePath,
+                    prompt: prompt,
+                    gatewayRoute: owner.codexGatewayRoute(for: session))
+            } else {
+                launchCommand = try await target.launchCommand(
+                    sessionID: sessionID,
+                    worktreePath: worktree.worktreePath,
+                    prompt: prompt,
+                    sessionKind: session.kind
+                )
+            }
         } catch {
             throw AgentHandoffError.launchFailed(error.localizedDescription)
         }

@@ -103,7 +103,28 @@ public struct OpenAICodexAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let codexPath = launchBinary() ?? "codex"
+        autoLaunchCommand(
+            session: session, worktreePath: worktreePath,
+            remoteControlEnabled: remoteControlEnabled,
+            autoPermissionMode: autoPermissionMode, telemetryPort: telemetryPort,
+            gatewayRoute: nil)
+    }
+
+    /// ``autoLaunchCommand(session:worktreePath:remoteControlEnabled:autoPermissionMode:telemetryPort:)``
+    /// routed through a Corveil gateway (CROW-1407). `gatewayRoute` adds the
+    /// `CodexGatewayArgs.configOverrides` right after the binary, on every
+    /// branch (fresh, resume, job, review). Nil reproduces the protocol method
+    /// byte for byte. The key itself is not here: the caller types
+    /// `CodexGatewayArgs.keyExportPrefix` ahead of this text.
+    public func autoLaunchCommand(
+        session: Session,
+        worktreePath: String,
+        remoteControlEnabled: Bool,
+        autoPermissionMode: Bool,
+        telemetryPort: UInt16?,
+        gatewayRoute: CodexGatewayArgs.Route?
+    ) -> String? {
+        let codexPath = (launchBinary() ?? "codex") + CodexGatewayArgs.configOverrides(gatewayRoute)
         // CROW-1319: render inline on every path (see `inlineRenderingFlag`).
         // A fresh launch takes the flag after the binary; a resume takes it
         // after `resume --last`, whose arguments flatten Codex's TUI options.
@@ -231,10 +252,24 @@ public struct OpenAICodexAgent: CodingAgent {
         worktreePath: String,
         prompt: String
     ) async throws -> String {
+        try await launchCommand(
+            sessionID: sessionID, worktreePath: worktreePath, prompt: prompt,
+            gatewayRoute: nil)
+    }
+
+    /// The handoff launch, routed through a Corveil gateway (CROW-1407). Nil
+    /// `gatewayRoute` is exactly the protocol method.
+    public func launchCommand(
+        sessionID: UUID,
+        worktreePath: String,
+        prompt: String,
+        gatewayRoute: CodexGatewayArgs.Route?
+    ) async throws -> String {
         try await launcher.launchCommand(
             sessionID: sessionID,
             worktreePath: worktreePath,
-            prompt: prompt
+            prompt: prompt,
+            gatewayRoute: gatewayRoute
         )
     }
 
@@ -244,6 +279,24 @@ public struct OpenAICodexAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?,
         conversationID: String? = nil
+    ) -> String {
+        managerLaunchCommand(
+            sessionName: sessionName, remoteControlEnabled: remoteControlEnabled,
+            autoPermissionMode: autoPermissionMode, telemetryPort: telemetryPort,
+            conversationID: conversationID, gatewayRoute: nil)
+    }
+
+    /// The Manager launch, routed through its gateway (CROW-1407): the tagged
+    /// workspace's, else `managerGateway`, the same rule Claude follows. The
+    /// result is persisted as the Manager terminal's `command`, which is safe
+    /// because the overrides name the key's env var and never hold the key.
+    public func managerLaunchCommand(
+        sessionName: String,
+        remoteControlEnabled: Bool,
+        autoPermissionMode: Bool,
+        telemetryPort: UInt16?,
+        conversationID: String?,
+        gatewayRoute: CodexGatewayArgs.Route?
     ) -> String {
         // Codex's Manager is a plain TUI — no auto-prompt, no `--rc` flag, no
         // auto-permission knob (CROW-433). Terminal backend appends the
@@ -261,7 +314,7 @@ public struct OpenAICodexAgent: CodingAgent {
         // command rather than on `supportsRemoteControl`
         // (`SessionService.ensureManagerSession`), so the CROW-1001 flip
         // leaves this path exactly as it was — same as Cursor's Manager.
-        let codexPath = launchBinary() ?? "codex"
+        let codexPath = (launchBinary() ?? "codex") + CodexGatewayArgs.configOverrides(gatewayRoute)
         if let id = HarnessConversationID.sanitize(conversationID) {
             let quoted = "'" + id.replacingOccurrences(of: "'", with: "'\\''") + "'"
             return "\(codexPath) resume \(quoted) \(Self.inlineRenderingFlag)"

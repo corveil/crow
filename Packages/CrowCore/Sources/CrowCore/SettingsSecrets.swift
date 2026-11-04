@@ -159,6 +159,8 @@ public enum SettingsSecrets {
     private static func stripHeaderValues(_ gateway: WorkspaceGateway) -> WorkspaceGateway {
         WorkspaceGateway(
             baseURL: gateway.baseURL,
-            customHeaders: gateway.customHeaders.mapValues { _ in "" })
+            customHeaders: gateway.customHeaders.mapValues { _ in "" },
+            // Not a secret (CROW-1407) — kept so the browser can show it.
+            codexUpstream: gateway.codexUpstream)
     }
 }

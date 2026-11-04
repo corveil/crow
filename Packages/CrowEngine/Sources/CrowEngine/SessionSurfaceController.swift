@@ -687,11 +687,16 @@ final class SessionSurfaceController {
         // matches the stable socket). Create a fresh window as before.
         do {
             let session = appState.sessions.first(where: { $0.id == terminal.sessionID })
+            // CROW-1407: a routed Codex Manager's stored command is key-free;
+            // its key export is typed ahead of it here, never persisted.
+            let pasteText = terminal.command.map {
+                owner.codexGatewayKeyPrefix(sessionID: terminal.sessionID, command: $0) + $0
+            }
             let binding = try TmuxBackend.shared.registerTerminal(
                 id: terminal.id,
                 name: terminal.name,
                 cwd: terminal.cwd,
-                command: terminal.command,
+                command: pasteText,
                 trackReadiness: trackReadiness,
                 agentKind: session?.agentKind,
                 agentSurface: terminal.isAgentSurface(session: session),
