@@ -70,7 +70,10 @@ public actor CodexLauncher {
     }
 
     /// Write `prompt` to a temp file and return the launch command.
-    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) throws -> String {
+    public func launchCommand(
+        sessionID: UUID, worktreePath: String, prompt: String,
+        gatewayRoute: CodexGatewayArgs.Route? = nil
+    ) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-codex-\(sessionID.uuidString)-prompt.md")
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
@@ -79,7 +82,8 @@ public actor CodexLauncher {
         return "cd \(Self.shellEscape(worktreePath)) && "
             + ShellLaunchArgs.evalPromptLaunch(
                 // Inline rendering, like every other Codex launch (CROW-1319).
-                prefix: "codex \(OpenAICodexAgent.inlineRenderingFlag)",
+                // CROW-1407: gateway overrides sit right after the binary.
+                prefix: "codex\(CodexGatewayArgs.configOverrides(gatewayRoute)) \(OpenAICodexAgent.inlineRenderingFlag)",
                 promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
     }
 

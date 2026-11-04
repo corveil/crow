@@ -73,6 +73,62 @@ import Testing
         #expect(ConfigStore.loadConfig(devRoot: devRoot)?.managerGateway == nil)
     }
 
+    // MARK: - Codex opt-in (CROW-1407)
+
+    @Test @MainActor func codexUpstreamSetKeepClearRoundTrip() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let router = router(devRoot: devRoot)
+        func set(_ extra: [String: JSONValue]) async -> JSONRPCResponse {
+            await call(router, "gateway-set", [
+                "target": .string("manager"),
+                "base_url": .string("https://corveil.io"),
+                "header_lines": .array([.string("x-citadel-api-key: sk-citadel-1")]),
+            ].merging(extra) { _, new in new })
+        }
+
+        // Unset by default: existing gateways never start routing Codex.
+        _ = await set([:])
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.managerGateway?.codexUpstream == nil)
+        let off = await call(router, "gateway-get", ["target": .string("manager")])
+        #expect(off.result?["codex_upstream"] == .string("off"))
+
+        let on = await set(["codex_upstream": .string("auto")])
+        #expect(on.error == nil)
+        #expect(on.result?["codex_upstream"] == .string("auto"))
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.managerGateway?.codexUpstream == .auto)
+
+        // A base-URL / header edit that doesn't mention Codex keeps the opt-in.
+        _ = await call(router, "gateway-set", [
+            "target": .string("manager"),
+            "base_url": .string("https://corveil.io/"),
+            "header_lines": .array([.string("x-citadel-api-key:")]),
+        ])
+        let kept = ConfigStore.loadConfig(devRoot: devRoot)?.managerGateway
+        #expect(kept?.codexUpstream == .auto)
+        #expect(kept?.customHeaders["x-citadel-api-key"] == "sk-citadel-1")
+
+        _ = await set(["codex_upstream": .string("off")])
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.managerGateway?.codexUpstream == nil)
+
+        let bad = await set(["codex_upstream": .string("chatgpt")])
+        #expect(bad.error != nil)
+    }
+
+    @Test func webEditorMergeKeepsTheStoredCodexOptIn() throws {
+        // The browser rebuilds the gateway from base URL + headers and knows
+        // nothing about Codex; its save must not drop the opt-in.
+        let stored = WorkspaceGateway(
+            baseURL: "https://corveil.io", customHeaders: ["x-citadel-api-key": "sk"],
+            codexUpstream: .openaiAPI)
+        let incoming = WorkspaceGateway(baseURL: "https://corveil.io", customHeaders: ["x-citadel-api-key": ""])
+        let merged = try SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored).get()
+        #expect(merged?.codexUpstream == .openaiAPI)
+        #expect(merged?.customHeaders["x-citadel-api-key"] == "sk")
+        // Clearing still drops everything.
+        #expect(try SecretRoutes.mergingPreservedHeaders(incoming: nil, stored: stored).get() == nil)
+    }
+
     @Test @MainActor func omittedRevealRedacts() async throws {
         // Fail safe: a caller that never sends `reveal` must not get secrets.
         let devRoot = tempDevRoot()
@@ -441,6 +497,11 @@ import Testing
 
         let revealed = SecretsRPC.gatewayJSON(gateway, reveal: true)
         #expect(revealed["headers"] == .object(["X-Api-Key": .string("sk-test-1")]))
+        // CROW-1407: the Codex opt-in is not a secret, so it is never redacted.
+        #expect(redacted["codex_upstream"] == .string("off"))
+        var routed = gateway
+        routed.codexUpstream = .chatgptCodex
+        #expect(SecretsRPC.gatewayJSON(routed, reveal: false)["codex_upstream"] == .string("chatgpt_codex"))
     }
 
     @Test func gatewayJSONReportsAbsentGateway() {

@@ -2100,7 +2100,7 @@ crow gateway get --workspace Corveil --reveal
 | `--workspace` | one of   | Target a workspace's gateway (name or UUID)          |
 | `--reveal`    | no       | Print header values instead of blanking them         |
 
-Returns `{"gateway_set": true, "base_url": "...", "headers": {...}}`, plus `workspace_id` / `workspace_name` for a workspace target.
+Returns `{"gateway_set": true, "base_url": "...", "headers": {...}, "codex_upstream": "off"}`, plus `workspace_id` / `workspace_name` for a workspace target.
 
 ### `crow gateway set`
 
@@ -2141,8 +2141,15 @@ Both write paths enforce this (the CLI and the Settings gateway editor). A value
 | `--workspace` | one of   | Target a workspace's gateway (name or UUID)          |
 | `--base-url`  | yes      | Gateway base URL                                     |
 | `--header`    | yes      | Header as `Name: Value` (repeatable)                 |
+| `--codex-upstream` | no  | Route **Codex** through this gateway too: `auto` \| `chatgpt_codex` \| `openai_api` \| `off`. Omitted keeps the stored setting (default: not routed). Needs an `x-citadel-api-key` header — see [configuration.md](configuration.md#codex-sessions-opt-in) (CROW-1407) |
 
-Returns `{"saved": true, "gateway_set": true}`.
+```bash
+# Opt Codex in without restating the key (blank value keeps it):
+crow gateway set --workspace corveil --base-url https://corveil.io \
+  --header "x-citadel-api-key:" --codex-upstream auto
+```
+
+Returns `{"saved": true, "gateway_set": true, "codex_upstream": "…"}`. `crow gateway get` reports `codex_upstream` too (`off` when Codex is not routed); it is not a secret, so it is never blanked.
 
 ### `crow gateway clear`
 

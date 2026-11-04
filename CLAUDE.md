@@ -391,7 +391,7 @@ crow web-password set [--stdin]                                         → {"sa
 crow web-password clear                                                 → {"saved":true,"password_set":false}
 ```
 
-`gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. A header value must not be wrapped in literal quotes (`--header 'X-Api-Key: "Bearer sk-…"'`) — they'd be sent as part of the credential and the gateway would reject the request; quote the whole `Name: Value` pair in your shell, not inside it. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
+`gateway set --codex-upstream auto|chatgpt_codex|openai_api|off` opts **Codex** launches into the same Corveil gateway (CROW-1407, ADR 0030; default off — omitted keeps the stored value); the key is exported into the pane at paste time, never argv. `gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. A header value must not be wrapped in literal quotes (`--header 'X-Api-Key: "Bearer sk-…"'`) — they'd be sent as part of the credential and the gateway would reject the request; quote the whole `Name: Value` pair in your shell, not inside it. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
 
 ### Session-Log Sync
 

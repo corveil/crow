@@ -424,7 +424,10 @@ enum SecretRoutes {
             return .failure(GatewayValidationError(
                 message: "a gateway header has no value and no stored secret to keep"))
         }
-        return .success(WorkspaceGateway(baseURL: incoming.baseURL, customHeaders: headers))
+        return .success(WorkspaceGateway(baseURL: incoming.baseURL, customHeaders: headers)
+            // CROW-1407: a base-URL or header edit keeps the Codex opt-in; only an
+            // explicit change (`crow gateway set --codex-upstream`) moves it.
+            .carryingCodexUpstream(from: incoming.codexUpstream == nil ? stored : incoming))
     }
 
     /// Resolve the gateway a `/config/*-gateway` POST should store, given the
@@ -443,7 +446,9 @@ enum SecretRoutes {
         stored: WorkspaceGateway?
     ) -> Result<WorkspaceGateway?, GatewayValidationError> {
         if let orgId = body?.orgId?.trimmingCharacters(in: .whitespaces), !orgId.isEmpty {
+            // CROW-1407: re-picking an org must not drop the Codex opt-in.
             return deriveOrgGateway(orgId: orgId, connection: config.corveilConnection)
+                .map { $0?.carryingCodexUpstream(from: stored) }
         }
         return buildGateway(body).flatMap { mergingPreservedHeaders(incoming: $0, stored: stored) }
     }

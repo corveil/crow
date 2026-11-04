@@ -105,6 +105,15 @@ public struct GatewaySet: ParsableCommand {
 
         Header values may be op:// 1Password references, resolved at agent \
         launch so the secret never rests in config.json.
+
+        --codex-upstream opts Codex launches into the same gateway (CROW-1407). \
+        The gateway must carry an x-citadel-api-key header; Codex keeps its own \
+        sign-in and sends the key as X-Corveil-Key. `auto` picks chatgpt_codex or \
+        openai_api from how Codex is signed in; `off` stops routing Codex. \
+        Omitted, the stored setting is kept (Codex is not routed by default):
+
+          crow gateway set --workspace corveil --base-url https://corveil.io \\
+            --header "x-citadel-api-key:" --codex-upstream auto
         """
     )
 
@@ -115,6 +124,14 @@ public struct GatewaySet: ParsableCommand {
 
     @Option(name: .long, parsing: .singleValue, help: "Header as 'Name: Value' (repeatable)")
     public var header: [String] = []
+
+    @Option(
+        name: .customLong("codex-upstream"),
+        help: "Route Codex through this gateway: auto | chatgpt_codex | openai_api | off (omit to keep)")
+    public var codexUpstream: String?
+
+    /// `CodexUpstream`'s raw values plus `off`. The daemon re-validates.
+    static let codexUpstreamValues: Set<String> = ["auto", "chatgpt_codex", "openai_api", "off"]
 
     public init() {}
 
@@ -127,12 +144,17 @@ public struct GatewaySet: ParsableCommand {
             throw ValidationError("At least one --header is required (a gateway needs both a base URL and a header).")
         }
         try header.forEach(validateHeaderLine)
+        if let codexUpstream, !Self.codexUpstreamValues.contains(codexUpstream) {
+            throw ValidationError(
+                "--codex-upstream must be one of: auto, chatgpt_codex, openai_api, off (got '\(codexUpstream)')")
+        }
     }
 
     public func run() throws {
         var params = target.params
         params["base_url"] = .string(baseURL)
         params["header_lines"] = .array(header.map { .string($0) })
+        if let codexUpstream { params["codex_upstream"] = .string(codexUpstream) }
         printJSON(try rpc("gateway-set", params: params))
     }
 }

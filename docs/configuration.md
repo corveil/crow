@@ -151,7 +151,7 @@ Configure the default and per-kind overrides in **Settings → General**, or fro
 
 ## AI Gateway
 
-A workspace can route its Claude Code sessions through a proxy/gateway (e.g. an internal LLM gateway) instead of the vanilla Anthropic API, with its own API key. This replaces setting `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` globally in your shell — which would force *every* `claude` on the machine through one gateway — with a per-workspace setting Crow manages.
+A workspace can route its Claude Code sessions (and, opt-in, its [Codex sessions](#codex-sessions-opt-in)) through a proxy/gateway (e.g. an internal LLM gateway) instead of the vanilla Anthropic API, with its own API key. This replaces setting `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` globally in your shell — which would force *every* `claude` on the machine through one gateway — with a per-workspace setting Crow manages.
 
 > **Using a Corveil gateway?** The hand-entered `x-citadel-api-key` gateway below is the **manual** path — it still works and is the right tool for any non-Corveil proxy. But for Corveil, the recommended path is the first-class **[Corveil connection](#corveil-connection-first-class)**: connect once (OAuth), pick an org, and Crow provisions and injects the gateway key for you. If you already have manual `x-citadel-api-key` gateways, [migrate them](#migrating-manual-gateways-to-the-connection) with `crow corveil detect-gateways` / `link-gateway`. See [ADR 0020](adr/0020-first-class-corveil-integration.md).
 
@@ -182,6 +182,41 @@ When no workspace claims the session — or the one that does has **no** `gatewa
 > **Precedence note:** the launch-line assignment is what reliably overrides a value exported by your shell for the initial launch. Whether Claude Code's `settings.local.json` `env` block *alone* overrides an inherited shell variable (e.g. an `ANTHROPIC_BASE_URL` still left in `~/.zshrc`) is not something Crow controls — so the intended end state is to delete the global `~/.zshrc` exports once per-workspace gateways are configured, leaving `config.json` the single source of truth.
 
 > **Applied at launch:** the gateway env is resolved and written when the agent **starts** (or is handed off to another agent). A session that was already running when you edited a gateway keeps the environment it launched with — relaunch it, or hand it off, to pick up the change.
+
+### Codex sessions (opt-in)
+
+By default a gateway applies to **Claude Code only**; Codex sessions and Managers in the same workspace talk to OpenAI directly. A Corveil gateway can opt Codex in too (CROW-1407, [ADR 0030](adr/0030-codex-through-the-workspace-gateway.md)):
+
+```bash
+# Blank header value keeps the stored key; only the Codex setting changes.
+crow gateway set --workspace corveil --base-url https://corveil.io \
+  --header "x-citadel-api-key:" --codex-upstream auto
+crow gateway get --workspace corveil        # → "codex_upstream": "auto"
+```
+
+```jsonc
+"gateway": {
+  "baseURL": "https://corveil.io",
+  "customHeaders": { "x-citadel-api-key": "op://…" },
+  "codexUpstream": "auto"   // auto | chatgpt_codex | openai_api; absent = Codex not routed
+}
+```
+
+- **What changes** — Codex launches through Corveil's `/v1/responses` passthrough using per-run `-c` overrides (a `crow-corveil` model provider). Your `~/.codex/config.toml` is never edited. Codex keeps its own ChatGPT sign-in or API key; the gateway's `x-citadel-api-key` is sent as `X-Corveil-Key`, never in `Authorization`.
+- **Upstream** — `auto` reads how Codex is signed in (`$CODEX_HOME/auth.json`): ChatGPT → `chatgpt_codex`, API key → `openai_api`, unknown → `chatgpt_codex`. Pin it with `chatgpt_codex` / `openai_api`. `--codex-upstream off` stops routing.
+- **Why opt-in** — `chatgpt_codex` forwards your ChatGPT subscription token, which OpenAI does not document; Corveil asks for an org banner before customers enable it.
+- **Requirements** — the gateway must carry an `x-citadel-api-key` (or `X-Corveil-Key`) header; any other gateway is not a Corveil gateway and Codex is not routed. A base URL with shell-special characters is also refused (logged).
+- **Which gateway** — the same rules as Claude, below; a Codex Manager uses its tagged workspace's gateway, else `managerGateway`.
+- **The key** — never in argv, a stored terminal command, `config.toml`, or `settings.local.json`: Crow types `export CROW_CORVEIL_GATEWAY_KEY='…' && ` into the pane right before the command. `op://` values are resolved at that moment.
+- **Restarts after toggling** — Codex's `resume --last` only finds threads recorded under the current provider, so the first restart of a Codex work session after you turn routing on (or off) opens a fresh thread. Manager resume (by thread id) is unaffected.
+- **Observability** — routed requests appear in Corveil's request log (`corveil control observability logs-list`, path `/v1/responses`, `upstream: chatgpt_codex|openai_api`). Corveil's `sessions-list` currently derives gateway sessions for Claude Code only.
+
+The launch log names the outcome for any session with a gateway:
+
+```
+[SessionService] Codex gateway for session <uuid>: routed via https://corveil.io/v1 (X-Corveil-Upstream: chatgpt_codex)
+[SessionService] Codex gateway for session <uuid>: not routed — the gateway has not opted Codex in (…)
+```
 
 ### Which gateway applies
 

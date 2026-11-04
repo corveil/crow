@@ -126,6 +126,67 @@ check "single header on launch line" \
   "ANTHROPIC_BASE_URL='https://corveil.io' ANTHROPIC_CUSTOM_HEADERS='x-key: Bearer sk-1' " \
   "$prefix"
 
+echo "== Codex gateway overrides (CROW-1407) =="
+# Rewrite config.json with Codex-specific workspaces. The key never appears in
+# the overrides, so no `op read` is needed for any of these.
+cat > "$DEV_ROOT/.claude/config.json" <<'JSON'
+{
+  "workspaces": [
+    { "name": "OptedIn", "gateway": { "baseURL": "https://corveil.io/",
+        "customHeaders": { "x-citadel-api-key": "op://Vault/Citadel/api_key" },
+        "codexUpstream": "chatgpt_codex" } },
+    { "name": "ApiKey", "gateway": { "baseURL": "https://corveil.io/v1",
+        "customHeaders": { "X-Corveil-Key": "sk-citadel-plain" },
+        "codexUpstream": "openai_api" } },
+    { "name": "Auto", "gateway": { "baseURL": "https://corveil.io",
+        "customHeaders": { "x-citadel-api-key": "sk-citadel-plain" },
+        "codexUpstream": "auto" } },
+    { "name": "NotOptedIn", "gateway": { "baseURL": "https://corveil.io",
+        "customHeaders": { "x-citadel-api-key": "sk-citadel-plain" } } },
+    { "name": "NotCorveil", "gateway": { "baseURL": "https://gw.example.com",
+        "customHeaders": { "Authorization": "Bearer x" }, "codexUpstream": "auto" } },
+    { "name": "Unsafe", "gateway": { "baseURL": "https://gw.example.com/$(id)",
+        "customHeaders": { "x-citadel-api-key": "k" }, "codexUpstream": "auto" } },
+    { "name": "Personal" }
+  ]
+}
+JSON
+expected_overrides() { # expected_overrides <base> <upstream>
+  local p="model_providers.crow-corveil"
+  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY' \
+    "$p" "$p" "'$1'" "$p" "$p" "$p" "$2" "$p"
+}
+WORKSPACE="OptedIn"
+out=$(codex_gateway_overrides 2>/dev/null)
+check "opted-in: /v1 appended, trailing slash dropped" "$(expected_overrides https://corveil.io/v1 chatgpt_codex)" "$out"
+check "opted-in: no key on the line" "0" "$([[ "$out" == *"RESOLVED-SECRET"* || "$out" == *"op://"* ]] && echo 1 || echo 0)"
+check "opted-in: no double quote (eval-safe)" "0" "$([[ "$out" == *'"'* ]] && echo 1 || echo 0)"
+WORKSPACE="ApiKey"
+check "existing /v1 kept, X-Corveil-Key header accepted" \
+  "$(expected_overrides https://corveil.io/v1 openai_api)" "$(codex_gateway_overrides 2>/dev/null)"
+WORKSPACE="NotOptedIn"
+check "gateway without codexUpstream: Codex not routed" "" "$(codex_gateway_overrides 2>/dev/null)"
+WORKSPACE="NotCorveil"
+check "non-Corveil gateway: Codex not routed" "" "$(codex_gateway_overrides 2>/dev/null)"
+WORKSPACE="Unsafe"
+check "shell-special base URL: Codex not routed" "" "$(codex_gateway_overrides 2>/dev/null)"
+WORKSPACE="Personal"
+check "no gateway: Codex not routed" "" "$(codex_gateway_overrides 2>/dev/null)"
+
+echo "== codex auth detection (auto) =="
+mkdir -p "$TMP/codexhome"
+WORKSPACE="Auto"
+export CODEX_HOME="$TMP/codexhome"
+echo '{"auth_mode":"chatgpt","tokens":{"id_token":"x"}}' > "$CODEX_HOME/auth.json"
+check "auto + ChatGPT sign-in → chatgpt_codex" "$(expected_overrides https://corveil.io/v1 chatgpt_codex)" "$(codex_gateway_overrides 2>/dev/null)"
+echo '{"auth_mode":"apikey","OPENAI_API_KEY":"sk-x"}' > "$CODEX_HOME/auth.json"
+check "auto + API key → openai_api" "openai_api" "$(codex_auth_upstream)"
+echo '{"OPENAI_API_KEY":"sk-x","tokens":null}' > "$CODEX_HOME/auth.json"
+check "auto, legacy file with only a key → openai_api" "openai_api" "$(codex_auth_upstream)"
+rm -f "$CODEX_HOME/auth.json"
+check "auto, no auth.json → chatgpt_codex fallback" "chatgpt_codex" "$(codex_auth_upstream)"
+unset CODEX_HOME
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$fail" -eq 0 ]]

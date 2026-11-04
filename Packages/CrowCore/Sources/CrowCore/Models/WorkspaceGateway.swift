@@ -14,10 +14,23 @@ import Foundation
 public struct WorkspaceGateway: Codable, Sendable, Equatable {
     public var baseURL: String
     public var customHeaders: [String: String]
+    /// Whether — and how — **Codex** launches route through this gateway too
+    /// (CROW-1407, ADR 0030). `nil` (the default, and every gateway written
+    /// before this field existed) means Codex is *not* routed: it launches
+    /// exactly as it did before, talking to OpenAI directly. Set, Codex is
+    /// pointed at the gateway's Corveil `/v1/responses` passthrough with
+    /// `X-Corveil-Upstream` chosen by this value. Opt-in because the
+    /// `chatgpt_codex` upstream forwards the user's ChatGPT subscription token,
+    /// which OpenAI does not document (see ADR 0030).
+    ///
+    /// Not a secret — it travels to the browser unredacted — but it is written
+    /// only through the local-only gateway doors, like the rest of the struct.
+    public var codexUpstream: CodexUpstream?
 
-    public init(baseURL: String, customHeaders: [String: String]) {
+    public init(baseURL: String, customHeaders: [String: String], codexUpstream: CodexUpstream? = nil) {
         self.baseURL = baseURL
         self.customHeaders = customHeaders
+        self.codexUpstream = codexUpstream
     }
 
     /// Whether this gateway has anything to apply. A gateway whose `baseURL` is
@@ -48,11 +61,35 @@ public struct WorkspaceGateway: Codable, Sendable, Equatable {
 
         baseURL = decodedBaseURL
         customHeaders = decodedHeaders
+        // Lenient on purpose: an unrecognized value (a newer Crow wrote a mode
+        // this build doesn't know) must not fail the decode — a gateway that
+        // won't decode makes `ConfigStore.loadConfig` return nil, and the next
+        // write then replaces the whole config with defaults. Unknown reads as
+        // "Codex not routed", the conservative answer.
+        codexUpstream = (try? container.decodeIfPresent(String.self, forKey: .codexUpstream))
+            .flatMap { $0 }
+            .flatMap(CodexUpstream.init(rawValue:))
     }
 
     private enum CodingKeys: String, CodingKey {
-        case baseURL, customHeaders
+        case baseURL, customHeaders, codexUpstream
     }
+}
+
+/// How a Codex launch routed through a ``WorkspaceGateway`` picks its Corveil
+/// upstream (CROW-1407). Corveil's `/v1/responses` passthrough forwards Codex's
+/// own `Authorization` unchanged and reads `X-Corveil-Upstream` to know where:
+/// a ChatGPT sign-in token only works against the ChatGPT Codex backend, an
+/// OpenAI API key only against the OpenAI API — so the value has to match how
+/// Codex is signed in, or every request fails.
+public enum CodexUpstream: String, Codable, Sendable, Equatable, CaseIterable {
+    /// Read Codex's own sign-in (`$CODEX_HOME/auth.json` `auth_mode`) at launch:
+    /// ChatGPT → `chatgpt_codex`, API key → `openai_api`.
+    case auto
+    /// Always `X-Corveil-Upstream: chatgpt_codex` (ChatGPT subscription sign-in).
+    case chatgptCodex = "chatgpt_codex"
+    /// Always `X-Corveil-Upstream: openai_api` (OpenAI API key).
+    case openaiAPI = "openai_api"
 }
 
 extension WorkspaceGateway {
@@ -163,6 +200,20 @@ extension WorkspaceGateway {
         else { return self }
         var headers = customHeaders
         for (name, value) in headers where value == oldSecret { headers[name] = newSecret }
-        return WorkspaceGateway(baseURL: baseURL, customHeaders: headers)
+        return WorkspaceGateway(baseURL: baseURL, customHeaders: headers, codexUpstream: codexUpstream)
+    }
+
+    /// This gateway with `stored`'s ``codexUpstream`` carried over when this one
+    /// has none (CROW-1407). Every writer that *rebuilds* a gateway from a
+    /// request body — the web editor, `crow gateway set`, the Corveil org picker —
+    /// constructs a fresh struct from base URL + headers, which would silently
+    /// drop the Codex opt-in on any unrelated edit. They run their result through
+    /// here so only an explicit change moves it. A clear (`nil` gateway) never
+    /// reaches this, so clearing still drops everything.
+    public func carryingCodexUpstream(from stored: WorkspaceGateway?) -> WorkspaceGateway {
+        guard codexUpstream == nil, let kept = stored?.codexUpstream else { return self }
+        var copy = self
+        copy.codexUpstream = kept
+        return copy
     }
 }

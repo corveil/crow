@@ -365,6 +365,81 @@ gateway_launch_prefix() {
     "$(posix_quote "$WS_BASE_URL")" "$(posix_quote "$WS_CUSTOM_HEADERS")"
 }
 
+# How Codex is signed in, as a Corveil upstream (CROW-1407). Mirrors
+# CodexGatewayArgs.readAuthMode in Swift: `auth_mode` in $CODEX_HOME/auth.json
+# wins, then whichever credential is populated; unknown → chatgpt_codex (a
+# wrong guess is a loud 401 at the gateway, never a silent bypass). Reads the
+# mode only — never prints a token.
+codex_auth_upstream() {
+  local auth="${CODEX_HOME:-$HOME/.codex}/auth.json" mode=""
+  if [[ -f "$auth" ]]; then
+    mode=$(jq -r '(.auth_mode // "") | ascii_downcase' "$auth" 2>/dev/null) || mode=""
+    if [[ "$mode" == *chatgpt* ]]; then echo chatgpt_codex; return 0; fi
+    if [[ "$mode" == *api* ]]; then echo openai_api; return 0; fi
+    if jq -e '.tokens | type == "object"' "$auth" >/dev/null 2>&1; then echo chatgpt_codex; return 0; fi
+    if jq -e '(.OPENAI_API_KEY // "") | length > 0' "$auth" >/dev/null 2>&1; then echo openai_api; return 0; fi
+  fi
+  echo chatgpt_codex
+}
+
+# The `-c` overrides that route Codex through this workspace's Corveil gateway
+# (CROW-1407) — mirrors CodexGatewayArgs.configOverrides in Swift; keep the two
+# byte-identical. Prints nothing (Codex launches exactly as before) unless the
+# gateway opted Codex in (`codexUpstream`) and carries a Corveil key header.
+#
+# The KEY IS NOT HERE. The overrides name the env var Codex reads it from
+# (`env_http_headers`), and the daemon types `export CROW_CORVEIL_GATEWAY_KEY=… &&`
+# into the pane when it pastes this command — so the key never rides in
+# `crow new-terminal --command`'s argv. That is also why this needs no `op read`.
+# No `"` anywhere: the result sits inside eval_prompt_launch's `eval "…"`.
+codex_gateway_overrides() {
+  local config_path="$DEV_ROOT/.claude/config.json"
+  [[ -f "$config_path" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local gateway
+  gateway=$(jq -c --arg name "$WORKSPACE" \
+    '.workspaces[]? | select(.name == $name) | .gateway // empty' \
+    "$config_path" 2>/dev/null) || return 0
+  [[ -n "$gateway" && "$gateway" != "null" ]] || return 0
+
+  local mode
+  mode=$(jq -r '.codexUpstream // ""' <<< "$gateway")
+  [[ -n "$mode" ]] || return 0
+
+  local key_headers
+  key_headers=$(jq -r '[(.customHeaders // {}) | keys[] | ascii_downcase
+    | select(. == "x-citadel-api-key" or . == "x-corveil-key")] | length' <<< "$gateway")
+  if [[ "$key_headers" == "0" ]]; then
+    log "Codex gateway: not routed — the gateway has no x-citadel-api-key / X-Corveil-Key header"
+    return 0
+  fi
+
+  local base
+  base=$(jq -r '.baseURL // ""' <<< "$gateway")
+  base="${base#"${base%%[![:space:]]*}"}"
+  base="${base%"${base##*[![:space:]]}"}"
+  while [[ "$base" == */ ]]; do base="${base%/}"; done
+  [[ -n "$base" ]] || return 0
+  local unsafe='["$`\\!'"'"'[:space:][:cntrl:]]'
+  if [[ "$base" =~ $unsafe ]]; then
+    log "Codex gateway: not routed — the gateway base URL contains shell-special characters"
+    return 0
+  fi
+  [[ "$base" == */v1 ]] || base="$base/v1"
+
+  local upstream
+  case "$mode" in
+    chatgpt_codex|openai_api) upstream="$mode" ;;
+    auto) upstream=$(codex_auth_upstream) ;;
+    *) log "Codex gateway: not routed — unknown codexUpstream '$mode'"; return 0 ;;
+  esac
+
+  local p="model_providers.crow-corveil"
+  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY' \
+    "$p" "$p" "$(posix_quote "$base")" "$p" "$p" "$p" "$upstream" "$p"
+  log "Codex gateway: routing through $base (X-Corveil-Upstream: $upstream)"
+}
+
 die() {
   local step="$1" msg="$2"
   local partial=""
@@ -1602,7 +1677,10 @@ launch_codex() {
   # That left the web terminal with nothing to scroll. Inline, Codex writes
   # its transcript into the pane's scrollback like Cursor does. Keep this in
   # step with OpenAICodexAgent.inlineRenderingFlag.
-  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin --no-alt-screen" "$prompt_path")"
+  #
+  # CROW-1407: the gateway overrides (empty without an opted-in Corveil
+  # gateway) go right after the binary, like CodexGatewayArgs in Swift.
+  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin$(codex_gateway_overrides) --no-alt-screen" "$prompt_path")"
   create_agent_terminal "OpenAI Codex" "$launch_cmd"
 }
 

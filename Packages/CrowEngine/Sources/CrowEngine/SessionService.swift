@@ -809,11 +809,17 @@ public final class SessionService {
     ) -> SessionTerminal {
         var t = terminal
         let session = appState.sessions.first(where: { $0.id == t.sessionID })
+        // CROW-1407: a routed Codex Manager command needs its gateway key
+        // exported first. Prepended to the *pasted* text only — `t.command`
+        // (persisted, and served by list-terminals/get-state) stays key-free.
+        let pasteText = pasteCommand
+            ? t.command.map { codexGatewayKeyPrefix(sessionID: t.sessionID, command: $0) + $0 }
+            : nil
         let registration = TerminalRegistration(
             id: t.id,
             name: t.name,
             cwd: t.cwd,
-            command: pasteCommand ? t.command : nil,
+            command: pasteText,
             trackReadiness: trackReadiness,
             agentKind: session?.agentKind,
             // Covers the Manager, whose terminal is built without
