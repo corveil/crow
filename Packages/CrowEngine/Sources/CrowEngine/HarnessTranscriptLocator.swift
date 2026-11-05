@@ -118,27 +118,10 @@ public enum HarnessTranscriptLocator {
     }
 
     /// `sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`. Days are walked
-    /// newest-first so a live handoff stops at the recent file.
+    /// newest-first so a live handoff stops at the recent file. Shared with the
+    /// Manager's provider check (`CodexThreadProvider`, CROW-1409).
     private static func codexRollout(id: String, sessionsDir: String) -> String? {
-        let wanted = id.lowercased()
-        return walkDateTree(sessionsDir) { day in
-            guard let files = try? FileManager.default.contentsOfDirectory(
-                at: day, includingPropertiesForKeys: [.isRegularFileKey]
-            ) else { return nil }
-            let matches = files.filter { url in
-                // Same UUID-from-filename rule as `BackfillScanner.codexUID`:
-                // the last five hyphen groups of `rollout-<ts>-<uuid>`.
-                let stem = url.deletingPathExtension().lastPathComponent
-                guard stem.lowercased().hasPrefix("rollout-") else { return false }
-                let groups = stem.split(separator: "-")
-                guard groups.count >= 5 else { return false }
-                return groups.suffix(5).joined(separator: "-").lowercased() == wanted
-            }
-            guard let file = matches.max(by: { $0.lastPathComponent < $1.lastPathComponent }) else {
-                return nil
-            }
-            return regularFile(file.path)
-        }
+        CodexRollout.path(conversationID: id, sessionsDir: sessionsDir)
     }
 
     /// `sessions/<YYYY>/<MM>/<DD>/<id>/session.jsonl`.

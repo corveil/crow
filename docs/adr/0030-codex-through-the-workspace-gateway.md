@@ -77,8 +77,10 @@ prefix works.
 - **Restart continuity across the toggle.** Because `resume --last` is
   provider-filtered (force 2), a `.work`/`.job`/`.review` restart right after
   routing is turned on (or off) opens a fresh thread instead of the previous
-  one. Resume by id, the Manager's path (ADR 0028), is unaffected: a thread
-  resumes by id under a different provider.
+  one. ~~Resume by id, the Manager's path (ADR 0028), is unaffected: a thread
+  resumes by id under a different provider.~~ **Corrected 2026-11-05
+  (#1409):** that was checked only with `codex exec resume` on 0.147.0, and it
+  is wrong for the TUI. See the amendment below.
 - A key that can't be resolved (a failed `op read`) is exported empty. Codex
   then reaches Corveil without `X-Corveil-Key` and gets a 401, failing loudly
   rather than silently falling back to OpenAI direct, the same rule
@@ -90,6 +92,46 @@ prefix works.
   (`gateway-set`, `/config/*-gateway`), like the rest of the gateway. Every
   writer that rebuilds a gateway from base URL + headers carries the stored
   value forward, so an unrelated edit doesn't drop it.
+
+### Amendment — #1409 (2026-11-05): resume by id is provider-checked too
+
+Codex 0.166.0's TUI **refuses** a by-id resume when the thread's recorded
+`model_provider` differs from the launch's, and the pane drops to a shell:
+
+```
+Error: Failed to resume session from …/rollout-…-<id>.jsonl: thread/resume failed
+during TUI bootstrap: thread/resume failed: This chat uses alpha, but your current
+provider is beta. Switch to alpha to continue. (code -32600), data:
+{"type":"modelProviderMismatch","modelProvider":"alpha","currentModelProvider":"beta"}
+```
+
+Reproduced in a pty against a scratch `CODEX_HOME` (a thread recorded under
+provider `alpha`, resumed under `beta`); the same id resumes normally under
+`alpha`. So the Manager's resume by id (ADR 0028) breaks whenever the provider
+changes under a stored id: a Manager created before routing was turned on,
+routing turned off for a `crow-corveil` thread, or a thread the operator started
+by hand with their own provider.
+
+**Decision.** `OpenAICodexAgent.managerLaunchCommand` resumes by id only when
+the thread's recorded provider equals the launch's, and otherwise launches a
+fresh TUI and logs one line naming both providers (`CodexThreadProvider`).
+
+- The **recorded** provider is read from the rollout on disk,
+  `session_meta.payload.model_provider` on the first line of
+  `<codexHome>/sessions/…/rollout-<ts>-<id>.jsonl`. It is not stored beside
+  `harnessConversationID`: the rollout is what Codex checks, it covers every id
+  captured before this change, and it can't drift from a copy in `store.json`.
+- The **launch** provider is `crow-corveil` when routed, else `config.toml`'s
+  `model_provider` (the active `profile`'s wins), else Codex's default `openai`.
+- An **unknown** recorded provider (rollout missing, or no `model_provider` in
+  it) counts as a mismatch. A by-id resume Codex can't match fails the same way,
+  so a fresh TUI is the safe outcome. The stored id is not cleared; the fresh
+  thread's `SessionStart` hook replaces it.
+
+`resume --last` (`.work` / `.job` / `.review` restarts) is unchanged and still
+behaves as force 2 says on 0.166.0: it skips another provider's thread and opens
+a fresh TUI rather than erroring (same scratch setup). The restart-continuity
+consequence above still applies to those paths.
 
 ## Alternatives considered
 
@@ -113,12 +155,13 @@ prefix works.
 
 ## References
 
-- Ticket: corveil/crow#1407
+- Ticket: corveil/crow#1407; correction corveil/crow#1409
 - Related ADRs: [0014](./0014-pluggable-coding-agent-adapter.md),
   [0015](./0015-harness-capability-tiers.md),
   [0020](./0020-first-class-corveil-integration.md),
   [0028](./0028-manager-resume-by-id.md)
 - Code: `Packages/CrowCodex/Sources/CrowCodex/CodexGatewayArgs.swift`,
+  `Packages/CrowCodex/Sources/CrowCodex/CodexThreadProvider.swift`,
   `Packages/CrowEngine/Sources/CrowEngine/CodexGatewayLaunch.swift`,
   `Packages/CrowCore/Sources/CrowCore/Models/WorkspaceGateway.swift`,
   `skills/crow-workspace/setup.sh` (`codex_gateway_overrides`)

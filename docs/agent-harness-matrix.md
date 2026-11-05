@@ -249,7 +249,10 @@ managed-terminal command needs hook/env prep.
   `codex resume --last` rather than dropping into a bare TUI
   (`OpenAICodexAgent.autoLaunchCommand`, #830 — the earlier MVP no-resume pin is
   retired). **Manager cold-start** uses `codex resume <id>` when Crow has
-  captured the thread, never cwd-scoped `resume --last` (CROW-1281).
+  captured the thread, never cwd-scoped `resume --last` (CROW-1281) — but only
+  when the rollout's recorded `model_provider` matches the launch's; otherwise
+  (or when it can't be read) a fresh TUI, because Codex 0.166 refuses a
+  cross-provider resume by id (#1409, ADR 0030 amendment).
 - **OpenCode:** review/job sessions run headless `opencode run "$prompt"` on
   first launch, then chain `; opencode --continue` to reopen the same session in
   the TUI on restart (`resumeTUICommand` / `firstLaunchChainedCommand`,
@@ -1075,8 +1078,11 @@ exhaustive, including the two Manager gateway writes noted below):
   stored terminal `command`, `config.toml` or `settings.local.json`. A Codex →
   Claude handoff builds a plain Claude command in a fresh pane (no Codex
   setting survives); Claude → Codex still clears the `ANTHROPIC_*` block. Off by
-  default; `resume --last` is provider-filtered, so toggling routing makes the
-  next `.work` restart open a fresh thread (resume-by-id is unaffected).
+  default; `resume --last` is provider-filtered (still true on 0.166: it opens
+  fresh, it doesn't error), so toggling routing makes the next `.work` restart
+  open a fresh thread. Resume by id is provider-checked too, and on 0.166 it
+  *errors* on a mismatch, so a Codex Manager whose stored thread was recorded
+  under another provider launches a fresh TUI instead (#1409).
 - **OTEL telemetry env** — `AgentLaunch.prepareAgentLaunchText` prepends the
   `OTEL_*` exporter vars, gated on `agent.kind == .claudeCode` (Codex has no OTLP
   equivalent).

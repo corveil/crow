@@ -5,7 +5,10 @@ import Testing
 
 @Suite("OpenAICodexAgent", .serialized)
 struct OpenAICodexAgentTests {
-    private let agent = OpenAICodexAgent()
+    /// Resume-by-id tests pin "the stored thread matches this launch's
+    /// provider" so they never read the real `~/.codex` (CROW-1409).
+    private let agent = OpenAICodexAgent(threadProviders: .init(
+        recorded: { _ in "openai" }, configured: { "openai" }))
 
     @Test func protocolMembers() {
         #expect(agent.kind == .codex)

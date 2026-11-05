@@ -142,7 +142,9 @@ struct CodexGatewayArgsTests {
 /// CROW-1407: the gateway route reaches every Codex launch builder.
 @Suite("OpenAICodexAgent gateway route")
 struct OpenAICodexAgentGatewayTests {
-    private let agent = OpenAICodexAgent()
+    /// The stored thread was recorded under the routed provider (CROW-1409).
+    private let agent = OpenAICodexAgent(threadProviders: .init(
+        recorded: { _ in CodexGatewayArgs.providerID }, configured: { "openai" }))
     private let route = CodexGatewayArgs.Route(baseURL: "https://corveil.io/v1", upstream: "chatgpt_codex")
     private var overrides: String { CodexGatewayArgs.configOverrides(route) }
 
