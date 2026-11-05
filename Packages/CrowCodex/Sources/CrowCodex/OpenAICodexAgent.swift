@@ -87,12 +87,19 @@ public struct OpenAICodexAgent: CodingAgent {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path,
     ]
 
+    /// How a Manager launch learns which provider its stored thread was
+    /// recorded under and which one it will use (CROW-1409). Live reads
+    /// `$CODEX_HOME`; tests inject fixed answers.
+    public let threadProviders: CodexThreadProviders
+
     public init(
         hookConfigWriter: any HookConfigWriter = CodexHookConfigWriter(),
-        stateSignalSource: any StateSignalSource = CodexSignalSource()
+        stateSignalSource: any StateSignalSource = CodexSignalSource(),
+        threadProviders: CodexThreadProviders = .live
     ) {
         self.hookConfigWriter = hookConfigWriter
         self.stateSignalSource = stateSignalSource
+        self.threadProviders = threadProviders
         self.launcher = CodexLauncher()
     }
 
@@ -144,6 +151,10 @@ public struct OpenAICodexAgent: CodingAgent {
             // but never took a turn) `codex resume --last` gracefully opens a new
             // interactive TUI rather than erroring — verified against 0.141.0 in
             // a pty, so no `|| codex` fallback is needed (#843 review round 3).
+            // `--last` is also provider-filtered: a thread recorded under another
+            // `model_provider` (routing toggled, CROW-1407) is skipped and a
+            // fresh TUI opens — still a clean open, not an error, on 0.166.0
+            // (CROW-1409; unlike by-id resume, see `managerLaunchCommand`).
             // No env prefix (Codex has no OTEL equivalent), and no `--rc` —
             // Codex ships no such flag, so `remoteControlEnabled` never changes
             // the launch text even though `supportsRemoteControl` is `true`
@@ -314,12 +325,36 @@ public struct OpenAICodexAgent: CodingAgent {
         // command rather than on `supportsRemoteControl`
         // (`SessionService.ensureManagerSession`), so the CROW-1001 flip
         // leaves this path exactly as it was — same as Cursor's Manager.
+        //
+        // CROW-1409: Codex 0.166 refuses a by-id resume recorded under another
+        // `model_provider` and drops the pane to a shell, so the id is dropped
+        // (fresh TUI) unless the thread's recorded provider is known to equal
+        // this launch's. Unknown counts as a mismatch.
         let codexPath = (launchBinary() ?? "codex") + CodexGatewayArgs.configOverrides(gatewayRoute)
-        if let id = HarnessConversationID.sanitize(conversationID) {
+        if let id = resumableThreadID(conversationID, gatewayRoute: gatewayRoute) {
             let quoted = "'" + id.replacingOccurrences(of: "'", with: "'\\''") + "'"
             return "\(codexPath) resume \(quoted) \(Self.inlineRenderingFlag)"
         }
         return "\(codexPath) \(Self.inlineRenderingFlag)"
+    }
+
+    /// `conversationID` when a by-id resume will open it, else nil (CROW-1409).
+    /// Logs one line when a stored id is dropped, naming both providers.
+    func resumableThreadID(
+        _ conversationID: String?, gatewayRoute: CodexGatewayArgs.Route?
+    ) -> String? {
+        guard let id = HarnessConversationID.sanitize(conversationID) else { return nil }
+        let current = CodexThreadProvider.launchProvider(
+            route: gatewayRoute, configured: threadProviders.configured)
+        guard let recorded = threadProviders.recorded(id) else {
+            CrowLog.info("[OpenAICodexAgent] Manager thread \(id) has no readable rollout provider (this launch uses '\(current)'); starting a fresh Codex TUI instead of resuming by id (CROW-1409)")
+            return nil
+        }
+        guard recorded == current else {
+            CrowLog.info("[OpenAICodexAgent] Manager thread \(id) was recorded under model_provider '\(recorded)' but this launch uses '\(current)'; starting a fresh Codex TUI, since Codex refuses a cross-provider resume (CROW-1409)")
+            return nil
+        }
+        return id
     }
 
     /// Codex TUI exposes `/rename` for the current thread (CROW-629).

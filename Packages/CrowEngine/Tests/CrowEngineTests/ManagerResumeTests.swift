@@ -113,13 +113,34 @@ struct ManagerResumeCommandTests {
     }
 
     @Test func managerCommandResumesCodexByThreadIdNotLast() {
-        AgentRegistry.shared.register(OpenAICodexAgent())
+        // The stored thread matches this (unrouted) launch's provider.
+        AgentRegistry.shared.register(OpenAICodexAgent(threadProviders: .init(
+            recorded: { _ in "openai" }, configured: { "openai" })))
         let svc = service()
         var session = Session(name: "Manager 2", kind: .manager, agentKind: .codex)
         session.harnessConversationID = "thread-7"
         let cmd = svc.managerCommand(for: session)
         #expect(cmd.contains("resume 'thread-7'"))
         #expect(!cmd.contains("--last"))
+    }
+
+    /// CROW-1409: a thread recorded under another `model_provider` (or one whose
+    /// rollout can't be read) launches a fresh Codex TUI instead of a by-id
+    /// resume that Codex 0.166 rejects.
+    @Test func managerCommandDropsCodexThreadRecordedUnderAnotherProvider() {
+        for recorded in ["corveil", nil] as [String?] {
+            AgentRegistry.shared.register(OpenAICodexAgent(threadProviders: .init(
+                recorded: { _ in recorded }, configured: { "openai" })))
+            let svc = service()
+            var session = Session(name: "Manager 2", kind: .manager, agentKind: .codex)
+            session.harnessConversationID = "thread-7"
+            let cmd = svc.managerCommand(for: session)
+            #expect(!cmd.contains("resume"), "recorded=\(recorded ?? "nil")")
+            #expect(cmd.hasSuffix("--no-alt-screen"))
+            // The stored id is not cleared by building the command; the next
+            // SessionStart hook replaces it with the fresh thread's.
+            #expect(session.harnessConversationID == "thread-7")
+        }
     }
 
     @Test func twoManagersWithIdsProduceDistinctResumeCommands() {
