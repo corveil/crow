@@ -184,6 +184,43 @@ extension TmuxBackend {
         }
     }
 
+    /// The visible rows of terminal `id`'s pane as plain text (`capture-pane
+    /// -p`, no history, no escapes). Nil when the window is not bound or tmux
+    /// fails. The Codex startup-prompt watch reads this (CROW-1410).
+    public func captureVisibleText(id: UUID) -> String? {
+        guard let windowIndex = bindings[id] else { return nil }
+        do {
+            let ctrl = try ensureRunningServer()
+            return try ctrl.captureVisiblePane(
+                target: "\(ctrl.sessionName):\(windowIndex)", escapes: false)
+        } catch {
+            reportIfTimeout(error)
+            return nil
+        }
+    }
+
+    /// Press `keys` in terminal `id`'s pane, one `send-keys` call per key, in
+    /// order, after cancelling copy-mode the way ``sendText(id:text:)`` does.
+    /// Each entry is a tmux key name (`"Enter"`) or a literal character
+    /// (`"2"`). For answering a TUI menu, where a paste would be wrong
+    /// (CROW-1410).
+    public func sendKeys(id: UUID, keys: [String]) throws {
+        guard let windowIndex = bindings[id] else {
+            throw TmuxBackendError.unknownTerminal(id)
+        }
+        do {
+            let ctrl = try ensureRunningServer()
+            let target = "\(ctrl.sessionName):\(windowIndex)"
+            try ctrl.cancelCopyModeIfActive(target: target)
+            for key in keys {
+                try ctrl.sendKeys(target: target, keys: [key])
+            }
+        } catch {
+            reportIfTimeout(error)
+            throw error
+        }
+    }
+
     /// Direction for `searchInScrollback`. `backward` walks toward older
     /// output (the common case for Cmd+F on terminal history); `forward`
     /// walks toward newer output.

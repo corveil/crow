@@ -179,6 +179,12 @@ public final class SessionService {
     /// tmux surface lifecycle + crash recovery (CROW-1113).
     lazy var surfaces = SessionSurfaceController(owner: self)
 
+    /// Answers Codex's model-migration screen after a launch (CROW-1410).
+    lazy var codexStartupPrompts = CodexStartupPromptWatcher(
+        onNeedsOperator: { [unowned self] terminalID, reason in
+            self.markCodexPromptNeedsOperator(terminalID: terminalID, reason: reason)
+        })
+
     /// Upgrade the well-known primary Manager session from `.work` (how it was
     /// persisted before `SessionKind.manager` existed) to `.manager`. Returns
     /// `true` when a migration was applied. Pure/`nonisolated` so it can run on
@@ -834,6 +840,8 @@ public final class SessionService {
                 return t
             }
             t.tmuxBinding = binding
+            // CROW-1410: a pasted Codex Manager launch gets the startup-prompt watch.
+            if pasteCommand { armCodexStartupPromptWatch(terminalID: t.id, command: t.command) }
         } catch {
             CrowLog.info("[SessionService] tmux registerTerminal failed (\(error)); terminal \(t.id) will not render")
         }

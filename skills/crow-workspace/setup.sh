@@ -1680,7 +1680,13 @@ launch_codex() {
   #
   # CROW-1407: the gateway overrides (empty without an opted-in Corveil
   # gateway) go right after the binary, like CodexGatewayArgs in Swift.
-  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin$(codex_gateway_overrides) --no-alt-screen" "$prompt_path")"
+  #
+  # CROW-1410: `-c check_for_update_on_startup=false` keeps Codex's "Update
+  # available" screen from stalling the launch. It also marks the command as
+  # a Codex launch, which is what arms the daemon's watch for the
+  # model-migration screen. Keep it in step with
+  # CodexStartupNotices.configOverrides; it goes before the gateway overrides.
+  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin -c check_for_update_on_startup=false$(codex_gateway_overrides) --no-alt-screen" "$prompt_path")"
   create_agent_terminal "OpenAI Codex" "$launch_cmd"
 }
 

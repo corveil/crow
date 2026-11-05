@@ -32,7 +32,7 @@ struct OpenAICodexAgentTests {
         // Work sessions resume the most recent recorded thread on an app
         // restart instead of reopening a blank TUI (#830) — prefer the absolute
         // binary path when `findBinary()` resolves, otherwise the bare token.
-        #expect(cmd?.hasSuffix("codex resume --last --no-alt-screen\n") == true)
+        #expect(cmd?.hasSuffix("codex -c check_for_update_on_startup=false resume --last --no-alt-screen\n") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
@@ -47,7 +47,7 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: 4318
         )
-        #expect(cmd?.hasSuffix("codex resume --last --no-alt-screen\n") == true)
+        #expect(cmd?.hasSuffix("codex -c check_for_update_on_startup=false resume --last --no-alt-screen\n") == true)
         // No OTEL env-var prefix and no review/job prompt file should be
         // referenced for a plain work session.
         #expect(cmd?.contains("OTEL_") == false)
@@ -92,7 +92,7 @@ struct OpenAICodexAgentTests {
         let fresh = agent.managerLaunchCommand(
             sessionName: "Manager", remoteControlEnabled: false,
             autoPermissionMode: false, telemetryPort: nil)
-        #expect(fresh == "codex --no-alt-screen" || fresh.hasSuffix("codex --no-alt-screen"))
+        #expect(fresh == "codex -c check_for_update_on_startup=false --no-alt-screen" || fresh.hasSuffix("codex -c check_for_update_on_startup=false --no-alt-screen"))
         #expect(!fresh.contains("resume"))
 
         let resumed = agent.managerLaunchCommand(
@@ -163,7 +163,7 @@ struct OpenAICodexAgentTests {
                 .appendingPathComponent("crow-codex-\(sessionID.uuidString)-prompt.md"))
         }
         #expect(cmd.hasPrefix("cd '/tmp/wt' && "))
-        #expect(cmd.contains("codex \(OpenAICodexAgent.inlineRenderingFlag) $(printf"))
+        #expect(cmd.contains("codex\(CodexStartupNotices.configOverrides) \(OpenAICodexAgent.inlineRenderingFlag) $(printf"))
     }
 
     @Test func autoLaunchCommandReviewSessionFirstLaunchFeedsPrompt() {
@@ -347,7 +347,7 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        #expect(cmd == "/bin/sh resume --last --no-alt-screen\n")
+        #expect(cmd == "/bin/sh -c check_for_update_on_startup=false resume --last --no-alt-screen\n")
     }
 
     @Test func findBinaryIgnoresOverrideWhenPathMissing() {

@@ -74,6 +74,17 @@ public struct OpenAICodexAgent: CodingAgent {
     /// version gate, and it outranks a user's `tui.alternate_screen` setting.
     public static let inlineRenderingFlag = "--no-alt-screen"
 
+    /// The binary plus the root-level `-c` overrides every Crow Codex launch
+    /// carries, in order: the startup-notice suppression
+    /// (`CodexStartupNotices.configOverrides`, CROW-1410), then the gateway
+    /// route (`CodexGatewayArgs.configOverrides`, CROW-1407, empty when
+    /// unrouted). `CodexLauncher` and `setup.sh`'s `launch_codex` build the
+    /// same prefix.
+    public static func launchPrefix(binary: String?, gatewayRoute: CodexGatewayArgs.Route?) -> String {
+        (binary ?? "codex") + CodexStartupNotices.configOverrides
+            + CodexGatewayArgs.configOverrides(gatewayRoute)
+    }
+
     private let launcher: CodexLauncher
 
     /// Last-resort search paths for the `codex` binary, used only when the
@@ -131,7 +142,7 @@ public struct OpenAICodexAgent: CodingAgent {
         telemetryPort: UInt16?,
         gatewayRoute: CodexGatewayArgs.Route?
     ) -> String? {
-        let codexPath = (launchBinary() ?? "codex") + CodexGatewayArgs.configOverrides(gatewayRoute)
+        let codexPath = Self.launchPrefix(binary: launchBinary(), gatewayRoute: gatewayRoute)
         // CROW-1319: render inline on every path (see `inlineRenderingFlag`).
         // A fresh launch takes the flag after the binary; a resume takes it
         // after `resume --last`, whose arguments flatten Codex's TUI options.
@@ -330,7 +341,7 @@ public struct OpenAICodexAgent: CodingAgent {
         // `model_provider` and drops the pane to a shell, so the id is dropped
         // (fresh TUI) unless the thread's recorded provider is known to equal
         // this launch's. Unknown counts as a mismatch.
-        let codexPath = (launchBinary() ?? "codex") + CodexGatewayArgs.configOverrides(gatewayRoute)
+        let codexPath = Self.launchPrefix(binary: launchBinary(), gatewayRoute: gatewayRoute)
         if let id = resumableThreadID(conversationID, gatewayRoute: gatewayRoute) {
             let quoted = "'" + id.replacingOccurrences(of: "'", with: "'\\''") + "'"
             return "\(codexPath) resume \(quoted) \(Self.inlineRenderingFlag)"

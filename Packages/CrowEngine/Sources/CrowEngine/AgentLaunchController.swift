@@ -98,6 +98,8 @@ final class AgentLaunchController {
         // Ensure a trailing newline so TmuxBackend.sendText delivers Enter.
         TerminalRouter.send(routedTerminal, text: text.hasSuffix("\n") ? text : text + "\n")
         appState.terminalReadiness[terminalID] = .agentLaunched
+        // CROW-1410: answer Codex's model-migration screen if it comes up.
+        owner.armCodexStartupPromptWatch(terminalID: terminalID, command: command)
     }
 
     /// Surface a refused `.work` launch in the pane instead of starting the
@@ -551,6 +553,7 @@ final class AgentLaunchController {
         if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
             let codexKeyPrefix = owner.codexGatewayKeyPrefix(for: session, command: command)
             TerminalRouter.send(routedTerminal, text: gatewayPrefix + codexKeyPrefix + command)
+            owner.armCodexStartupPromptWatch(terminalID: terminalID, command: command)
         } else {
             CrowLog.info("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")
         }

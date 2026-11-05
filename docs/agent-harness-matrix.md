@@ -992,6 +992,38 @@ verified against the installed binary: `agent --list-models --bogus` errors,
 errors with tip *"use '-- --bogus'"*. Check the CLI before enabling it anywhere
 else.
 
+### Startup prompts (Codex, CROW-1410)
+
+Codex can stop before its first turn on a full-screen prompt that needs a
+keypress, which stalls every launch nobody is watching: jobs, reviews, seeded
+Scratch Managers, handoffs. Two screens matter. Both were read from the
+`rust-v0.166.0` source of openai/codex and reproduced on codex-cli **0.166.0**
+in a scratch `CODEX_HOME` (offline: a dummy `requires_openai_auth = false`
+provider plus a `model_catalog_json` whose current model carries an `upgrade`),
+never against `~/.codex`.
+
+| Screen | When Codex shows it | How Crow handles it |
+|---|---|---|
+| **Update available** (`update_prompt.rs`). Default highlight is *Update now*, which runs `npm install -g @openai/codex` | `version.json` names a newer release, and **no prompt was passed on argv** (`lib.rs` skips it then). So it blocks Managers and every `resume`, not seeded launches | Suppressed by a per-run key: `-c check_for_update_on_startup=false` (`CodexStartupNotices.configOverrides`), on every Crow Codex launch: `OpenAICodexAgent` (all kinds, fresh and resume, Manager), `CodexLauncher` (handoff), `setup.sh` `launch_codex`. Verified: with a pending `9.9.9`, the bare launch shows the screen and the override opens straight to the composer. It also stops Codex's in-session "new version" notice |
+| **Model migration** (`model_migration.rs`, *"Meet GPT-6 Sol … 1. Try new model / 2. Use existing model"*) | The server's model catalog gives the current model an `upgrade`. Shown **with or without** a prompt on argv | **No key exists.** `startup_prompts.rs` skips it only when `notice.model_migrations[<current>] == <target>` (or for the two retired `hide_gpt5_1…` slugs). Both slugs come from the catalog fetched at startup, so no override can be written in advance (verified: `-c notice.model_migrations.crow-old=crow-new` suppresses only that exact pair). Crow reads the pane instead (`CodexStartupPromptWatcher`) and presses `2`, then Enter, which keeps the current model. Codex writes the ack to `config.toml` itself, as it would for the operator |
+
+The watch is armed wherever a Codex launch is typed into a pane (grep the
+`armCodexStartupPromptWatch` call sites), keyed on the `check_for_update_on_startup` override
+being in the command (`CodexStartupNotices.isCodexLaunch`). It polls the visible
+rows once a second for 180s. It answers only when the bottom three non-blank rows
+are exactly the two options and the `enter/esc confirm` hint, so a transcript
+that quotes the screen never matches (the composer is always the bottom of a
+running session). `2` matters: Enter and Esc both confirm the *highlighted*
+option, and *Try new model* is highlighted first. It re-answers a lost keypress
+up to three times. When the current model has left the catalog, the screen has
+no keep-current option (`enter/esc continue`); every answer switches models, so
+Crow presses nothing and marks the session `.waiting` for the operator.
+
+Other startup screens need nothing: folder trust and per-hook trust are seeded
+(`CodexTrustSeeder`, CROW-1381), and the GovCloud guidance screen
+(`notice.hide_gov_cloud_guidance`) appears only when the account itself needs GovCloud guidance. It is not
+suppressed: the screen couldn't be triggered here to prove that key works.
+
 ### Gateway env / trust seed / telemetry
 
 Three capabilities the protocol doesn't abstract — historically Claude-specific
@@ -1276,6 +1308,7 @@ against current upstream CLIs.
 | Codex honors `async: true` (below the pin it *skips* the entry, breaking state detection) | Codex **≥ 0.148.0** (gate lives in `CodexVersionProbe.minimumAsyncHookVersion`) | `CodexVersionProbe` / `CodexHookConfigWriter.asyncEvents` | 2026-08-20 (CROW-1065) — **closed**. Upstream `discovery.rs` on `rust-v0.148.0` computes `runs_async = async && event != SessionEnd` (the "not supported yet" skip is gone). `0.148.0` shipped **stable** on 2026-08-18 (npm `latest` = `0.149.0` on 2026-08-20), so the gate now passes on real installs — earlier the reason held (2026-08-13, CROW-999) but `0.148.0` was still pre-release. Async **timing** is now resolved **by construction**: `PostToolUse` is the only async event and its sole mutation (`lastToolActivity`) is persistence-excluded + reader-less, while completion is owned by the sync `Stop` — so no straggler-after-`Stop` ordering is observable on the card (proof over all orderings; pinned by `lateAsyncPostToolUseAfterStopStaysDone`). A live 0.148.0+ TUI trace stays a nice-to-have human re-check. **CROW-1177 keeps this proof:** `Interrupt` is registered but **sync** (it mutates `activityState` → `.waiting`) |
 | Codex `Interrupt` hook (abort path; must not look like `Stop`) | Codex **≥ 0.150.0** (`#40511`); executor coverage **0.152.0** (`#41432`). Official hooks docs still omit it | `CodexHookConfigWriter.allEvents` / `CodexSignalSource` | 2026-09-02 (CROW-1177) — **wired**. `Stop` = natural completion → `.done`; `Interrupt` = `TurnAborted` → `.waiting` (jobs/reviews stay open). Timeout written 3s (upstream clamp). No `async: true` (would reopen CROW-1065). Pre-0.150 ignores the unknown key (`HookEventsToml` has no `deny_unknown_fields`). **Re-verified 2026-10-27 (CROW-1344) on codex 0.163.0, with `instant_interrupt` default-on since 0.162.0:** Esc gives `Interrupt` and no `Stop`. `crow send` while working is a **steer**, not abort-then-submit: `UserPromptSubmit` inside the same turn, no `Interrupt`, and one `Stop` at the real end (live TUI trace plus `turn.rs`; the same `!needs_follow_up` Stop gate is in the `rust-v0.164.0` source). No gate needed |
 | Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
+| Codex startup prompts: `check_for_update_on_startup=false` hides the update screen; the model-migration screen has no key, so the pane watch answers *Use existing model* by its exact bottom rows | codex-cli **0.166.0** (`rust-v0.166.0`: `updates.rs`, `app/startup_prompts.rs`, `model_migration.rs`) | `CodexStartupNotices` / `CodexStartupPromptWatcher` / `setup.sh` `launch_codex` | 2026-11-05 (CROW-1410). Re-check on each bump: the option labels, the `enter/esc confirm` hint, and whether a generic `notice.*` hide key has appeared (then prefer it to the watch) |
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
 | Claude auto-mode extra-workdir Read prompt can stall unattended sessions; no honest pre-answer | Claude Code **≥ 2.1.257** (`permissions.blockReadsOutsideWorkingDirectories` is a *block*, not a skip) | `ClaudeLaunchArgs` | 2026-09-02 (CROW-1176) — changelog-specified for `--permission-mode auto`. Working dirs = launch cwd + `--add-dir` + `permissions.additionalDirectories`. Crow worktree / review clone / Manager `{devRoot}` each have a different outside-set (sibling checkouts, `$TMPDIR`, `$HOME` for `gh` creds). No per-launch allow; `--dangerously-skip-permissions` / `bypassPermissions` would also drop the same-release Containment Escape rule (brittle-reject). `skipAutoPermissionPrompt` is a different notice. Installed probe binary was **2.1.232** (below the pin) so a live Crow-tmux PTY pass on ≥ 2.1.257 remains a human re-check. `--permission-prompts none` (2.1.259) is **not** that allow: it is deny-not-allow and print-mode only — declined CROW-1215 (next row) |

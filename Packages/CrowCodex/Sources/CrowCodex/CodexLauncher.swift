@@ -82,8 +82,9 @@ public actor CodexLauncher {
         return "cd \(Self.shellEscape(worktreePath)) && "
             + ShellLaunchArgs.evalPromptLaunch(
                 // Inline rendering, like every other Codex launch (CROW-1319).
-                // CROW-1407: gateway overrides sit right after the binary.
-                prefix: "codex\(CodexGatewayArgs.configOverrides(gatewayRoute)) \(OpenAICodexAgent.inlineRenderingFlag)",
+                // CROW-1410 startup-notice and CROW-1407 gateway overrides
+                // sit right after the binary.
+                prefix: "\(OpenAICodexAgent.launchPrefix(binary: nil, gatewayRoute: gatewayRoute)) \(OpenAICodexAgent.inlineRenderingFlag)",
                 promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
     }
 
