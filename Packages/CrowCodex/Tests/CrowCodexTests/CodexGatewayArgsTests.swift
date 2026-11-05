@@ -176,7 +176,7 @@ struct OpenAICodexAgentGatewayTests {
                 let cmd = agent.autoLaunchCommand(
                     session: session, worktreePath: "/tmp/wt", remoteControlEnabled: false,
                     autoPermissionMode: true, telemetryPort: nil, gatewayRoute: route) ?? ""
-                #expect(cmd.contains(binary + overrides + " "), "\(kind) dispatched=\(dispatched)")
+                #expect(cmd.contains(binary + CodexStartupNotices.configOverrides + overrides + " "), "\(kind) dispatched=\(dispatched)")
                 #expect(CodexGatewayArgs.commandRequestsKey(cmd))
             }
         }
@@ -188,13 +188,13 @@ struct OpenAICodexAgentGatewayTests {
             sessionName: "M", remoteControlEnabled: false, autoPermissionMode: false,
             telemetryPort: nil, conversationID: "019a0000-0000-7000-8000-000000000000",
             gatewayRoute: route)
-        #expect(cmd == "\(binary)\(overrides) resume '019a0000-0000-7000-8000-000000000000' --no-alt-screen")
+        #expect(cmd == "\(binary)\(CodexStartupNotices.configOverrides)\(overrides) resume '019a0000-0000-7000-8000-000000000000' --no-alt-screen")
     }
 
     @Test func handoffLaunchCarriesOverridesButNoKey() async throws {
         let cmd = try await agent.launchCommand(
             sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "hi", gatewayRoute: route)
-        #expect(cmd.contains("eval \"codex\(overrides) --no-alt-screen "))
+        #expect(cmd.contains("eval \"codex\(CodexStartupNotices.configOverrides)\(overrides) --no-alt-screen "))
         #expect(!cmd.contains("CROW_CORVEIL_GATEWAY_KEY="))
     }
 }
