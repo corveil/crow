@@ -14,6 +14,8 @@
       "Bash(.claude/skills/crow-backlog-brief/brief.sh *)",
       "Bash(bash .claude/skills/crow-release-review/release.sh *)",
       "Bash(.claude/skills/crow-release-review/release.sh *)",
+      "Bash(bash .claude/skills/crow-diagnose/diagnose.sh *)",
+      "Bash(.claude/skills/crow-diagnose/diagnose.sh *)",
       "Bash(crow new-session:*)",
       "Bash(crow rename-session:*)",
       "Bash(crow select-session:*)",

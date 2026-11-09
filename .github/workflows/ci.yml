@@ -164,11 +164,14 @@ jobs:
       - name: crow-release-review scope / ids / build / readback / extract (CROW-1371)
         run: bash skills/crow-release-review/release_test.sh
 
+      - name: crow-diagnose source / dupes / ticket-standard check / filing (CROW-1415)
+        run: bash skills/crow-diagnose/diagnose_test.sh
+
       # jq 1.6 is still what some Macs resolve first (Homebrew), and it rejects
       # 1.7-only syntax such as a keyword used as an object key — which once
       # made `watch` release an unmerged wave. The runner's jq is newer, so run
       # the suite again under a pinned, checksum-verified 1.6.
-      - name: crow-cascade-epic, crow-triage, crow-ci-queue, crow-backlog-brief and crow-release-review under jq 1.6 (CROW-1312 / CROW-1325 / CROW-1365 / CROW-1367 / CROW-1371)
+      - name: crow-cascade-epic, crow-triage, crow-ci-queue, crow-backlog-brief, crow-release-review and crow-diagnose under jq 1.6 (CROW-1312 / CROW-1325 / CROW-1365 / CROW-1367 / CROW-1371 / CROW-1415)
         run: |
           mkdir -p "$RUNNER_TEMP/jq16"
           curl -fsSL -o "$RUNNER_TEMP/jq16/jq" https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64
@@ -182,6 +185,7 @@ jobs:
           # time on some hosts, so brief.sh parses times itself (PR #1368).
           TZ=America/New_York PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-backlog-brief/brief_test.sh
           PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-release-review/release_test.sh
+          PATH="$RUNNER_TEMP/jq16:$PATH" bash skills/crow-diagnose/diagnose_test.sh
 
       - name: NSLog ban (CROW-874)
         run: bash scripts/check-no-nslog.sh

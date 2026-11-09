@@ -38,7 +38,10 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-release-review/page.html`              | Page template that `release.sh build` fills from `items.json` |
 | `{devRoot}/.claude/skills/crow-release-review/release.sh`             | Scope, ids, item check, build, readback, Markdown report      |
 | `{devRoot}/.claude/release-review/`                                   | Per-release scope, study, items, built page, URL, read-back   |
-| `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
+| `{devRoot}/.claude/skills/crow-diagnose/SKILL.md`                     | Diagnose skill invoked via `/crow-diagnose`                   |
+| `{devRoot}/.claude/skills/crow-diagnose/diagnose.sh`                  | Source, repos, scratch clones, duplicates, standard check, file |
+| `{devRoot}/.claude/diagnose/`                                         | Per-observation source, plan, bodies, and `filed.json`        |
+| `{devRoot}/crow-reviews/`                                             | Temporary clones for PR reviews and `/crow-diagnose` (reserved name) |
 
 ## Workspace Configuration
 

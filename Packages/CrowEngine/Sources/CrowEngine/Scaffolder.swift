@@ -87,6 +87,9 @@ public struct Scaffolder {
         let releaseReviewSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-release-review")
         try fm.createDirectory(atPath: releaseReviewSkillsDir, withIntermediateDirectories: true)
 
+        let diagnoseSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-diagnose")
+        try fm.createDirectory(atPath: diagnoseSkillsDir, withIntermediateDirectories: true)
+
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
@@ -210,6 +213,17 @@ public struct Scaffolder {
         let releaseReviewScriptPath = (releaseReviewSkillsDir as NSString).appendingPathComponent("release.sh")
         try Self.bundledReleaseReviewScript().write(toFile: releaseReviewScriptPath, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: releaseReviewScriptPath)
+
+        // Always overwrite the diagnose skill and its helper script
+        // (CROW-1415). The script resolves the observation, lists and clones
+        // the workspace's repos, searches for duplicates, checks the draft
+        // against docs/ticket-standard.md, and files it.
+        let diagnoseSkillPath = (diagnoseSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try CrowAttribution.expandSkillBody(Self.bundledDiagnoseSkill(), agentKind: managerAgentKind)
+            .write(toFile: diagnoseSkillPath, atomically: true, encoding: .utf8)
+        let diagnoseScriptPath = (diagnoseSkillsDir as NSString).appendingPathComponent("diagnose.sh")
+        try Self.bundledDiagnoseScript().write(toFile: diagnoseScriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: diagnoseScriptPath)
 
         // Always overwrite the show-image skill (surfaces generated images in
         // Crow's Images panel). No attribution expansion — it has no agent
@@ -1095,6 +1109,49 @@ public struct Scaffolder {
         """
     }
 
+    /// The crow-diagnose SKILL.md template bundled with the app (CROW-1415).
+    static func bundledDiagnoseSkill() -> String {
+        if let content = loadFromRepo("skills/crow-diagnose/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-diagnose-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        ---
+        name: crow-diagnose
+        description: Turn one observation into a diagnosed ticket or epic that meets the ticket standard, or an outcome that isn't a ticket.
+        ---
+
+        # Crow Diagnose
+
+        ## Activation
+        This skill activates when user invokes `/crow-diagnose <observation>` command.
+
+        ## Important
+        The full skill was not bundled with this build. It needs `diagnose.sh`
+        beside this file. The ticket standard is `docs/ticket-standard.md` in
+        corveil/crow. Never label a diagnosed ticket `crow:auto`.
+        """
+    }
+
+    /// The crow-diagnose diagnose.sh helper bundled with the app (CROW-1415).
+    static func bundledDiagnoseScript() -> String {
+        if let content = loadFromRepo("skills/crow-diagnose/diagnose.sh") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-diagnose-diagnose.sh", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        #!/bin/bash
+        echo '{"status":"error","message":"diagnose.sh not bundled"}'
+        exit 2
+        """
+    }
+
     /// Shared attribution footer instructions (issue #443).
     static func bundledAttributionFooter() -> String {
         if let content = loadFromRepo("skills/crow-attribution/FOOTER.md") {
@@ -1133,6 +1190,8 @@ public struct Scaffolder {
               "Bash(.claude/skills/crow-backlog-brief/brief.sh *)",
               "Bash(bash .claude/skills/crow-release-review/release.sh *)",
               "Bash(.claude/skills/crow-release-review/release.sh *)",
+              "Bash(bash .claude/skills/crow-diagnose/diagnose.sh *)",
+              "Bash(.claude/skills/crow-diagnose/diagnose.sh *)",
               "Bash(gh issue view:*)",
               "Bash(gh issue create:*)",
               "Bash(gh issue edit:*)",

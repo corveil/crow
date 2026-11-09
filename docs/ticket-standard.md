@@ -4,7 +4,7 @@ What a **diagnosed ticket** contains, and the outcomes that aren't tickets.
 
 An observation (a meeting remark captured as a Corveil FollowUp, a Slack thread, or a Scratch item) stays raw at its source. A Crow session that can read the code diagnoses it and either files a ticket that meets this standard or reports one of the non-ticket outcomes. [ADR 0031](adr/0031-observations-are-diagnosed-before-they-become-tickets.md) records why.
 
-This standard is for the session doing the diagnosis, whether that is [`/crow-diagnose`](https://github.com/corveil/crow/issues/1415), the Scratch **Ticket** brief, `/my-follow-ups` Triage, or someone filing by hand with `/crow-create-ticket`. Nothing enforces it automatically.
+This standard is for the session doing the diagnosis, whether that is [`/crow-diagnose`](../skills/crow-diagnose/SKILL.md), the Scratch **Ticket** brief, `/my-follow-ups` Triage, or someone filing by hand with `/crow-create-ticket`. `/crow-diagnose` checks its own drafts against it with `diagnose.sh check` before filing. Nothing enforces it on a ticket filed any other way.
 
 - [Outcomes](#outcomes)
 - [The sections of a diagnosed ticket](#the-sections-of-a-diagnosed-ticket)
