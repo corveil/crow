@@ -33,6 +33,19 @@ To read it from a dev root that has no Crow checkout:
 gh api repos/corveil/crow/contents/docs/ticket-standard.md -H "Accept: application/vnd.github.raw"
 ```
 
+Both the link and the command read the standard on `main`, which may be newer than this
+Crow build. Follow the version you read there.
+
+**Epics and `crow:auto`:** when the standard's Shape is an **epic**, file the epic
+issue and every sub-ticket in **wave 2 or later** *without* `crow:auto` (drop
+`--label "crow:auto"` in Step 4, or `crow:auto` from Jira's `labels`). Crow's
+auto-create watcher starts a work session for any `crow:auto` issue that has none.
+Labeled, the epic gets a session of its own, and a later-wave sub-ticket starts
+before its dependencies merge. Step 5's missing-label fallback doesn't apply to
+issues filed without the label. Wave-1 sub-tickets and single tickets keep the
+label as usual. Report the unlabeled issues in Step 6, and point the operator to
+`/crow-cascade-epic <epic-url>` to run them.
+
 ## Important: Sandbox Bypass
 
 All `gh`, `glab`, and `git` commands require `dangerouslyDisableSandbox: true` because
@@ -144,6 +157,10 @@ the resolved account, call `jira_get_user_profile {email}`.)
 
 In both commands below, `BODY` is the user-provided body followed by the required
 attribution footer from **Step 4b** (a blank line, then the canonical link).
+
+**Exception:** an epic issue, and a sub-ticket in wave 2 or later, is filed
+**without** `--label "crow:auto"` (see **Epics and `crow:auto`** under **Ticket
+standard**).
 
 **GitHub:**
 ```bash

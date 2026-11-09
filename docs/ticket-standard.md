@@ -26,6 +26,8 @@ Every observation ends in exactly one outcome. Decide it before you write anythi
 
 **Only a ticket outcome files anything.** Never file an issue just to record one of the other four.
 
+**The diagnosis decides the outcome, not the source's label.** Corveil gives every FollowUp a `kind`, and a FollowUp of kind `commitment` can still be engineering work. The FollowUp behind this standard was one. Use the **commitment** outcome only when the promised work isn't a code change.
+
 **Check for duplicates before you file.** Search open **and** closed issues and PRs in every repo your diagnosis names. A closed issue still counts:
 
 - If it was fixed and the problem is back, file a ticket that links the closed issue as a regression.
@@ -122,7 +124,7 @@ The last line of the body, above the Crow attribution line, after a `---` rule:
 Provenance: Corveil FollowUp `<id>` · meeting `<id>` (<date>, <time said>) · Slack <permalink> · Scratch `<id>`
 ```
 
-Include whichever of these apply, in this order, and leave out the rest. Write the time as the source records it (`said_at` on a FollowUp), as `YYYY-MM-DD, HH:MM` or a range like `15:41–15:59`. For a ticket re-diagnosed from a raw issue, add `· re-diagnosed from <issue URL>`.
+Include whichever of these apply, in this order, and leave out the rest. Write the time to the minute, as `YYYY-MM-DD, HH:MM`, or a range like `15:41–15:59`. Truncate a FollowUp's `said_at` (`15:59:03` becomes `15:59`). For a ticket re-diagnosed from a raw issue, add `· re-diagnosed from <issue URL>`.
 
 **The source links back to the ticket.** A FollowUp gets its `ticket_url`, and a Scratch item gets `crow todo link --type ticket`. Crow has no write path into Slack, so for a Slack thread the permalink in the ticket is the only link. Whether to reply in the thread is the operator's call.
 
@@ -142,7 +144,7 @@ Part of #1413 (triage pipeline epic). Depends on #1414.
 
 - `Depends on` names its dependencies as `#N` in the same repo, as a full issue URL in another repo, or as the epic's labels (`Depends on T2, T3.`).
 - A sub-ticket with no dependencies leaves out `Depends on`.
-- A sub-ticket in wave 2 or later must not carry the `crow:auto` label, or Crow's auto-pickup starts it before its dependencies merge.
+- The epic issue and every sub-ticket in wave 2 or later must not carry the `crow:auto` label. Crow's auto-create watcher starts a work session for any `crow:auto` issue that has none. On the epic, that would start a session for the epic itself. On a later-wave sub-ticket, it would start the work before its dependencies merge. `/crow-cascade-epic` starts these tickets when their wave comes up.
 
 ## Worked example
 
@@ -212,7 +214,7 @@ Before you file, check that:
 - [ ] The title isn't the raw quote.
 - [ ] **Observation** quotes the source verbatim and links to it.
 - [ ] **Diagnosis** names the repos, cites `file:line`, states the cause or hypothesis, and gives a confidence level.
-- [ ] **Shape** says one ticket or an epic. An epic has a task list, and every sub-ticket has a `Part of` line and, if it has dependencies, a `Depends on` line.
+- [ ] **Shape** says one ticket or an epic. An epic has a task list, and every sub-ticket has a `Part of` line and, if it has dependencies, a `Depends on` line. Neither the epic nor any sub-ticket in wave 2 or later carries `crow:auto`.
 - [ ] **Acceptance and verification** has **Done when** and **Verify after release**, with every check using the release-review fields and every agent check read-only against production.
 - [ ] **Out of scope** draws the line with sibling tickets.
 - [ ] The **Provenance** footer is above the attribution line, and the source will link back to the ticket.
