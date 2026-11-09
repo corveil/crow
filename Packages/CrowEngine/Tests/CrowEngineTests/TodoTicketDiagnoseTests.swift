@@ -65,9 +65,58 @@ struct TodoTicketDiagnoseTests {
         #expect(brief.contains("crow todo park --id \(id)"))
         #expect(brief.contains("crow todo drop --id \(id)"))
         // An epic: every filed issue, once, the epic last so `todo work` starts it.
-        #expect(brief.contains("link every issue the skill filed"))
+        #expect(brief.contains("link every issue you filed"))
         #expect(brief.contains("sub-tickets first and the epic last"))
+        #expect(brief.contains("crow todo get --id \(id)`: if the epic is not the last ticket link, link it again"))
         #expect(brief.contains("Never paste the item's text"))
+    }
+
+    /// `--yes` covers filing, not publishing a pasted private thread verbatim
+    /// into a public repo (review on #1420).
+    @Test func briefLimitsYesToFilingNotPublishingPrivateQuotes() {
+        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "x"), workspace: corveil, devRoot: devRoot)
+        #expect(brief.contains("`--yes` is the go to file, not to publish private text."))
+        #expect(brief.contains("`visibility` is `public`"))
+        #expect(brief.contains("`[redacted]`"))
+    }
+
+    // MARK: - Where the issues go (D file is GitHub-only)
+
+    /// A Jira-tracked workspace must never fall through to `D file`, which
+    /// files GitHub issues (review on #1420).
+    @Test func briefSendsAJiraWorkspaceToTheJiraMCP() {
+        let jira = WorkspaceInfo(
+            name: "Ops", alwaysInclude: ["acme/ops"], taskProvider: "jira",
+            jiraProjectKey: "OPS", jiraSite: "acme.atlassian.net")
+        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "x"), workspace: jira, devRoot: devRoot)
+        #expect(brief.contains("--workspace \"Ops\""))
+        #expect(brief.contains("tracks tickets in Jira, project OPS on acme.atlassian.net"))
+        #expect(brief.contains("Never run `D file`"))
+        #expect(brief.contains("`jira_create_issue` in project `OPS`"))
+        #expect(brief.contains("--label \"<KEY-N>\""))
+        #expect(!brief.contains("glab"))
+    }
+
+    @Test func briefNamesJiraEvenWithoutAProjectKey() {
+        let jira = WorkspaceInfo(name: "Ops", taskProvider: "jira")
+        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "x"), workspace: jira, devRoot: devRoot)
+        #expect(brief.contains("**This workspace tracks tickets in Jira.**"))
+        #expect(brief.contains("`jira_create_issue`, the way `/crow-create-ticket` does"))
+    }
+
+    @Test func briefSendsAGitLabWorkspaceToGlab() {
+        let gitlab = WorkspaceInfo(name: "Lab", provider: "gitlab", cli: "glab")
+        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "x"), workspace: gitlab, devRoot: devRoot)
+        #expect(brief.contains("code is on GitLab"))
+        #expect(brief.contains("`glab issue create`, not `D file`"))
+        #expect(!brief.contains("Jira"))
+    }
+
+    @Test func briefLeavesAGitHubWorkspaceOnTheSkillsOwnFlow() {
+        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "x"), workspace: corveil, devRoot: devRoot)
+        #expect(!brief.contains("Never run `D file`"))
+        #expect(!brief.contains("GitLab"))
+        #expect(TodoRPC.ticketDestination(corveil).isEmpty)
     }
 
     @Test func briefKeepsTheDispatchAndWorkSessionRails() {
@@ -117,6 +166,24 @@ struct TodoTicketDiagnoseTests {
         #expect(again.state == .ticketed)
         #expect(again.links.count == 1)
         #expect(again.updatedAt == at)
+    }
+
+    /// An epic linked before its sub-tickets is repaired by linking it again:
+    /// the existing link moves to the end, so `todo work` starts the epic
+    /// (review on #1420).
+    @Test func relinkingMovesTheLinkToTheEndToRepairEpicOrder() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        var item = TodoItem(text: "x", state: .exploring)
+        for link in [issue(10), issue(11), issue(12)] {
+            item = TodoRPC.linking(link, to: item, now: at)
+        }
+        #expect(item.linkedTicketURL == "https://github.com/corveil/crow/issues/12")
+        let repaired = TodoRPC.linking(issue(10), to: item, now: at.addingTimeInterval(60))
+        #expect(repaired.links.compactMap(\.url) == [11, 12, 10].map { "https://github.com/corveil/crow/issues/\($0)" })
+        #expect(repaired.links.last?.id == item.links.first?.id)
+        #expect(repaired.linkedTicketURL == "https://github.com/corveil/crow/issues/10")
+        #expect(repaired.state == .ticketed)
+        #expect(repaired.updatedAt == at.addingTimeInterval(60))
     }
 
     @Test func linkingDoesNotWalkWorkingOrDoneBack() {

@@ -171,22 +171,28 @@ public enum TodoRPC {
         return next
     }
 
-    /// Attach `link` to `item` (`todo link`). Linking a ticket, PR or custom
-    /// URL that is already on the item is a no-op, so the filing Manager can
-    /// link every issue it filed without leaving duplicate badges. A ticket
+    /// Attach `link` to `item` (`todo link`). A ticket, PR or custom URL that
+    /// is already on the item is never added twice: re-linking it moves the
+    /// existing link to the end instead. So the filing Manager can link every
+    /// issue it filed without duplicate badges, and can repair an epic linked
+    /// out of order by linking the epic again, since the last ticket link is
+    /// the one `todo work` starts (``TodoItem/linkedTicketURL``). A ticket
     /// link moves the item through ``stateAfterTicketLink(_:)``: the first one
     /// moves a pre-ticket item to `ticketed`, and the rest of an epic's links
-    /// leave it there (CROW-1416).
+    /// leave it there (CROW-1416). Nothing changes, `updatedAt` included, when
+    /// the link is already last and the state stays put.
     public static func linking(_ link: TodoLink, to item: TodoItem, now: Date = Date()) -> TodoItem {
-        if link.type != .session, let url = link.url,
-           item.links.contains(where: { $0.type == link.type && $0.url == url }) {
-            return item
-        }
         var next = item
-        next.links.append(link)
+        if link.type != .session, let url = link.url,
+           let index = next.links.firstIndex(where: { $0.type == link.type && $0.url == url }) {
+            next.links.append(next.links.remove(at: index))
+        } else {
+            next.links.append(link)
+        }
         if link.type == .ticket {
             next.state = stateAfterTicketLink(next.state)
         }
+        guard next.links != item.links || next.state != item.state else { return item }
         next.updatedAt = now
         return next
     }
@@ -380,10 +386,12 @@ public enum TodoRPC {
     /// ticket (`docs/ticket-standard.md`). Crow does not pick the repo or call
     /// `TaskBackend.createTask`.
     ///
-    /// `--yes` is passed because pressing Ticket is the operator's go to file.
-    /// `workspace` (CROW-1387) becomes the skill's `--workspace`, so a live
-    /// Manager tagged with another workspace still files where the item
-    /// belongs. `devRoot` names where the skill's relative paths resolve: an
+    /// `--yes` is passed because pressing Ticket is the operator's go to file
+    /// (not to publish private text: the brief says to redact quotes bound for
+    /// a public repo). `workspace` (CROW-1387) becomes the skill's
+    /// `--workspace`, so a live Manager tagged with another workspace still
+    /// files where the item belongs, and ``ticketDestination(_:)`` steers a
+    /// Jira or GitLab workspace away from `D file`, which files GitHub issues. `devRoot` names where the skill's relative paths resolve: an
     /// extra Manager runs in its own identity directory, not the root.
     ///
     /// The brief never relies on a slash command alone. Cursor, Codex and
@@ -415,9 +423,20 @@ public enum TodoRPC {
             "",
             "`--yes` is the operator's go: pressing Ticket asked for the filing, so do not stop to ask before filing, commenting or writing back. If this harness does not run `.claude/skills/` skills as slash commands, read `\(skillPath)` and follow it with the same arguments. The skill checks every draft against the ticket standard, `docs/ticket-standard.md` on `main`.",
             "",
+            "`--yes` is the go to file, not to publish private text. A Scratch note is often pasted from a private thread: when a target repo's `visibility` is `public`, quote only what can be public and replace the rest with `[redacted]`, and say so, as the skill's Step 7 allows. The same holds for a comment on a duplicate in a public repo.",
+        ])
+        if let workspace {
+            let destination = ticketDestination(workspace)
+            if !destination.isEmpty {
+                lines.append("")
+                lines.append(contentsOf: destination)
+            }
+        }
+        lines.append(contentsOf: [
+            "",
             "When the skill reports its outcome, finish this item:",
             "",
-            "- **ticket** (one ticket or an epic): link every issue the skill filed (its `filed.json`) to this item, once each. Link an epic's sub-tickets first and the epic last: the last ticket link is the one `crow todo work` starts. The first link moves the item to `ticketed`; the others leave it there, and linking a URL that is already on the item does nothing.",
+            "- **ticket** (one ticket or an epic): link every issue you filed to this item, once each (`filed.json` lists what `D file` filed). Link an epic's sub-tickets first and the epic last: the last ticket link is the one `crow todo work` starts. The first link moves the item to `ticketed` and the others leave it there. Then check the order with `crow todo get --id \(id)`: if the epic is not the last ticket link, link it again. Re-linking a URL that is already on the item moves it to the end and never adds a second link.",
             "- **duplicate**: file nothing. Link the existing issue instead, then add the reason to the note.",
             "- **commitment** or **needs info**: park the item and add the reason to the note. For needs info, the reason is the question to ask the observer.",
             "- **won't do**: drop the item and add the reason to the note.",

@@ -762,7 +762,7 @@ crow todo link --id <todo-uuid> --type ticket --url https://github.com/owner/rep
 crow todo link --id <todo-uuid> --type session --session <session-uuid> --label explore
 ```
 
-A ticket link moves a `captured`, `exploring`, `parked` or `dropped` item to `ticketed`; `working` and `done` stay put. Linking a ticket, PR or custom URL that is already on the item changes nothing, so an epic's several links move the item once and leave one badge per issue. The last ticket link is the one `todo work` starts.
+A ticket link moves a `captured`, `exploring`, `parked` or `dropped` item to `ticketed`; `working` and `done` stay put. Linking a ticket, PR or custom URL that is already on the item never adds a second link: it moves the existing one to the end. So an epic's several links move the item once and leave one badge per issue, and an epic linked before its sub-tickets is fixed by linking it again. The last ticket link is the one `todo work` starts.
 
 ### `crow todo explore`
 
@@ -781,7 +781,7 @@ crow todo explore --id <todo-uuid> --agent cursor
 
 Open a Manager (or reuse the item's linked one) and seed a brief that runs [`/crow-diagnose`](../skills/crow-diagnose/SKILL.md) on the item (CROW-1416), the same path as `todo explore` — written to the brief file and launched as argv, or pointed at with a one-line `Read and follow the instructions in <path>` when the Manager is already up. The Manager is tagged with the item's workspace and runs its agent, exactly as for `todo explore` (including `--agent` / `--workspace` and the linked-Manager `warning`).
 
-The brief runs `/crow-diagnose <item-id> --yes --workspace <ws>`: pressing Ticket is the operator's go, so the skill files without asking. A harness that doesn't load `.claude/skills/` as slash commands is pointed at `{devRoot}/.claude/skills/crow-diagnose/SKILL.md` instead. The skill drafts against the [ticket standard](ticket-standard.md), and the brief finishes the item by its outcome:
+The brief runs `/crow-diagnose <item-id> --yes --workspace <ws>`: pressing Ticket is the operator's go, so the skill files without asking. `--yes` is not a go to publish private text: for a public target repo, the brief says to quote only what can be public and redact the rest. For a Jira-tracked workspace the brief names the project and says to file with the `jira` MCP, never the skill's `D file` (which files GitHub issues); for a GitLab workspace, with `glab`. A harness that doesn't load `.claude/skills/` as slash commands is pointed at `{devRoot}/.claude/skills/crow-diagnose/SKILL.md` instead. The skill drafts against the [ticket standard](ticket-standard.md), and the brief finishes the item by its outcome:
 
 | Outcome | The item ends |
 |---|---|

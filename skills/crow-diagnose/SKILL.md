@@ -240,6 +240,8 @@ Show the operator the draft: the outcome, the shape, each issue's repo and title
 D file --plan R/plan.json
 ```
 
+`D file` files GitHub issues only. If the workspace's `task_provider` is `jira`, never run it, even with `--yes`: file each issue with the `jira` MCP the way `/crow-create-ticket` does (see **Requirements**). On a GitLab workspace, file with `glab`.
+
 `file` refuses a public repo until you add `--public-ok`. Add it only after the operator has agreed the quotes can be public, or when `--yes` was passed.
 
 
@@ -272,7 +274,7 @@ Do this only for a **ticket** or a **duplicate**, after filing (or after the dup
   ```
 
   For a duplicate, the reason is `Diagnosed by /crow-diagnose as a duplicate of <owner/repo#N>`. Skip the write if `ticket_url` already holds that URL. Leave `status` alone: `/my-follow-ups` lists the item as "ticket filed, not checked off yet", and its owner checks it off there. If the tool is missing or the write is refused, don't try another write path. Report the pending write (the FollowUp id and the URL) in **Step 9**.
-- **A Scratch item:** link every issue you filed, one `crow todo link` each, or the existing issue for a duplicate. For an epic, link the sub-tickets in plan order and the epic last: the item's last ticket link is the one `crow todo work` starts. The first link moves the item to `ticketed`, and linking a URL that is already on the item does nothing.
+- **A Scratch item:** link every issue you filed, one `crow todo link` each, or the existing issue for a duplicate. For an epic, link the sub-tickets in plan order and the epic last: the item's last ticket link is the one `crow todo work` starts. The first link moves the item to `ticketed`. Linking a URL that is already on the item moves it to the end and never adds a second link, so an epic linked out of order is fixed by linking the epic again.
 
   ```bash
   crow todo link --id {id} --type ticket --url {url} --label "{owner/repo#N}"
