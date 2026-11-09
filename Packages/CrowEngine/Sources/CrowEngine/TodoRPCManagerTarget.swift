@@ -135,33 +135,4 @@ extension TodoRPC {
         return "The brief went to this item's existing Manager, which is \(tagged), not '\(launch.name)'. "
             + "Managers are never re-tagged; delete that Manager and run this again for one in '\(launch.name)'."
     }
-
-    /// The lines that tell a filing agent where the ticket goes (CROW-1387):
-    /// the workspace's ticket provider and its repos, so it never guesses.
-    static func ticketDestination(_ workspace: WorkspaceInfo) -> [String] {
-        var lines: [String] = []
-        let provider = workspace.derivedTaskProvider
-        if provider == "jira" {
-            var jira = "File it in Jira"
-            if let key = workspace.jiraProjectKey, !key.isEmpty { jira += ", project \(key)" }
-            if let site = workspace.jiraSite, !site.isEmpty { jira += " on \(site)" }
-            lines.append(jira + ", for the **\(workspace.name)** workspace.")
-        } else {
-            lines.append(
-                "File it with `\(provider == "gitlab" ? "glab issue create" : "gh issue create")` "
-                + "in the **\(workspace.name)** workspace's \(provider) provider.")
-        }
-        if provider == "jira" {
-            if !workspace.alwaysInclude.isEmpty {
-                let repos = workspace.alwaysInclude.map { "`\($0)`" }.joined(separator: ", ")
-                lines.append("The code lives in: \(repos).")
-            }
-        } else if workspace.alwaysInclude.isEmpty {
-            lines.append("Pick the \(workspace.name) repo that owns the work. Do not file it outside this workspace.")
-        } else {
-            let repos = workspace.alwaysInclude.map { "`\($0)`" }.joined(separator: ", ")
-            lines.append("The repo is one of: \(repos). Pick the one that owns the work; do not file anywhere else.")
-        }
-        return lines
-    }
 }

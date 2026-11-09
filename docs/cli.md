@@ -158,7 +158,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow todo park`](#crow-todo-park) | Park a Scratch item for later |
 | [`crow todo reopen`](#crow-todo-reopen) | Reopen a done, parked, or dropped item |
 | [`crow todo talk`](#crow-todo-talk) | Send text to the item's linked Manager |
-| [`crow todo ticket`](#crow-todo-ticket) | Open a Manager and seed the item as a file-ticket brief |
+| [`crow todo ticket`](#crow-todo-ticket) | Open a Manager that runs /crow-diagnose on the item |
 | [`crow todo work`](#crow-todo-work) | Start a work session from the item's linked ticket |
 | [`crow transition-ticket`](#crow-transition-ticket) | Transition a session's ticket to a pipeline status |
 | [`crow tui`](#crow-tui) | TUI form-factor recording |
@@ -2380,16 +2380,17 @@ crow todo drop --id <id>
 Update fields on an existing Scratch item.
 
 ```
-crow todo edit --id <id> [--text <text>] [--note <note>] [--priority <priority>] [--workspace <workspace>] [--agent <agent>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
+crow todo edit --id <id> [--text <text>] [--note <note>] [--append-note <append-note>] [--priority <priority>] [--workspace <workspace>] [--agent <agent>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
 ```
 
-Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list. --workspace "" clears the workspace; --agent "" clears the agent.
+Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list. --append-note adds a paragraph after the existing note (after --note, when both are given) instead of replacing it. --workspace "" clears the workspace; --agent "" clears the agent.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--id` | `<id>` | yes | Todo UUID |
 | `--text` | `<text>` | no | Replacement item text |
 | `--note` | `<note>` | no | Replacement note |
+| `--append-note` | `<append-note>` | no | Paragraph to add after the existing note |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
 | `--workspace` | `<workspace>` | no | Workspace name or UUID; "" clears it |
 | `--agent` | `<agent>` | no | Coding agent kind; "" clears it |
@@ -2506,7 +2507,7 @@ crow todo talk --id <id> <text>
 
 ## `crow todo ticket`
 
-Open a Manager and seed the item as a file-ticket brief.
+Open a Manager that runs /crow-diagnose on the item.
 
 ```
 crow todo ticket --id <id> [--agent <agent>] [--workspace <workspace>]

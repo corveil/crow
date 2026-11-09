@@ -32,6 +32,10 @@ A filed ticket can name the right repo and say something a reviewer can act on. 
 
 Scratch items now carry an agent and a workspace, and `todo ticket` opens a Manager tagged with that workspace. The brief names the workspace's ticket provider and repos, so the agent files inside it. Crow still does not pick the repo or call `TaskBackend.createTask`; the agent chooses among the workspace's repos. `crow todo ticket --workspace` exists again, with a different meaning: it overrides the Manager's workspace tag for one launch, matching the web Explore/Ticket dialog. It is not a repo picker, and `--repo` stays removed.
 
+## Update (CROW-1416)
+
+The brief no longer asks for one issue. It runs `/crow-diagnose` on the item with `--yes` and the item's workspace ([ADR 0031](./0031-observations-are-diagnosed-before-they-become-tickets.md)), so Ticket can file one ticket or an epic against the [ticket standard](../ticket-standard.md), or end in an outcome that isn't a ticket. The Manager links every issue it filed with `todo link --type ticket` (an epic's sub-tickets first, the epic last), links the existing issue for a duplicate, and parks a commitment or needs info or drops a won't do, appending the reason with `todo edit --append-note`. Linking a URL that is already on the item is a no-op, so an epic moves the item to `ticketed` once. Parking or dropping clears `ticketRequestedAt`, so the 15-minute window ends when the Manager decides there is no ticket; the window itself is unchanged. Crow still does not pick the repo or call `TaskBackend.createTask`.
+
 ## References
 
 - Ticket: https://github.com/corveil/crow/issues/1289

@@ -12,6 +12,8 @@ const epilogue = `
   renderBoard(){ return renderBoard(); },
   sidebarLeftStack(){ return sidebarLeftStack(); },
   scratchOpenCount(){ return scratchOpenCount(); },
+  get scratchTicketDispatched(){ return scratchTicketDispatched; },
+  set scratchShowClosed(v){ scratchShowClosed = v; },
   resetScratchPickers(){ scratchPickers = null; scratchPickersLoading = null; scratchCaptureAgent = null; scratchCaptureWorkspace = null; },
 };
 `;
@@ -123,6 +125,20 @@ T.boardData.scratch = { todos: [staleItem] };
 T.renderBoard();
 const staleTicket = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Ticket');
 check('Ticket enabled again after the dispatch window', staleTicket && !staleTicket.disabled);
+
+// CROW-1416: a diagnosis that isn't a ticket parks or drops the item, which
+// ends the dispatch even when this tab remembers the click.
+// Dropped items are listed only with Show done.
+T.scratchShowClosed = true;
+for (const state of ['parked', 'dropped']) {
+  T.scratchTicketDispatched.add(filingItem.id);
+  T.boardData.scratch = { todos: [{ ...filingItem, state }] };
+  T.renderBoard();
+  const ended = [...board.querySelectorAll('button')].find((b) => b.textContent === 'Ticket');
+  check(`Ticket enabled again once the item is ${state}`, ended && !ended.disabled);
+  check(`${state} clears the remembered dispatch`, !T.scratchTicketDispatched.has(filingItem.id));
+}
+T.scratchShowClosed = false;
 
 T.boardData.scratch = { todos: [item] };
 T.renderBoard();

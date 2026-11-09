@@ -272,11 +272,13 @@ Do this only for a **ticket** or a **duplicate**, after filing (or after the dup
   ```
 
   For a duplicate, the reason is `Diagnosed by /crow-diagnose as a duplicate of <owner/repo#N>`. Skip the write if `ticket_url` already holds that URL. Leave `status` alone: `/my-follow-ups` lists the item as "ticket filed, not checked off yet", and its owner checks it off there. If the tool is missing or the write is refused, don't try another write path. Report the pending write (the FollowUp id and the URL) in **Step 9**.
-- **A Scratch item:**
+- **A Scratch item:** link every issue you filed, one `crow todo link` each, or the existing issue for a duplicate. For an epic, link the sub-tickets in plan order and the epic last: the item's last ticket link is the one `crow todo work` starts. The first link moves the item to `ticketed`, and linking a URL that is already on the item does nothing.
 
   ```bash
   crow todo link --id {id} --type ticket --url {url} --label "{owner/repo#N}"
   ```
+
+  Scratch's **Ticket** button runs this skill with `--yes`, and its brief finishes the item for the other outcomes: it parks a commitment or a needs info, drops a won't do, and appends the reason to the item's note.
 
 - **A meeting and a time, a Slack thread, plain text, or an issue with no FollowUp behind it:** there is no write path. The Provenance footer is the only link. For Slack, replying in the thread is the operator's call.
 

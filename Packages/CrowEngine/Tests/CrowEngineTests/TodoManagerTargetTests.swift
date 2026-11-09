@@ -194,29 +194,4 @@ struct TodoManagerTargetTests {
         let untagged = TodoRPC.existingManagerWarning(managerTag: nil, launch: corveil, config: config)
         #expect(untagged?.contains("not tagged") == true)
     }
-
-    // MARK: - Ticket brief
-
-    @Test func ticketBriefFilesIntoTheWorkspacesProviderAndRepos() {
-        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "x"), workspace: corveil)
-        #expect(brief.contains("gh issue create"))
-        #expect(brief.contains("**Corveil**"))
-        #expect(brief.contains("`corveil/crow`"))
-        #expect(!brief.contains("Choose that repo yourself"))
-        #expect(brief.contains("crow todo link"))
-    }
-
-    @Test func ticketBriefNamesTheJiraProject() {
-        let jira = WorkspaceInfo(
-            name: "Ops", taskProvider: "jira", jiraProjectKey: "OPS", jiraSite: "acme.atlassian.net")
-        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "x"), workspace: jira)
-        #expect(brief.contains("Jira, project OPS on acme.atlassian.net"))
-        #expect(!brief.contains("gh issue create"))
-    }
-
-    @Test func ticketBriefWithoutAWorkspaceIsUnchanged() {
-        let item = TodoItem(text: "x")
-        #expect(TodoRPC.ticketBrief(for: item, workspace: nil) == TodoRPC.ticketBrief(for: item))
-        #expect(TodoRPC.ticketBrief(for: item).contains("Choose that repo yourself"))
-    }
 }

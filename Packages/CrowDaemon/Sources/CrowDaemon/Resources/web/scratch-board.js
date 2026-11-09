@@ -4,7 +4,9 @@
 // ===== Scratch (CROW-1231 / CROW-1233) =====
 let scratchShowClosed = false;
 // Survives refreshBoard so Ticket cannot re-fire while the Manager is still
-// attaching the issue. Cleared once a ticket URL lands. 15m matches the daemon TTL.
+// attaching the issue. Cleared once a ticket URL lands, or once the item is
+// parked or dropped (a diagnosis that isn't a ticket ends the dispatch, and the
+// daemon clears ticket_requested_at — CROW-1416). 15m matches the daemon TTL.
 const scratchTicketDispatched = new Set();
 const TICKET_DISPATCH_TTL_MS = 15 * 60 * 1000;
 
@@ -340,7 +342,7 @@ function scratchTicketURL(item) {
 }
 
 function scratchTicketFiling(item) {
-  if (scratchTicketURL(item)) {
+  if (scratchTicketURL(item) || item.state === 'parked' || item.state === 'dropped') {
     scratchTicketDispatched.delete(item.id);
     return false;
   }

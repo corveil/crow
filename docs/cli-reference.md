@@ -717,7 +717,11 @@ crow todo get --id <todo-uuid>
 crow todo edit --id <todo-uuid> --text "changed" --add-tag cli --remove-tag ios
 ```
 
-`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list. `--workspace NAME` sets the item's workspace and `--workspace ""` clears it; `--agent KIND` sets its agent and `--agent ""` clears it.
+`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list. `--append-note TEXT` adds a paragraph after the existing note instead of replacing it (applied after `--note` when both are given); the Scratch Ticket Manager records a diagnosis outcome this way. `--workspace NAME` sets the item's workspace and `--workspace ""` clears it; `--agent KIND` sets its agent and `--agent ""` clears it.
+
+```bash
+crow todo edit --id <todo-uuid> --append-note "Diagnosed by /crow-diagnose: needs info. Which browser was this on?"
+```
 
 ### `crow todo done`
 
@@ -732,6 +736,8 @@ crow todo reopen --id <todo-uuid>
 ```
 
 ### `crow todo park`
+
+Parking or dropping an item also clears a pending Ticket dispatch (`ticket_requested_at`), so the next `todo ticket` opens or re-seeds a Manager instead of returning `already_dispatched`.
 
 ```bash
 crow todo park --id <todo-uuid>
@@ -756,6 +762,8 @@ crow todo link --id <todo-uuid> --type ticket --url https://github.com/owner/rep
 crow todo link --id <todo-uuid> --type session --session <session-uuid> --label explore
 ```
 
+A ticket link moves a `captured`, `exploring`, `parked` or `dropped` item to `ticketed`; `working` and `done` stay put. Linking a ticket, PR or custom URL that is already on the item changes nothing, so an epic's several links move the item once and leave one badge per issue. The last ticket link is the one `todo work` starts.
+
 ### `crow todo explore`
 
 Create a Manager, seed the item as a Scratch explore brief, attach the session, and move state to `exploring`. Needs tmux.
@@ -771,7 +779,19 @@ crow todo explore --id <todo-uuid> --agent cursor
 
 ### `crow todo ticket`
 
-Open a Manager (or reuse the item's linked one) and seed a file-ticket brief, the same path as `todo explore` — written to the brief file and launched as argv, or pointed at with a one-line `Read and follow the instructions in <path>` when the Manager is already up. The Manager is tagged with the item's workspace and runs its agent, exactly as for `todo explore` (including `--agent` / `--workspace` and the linked-Manager `warning`). The brief names that workspace's ticket provider (GitHub, GitLab, or the Jira project) and its repos, so the agent files there instead of guessing; the workspace is resolved the same way as for `todo explore`. The agent files the provider issue and attaches it with `todo link --type ticket`. That link moves the item to `ticketed` unless it is already `working` or `done`. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`. A second call within 15 minutes, before that URL exists, returns `already_dispatched` and does not open another Manager.
+Open a Manager (or reuse the item's linked one) and seed a brief that runs [`/crow-diagnose`](../skills/crow-diagnose/SKILL.md) on the item (CROW-1416), the same path as `todo explore` — written to the brief file and launched as argv, or pointed at with a one-line `Read and follow the instructions in <path>` when the Manager is already up. The Manager is tagged with the item's workspace and runs its agent, exactly as for `todo explore` (including `--agent` / `--workspace` and the linked-Manager `warning`).
+
+The brief runs `/crow-diagnose <item-id> --yes --workspace <ws>`: pressing Ticket is the operator's go, so the skill files without asking. A harness that doesn't load `.claude/skills/` as slash commands is pointed at `{devRoot}/.claude/skills/crow-diagnose/SKILL.md` instead. The skill drafts against the [ticket standard](ticket-standard.md), and the brief finishes the item by its outcome:
+
+| Outcome | The item ends |
+|---|---|
+| One ticket | `ticketed`, with one ticket link |
+| An epic | `ticketed`, with one ticket link per issue filed: sub-tickets first, the epic last, so `todo work` starts the epic |
+| Duplicate | `ticketed`, linked to the existing issue, with the reason appended to its note |
+| Commitment or needs info | `parked`, with the reason (or the question for the observer) appended to its note |
+| Won't do | `dropped`, with the reason appended to its note |
+
+The first ticket link moves the item to `ticketed` unless it is already `working` or `done`; later links leave it there. There is no repo picker. Needs tmux. An item that already has a ticket is refused — use `todo work`. A second call within 15 minutes, before that URL exists, returns `already_dispatched` and does not open another Manager.
 
 ```bash
 crow todo ticket --id <todo-uuid>

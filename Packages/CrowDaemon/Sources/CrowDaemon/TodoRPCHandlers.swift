@@ -81,7 +81,7 @@ func makeTodoHandlers(
         },
         "todo-link": { params in
             try await mapRPCError {
-                var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
+                let item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
                 let type = try TodoRPC.decodeLinkType(params["type"])
                 let url = params["url"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let nonemptyURL = (url?.isEmpty == false) ? url : nil
@@ -114,15 +114,12 @@ func makeTodoHandlers(
                         url: nonemptyURL,
                         label: (label?.isEmpty == false) ? label! : type.rawValue)
                 }
-                item.links.append(link)
-                if type == .ticket {
-                    // The filing Manager attaches the issue it just created.
-                    // Don't walk a working or done item backwards.
-                    item.state = TodoRPC.stateAfterTicketLink(item.state)
-                }
-                item.updatedAt = Date()
-                repo.save(item)
-                return ["todo": TodoRPC.todoJSON(item)]
+                // The filing Manager attaches each issue it filed. A URL that
+                // is already linked is a no-op, and only the first ticket link
+                // moves the item to `ticketed` (CROW-1416).
+                let next = TodoRPC.linking(link, to: item)
+                if next != item { repo.save(next) }
+                return ["todo": TodoRPC.todoJSON(next)]
             }
         },
         "todo-explore": { params in
@@ -139,7 +136,9 @@ func makeTodoHandlers(
                 try await openScratchManager(
                     params: params, repo: repo, appState: appState,
                     sessionService: sessionService, devRoot: devRoot,
-                    briefFor: TodoRPC.ticketBrief(for:workspace:),
+                    briefFor: { item, workspace in
+                        TodoRPC.ticketBrief(for: item, workspace: workspace, devRoot: devRoot)
+                    },
                     rejectIfTicketed: true)
             }
         },
@@ -177,16 +176,15 @@ private func requireTodo(id: UUID, repo: TodoRepository) throws -> TodoItem {
 private func setTodoState(
     _ state: TodoState, params: [String: JSONValue], repo: TodoRepository
 ) throws -> [String: JSONValue] {
-    var item = try requireTodo(id: try TodoRPC.decodeID(params), repo: repo)
-    item.state = state
-    item.updatedAt = Date()
+    let item = TodoRPC.applyingState(
+        state, to: try requireTodo(id: try TodoRPC.decodeID(params), repo: repo))
     repo.save(item)
     return ["todo": TodoRPC.todoJSON(item)]
 }
 
 /// Explore and Ticket share one Manager open. The brief is the only
-/// difference: Explore is read-only; Ticket tells the agent to file a
-/// provider issue and attach it with `todo link` (CROW-1289).
+/// difference: Explore is read-only; Ticket runs `/crow-diagnose` on the item
+/// and attaches what it files with `todo link` (CROW-1289, CROW-1416).
 private func openScratchManager(
     params: [String: JSONValue],
     repo: TodoRepository,
