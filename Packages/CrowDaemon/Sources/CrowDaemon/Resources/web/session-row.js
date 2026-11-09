@@ -68,6 +68,10 @@ function sessionRow(s) {
   top.appendChild(lead);
 
   const trail = el('div', 'row-trail');
+  // Gateway-at-launch + transcript-upload glyphs (spike). Shown regardless of
+  // hideSessionDetails: "is Corveil recording this?" is the at-a-glance part.
+  const rec = recordingGlyphs(s);
+  if (rec) trail.appendChild(rec);
   if (isGridPinned(s.id)) {
     const pinMark = icon('pin', 11);
     pinMark.classList.add('row-pin');
@@ -94,6 +98,8 @@ function sessionRow(s) {
     // repo line, capped at 2, behind the same hideSessionDetails gate (CROW-773).
     if (s.labels && s.labels.length) content.appendChild(labelPills(s.labels, 2));
   }
+  const recDetail = recordingDetail(s);
+  if (recDetail) content.appendChild(recDetail);
 
   const badges = el('div', 'row-badges');
   // Ticket pill — purple once the linked issue is closed, mirroring the

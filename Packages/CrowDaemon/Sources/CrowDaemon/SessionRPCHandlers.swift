@@ -92,14 +92,14 @@ func makeSessionHandlers(
         "list-sessions": { _ in
             // Workspace names for tagged extra Managers (CROW-1382). Read off
             // the main actor, and only when some Manager is tagged at all.
-            let anyTagged = await MainActor.run {
-                appState.sessions.contains { $0.managerWorkspaceTag != nil }
-            }
-            let workspaceNames: [UUID: String] = anyTagged
-                ? Dictionary(
-                    (ConfigStore.loadConfig(devRoot: devRoot)?.workspaces ?? []).map { ($0.id, $0.name) },
-                    uniquingKeysWith: { first, _ in first })
-                : [:]
+            // One config read per poll now: the recording indicator (spike)
+            // needs it for every row, not only tagged Managers.
+            let config = ConfigStore.loadConfig(devRoot: devRoot)
+            let workspaceNames: [UUID: String] = Dictionary(
+                (config?.workspaces ?? []).map { ($0.id, $0.name) },
+                uniquingKeysWith: { first, _ in first })
+            let ledger = await LogSyncLedgerStore.shared(devRoot: devRoot).snapshot()
+            let now = Date()
             let items: [JSONValue] = await MainActor.run {
                 // One pass per poll. Newest open item wins when more than one
                 // Scratch points at the same Manager (Explore itself is 1:1;
@@ -157,6 +157,15 @@ func makeSessionHandlers(
                         // yes, GitLab no). Gates the web "In Review" button (CROW-749).
                         "can_set_project_status": .bool(tracker?.canSetProjectStatus(for: session) ?? false),
                     ]
+                    // Spike: gateway-at-launch + transcript upload indicator.
+                    // Base URL + fixed text only — `list-sessions` is remote-
+                    // readable (see the ⚠️ REDACTION note on `get-session`).
+                    object["recording"] = RecordingStatusJSON.build(
+                        session: session,
+                        worktreePath: appState.primaryWorktree(for: session.id)?.worktreePath,
+                        prLinks: appState.links(for: session.id),
+                        devRoot: devRoot, config: config, ledger: ledger,
+                        skipNotes: LogSyncSkipBoard.shared.notes(for: session.id), now: now)
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
                         object["branch"] = .string(worktree.branch)

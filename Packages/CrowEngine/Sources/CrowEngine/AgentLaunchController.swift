@@ -61,6 +61,7 @@ final class AgentLaunchController {
         // and Claude telemetry is exported — via the shared helper so the two
         // launch paths never drift.
         var text = command
+        var launchedKind: AgentKind?
         if let session = appState.sessions.first(where: { $0.id == sessionID }),
            let agent = AgentRegistry.shared.agent(for: session.agentKind) {
             let worktreePath = appState.primaryWorktree(for: sessionID)?.worktreePath
@@ -81,14 +82,16 @@ final class AgentLaunchController {
                     worktreePath: worktreePath,
                     ownership: HookOwnership.snapshot(appState, crowPath: crowPath))
             }
-            text = AgentLaunch.prepareAgentLaunchText(
+            let prepared = AgentLaunch.prepareAgentLaunchText(
                 command: command,
                 agent: agent,
                 sessionID: sessionID,
                 worktreePath: worktreePath,
                 crowPath: crowPath,
                 telemetryPort: telemetryPort
-            ).text
+            )
+            text = prepared.text
+            if prepared.didLaunch { launchedKind = agent.kind }
         }
         // CROW-1407: a routed Codex command — from `setup.sh`'s `--command`, a
         // handoff, or a Codex Manager's explore seed — needs its gateway key
@@ -97,6 +100,10 @@ final class AgentLaunchController {
         text = owner.codexGatewayKeyPrefix(sessionID: sessionID, command: text) + text
         // Ensure a trailing newline so TmuxBackend.sendText delivers Enter.
         TerminalRouter.send(routedTerminal, text: text.hasSuffix("\n") ? text : text + "\n")
+        if let launchedKind {
+            owner.recordLaunchedGateway(
+                sessionID: sessionID, agentKind: launchedKind, launchText: command, cwd: routedTerminal.cwd)
+        }
         appState.terminalReadiness[terminalID] = .agentLaunched
         // CROW-1410: answer Codex's model-migration screen if it comes up.
         owner.armCodexStartupPromptWatch(terminalID: terminalID, command: command)
@@ -553,6 +560,9 @@ final class AgentLaunchController {
         if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
             let codexKeyPrefix = owner.codexGatewayKeyPrefix(for: session, command: command)
             TerminalRouter.send(routedTerminal, text: gatewayPrefix + codexKeyPrefix + command)
+            owner.recordLaunchedGateway(
+                sessionID: sessionID, agentKind: agent.kind,
+                launchText: gatewayPrefix + command, cwd: worktree.worktreePath)
             owner.armCodexStartupPromptWatch(terminalID: terminalID, command: command)
         } else {
             CrowLog.info("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")

@@ -821,6 +821,13 @@ public final class SessionService {
         let pasteText = pasteCommand
             ? t.command.map { codexGatewayKeyPrefix(sessionID: t.sessionID, command: $0) + $0 }
             : nil
+        // Spike (recording indicator): a pasted agent command is a launch.
+        if pasteCommand, let command = t.command, let session,
+           let agent = AgentRegistry.shared.agent(for: session.agentKind),
+           AgentLaunch.commandLaunchesAgent(command, agent: agent) {
+            recordLaunchedGateway(
+                sessionID: session.id, agentKind: agent.kind, launchText: command, cwd: t.cwd)
+        }
         let registration = TerminalRegistration(
             id: t.id,
             name: t.name,

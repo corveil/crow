@@ -1,0 +1,346 @@
+import Foundation
+
+/// The two per-session "is this being recorded by Corveil?" indicators shown
+/// on every sidebar row (spike: sidebar recording indicator).
+///
+/// Pure: every input is a value the caller already has (the session, config,
+/// a ledger snapshot, the collector's skip notes, a clock). No disk, no
+/// `op read`, no actor hop, so the rules are unit-tested directly and a read
+/// RPC can call it on every poll.
+///
+/// ⚠️ REDACTION. The output rides `list-sessions`, which remote `/rpc` peers
+/// read. It may carry a gateway **base URL** and fixed explanatory text only —
+/// never a header name or value from config.
+public enum RecordingStatus {
+
+    // MARK: - Gateway
+
+    public enum GatewayState: String, Sendable, Equatable, CaseIterable {
+        /// Launched through the gateway that is configured now.
+        case routed
+        /// Launched with something other than what is configured now: a
+        /// relaunch would change it.
+        case drift
+        /// A gateway is configured, but no launch has been recorded (the agent
+        /// started before Crow recorded launches).
+        case unverified
+        /// Launched with the gateway explicitly cleared: vendor direct.
+        case direct
+        /// No gateway configured, and no launch recorded through one.
+        case off
+        /// A harness Crow has no gateway route for (Cursor, OpenCode, …).
+        case unsupported
+    }
+
+    public struct GatewayIndicator: Sendable, Equatable {
+        public var state: GatewayState
+        /// The launched base URL when there is one, else the configured one.
+        public var baseURL: String?
+        public var detail: String
+    }
+
+    /// Compare what the agent was launched with against what a launch would
+    /// get now.
+    ///
+    /// - Parameters:
+    ///   - launched: ``Session/launchedGateway``.
+    ///   - configuredBaseURL: the gateway a launch of this session's harness
+    ///     would use now (nil when none applies).
+    ///   - harnessRoutable: whether Crow can route this harness through a
+    ///     gateway at all (Claude always; Codex when its gateway opted in).
+    ///   - agentName: display name for the text.
+    public static func gateway(
+        launched: LaunchedGateway?, configuredBaseURL: String?,
+        harnessRoutable: Bool, agentName: String
+    ) -> GatewayIndicator {
+        let configured = configuredBaseURL.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+        if let launched {
+            switch launched.via {
+            case .launchLine, .codexOverride, .settingsEnv:
+                let url = launched.baseURL ?? "?"
+                guard let configured else {
+                    return GatewayIndicator(
+                        state: .drift, baseURL: url,
+                        detail: "Launched through \(url), but no gateway is configured now. A relaunch would go to the vendor directly.")
+                }
+                if sameGateway(url, configured) {
+                    return GatewayIndicator(state: .routed, baseURL: url, detail: "Launched through \(url)")
+                }
+                return GatewayIndicator(
+                    state: .drift, baseURL: url,
+                    detail: "Launched through \(url); the config now says \(configured). Relaunch to apply.")
+            case .none:
+                if let configured {
+                    return GatewayIndicator(
+                        state: .drift, baseURL: configured,
+                        detail: "Launched without a gateway; \(configured) is configured now. Relaunch to route through it.")
+                }
+                return GatewayIndicator(state: .direct, baseURL: nil,
+                                        detail: "Launched without a gateway (vendor direct)")
+            case .unknown:
+                break
+            }
+        }
+        guard harnessRoutable else {
+            return GatewayIndicator(state: .unsupported, baseURL: nil,
+                                    detail: "\(agentName) isn't routed through a Crow gateway")
+        }
+        if let configured {
+            return GatewayIndicator(
+                state: .unverified, baseURL: configured,
+                detail: "Configured: \(configured). This agent's launch wasn't recorded (it started before Crow recorded launches), so it may not be using it.")
+        }
+        return GatewayIndicator(state: .off, baseURL: nil, detail: "No gateway configured")
+    }
+
+    /// Two base URLs name the same gateway: case, a trailing slash and Codex's
+    /// required `/v1` suffix (CROW-1407) are not differences.
+    public static func sameGateway(_ a: String, _ b: String) -> Bool {
+        func norm(_ s: String) -> String {
+            var v = s.trimmingCharacters(in: .whitespaces).lowercased()
+            while v.hasSuffix("/") { v.removeLast() }
+            if v.hasSuffix("/v1") { v.removeLast(3) }
+            while v.hasSuffix("/") { v.removeLast() }
+            return v
+        }
+        return norm(a) == norm(b)
+    }
+
+    // MARK: - Transcripts
+
+    public enum TranscriptState: String, Sendable, Equatable, CaseIterable {
+        case uploaded
+        /// Opted in, nothing shipped yet: inside the quiet period, still
+        /// active, or a Manager conversation not yet idle.
+        case waiting
+        /// `failedTransient`: re-attempted after a backoff.
+        case retrying
+        /// `skippedPermanent`: never re-attempted.
+        case rejected
+        /// The configuration says this session never uploads.
+        case notOptedIn = "not_opted_in"
+        /// Opted in, but the collector skipped it (no transcript on disk, no
+        /// worktree, …). The reason is in `detail`.
+        case skipped
+    }
+
+    public struct TranscriptIndicator: Sendable, Equatable {
+        public var state: TranscriptState
+        public var detail: String
+        /// Managers only: conversations uploaded / known.
+        public var uploaded: Int?
+        public var total: Int?
+    }
+
+    /// Gateway header names that may carry the Corveil key, in preference
+    /// order. Shared with `LogSyncCollector.corveilKeyHeaderNames`.
+    public static let corveilKeyHeaderNames = ["x-citadel-api-key", "authorization", "x-api-key", "x-corveil-key"]
+
+    /// Whether a gateway carries a Corveil key header with a non-blank value.
+    /// Presence only: an `op://` reference is not resolved here (a read path
+    /// must never shell out), so an unresolvable reference still reads as
+    /// "has one".
+    public static func hasCorveilKey(_ gateway: WorkspaceGateway?) -> Bool {
+        guard let gateway, !gateway.isEmpty,
+              !gateway.baseURL.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return false }
+        return gateway.customHeaders.contains { name, value in
+            corveilKeyHeaderNames.contains(name.lowercased())
+                && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    /// Every conversation a Manager has run, oldest first: its recorded
+    /// history plus the current id when the history predates it (CROW-1382).
+    /// The collector uploads one artifact per entry.
+    public static func managerConversations(_ session: Session) -> [HarnessConversationRef] {
+        var refs = session.harnessConversationHistory
+        if let current = session.harnessConversationID,
+           !refs.contains(where: { $0.id == current }) {
+            refs.append(HarnessConversationRef(agentKind: session.agentKind, id: current))
+        }
+        return refs
+    }
+
+    /// `{devRoot}/{workspace}/…` → `workspace`; nil outside the dev root.
+    public static func workspaceFolder(forWorktreePath path: String, devRoot: String) -> String? {
+        let root = (devRoot as NSString).standardizingPath
+        let full = (path as NSString).standardizingPath
+        guard full.hasPrefix(root + "/") else { return nil }
+        return full.dropFirst(root.count + 1).split(separator: "/").first.map(String.init)
+    }
+
+    /// The transcript indicator, mirroring `LogSyncCollector`'s rules:
+    /// the primary and untagged Managers never upload; a work, review or job
+    /// session uploads under the workspace its **worktree path** names; the
+    /// workspace must tick `uploadSessionLogs` and carry a gateway with a
+    /// Corveil key; a Manager ships one artifact per harness conversation.
+    public static func transcripts(
+        session: Session, worktreePath: String?, devRoot: String?, config: AppConfig?,
+        ledger: LogSyncLedger, skipNotes: [LogSyncSkipNote], now: Date
+    ) -> TranscriptIndicator {
+        func notOptedIn(_ why: String) -> TranscriptIndicator {
+            TranscriptIndicator(state: .notOptedIn, detail: "Not opted in: \(why)")
+        }
+        func skipped(_ why: String) -> TranscriptIndicator {
+            TranscriptIndicator(state: .skipped, detail: "Not uploading: \(why)")
+        }
+
+        if session.id == AppState.managerSessionID {
+            return notOptedIn("the primary Manager never uploads transcripts, by design")
+        }
+        guard let config else { return notOptedIn("config.json is unreadable") }
+
+        let workspace: WorkspaceInfo
+        if session.isManager {
+            guard let tag = session.managerWorkspaceTag else {
+                return notOptedIn("untagged Manager (created before Managers needed a workspace)")
+            }
+            guard let ws = config.workspaces.first(where: { $0.id == tag }) else {
+                return notOptedIn("this Manager's workspace was removed")
+            }
+            workspace = ws
+        } else {
+            guard let worktreePath else { return skipped("the session has no worktree") }
+            guard let devRoot, let folder = workspaceFolder(forWorktreePath: worktreePath, devRoot: devRoot) else {
+                return skipped("the worktree is outside the dev root")
+            }
+            guard let ws = config.workspaces.first(where: { $0.name.lowercased() == folder.lowercased() }) else {
+                if folder == "crow-reviews" {
+                    return notOptedIn("review clones live under crow-reviews/, which the collector doesn't map to a workspace")
+                }
+                return notOptedIn("\(folder)/ isn't a configured workspace")
+            }
+            workspace = ws
+        }
+        guard workspace.uploadSessionLogs else {
+            return notOptedIn("workspace \(workspace.name) has transcript upload off")
+        }
+        guard hasCorveilKey(workspace.gateway) else {
+            return notOptedIn("workspace \(workspace.name) has no gateway with a Corveil API key")
+        }
+
+        let quiet = max(0, (config.logSync ?? LogSyncConfig()).quietPeriodMinutes)
+        if session.isManager {
+            return managerTranscripts(
+                session: session, ledger: ledger, skipNotes: skipNotes, quietMinutes: quiet, now: now)
+        }
+        return workTranscripts(
+            session: session, ledger: ledger, skipNotes: skipNotes, quietMinutes: quiet, now: now)
+    }
+
+    private static let kindSuffix = ":" + LogSyncArtifactKind.sessionTranscript.rawValue
+
+    /// Ledger entries for one upload uid (any harness), as `(harness, entry)`.
+    static func entries(uid: String, in ledger: LogSyncLedger) -> [(harness: String, entry: LogSyncLedger.Entry)] {
+        ledger.entries.compactMap { key, entry in
+            guard key.hasPrefix(uid + ":"), key.hasSuffix(kindSuffix) else { return nil }
+            let harness = key.dropFirst(uid.count + 1).dropLast(kindSuffix.count)
+            return (String(harness), entry)
+        }.sorted { $0.harness < $1.harness }
+    }
+
+    private static func workTranscripts(
+        session: Session, ledger: LogSyncLedger, skipNotes: [LogSyncSkipNote],
+        quietMinutes: Int, now: Date
+    ) -> TranscriptIndicator {
+        let found = entries(uid: session.id.uuidString, in: ledger)
+        let terminal = session.status == .completed || session.status == .archived
+        let uploaded = found.filter { $0.entry.status == .uploaded }
+        if !uploaded.isEmpty {
+            var lines = uploaded.map {
+                "Uploaded \($0.harness) transcript \(ago($0.entry.at, now)) (\(bytes($0.entry.sizeBytes)) gzipped)"
+            }
+            for other in found where other.entry.status != .uploaded {
+                lines.append("\(other.harness): \(describe(other.entry, now))")
+            }
+            if !terminal {
+                lines.append("Uploaded while the session was still open. Uploads are write-once, so anything after that isn't in Corveil.")
+            }
+            return TranscriptIndicator(state: .uploaded, detail: lines.joined(separator: "\n"))
+        }
+        if let transient = found.first(where: { $0.entry.status == .failedTransient }) {
+            return TranscriptIndicator(
+                state: .retrying,
+                detail: "\(transient.harness): \(describe(transient.entry, now)). Retried after 30 min.")
+        }
+        if let rejected = found.first(where: { $0.entry.status == .skippedPermanent }) {
+            return TranscriptIndicator(
+                state: .rejected,
+                detail: "\(rejected.harness): \(describe(rejected.entry, now)). Not retried.")
+        }
+        if !skipNotes.isEmpty {
+            return TranscriptIndicator(
+                state: .skipped,
+                detail: "Not uploading: " + skipNotes.map(\.detail).joined(separator: "; "))
+        }
+        let waiting = terminal
+            ? "Waiting: \(session.status.rawValue); uploads on the next collector pass (every 5 min)"
+            : "Waiting: uploads once the transcript has been idle \(quietMinutes) min, or when the session completes"
+        return TranscriptIndicator(state: .waiting, detail: waiting)
+    }
+
+    private static func managerTranscripts(
+        session: Session, ledger: LogSyncLedger, skipNotes: [LogSyncSkipNote],
+        quietMinutes: Int, now: Date
+    ) -> TranscriptIndicator {
+        let conversations = managerConversations(session)
+        guard !conversations.isEmpty else {
+            return TranscriptIndicator(
+                state: .waiting, detail: "Waiting: no harness conversation recorded yet",
+                uploaded: 0, total: 0)
+        }
+        var uploaded = 0, retrying = 0, rejected = 0, pending = 0
+        var lines: [String] = []
+        for ref in conversations {
+            let short = String(ref.id.prefix(8))
+            let found = entries(uid: ref.id, in: ledger)
+            if found.contains(where: { $0.entry.status == .uploaded }) {
+                uploaded += 1
+            } else if let t = found.first(where: { $0.entry.status == .failedTransient }) {
+                retrying += 1
+                lines.append("\(short): \(describe(t.entry, now))")
+            } else if let r = found.first(where: { $0.entry.status == .skippedPermanent }) {
+                rejected += 1
+                lines.append("\(short): \(describe(r.entry, now))")
+            } else {
+                pending += 1
+                let note = skipNotes.first(where: { $0.scope == ref.id })
+                lines.append("\(short): " + (note?.detail ?? "waiting for \(quietMinutes) min idle"))
+            }
+        }
+        let total = conversations.count
+        let state: TranscriptState
+        if uploaded == total { state = .uploaded }
+        else if retrying > 0 { state = .retrying }
+        else if pending > 0 { state = .waiting }
+        else { state = .rejected }
+        let head = "\(uploaded) of \(total) conversation\(total == 1 ? "" : "s") uploaded"
+        return TranscriptIndicator(
+            state: state, detail: ([head] + lines).joined(separator: "\n"),
+            uploaded: uploaded, total: total)
+    }
+
+    private static func describe(_ entry: LogSyncLedger.Entry, _ now: Date) -> String {
+        let why = entry.reason.map { " (\($0))" } ?? ""
+        switch entry.status {
+        case .uploaded: return "uploaded \(ago(entry.at, now))"
+        case .failedTransient: return "upload failed\(why) \(ago(entry.at, now))"
+        case .skippedPermanent: return "rejected\(why) \(ago(entry.at, now))"
+        }
+    }
+
+    static func ago(_ epoch: Double, _ now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince1970 - epoch))
+        if s < 60 { return "just now" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        if s < 86_400 { return "\(s / 3600)h ago" }
+        return "\(s / 86_400)d ago"
+    }
+
+    static func bytes(_ n: Int) -> String {
+        if n < 1024 { return "\(n) B" }
+        if n < 1024 * 1024 { return "\(n / 1024) KB" }
+        return String(format: "%.1f MB", Double(n) / 1_048_576)
+    }
+}

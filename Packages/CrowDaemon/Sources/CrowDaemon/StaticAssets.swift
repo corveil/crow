@@ -21,7 +21,7 @@ enum StaticAssets {
     /// `settings.js` is last. `session-modals.js` precedes sidebar callers.
     static let uiJavaScriptFiles = [
         "theme.js", "rpc.js", "notifications.js", "session-modals.js", "sidebar.js", "sidebar-chrome.js",
-        "pr-glyphs.js", "session-row.js", "session-menu.js", "switcher.js",
+        "pr-glyphs.js", "recording-glyphs.js", "session-row.js", "session-menu.js", "switcher.js",
         "session.js", "session-header.js", "session-tabs.js", "grid.js", "boards.js", "scorecard-board.js",
         "tickets-board.js", "reviews-board.js", "scratch-board.js",
         "terminal.js", "chat.js", "tui-record.js", "setup.js",

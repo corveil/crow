@@ -47,6 +47,9 @@ struct LogSyncCollector: Sendable {
     let log: LogSyncLog
     /// How long a delete may wait on the upload before it goes ahead anyway.
     let deleteUploadTimeout: Duration
+    /// Where each skip is also recorded as a structured note, so the sidebar
+    /// can show it (spike: recording indicator).
+    let skipBoard: LogSyncSkipBoard
 
     /// Don't re-attempt a transiently-failed upload for this long.
     private let retryBackoff: TimeInterval = 30 * 60
@@ -68,7 +71,8 @@ struct LogSyncCollector: Sendable {
         },
         loadConfig: @escaping @Sendable (String) -> AppConfig? = { ConfigStore.loadConfig(devRoot: $0) },
         log: LogSyncLog = .shared,
-        deleteUploadTimeout: Duration = .seconds(10)
+        deleteUploadTimeout: Duration = .seconds(10),
+        skipBoard: LogSyncSkipBoard = .shared
     ) {
         self.devRoot = devRoot
         self.uploader = uploader
@@ -80,6 +84,7 @@ struct LogSyncCollector: Sendable {
         self.loadConfig = loadConfig
         self.log = log
         self.deleteUploadTimeout = deleteUploadTimeout
+        self.skipBoard = skipBoard
     }
 
     /// A session as the collector needs it, captured on the main actor.
@@ -212,6 +217,8 @@ struct LogSyncCollector: Sendable {
     }
 
     private func collect(_ entry: SessionSnapshot, _ pass: Pass) async {
+        // This pass restates every skip that still applies.
+        skipBoard.clear(entry.session.id)
         // Managers have no worktree to derive a workspace from. Only an
         // extra Manager tagged with an opted-in workspace ships; untagged
         // ones — the primary always among them — never do (CROW-1382).
@@ -270,6 +277,9 @@ struct LogSyncCollector: Sendable {
         // skip. This is the security invariant, asserted in the tests.
         guard let upload = Self.resolvedUpload(for: workspace, resolveSecret: resolveSecret) else {
             log.warnOnce("log-sync: workspace \"\(workspaceName)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
+            skipBoard.record(session.id, LogSyncSkipNote(
+                reason: "no-gateway-key",
+                detail: "workspace \(workspaceName)'s gateway key could not be resolved"))
             return
         }
 
@@ -453,6 +463,9 @@ struct LogSyncCollector: Sendable {
         }
         guard let upload = Self.resolvedUpload(for: workspace, resolveSecret: resolveSecret) else {
             log.warnOnce("log-sync: workspace \"\(workspace.name)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
+            skipBoard.record(session.id, LogSyncSkipNote(
+                reason: "no-gateway-key",
+                detail: "workspace \(workspace.name)'s gateway key could not be resolved"))
             return
         }
         let kind = LogSyncArtifactKind.sessionTranscript
@@ -560,6 +573,7 @@ struct LogSyncCollector: Sendable {
         let key = [session.id.uuidString, harness?.rawValue ?? "", scope ?? "", reason]
             .joined(separator: "|")
         log.once(key: key, "log-sync: session \(session.id.uuidString) \"\(session.name)\": \(detail); skipping")
+        skipBoard.record(session.id, LogSyncSkipNote(reason: reason, detail: detail, scope: scope))
     }
 
     /// A transcript cut at the size cap still uploads; say so once, with how
@@ -604,12 +618,7 @@ struct LogSyncCollector: Sendable {
     /// history, plus the current id when it predates the history (a Manager
     /// whose last hook fired before CROW-1382 recorded one).
     static func managerConversations(_ session: Session) -> [HarnessConversationRef] {
-        var refs = session.harnessConversationHistory
-        if let current = session.harnessConversationID,
-           !refs.contains(where: { $0.id == current }) {
-            refs.append(HarnessConversationRef(agentKind: session.agentKind, id: current))
-        }
-        return refs
+        RecordingStatus.managerConversations(session)
     }
 
     /// The upload destination + credential for a workspace, derived **solely** from
@@ -650,7 +659,7 @@ struct LogSyncCollector: Sendable {
     /// order. `x-citadel-api-key` is Crow's established Corveil-gateway convention
     /// (see `docs/configuration.md`); the rest are accepted defensively so a
     /// differently-named credential header still resolves.
-    static let corveilKeyHeaderNames = ["x-citadel-api-key", "authorization", "x-api-key", "x-corveil-key"]
+    static let corveilKeyHeaderNames = RecordingStatus.corveilKeyHeaderNames
 
     /// Extract the bare Corveil API key carried by a workspace's gateway (CROW-1066)
     /// so the upload can reuse it instead of asking for a second key. Finds the
