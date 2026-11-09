@@ -15,6 +15,37 @@ auto-pickup queue then implements it. (Jira's auto-pickup isn't wired — the la
 for parity/board visibility — but the work item is created **with an assignee in one
 step**, which `acli` could never do; CROW-528.)
 
+## Ticket standard
+
+A ticket filed from an **observation** (a Corveil FollowUp, a meeting remark, a Slack
+thread, or a Scratch item) should be a **diagnosed ticket**. Write its body to the
+[ticket standard](https://github.com/corveil/crow/blob/main/docs/ticket-standard.md)
+(`docs/ticket-standard.md` in the Crow repo; the decision is
+[ADR 0031](https://github.com/corveil/crow/blob/main/docs/adr/0031-observations-are-diagnosed-before-they-become-tickets.md)).
+It defines the body sections (Observation, Diagnosis, Shape, Acceptance and
+verification, Out of scope, and a Provenance footer), the epic format
+`/crow-cascade-epic` reads, and the outcomes that aren't tickets: commitment,
+duplicate, needs info and won't do.
+
+To read it from a dev root that has no Crow checkout:
+
+```bash
+gh api repos/corveil/crow/contents/docs/ticket-standard.md -H "Accept: application/vnd.github.raw"
+```
+
+Both the link and the command read the standard on `main`, which may be newer than this
+Crow build. Follow the version you read there.
+
+**Epics and `crow:auto`:** when the standard's Shape is an **epic**, file the epic
+issue and every sub-ticket in **wave 2 or later** *without* `crow:auto` (drop
+`--label "crow:auto"` in Step 4, or `crow:auto` from Jira's `labels`). Crow's
+auto-create watcher starts a work session for any `crow:auto` issue that has none.
+Labeled, the epic gets a session of its own, and a later-wave sub-ticket starts
+before its dependencies merge. Step 5's missing-label fallback doesn't apply to
+issues filed without the label. Wave-1 sub-tickets and single tickets keep the
+label as usual. Report the unlabeled issues in Step 6, and point the operator to
+`/crow-cascade-epic <epic-url>` to run them.
+
 ## Important: Sandbox Bypass
 
 All `gh`, `glab`, and `git` commands require `dangerouslyDisableSandbox: true` because
@@ -84,7 +115,8 @@ a blank line, then the literal attribution line shown in **Step 4** below.
 Crow has already filled in the agent name for this session — copy the line
 as-is into the body.
 Do NOT add any other footer — no "Generated with Claude Code" line and no co-author
-trailer. The Crow attribution is the only footer.
+trailer. The Crow attribution is the only footer. (The ticket standard's
+`Provenance:` line is part of the body: it goes just above the attribution line.)
 
 ### Step 2: Determine the target repo and provider
 
@@ -125,6 +157,10 @@ the resolved account, call `jira_get_user_profile {email}`.)
 
 In both commands below, `BODY` is the user-provided body followed by the required
 attribution footer from **Step 4b** (a blank line, then the canonical link).
+
+**Exception:** an epic issue, and a sub-ticket in wave 2 or later, is filed
+**without** `--label "crow:auto"` (see **Epics and `crow:auto`** under **Ticket
+standard**).
 
 **GitHub:**
 ```bash
