@@ -99,7 +99,11 @@ case "$1 $2" in
   "label create")
     printf '%s %s\n' "$3" "$repo" >> "$FIX/label-create.log" ;;
   "api repos/"*)
-    n="${2##*/}"; echo $((9000 + n)) ;;
+    case "$2" in
+      */issues/*) n="${2##*/}"; echo $((9000 + n)) ;;
+      *) r="${2#repos/}"; f="$FIX/visibility-${r//\//__}"
+         if [[ -f "$f" ]]; then cat "$f"; else echo private; fi ;;
+    esac ;;
   "api -X")
     [[ -f "$FIX/fail-subissue" ]] && { echo "HTTP 422: sub-issues are not enabled" >&2; exit 1; }
     printf '%s %s\n' "$4" "$6" >> "$FIX/subissue.log"
@@ -201,6 +205,7 @@ cp "$FIX/workspaces.all.json" "$FIX/workspaces.json"
 echo "repos"
 node() { # node <slug> <description> <pushed>
   jq -cn --arg r "$1" --arg d "$2" --arg p "$3" '{nameWithOwner: $r, description: $d, isFork: false, pushedAt: $p,
+    visibility: (if $r == "acme/api" then "PUBLIC" else "PRIVATE" end),
     primaryLanguage: {name: "Go"}, defaultBranchRef: {name: "main"}, repositoryTopics: {nodes: [{topic: {name: "api"}}]}}'
 }
 page() { # page <owner> <node-json>... — one GraphQL page
@@ -217,6 +222,7 @@ check "every claimed repo across pages and owners, newest push first" "acme/web,
 check "an unclaimed repo of a listed owner is left out" "0" "$(jq '[.repos[] | select(.repo == "partner/other")] | length' <<<"$out")"
 check "description, language, topics and default branch come along" "The API Go api main" "$(jq -r '.repos[] | select(.repo == "acme/api") | "\(.description) \(.language) \(.topics[0]) \(.default_branch)"' <<<"$out")"
 check "--out writes the same JSON" "$(jq -c . <<<"$out")" "$(jq -c . "$TMP/repos.json")"
+check "each repo reports its visibility, so a public one can be called out" "public private" "$(jq -r '[(.repos[] | select(.repo == "acme/api") | .visibility), (.repos[] | select(.repo == "acme/web") | .visibility)] | join(" ")' <<<"$out")"
 check "one GraphQL call per owner" "2" "$(grep -c '^api graphql' "$FIX/gh.log")"
 out=$(D repos --workspace Acme --repos acme/API,partner/other)
 check "--repos keeps only those, matched case-insensitively" "acme/api,partner/other" "$(jq -r '[.repos[].repo] | sort | join(",")' <<<"$out")"
@@ -247,24 +253,24 @@ git -C "$FIX/origin-acme__api.git" symbolic-ref HEAD refs/heads/main
 first_sha=$(git -C "$seed" rev-parse HEAD)
 out=$(D checkout --repo acme/api --dev-root "$DEVROOT")
 check "a first checkout clones" "ok true" "$(jq -r '"\(.status) \(.cloned)"' <<<"$out")"
-check "into crow-reviews, which the repo scan skips" "$DEVROOT/crow-reviews/diagnose-acme-api" "$(jq -r .path <<<"$out")"
+check "into crow-reviews, which the repo scan skips, with -- between owner and name" "$DEVROOT/crow-reviews/diagnose-acme--api" "$(jq -r .path <<<"$out")"
 check "at origin's default branch" "origin/main $first_sha" "$(jq -r '"\(.ref) \(.sha)"' <<<"$out")"
-check "the files are on disk" "first" "$(cat "$DEVROOT/crow-reviews/diagnose-acme-api/README.md")"
+check "the files are on disk" "first" "$(cat "$DEVROOT/crow-reviews/diagnose-acme--api/README.md")"
 echo "second" > "$seed/README.md"
 gitq -C "$seed" commit -q -am second
 git -C "$seed" push -q "$FIX/origin-acme__api.git" main
-echo "local junk" > "$DEVROOT/crow-reviews/diagnose-acme-api/junk.txt"
+echo "local junk" > "$DEVROOT/crow-reviews/diagnose-acme--api/junk.txt"
 out=$(D checkout --repo acme/api --dev-root "$DEVROOT" --branch main)
 check "a second checkout fetches instead of cloning" "false" "$(jq -r .cloned <<<"$out")"
 check "and moves to the new origin/main" "$(git -C "$seed" rev-parse HEAD)" "$(jq -r .sha <<<"$out")"
-check "the tree matches origin" "second" "$(cat "$DEVROOT/crow-reviews/diagnose-acme-api/README.md")"
-check "and leftovers are cleaned" "no" "$([[ -e "$DEVROOT/crow-reviews/diagnose-acme-api/junk.txt" ]] && echo yes || echo no)"
+check "the tree matches origin" "second" "$(cat "$DEVROOT/crow-reviews/diagnose-acme--api/README.md")"
+check "and leftovers are cleaned" "no" "$([[ -e "$DEVROOT/crow-reviews/diagnose-acme--api/junk.txt" ]] && echo yes || echo no)"
 check "one clone across both calls" "1" "$(grep -c '^repo clone' "$FIX/gh.log")"
-git -C "$DEVROOT/crow-reviews/diagnose-acme-api" config remote.origin.url https://github.com/acme/other.git
+git -C "$DEVROOT/crow-reviews/diagnose-acme--api" config remote.origin.url https://github.com/acme/other.git
 out=$(D checkout --repo acme/api --dev-root "$DEVROOT")
 check "a clone of another repo at that path is refused" "error" "$(jq -r .status <<<"$out")"
 contains "and named" "$(jq -r .message <<<"$out")" "acme/other"
-mkdir -p "$DEVROOT/crow-reviews/diagnose-acme-web"
+mkdir -p "$DEVROOT/crow-reviews/diagnose-acme--web"
 out=$(D checkout --repo acme/web --dev-root "$DEVROOT")
 check "a directory that isn't a clone is refused" "error" "$(jq -r .status <<<"$out")"
 out=$(D checkout --repo acme/api --dev-root "$DEVROOT" --branch 'main;rm')
@@ -328,6 +334,15 @@ check "every corveil call passed --no-capture" "0" "$(grep -vc -- '--no-capture'
 check "with CORVEIL_NO_CAPTURE=1 in the environment" "0" "$(grep -vc '^capture_off=1 ' "$FIX/corveil.log")"
 out=$(D source --id "$FU" --dir "$BASE" --minutes 1)
 check "--minutes narrows the window" "2" "$(jq '.transcript.lines | length' "$SRC")"
+echo '{"issues": {"T1": {"repo": "acme/api", "number": 500, "url": "https://github.com/acme/api/issues/500", "title": "Old"}}}' > "$BASE/followup-05d9dcd9/filed.json"
+out=$(D source --id "$FU" --dir "$BASE")
+check "a source whose folder already filed gets a fresh run folder" "followup-05d9dcd9-2" "$(jq -r .run_id <<<"$out")"
+contains "and warns with what the earlier run filed" "$(jq -r '.warnings | join(" ")' <<<"$out")" "followup-05d9dcd9: T1 https://github.com/acme/api/issues/500"
+check "the earlier run's folder is left alone" "Old" "$(jq -r .issues.T1.title "$BASE/followup-05d9dcd9/filed.json")"
+echo '{"issues": {"T1": {"repo": "acme/api", "number": 501, "url": "https://github.com/acme/api/issues/501"}}}' > "$BASE/followup-05d9dcd9-2/filed.json"
+out=$(D source --id "$FU" --dir "$BASE")
+check "and the next one after that" "followup-05d9dcd9-3" "$(jq -r .run_id <<<"$out")"
+contains "listing both earlier runs" "$(jq -r '.warnings | join(" ")' <<<"$out")" "followup-05d9dcd9-2: T1 https://github.com/acme/api/issues/501"
 out=$(D source --id "$MEET" --dir "$BASE")
 check "a meeting id without --at is refused" "error" "$(jq -r .status <<<"$out")"
 contains "with a hint to pass --at" "$(jq -r .message <<<"$out")" "--at"
@@ -444,6 +459,7 @@ oos() { printf '## Out of scope\n\n- The Ticket brief, which #1416 replaces.\n';
   printf '## Acceptance and verification\n\n**Done when**\n\n- [ ] Both sub-tickets merge.\n\n**Verify after release**\n\nNone: each sub-ticket carries its own checks.\n\n'
   oos; footer; } > "$RUN/bodies/epic.md"
 { printf 'Part of {{epic}} (link-aware briefs).\n\n'; diag acme/api "src/brief.go:184"
+  printf '```yaml\ntoken: ${{ secrets.GITHUB_TOKEN }}\nname: {{ .Values.name }}\n```\n\n'
   printf '## Shape\n\nOne ticket in the epic.\n\n'; accept; oos; footer; } > "$RUN/bodies/T1.md"
 { printf 'Part of {{epic}} (link-aware briefs). Depends on {{T1}}.\n\n'; diag acme/web "web/src/Brief.tsx:12"
   printf '## Shape\n\nOne ticket in the epic. See also {{T1}}.\n\n'; accept; oos; footer; } > "$RUN/bodies/T2.md"
@@ -458,7 +474,7 @@ cat > "$RUN/plan.json" <<JSON
  ]}
 JSON
 out=$(D check --plan "$RUN/plan.json")
-check "a complete epic passes" "ok" "$(jq -r .status <<<"$out")"
+check "a complete epic passes, other {{…}} text (an Actions expression, a Helm value) included" "ok" "$(jq -r .status <<<"$out")"
 [[ "$(jq -r .status <<<"$out")" == "ok" ]] || jq -r '.errors[]?' <<<"$out" | sed 's/^/      /'
 check "check exits 0 when ok" "0" "$(rc_of D check --plan "$RUN/plan.json")"
 check "check needs no network" "0" "$(GH_BIN=/nonexistent CROW_BIN=/nonexistent CORVEIL_BIN=/nonexistent bash "$DIAGNOSE_SH" check --plan "$RUN/plan.json" >/dev/null 2>&1; echo $?)"
@@ -510,6 +526,8 @@ copy_run; edit_body T1 's/^---$//'
 expect_error "no rule above the provenance" "T1: put a --- rule above the Provenance line"
 copy_run; edit_body T1 's/See also/See also {{T9}} and/; s/^## Shape$/## Shape\n\nSee {{T9}}./'
 expect_error "a placeholder for a key that isn't in the plan" "T1: {{T9}} is not a key in this plan"
+copy_run; edit_body T1 's/via Claude Code\]/via {{CROW_AGENT_DISPLAY_NAME}}]/'
+expect_error "an unexpanded agent-name placeholder" "T1: the attribution line still has the agent-name placeholder"
 copy_run; edit_plan '.issues[1].labels = ["triaged", "crow:auto"]'
 expect_error "crow:auto" "T1: never label a diagnosed ticket crow:auto"
 copy_run; edit_plan '.issues[1].labels = ["bug"]'
@@ -598,10 +616,24 @@ check "each sub-ticket is added as a sub-issue of the epic" $'repos/acme/api/iss
 check "filed.json records every issue" "100 101 102" "$(jq -r '[.issues[].number] | map(tostring) | join(" ")' "$RUN/filed.json")"
 check "the output lists them" "https://github.com/acme/web/issues/102" "$(jq -r '.filed[] | select(.key == "T2") | .url' <<<"$out")"
 check "the attribution line survives rendering" "$ATTR" "$(tail -n 1 "$FIX/created-102.md")"
+contains "other {{…}} text is filed untouched" "$(cat "$FIX/created-101.md")" 'token: ${{ secrets.GITHUB_TOKEN }}'
+check "filed.json records each title" "API brief lists links" "$(jq -r .issues.T1.title "$RUN/filed.json")"
 
 out=$(D file --plan "$RUN/plan.json")
 check "a rerun files nothing new" "3" "$(grep -c '' "$FIX/created.log")"
 check "and still reports the filed issues" "3" "$(jq '.filed | length' <<<"$out")"
+
+# A different diagnosis in a folder that already filed must not pass as a resume.
+cp "$RUN/plan.json" "$TMP/plan.saved"
+jq '.issues[1].title = "Regression: API brief drops links again"' "$TMP/plan.saved" > "$RUN/plan.json"
+out=$(D file --plan "$RUN/plan.json")
+check "a plan whose filed key changed title is invalid" "invalid" "$(jq -r .status <<<"$out")"
+contains "and says what filed.json holds" "$(jq -r '.errors | join(" ")' <<<"$out")" 'filed.json records T1 as acme/api#101 "API brief lists links"'
+check "and files nothing" "3" "$(grep -c '' "$FIX/created.log")"
+jq '.issues[2].repo = "acme/api"' "$TMP/plan.saved" > "$RUN/plan.json"
+out=$(D file --plan "$RUN/plan.json")
+contains "a filed key that moved repo is refused too" "$(jq -r '.errors | join(" ")' <<<"$out")" "but this plan files T2"
+cp "$TMP/plan.saved" "$RUN/plan.json"
 
 # Resume: the outage hits the second sub-ticket.
 copy_run; rm -f "$TMP/run2/filed.json" "$FIX/subissue.log" "$FIX"/edited-*.md
@@ -615,13 +647,27 @@ check "the rerun finishes" "ok" "$(jq -r .status <<<"$out")"
 check "without filing the first two again" $'200\tacme/api\tEpic: briefs carry their links\n201\tacme/api\tAPI brief lists links\n202\tacme/web\tWeb brief lists links' "$(cat "$FIX/created.log")"
 contains "the epic still gets its numbers" "$(cat "$FIX/edited-200.md")" "- [ ] T2 — acme/web#202 web side"
 
-# A missing label other than triaged stops everything before filing.
-copy_run; rm -f "$TMP/run2/filed.json"; : > "$FIX/created.log"
+# A missing label other than triaged stops everything before filing, and
+# before triaged is created anywhere.
+copy_run; rm -f "$TMP/run2/filed.json"; : > "$FIX/created.log"; : > "$FIX/label-create.log"
 edit_plan '.issues[2].labels = ["triaged", "frontend"]'
 out=$(D file --plan "$TMP/run2/plan.json")
 check "a missing label is invalid" "invalid" "$(jq -r .status <<<"$out")"
 contains "and named" "$(jq -r '.errors | join(" ")' <<<"$out")" "acme/web has no frontend label"
 check "and nothing was filed" "" "$(cat "$FIX/created.log")"
+check "and no label was created in the other repo" "" "$(cat "$FIX/label-create.log")"
+
+# A public repo needs --public-ok: the bodies quote the observation verbatim.
+copy_run; rm -f "$TMP/run2/filed.json"; : > "$FIX/created.log"; : > "$FIX/label-create.log"
+echo public > "$FIX/visibility-acme__web"
+out=$(D file --plan "$TMP/run2/plan.json")
+check "a public repo without --public-ok is invalid" "invalid" "$(jq -r .status <<<"$out")"
+contains "and named" "$(jq -r '.errors | join(" ")' <<<"$out")" "acme/web is public"
+check "nothing was filed" "" "$(cat "$FIX/created.log")"
+check "and no label was created" "" "$(cat "$FIX/label-create.log")"
+out=$(D file --plan "$TMP/run2/plan.json" --public-ok)
+check "with --public-ok it files" "ok 3" "$(jq -r '"\(.status) \(.filed | length)"' <<<"$out")"
+rm -f "$FIX/visibility-acme__web"
 
 # A failed sub-issue link is a warning, not a failure.
 copy_run; rm -f "$TMP/run2/filed.json"; touch "$FIX/fail-subissue"

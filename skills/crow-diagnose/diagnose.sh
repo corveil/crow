@@ -10,14 +10,16 @@
 #                                  and topics: one GraphQL query per owner, no clones
 #   checkout  --repo OWNER/NAME [--branch B] [--dev-root D]
 #                                  a scratch clone at origin's default branch, kept at
-#                                  {devRoot}/crow-reviews/diagnose-{owner}-{name}
+#                                  {devRoot}/crow-reviews/diagnose-{owner}--{name}
 #   source    (--id UUID [--at HH:MM[:SS]] | --url URL | --text-file F) --dir BASE
 #             [--minutes N] [--now T]
 #                                  resolve one observation into BASE/{run}/source.json
 #   dupes     --repos A,B [--id S]... [--terms "..."]... [--exclude URL]... [--out F]
 #                                  open and closed issues and PRs that may already cover it
 #   check     --plan F             the plan and every body against the ticket standard
-#   file      --plan F             file the plan's ticket or epic; resumable (filed.json)
+#   file      --plan F [--public-ok]
+#                                  file the plan's ticket or epic; resumable (filed.json).
+#                                  A public repo needs --public-ok (bodies quote the source)
 #   corveil   VERB [ARGS...]       a read-only corveil call with --no-capture
 #
 # Exit codes: 0 ok; 1 invalid input (an `errors` list says what); 2 usage or
@@ -48,7 +50,7 @@ TRIAGED_COLOR="C5DEF5"
 TRIAGED_DESCRIPTION="Diagnosed against docs/ticket-standard.md by /crow-diagnose"
 
 WORKSPACE=""; REPO=""; REPOS=""; OUT=""; BRANCH=""; DEV_ROOT=""; ID=""; AT=""
-URL=""; TEXT_FILE=""; DIR=""; MINUTES=5; NOW=""; PLAN=""
+URL=""; TEXT_FILE=""; DIR=""; MINUTES=5; NOW=""; PLAN=""; PUBLIC_OK=0
 IDS=(); TERMS=(); EXCLUDES=()
 TMP_FILES=()
 
@@ -66,7 +68,7 @@ invalid() { # invalid <errors-json-array> — exit 1 with an errors list
 }
 
 usage() {
-  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -137,6 +139,7 @@ parse_args() {
           --exclude)   EXCLUDES+=("$2") ;;
         esac
         shift 2 ;;
+      --public-ok) PUBLIC_OK=1; shift ;;
       *) die "parse_args" "unknown argument: $1" ;;
     esac
   done
@@ -231,7 +234,7 @@ REPOS_QUERY='query($owner: String!, $endCursor: String) {
   repositoryOwner(login: $owner) {
     login
     repositories(first: 100, after: $endCursor, isArchived: false, orderBy: {field: PUSHED_AT, direction: DESC}) {
-      nodes { nameWithOwner description isFork pushedAt primaryLanguage { name } defaultBranchRef { name }
+      nodes { nameWithOwner description isFork visibility pushedAt primaryLanguage { name } defaultBranchRef { name }
               repositoryTopics(first: 10) { nodes { topic { name } } } }
       pageInfo { hasNextPage endCursor }
     }
@@ -272,7 +275,8 @@ cmd_repos() {
     got=$(jq -cs --arg owner "$owner" '
       if any(.[]; .data.repositoryOwner == null) then {missing: $owner}
       else {nodes: [.[] | .data.repositoryOwner.repositories.nodes[]
-        | {repo: .nameWithOwner, description: (.description // ""), fork: .isFork, pushed_at: .pushedAt,
+        | {repo: .nameWithOwner, description: (.description // ""), fork: .isFork,
+           visibility: ((.visibility // "unknown") | ascii_downcase), pushed_at: .pushedAt,
            language: (.primaryLanguage.name // null), default_branch: (.defaultBranchRef.name // null),
            topics: [.repositoryTopics.nodes[].topic.name]}]}
       end' <<<"$pages") || die "repos" "unreadable GraphQL response for $owner"
@@ -329,8 +333,10 @@ cmd_checkout() {
   [[ -d "$DEV_ROOT" ]] || die "checkout" "dev root $DEV_ROOT does not exist"
 
   local owner="${REPO%%/*}" name="${REPO#*/}"
+  # `--` can't occur in a GitHub owner, so it splits owner from name
+  # unambiguously: a-b/c and a/b-c get different folders.
   local dir
-  dir="$DEV_ROOT/crow-reviews/diagnose-$(lower "$owner")-$(lower "$name")"
+  dir="$DEV_ROOT/crow-reviews/diagnose-$(lower "$owner")--$(lower "$name")"
   local cloned=false out remote
   if [[ -e "$dir" && ! -d "$dir/.git" ]]; then
     die "checkout" "$dir exists but is not a git clone; remove it and run again"
@@ -567,6 +573,18 @@ cmd_source() {
     run="text-$(now_stamp)"
   fi
 
+  # A folder whose run already filed issues belongs to that diagnosis: a new
+  # diagnosis of the same source (a regression, a re-run) gets its own folder,
+  # so `file` never mistakes it for a resume. Resuming is `file` on the old plan.
+  local base_run="$run" n=1 earlier='[]' f
+  while [[ -f "${DIR%/}/$run/filed.json" ]]; do
+    f="${DIR%/}/$run/filed.json"
+    earlier=$(jq -c --arg r "$run" --slurpfile f "$f" '. + [($f[0].issues // {}) | to_entries[] | "\($r): \(.key) \(.value.url)"]' <<<"$earlier" 2>/dev/null || echo "$earlier")
+    n=$((n + 1)); run="$base_run-$n"
+  done
+  if [[ "$run" != "$base_run" ]]; then
+    src=$(jq -c --argjson e "$earlier" --arg run "$run" '.warnings = ((.warnings // []) + ["an earlier run of this source already filed issues, so this run uses \($run): \($e | join("; "))"])' <<<"$src")
+  fi
   local run_dir="${DIR%/}/$run"
   src=$(jq -c --arg run "$run" '{run_id: $run} + . + {warnings: (.warnings // [])}' <<<"$src")
   write_atomic "$run_dir/source.json" "$(jq . <<<"$src")" || die "write" "cannot write $run_dir/source.json"
@@ -796,10 +814,14 @@ def body_errors($issue; $plan; $keys):
           (if ($nb[$n - 3] // "") | test("^---\\s*$") then empty
            else "\($k): put a --- rule above the Provenance line" end)),
 
-      # Placeholders name filed keys only.
-      ([$b | scan("\\{\\{([^}]*)\\}\\}")[0]] | unique[] as $ph
+      # Placeholders are {{epic}} and {{T<n>}} only, and must name a key in
+      # this plan. Any other {{…}} (an Actions expression, a template) is text.
+      ([$b | scan("\\{\\{(epic|T[0-9]+)\\}\\}")[0]] | unique[] as $ph
         | if ($keys | index($ph)) != null then empty
-          else "\($k): {{\($ph)}} is not a key in this plan" end)
+          else "\($k): {{\($ph)}} is not a key in this plan" end),
+      (if ($b | contains("{{CROW_AGENT_DISPLAY_NAME}}"))
+       then "\($k): the attribution line still has the agent-name placeholder; copy the line from the installed SKILL.md, where Crow filled it in"
+       else empty end)
     ];
 
 . as $plan
@@ -909,7 +931,7 @@ render_body() { # render_body <plan-json> <filed-json> <key> <src> <dest> — 0 
   local refs unresolved
   refs=$(jq -cn --argjson plan "$1" --argjson filed "$2" --arg key "$3" "$JQ_REFS") || return 2
   jq -Rr --argjson refs "$refs" 'reduce ($refs | to_entries[]) as $e (.; gsub("\\{\\{" + $e.key + "\\}\\}"; $e.value))' < "$4" > "$5" || return 2
-  unresolved=$(jq -Rs --argjson filed "$2" '[scan("\\{\\{([^}]*)\\}\\}")[0]] | unique | map(select($filed[.] == null)) | length' < "$4") || return 2
+  unresolved=$(jq -Rs --argjson filed "$2" '[scan("\\{\\{(epic|T[0-9]+)\\}\\}")[0]] | unique | map(select($filed[.] == null)) | length' < "$4") || return 2
   [[ "$unresolved" == "0" ]] && return 0
   return 1
 }
@@ -934,26 +956,51 @@ cmd_file() {
   fi
   save_filed() { write_atomic "$filed_path" "$(jq -n --argjson i "$filed" '{issues: $i}')" || die "file" "cannot write $filed_path"; }
 
-  # Preflight every label before filing anything: create triaged where it's
-  # missing; any other missing label stops the run so an epic is never half filed.
-  local warnings='[]' repo labels missing='[]' l
+  # A filed.json from another diagnosis must never pass for a resume: every
+  # key it records must still be the same repo and title in this plan.
+  local stale
+  stale=$(jq -c --argjson plan "$plan" '[to_entries[] | .key as $k | .value as $f
+      | ([$plan.issues[] | select(.key == $k)][0]) as $p
+      | if $p == null then "filed.json records \($k) as \($f.repo)#\($f.number), and this plan has no \($k)"
+        elif ($p.repo | ascii_downcase) != ($f.repo | ascii_downcase) or ($f.title != null and $p.title != $f.title)
+        then "filed.json records \($k) as \($f.repo)#\($f.number) \"\($f.title // "?")\", but this plan files \($k) as \"\($p.title)\" in \($p.repo)"
+        else empty end]' <<<"$filed")
+  if [[ "$(jq 'length' <<<"$stale")" != "0" ]]; then
+    invalid "$(jq -c '. + ["nothing was filed: this plan is a different diagnosis from the one filed.json records. Resume only the plan that was filed; diagnose again in a fresh run folder (D source makes one)."]' <<<"$stale")"
+  fi
+
+  # Preflight every repo before any write: its visibility, and every label.
+  # A missing label other than triaged, or a public repo without --public-ok,
+  # stops the run here, so an epic is never half filed and no label is made
+  # for a run that then aborts.
+  local warnings='[]' repo labels missing='[]' l vis need_triaged=() public=()
   while IFS= read -r repo; do
+    [[ -z "$repo" ]] && continue
+    vis=$("$GH_BIN" api "repos/$repo" --jq .visibility 2>&1) || die "file" "cannot read $repo's visibility: $vis"
+    [[ "$(lower "$vis")" == "public" ]] && public+=("$repo")
     labels=$("$GH_BIN" label list -R "$repo" --limit 1000 --json name 2>&1) || die "file" "gh label list -R $repo failed: $labels"
     while IFS= read -r l; do
       [[ -z "$l" ]] && continue
       if [[ "$(jq -r --arg l "$l" 'map(.name | ascii_downcase) | index($l | ascii_downcase) != null' <<<"$labels")" != "true" ]]; then
         if [[ "$(lower "$l")" == "$TRIAGED_LABEL" ]]; then
-          local made
-          made=$("$GH_BIN" label create "$TRIAGED_LABEL" -R "$repo" --color "$TRIAGED_COLOR" --description "$TRIAGED_DESCRIPTION" 2>&1) \
-            || die "file" "cannot create the $TRIAGED_LABEL label in $repo: $made"
-          warnings=$(jq -c --arg r "$repo" '. + ["created the triaged label in \($r)"]' <<<"$warnings")
+          need_triaged+=("$repo")
         else
           missing=$(jq -c --arg r "$repo" --arg l "$l" '. + ["\($r) has no \($l) label"]' <<<"$missing")
         fi
       fi
     done < <(jq -r --arg r "$repo" '[.issues[] | select(.repo == $r) | .labels[]] | unique[]' <<<"$plan")
-  done < <(jq -r '[.issues[].repo] | unique[]' <<<"$plan")
+  done < <(jq -r --argjson filed "$filed" '[.issues[] | select(.key as $k | $filed[$k] == null) | .repo] | unique[]' <<<"$plan")
   [[ "$(jq 'length' <<<"$missing")" == "0" ]] || invalid "$(jq -c '. + ["nothing was filed: drop those labels from the plan or create them first"]' <<<"$missing")"
+  if [[ ${#public[@]} -gt 0 && "$PUBLIC_OK" != "1" ]]; then
+    invalid "$(printf '%s\n' "${public[@]}" | jq -Rsc 'split("\n") | map(select(. != "")) | map("\(.) is public, and the bodies quote the observation verbatim")
+      + ["nothing was filed: confirm with the operator that the quotes can be public (redact them otherwise), then run file again with --public-ok"]')"
+  fi
+  for repo in ${need_triaged[@]+"${need_triaged[@]}"}; do
+    local made
+    made=$("$GH_BIN" label create "$TRIAGED_LABEL" -R "$repo" --color "$TRIAGED_COLOR" --description "$TRIAGED_DESCRIPTION" 2>&1) \
+      || die "file" "cannot create the $TRIAGED_LABEL label in $repo: $made"
+    warnings=$(jq -c --arg r "$repo" '. + ["created the triaged label in \($r)"]' <<<"$warnings")
+  done
 
   local key title body tmp url num args
   tmpfile tmp
@@ -977,8 +1024,8 @@ cmd_file() {
     url=$(printf '%s\n' "$url" | grep -Eo 'https://[^[:space:]]+/issues/[0-9]+' | tail -n 1)
     [[ -n "$url" ]] || die "file" "gh issue create for $key printed no issue URL"
     num="${url##*/}"
-    filed=$(jq -c --arg k "$key" --arg r "$repo" --arg u "$url" --argjson n "$num" --argjson resolved "$resolved" \
-      '.[$k] = {repo: $r, number: $n, url: $u, rendered: $resolved, linked: false}' <<<"$filed")
+    filed=$(jq -c --arg k "$key" --arg r "$repo" --arg t "$title" --arg u "$url" --argjson n "$num" --argjson resolved "$resolved" \
+      '.[$k] = {repo: $r, number: $n, url: $u, title: $t, rendered: $resolved, linked: false}' <<<"$filed")
     save_filed
   done < <(jq -r '.issues[].key' <<<"$plan")
 

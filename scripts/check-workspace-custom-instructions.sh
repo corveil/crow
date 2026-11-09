@@ -560,6 +560,9 @@ for f in skills/crow-diagnose/SKILL.md Resources/crow-diagnose-SKILL.md.template
         'D file --plan R/plan.json' \
         'crow todo link --id {id} --type ticket' \
         'Rename the Manager' \
+        '**Call out every target repo whose `visibility` is `public`**' \
+        '`file` refuses a public repo until you add `--public-ok`' \
+        'never resumes the first one'"'"'s filing' \
         '[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)'
 done
 # The rails are enforced in diagnose.sh, not only described.
@@ -571,7 +574,10 @@ require skills/crow-diagnose/diagnose.sh \
     'labels must include triaged' \
     'CORVEIL_NO_CAPTURE=1 "$CORVEIL_BIN" "$verb" --no-capture "$@"' \
     'exec "$CORVEIL_BIN" "$verb" --no-capture "$@"' \
-    'never copied source text'
+    'never copied source text' \
+    'this plan is a different diagnosis from the one filed.json records' \
+    'run file again with --public-ok' \
+    'scan("\\{\\{(epic|T[0-9]+)\\}\\}")'
 # The helper restates the standard's sections and `needs` values; a change to
 # the standard must fail here rather than leave the check enforcing the old one.
 # shellcheck disable=SC2016

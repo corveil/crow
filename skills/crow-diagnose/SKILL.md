@@ -89,9 +89,9 @@ A bare UUID is either a Scratch item or a Corveil entity. `D source --id` works 
 | `{devRoot}/.claude/diagnose/{run}/plan.json` | The outcome and the issues to file. You write it. |
 | `{devRoot}/.claude/diagnose/{run}/bodies/{key}.md` | Each issue body, and any comment body. You write them. |
 | `{devRoot}/.claude/diagnose/{run}/filed.json` | What `D file` filed. A rerun skips those. |
-| `{devRoot}/crow-reviews/diagnose-{owner}-{name}/` | A scratch clone at origin's default branch, reused and refreshed across runs. Delete it to reclaim the space. |
+| `{devRoot}/crow-reviews/diagnose-{owner}--{name}/` | A scratch clone at origin's default branch, reused and refreshed across runs. Delete it to reclaim the space. |
 
-`{run}` comes from the source, such as `followup-05d9dcd9`, `scratch-4b7d0c52`, `issue-corveil-crow-1413` or `text-20261109-141500`. Diagnosing the same observation again reuses its folder, so `filed.json` stops a second filing.
+`{run}` comes from the source, such as `followup-05d9dcd9`, `scratch-4b7d0c52`, `issue-corveil-crow-1413` or `text-20261109-141500`. If that folder's run already filed issues, `D source` starts `{run}-2` (then `-3`, …) and its warning lists what the earlier run filed. A second diagnosis of the same source, such as a regression, therefore never resumes the first one's filing. To finish a filing that stopped partway, run `D file` on the original plan again; don't run `D source`.
 
 Below, `D` is `bash .claude/skills/crow-diagnose/diagnose.sh`, and `R` is the run folder. Run from `{devRoot}`. `diagnose.sh` is pre-approved (`Bash(bash .claude/skills/crow-diagnose/diagnose.sh *)`). Every subcommand except `check` calls `gh`, `crow`, `git` or `corveil`, so it needs `dangerouslyDisableSandbox: true`. Every subcommand prints one JSON object. Exit 1 lists `errors`, and exit 2 is a usage or environment error.
 
@@ -103,7 +103,7 @@ Below, `D` is `bash .claude/skills/crow-diagnose/diagnose.sh`, and `R` is the ru
 - **Never add `crow:auto`, and never start a work session.** `D check` refuses the label. Don't run `/crow-workspace`, `crow work-on-issue` or `/crow-cascade-epic`. Name them in the report instead.
 - **Nothing outward-facing without the operator's go.** Filing, commenting, closing and writing back to the source each wait for a yes in chat, unless `--yes` was passed. `--dry-run` stops before all of them.
 - **Read the code at `origin/main`, in the scratch clone.** Never read, fetch into or check out the operator's own checkouts: they may be on another branch or have local changes. Cite paths relative to the repo root.
-- **The standard on `main` wins.** Read `docs/ticket-standard.md` at the start of every run (Step 0). Where it differs from this skill, follow the standard.
+- **The standard on `main` wins.** Read `docs/ticket-standard.md` at the start of every run (Step 0). Where it differs from this skill, follow the standard. `D check` encodes the standard of the Crow build that installed it, so see **Failure modes** when the two disagree.
 - **A FollowUp is written only through `ontology_update_entity`, and only its `ticket_url`.** Never use `corveil control … ontology-entities-update` or `replace_properties`: both replace the whole property set. Leave `status` to `/my-follow-ups`.
 
 ## Step 0: Set up
@@ -171,7 +171,7 @@ For a non-ticket outcome at the gate, write `R/plan.json` with that outcome (see
   D repos --workspace {ws} --out R/repos.json
   ```
 
-  One GraphQL query per owner returns every non-archived repo the workspace claims (`alwaysInclude` and `autoReviewRepos`), with its description, language, topics and last push. It clones nothing. Shortlist from it: the repos whose name, description or topics match the observation, plus any repo the source names (an issue's repo, a PR linked from a Scratch item, a repo said aloud in the transcript). That is usually one to three repos. Don't read every repo.
+  One GraphQL query per owner returns every non-archived repo the workspace claims (`alwaysInclude` and `autoReviewRepos`), with its description, language, topics, `visibility` and last push. It clones nothing. Shortlist from it: the repos whose name, description or topics match the observation, plus any repo the source names (an issue's repo, a PR linked from a Scratch item, a repo said aloud in the transcript). That is usually one to three repos. Don't read every repo.
 
 Write one line on why each repo is on the shortlist, and why an obvious candidate isn't. Those lines go under **Repos** in the Diagnosis.
 
@@ -234,11 +234,14 @@ D check --plan R/plan.json
 
 Fix every error and run `check` again until it prints `"status":"ok"`. It enforces the sections and their order, a verbatim quote, `**Repos:**`, `**Code:**` with a backticked `path:line`, `**Cause:**` and a `high`, `medium` or `low` **Confidence**, **Done when** with an item, and **Verify after release** checks that each have `needs`, `how` and `expect`, or `None:`. It also checks the `Part of` and `Depends on` line on each sub-ticket, the epic's task list, the `---` / Provenance / attribution footer, the `triaged` label, no `crow:auto`, and that no title is the raw quote. It can't judge the diagnosis itself, so read the standard's **Checklist** against your draft too. Agent checks must be read-only against production. Replace a secret or customer data in a quote with `[redacted]`, and say so.
 
-Show the operator the draft: the outcome, the shape, each issue's repo and title, and each body. With `--dry-run`, stop here and go to **Step 9**. Otherwise ask whether to file it, unless `--yes` was passed. On a yes:
+Show the operator the draft: the outcome, the shape, each issue's repo and title, and each body. **Call out every target repo whose `visibility` is `public`**: the Observation quotes a meeting, a thread or a note verbatim, and the operator decides whether that quote can be public. Redact it if not. With `--dry-run`, stop here and go to **Step 9**. Otherwise ask whether to file it, unless `--yes` was passed. On a yes:
 
 ```bash
 D file --plan R/plan.json
 ```
+
+`file` refuses a public repo until you add `--public-ok`. Add it only after the operator has agreed the quotes can be public, or when `--yes` was passed.
+
 
 `file` creates the `triaged` label in any repo that lacks it, files the epic first and then the sub-tickets in plan order, and fills in the `{{epic}}` and `{{T1}}` placeholders with real issue numbers. It edits an issue that was filed before a number it names existed. It adds each sub-ticket to the epic as a GitHub sub-issue, and records every filed issue in `R/filed.json`. If it stops partway, fix the cause and run it again: it skips what `filed.json` already holds. Issues are filed unassigned, because prioritising and assigning is `/crow-backlog-brief`'s job.
 
@@ -328,7 +331,7 @@ For a needs info outcome, `Reason` is the question for the observer. Then list:
 
 - **`shape: ticket`** has one issue with key `T1` and no `parent`. **`shape: epic`** lists the epic first, with key `epic`, then two or more sub-tickets `T1`, `T2`, … each with `parent: "epic"`. `depends_on` names sub-tickets listed earlier.
 - `labels` holds `triaged` plus any labels the repo already has (`gh label list -R {repo}`). `D file` creates `triaged` where it's missing, but stops before filing anything if any other label is missing.
-- Bodies refer to each other by placeholder: `{{epic}}`, `{{T1}}`. `D file` replaces each one with `#N` in the same repo, or `owner/repo#N` across repos.
+- Bodies refer to each other by placeholder: `{{epic}}`, `{{T1}}`. `D file` replaces each one with `#N` in the same repo, or `owner/repo#N` across repos. Only `{{epic}}` and `{{T<n>}}` are placeholders. Any other `{{…}}`, such as a GitHub Actions expression or a template, stays as text.
 
 A sub-ticket body opens with:
 
@@ -378,7 +381,10 @@ Crow filled in the agent name on that attribution line when it installed this sk
 | `D repos`, `checkout`, `dupes` or `file`: not on GitHub | On GitLab, do that step with `glab` by hand. |
 | `D dupes`: `--terms` refused | Use your own keywords, not text copied from the source. |
 | `D check`: errors | Fix each one and run `check` again. Never file around it. |
-| `D file`: a label is missing | Drop it from the plan, or create it with the operator's go. |
+| `D file`: a label is missing | Drop it from the plan, or create it with the operator's go. Nothing was filed, and no label was created. |
+| `D file`: `… is public` | Confirm with the operator that the quotes can be public, or redact them, then run `D file` again with `--public-ok`. |
+| `D file`: `filed.json records …` | This plan is a different diagnosis from the one filed in that folder. Run `D source` again: it starts a fresh run folder. |
 | `D file` stopped partway | Fix the cause and run it again. `filed.json` skips what is already filed. |
 | `D file` warning: no sub-issue link | The `Part of` line still links it. Add the sub-issue by hand if the board needs it. |
 | `ontology_update_entity` is missing or refused | Report the pending write. Don't use any other write path. |
+| `D check` and the standard on `main` disagree | `check` encodes the standard of the Crow build that installed it. If `main` asks for more, add it: `check` is a floor. If `check` refuses something `main` now allows, tell the operator that Crow is behind (`crow version --check`), and don't file until they decide. Never edit the installed `diagnose.sh`. |
