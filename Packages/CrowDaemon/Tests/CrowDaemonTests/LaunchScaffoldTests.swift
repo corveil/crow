@@ -38,6 +38,8 @@ struct LaunchScaffoldTests {
         "skills/crow-release-review/SKILL.md",
         "skills/crow-release-review/page.html",
         "skills/crow-release-review/release.sh",
+        "skills/crow-diagnose/SKILL.md",
+        "skills/crow-diagnose/diagnose.sh",
         "skills/crow-show-image/SKILL.md",
         "skills/crow-attribution/FOOTER.md",
     ]
@@ -94,8 +96,9 @@ struct LaunchScaffoldTests {
     /// including `cascade.sh`, the `/crow-cascade-epic` helper (CROW-1312),
     /// `triage.sh`, the `/crow-triage` helper (CROW-1325), `queue.sh`, the
     /// `/crow-ci-queue` helper (CROW-1365), `brief.sh`, the
-    /// `/crow-backlog-brief` helper (CROW-1367), and `release.sh`, the
-    /// `/crow-release-review` helper (CROW-1371).
+    /// `/crow-backlog-brief` helper (CROW-1367), `release.sh`, the
+    /// `/crow-release-review` helper (CROW-1371), and `diagnose.sh`, the
+    /// `/crow-diagnose` helper (CROW-1415).
     @Test func skillScriptsAreExecutable() throws {
         let devRoot = try Self.makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
@@ -110,6 +113,7 @@ struct LaunchScaffoldTests {
             "skills/crow-ci-queue/queue.sh",
             "skills/crow-backlog-brief/brief.sh",
             "skills/crow-release-review/release.sh",
+            "skills/crow-diagnose/diagnose.sh",
         ] {
             let path = (claudeDir as NSString).appendingPathComponent(relative)
             #expect(FileManager.default.isExecutableFile(atPath: path), "not executable: \(relative)")
