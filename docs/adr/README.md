@@ -67,3 +67,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0028 | [Manager cold-start resume is by harness conversation id](./0028-manager-resume-by-id.md) | Accepted | 2026-09-21 |
 | 0029 | [Scratch Ticket opens a Manager](./0029-scratch-ticket-opens-a-manager.md) | Accepted | 2026-09-22 |
 | 0030 | [Codex routes through the workspace gateway, opt-in per gateway](./0030-codex-through-the-workspace-gateway.md) | Accepted | 2026-11-04 |
+| 0031 | [Observations are diagnosed in Crow before they become tickets](./0031-observations-are-diagnosed-before-they-become-tickets.md) | Accepted | 2026-11-09 |
