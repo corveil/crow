@@ -136,31 +136,35 @@ extension TodoRPC {
             + "Managers are never re-tagged; delete that Manager and run this again for one in '\(launch.name)'."
     }
 
-    /// The lines that tell a filing agent where the ticket goes (CROW-1387):
-    /// the workspace's ticket provider and its repos, so it never guesses.
+    /// The lines that tell the Ticket Manager where its issues go when that
+    /// isn't GitHub (CROW-1387, CROW-1416). `/crow-diagnose`'s `D file` files
+    /// GitHub issues only, so a Jira-tracked workspace is told to file with
+    /// the `jira` MCP instead, and a GitLab one with `glab`. Empty for a plain
+    /// GitHub workspace, where the skill's own flow is right.
     static func ticketDestination(_ workspace: WorkspaceInfo) -> [String] {
         var lines: [String] = []
-        let provider = workspace.derivedTaskProvider
-        if provider == "jira" {
-            var jira = "File it in Jira"
-            if let key = workspace.jiraProjectKey, !key.isEmpty { jira += ", project \(key)" }
-            if let site = workspace.jiraSite, !site.isEmpty { jira += " on \(site)" }
-            lines.append(jira + ", for the **\(workspace.name)** workspace.")
-        } else {
+        if workspace.provider == "gitlab" {
             lines.append(
-                "File it with `\(provider == "gitlab" ? "glab issue create" : "gh issue create")` "
-                + "in the **\(workspace.name)** workspace's \(provider) provider.")
+                "**This workspace's code is on GitLab.** The skill's helper refuses GitLab for `repos`, `checkout` and `dupes`: "
+                + "do those steps with `glab` by hand, as the skill's Requirements say.")
         }
-        if provider == "jira" {
-            if !workspace.alwaysInclude.isEmpty {
-                let repos = workspace.alwaysInclude.map { "`\($0)`" }.joined(separator: ", ")
-                lines.append("The code lives in: \(repos).")
-            }
-        } else if workspace.alwaysInclude.isEmpty {
-            lines.append("Pick the \(workspace.name) repo that owns the work. Do not file it outside this workspace.")
-        } else {
-            let repos = workspace.alwaysInclude.map { "`\($0)`" }.joined(separator: ", ")
-            lines.append("The repo is one of: \(repos). Pick the one that owns the work; do not file anywhere else.")
+        switch workspace.derivedTaskProvider {
+        case "jira":
+            var project = "Jira"
+            if let key = workspace.jiraProjectKey, !key.isEmpty { project += ", project \(key)" }
+            if let site = workspace.jiraSite, !site.isEmpty { project += " on \(site)" }
+            let key = workspace.jiraProjectKey.flatMap { $0.isEmpty ? nil : $0 }
+            lines.append(
+                "**This workspace tracks tickets in \(project).** Never run `D file`: it files GitHub issues. "
+                + "Draft the plan and pass `D check` as usual, search Jira for duplicates with the `jira` MCP as well as `D dupes`, "
+                + "then file each issue with the `jira` MCP's `jira_create_issue`"
+                + (key.map { " in project `\($0)`" } ?? "")
+                + ", the way `/crow-create-ticket` does. Link each Jira URL you filed with `--label \"<KEY-N>\"`.")
+        case "gitlab":
+            lines.append(
+                "**File each issue with `glab issue create`, not `D file`** (it files GitHub issues), and link each URL you filed.")
+        default:
+            break
         }
         return lines
     }

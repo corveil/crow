@@ -55,6 +55,17 @@ private let todoUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     #expect(cmd.removeTag == ["ios"])
 }
 
+/// The Ticket Manager records a diagnosis outcome without retyping the
+/// item's note (CROW-1416).
+@Test func todoEditParsesAppendNote() throws {
+    let cmd = try TodoEdit.parse([
+        "--id", todoUUID,
+        "--append-note", "Diagnosed by /crow-diagnose: needs info. Which browser?",
+    ])
+    #expect(cmd.appendNote == "Diagnosed by /crow-diagnose: needs info. Which browser?")
+    #expect(cmd.note == nil)
+}
+
 @Test func todoLinkParsesSessionType() throws {
     let cmd = try TodoLink.parse([
         "--id", todoUUID,

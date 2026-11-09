@@ -216,29 +216,6 @@ struct TodoRPCSupportTests {
         #expect(TodoRPC.paneLooksLikeAgent("codex"))
     }
 
-    @Test func ticketBriefTellsTheAgentToFileAndLink() {
-        let item = TodoItem(text: "cursor jumps", note: "only on iPad", tags: ["web"], priority: "p2")
-        let brief = TodoRPC.ticketBrief(for: item)
-        #expect(brief.hasSuffix("\n"))
-        #expect(brief.contains(item.id.uuidString))
-        #expect(brief.contains("crow todo link"))
-        #expect(brief.contains("--type ticket"))
-        #expect(brief.contains("Choose that repo yourself"))
-        #expect(brief.contains("Do not run `crow todo ticket`"))
-        #expect(!brief.contains("Do not file a ticket"))
-        #expect(brief.contains("## Scratch item"))
-        #expect(brief.contains("cursor jumps"))
-        #expect(brief.contains("## Notes"))
-        #expect(brief.contains("only on iPad"))
-        #expect(brief.contains("Tags: web"))
-        #expect(brief.contains("Priority: p2"))
-    }
-
-    @Test func ticketBriefOmitsEmptyNote() {
-        let brief = TodoRPC.ticketBrief(for: TodoItem(text: "try this"))
-        #expect(!brief.contains("## Notes"))
-    }
-
     @Test func ticketDispatchPendingWithinTTLAndClearsOnceLinked() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         var item = TodoItem(text: "x", ticketRequestedAt: now)
@@ -319,7 +296,7 @@ struct TodoRPCSupportTests {
             // The file holds the complete brief, first line intact.
             let body = try String(contentsOfFile: path, encoding: .utf8)
             #expect(body == brief)
-            #expect(body.hasPrefix("You are filing a ticket"))
+            #expect(body.hasPrefix("You are diagnosing a Crow Scratch item"))
             #expect(TodoRPC.briefDelivery(
                 managerAlive: false, briefWritten: true, path: path) == .launchArgv)
         }

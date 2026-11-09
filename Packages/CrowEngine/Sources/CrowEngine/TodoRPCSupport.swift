@@ -115,6 +115,9 @@ public enum TodoRPC {
         if params["note"] != nil {
             next.note = decodeNote(params["note"])
         }
+        if params["append_note"] != nil {
+            next.note = appendingNote(decodeNote(params["append_note"]), to: next.note)
+        }
         if params["priority"] != nil {
             next.priority = try decodePriority(params["priority"])
         }
@@ -139,6 +142,58 @@ public enum TodoRPC {
             next.tags = next.tags.filter { !remove.contains($0.lowercased()) }
         }
         next.updatedAt = Date()
+        return next
+    }
+
+    /// `note` with `addition` appended after a blank line (CROW-1416). The
+    /// Ticket Manager records a diagnosis outcome this way, so the note the
+    /// item was captured with survives and is never retyped into a shell.
+    /// A blank addition leaves the note unchanged.
+    public static func appendingNote(_ addition: String, to note: String) -> String {
+        let addition = addition.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !addition.isEmpty else { return note }
+        let existing = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return existing.isEmpty ? addition : existing + "\n\n" + addition
+    }
+
+    /// Set a lifecycle state (`todo done|reopen|park|drop`). Parking or
+    /// dropping ends a pending Ticket dispatch: the filing Manager (or the
+    /// operator) decided there is no ticket, so the next Ticket press must
+    /// open or re-seed a Manager instead of reading as "still filing" for
+    /// the rest of ``ticketDispatchTTL`` (CROW-1416).
+    public static func applyingState(_ state: TodoState, to item: TodoItem, now: Date = Date()) -> TodoItem {
+        var next = item
+        next.state = state
+        if state == .parked || state == .dropped {
+            next.ticketRequestedAt = nil
+        }
+        next.updatedAt = now
+        return next
+    }
+
+    /// Attach `link` to `item` (`todo link`). A ticket, PR or custom URL that
+    /// is already on the item is never added twice: re-linking it moves the
+    /// existing link to the end instead. So the filing Manager can link every
+    /// issue it filed without duplicate badges, and can repair an epic linked
+    /// out of order by linking the epic again, since the last ticket link is
+    /// the one `todo work` starts (``TodoItem/linkedTicketURL``). A ticket
+    /// link moves the item through ``stateAfterTicketLink(_:)``: the first one
+    /// moves a pre-ticket item to `ticketed`, and the rest of an epic's links
+    /// leave it there (CROW-1416). Nothing changes, `updatedAt` included, when
+    /// the link is already last and the state stays put.
+    public static func linking(_ link: TodoLink, to item: TodoItem, now: Date = Date()) -> TodoItem {
+        var next = item
+        if link.type != .session, let url = link.url,
+           let index = next.links.firstIndex(where: { $0.type == link.type && $0.url == url }) {
+            next.links.append(next.links.remove(at: index))
+        } else {
+            next.links.append(link)
+        }
+        if link.type == .ticket {
+            next.state = stateAfterTicketLink(next.state)
+        }
+        guard next.links != item.links || next.state != item.state else { return item }
+        next.updatedAt = now
         return next
     }
 
@@ -325,30 +380,76 @@ public enum TodoRPC {
     }
 
     /// The prompt seeded when Ticket opens a Manager (CROW-1289). Same
-    /// delivery path as ``exploreBrief(for:)``, but the agent files a real
-    /// provider issue and attaches it. Crow does not pick the repo or call
+    /// delivery path as ``exploreBrief(for:)``. Since CROW-1416 the Manager
+    /// runs `/crow-diagnose` on the item instead of filing one issue itself,
+    /// so the item can become one ticket, an epic, or an outcome that isn't a
+    /// ticket (`docs/ticket-standard.md`). Crow does not pick the repo or call
     /// `TaskBackend.createTask`.
     ///
-    /// With a `workspace` (CROW-1387) the brief names its ticket provider and
-    /// repos, so the agent files there instead of choosing a repo itself.
-    public static func ticketBrief(for item: TodoItem, workspace: WorkspaceInfo? = nil) -> String {
-        var lines = [
-            "You are filing a ticket for a Crow Scratch item from this Manager session. Start now: read the item below, inspect related code in this working directory, and file one provider issue for the repo that owns the work.",
-        ]
+    /// `--yes` is passed because pressing Ticket is the operator's go to file
+    /// (not to publish private text: the brief says to redact quotes bound for
+    /// a public repo). `workspace` (CROW-1387) becomes the skill's
+    /// `--workspace`, so a live Manager tagged with another workspace still
+    /// files where the item belongs, and ``ticketDestination(_:)`` steers a
+    /// Jira or GitLab workspace away from `D file`, which files GitHub issues. `devRoot` names where the skill's relative paths resolve: an
+    /// extra Manager runs in its own identity directory, not the root.
+    ///
+    /// The brief never relies on a slash command alone. Cursor, Codex and
+    /// OpenCode receive the same text as their prompt, and are told to read
+    /// the installed `SKILL.md` when `.claude/skills/` isn't loaded (ADR 0015).
+    public static func ticketBrief(
+        for item: TodoItem, workspace: WorkspaceInfo? = nil, devRoot: String? = nil
+    ) -> String {
+        let id = item.id.uuidString
+        var invocation = "/crow-diagnose \(id) --yes"
         if let workspace {
-            lines.append(contentsOf: ticketDestination(workspace))
-            lines.append("Do not ask which repo to use, and do not stop for a repo picker.")
-        } else {
-            lines.append("Choose that repo yourself. Do not ask which repo to use, and do not stop for a repo picker.")
+            invocation += " --workspace \"\(workspace.name)\""
+        }
+        let skillPath = devRoot.map {
+            ($0 as NSString).appendingPathComponent(diagnoseSkillRelativePath)
+        } ?? diagnoseSkillRelativePath
+        var lines = [
+            "You are diagnosing a Crow Scratch item from this Manager session. The operator pressed Ticket, so turn it into the ticket or epic it should be, or into the outcome that says why it isn't one. Start now: run the `/crow-diagnose` skill on it.",
+            "",
+        ]
+        if let devRoot {
+            lines.append(contentsOf: [
+                "Work from the development root, `\(devRoot)`. The skill's commands and paths are relative to it.",
+                "",
+            ])
         }
         lines.append(contentsOf: [
-            "Write a title and body that stand on their own: what is wrong or wanted, where it lives, and how to tell it is done. Do not file the scratch text unchanged as the title when a clearer title is obvious.",
-            workspace == nil
-                ? "File it with the provider CLI (`gh issue create`, `glab issue create`, or the workspace's Jira command). Do not create a worktree or start a work session."
-                : "Do not create a worktree or start a work session.",
-            "After the ticket exists, attach it to this Scratch item and stop. Replace the placeholders with the issue you just filed:",
-            "crow todo link --id \(item.id.uuidString) --type ticket --url <ticket-url> --label \"Issue #<n>\"",
-            "Do not run `crow todo ticket` — a second call within 15 minutes does nothing, and after that it opens another Manager.",
+            invocation,
+            "",
+            "`--yes` is the operator's go: pressing Ticket asked for the filing, so do not stop to ask before filing, commenting or writing back. If this harness does not run `.claude/skills/` skills as slash commands, read `\(skillPath)` and follow it with the same arguments. The skill checks every draft against the ticket standard, `docs/ticket-standard.md` on `main`.",
+            "",
+            "`--yes` is the go to file, not to publish private text. A Scratch note is often pasted from a private thread: when a target repo's `visibility` is `public`, quote only what can be public and replace the rest with `[redacted]`, and say so, as the skill's Step 7 allows. The same holds for a comment on a duplicate in a public repo.",
+        ])
+        if let workspace {
+            let destination = ticketDestination(workspace)
+            if !destination.isEmpty {
+                lines.append("")
+                lines.append(contentsOf: destination)
+            }
+        }
+        lines.append(contentsOf: [
+            "",
+            "When the skill reports its outcome, finish this item:",
+            "",
+            "- **ticket** (one ticket or an epic): link every issue you filed to this item, once each (`filed.json` lists what `D file` filed). Link an epic's sub-tickets first and the epic last: the last ticket link is the one `crow todo work` starts. The first link moves the item to `ticketed` and the others leave it there. Then check the order with `crow todo get --id \(id)`: if the epic is not the last ticket link, link it again. Re-linking a URL that is already on the item moves it to the end and never adds a second link.",
+            "- **duplicate**: file nothing. Link the existing issue instead, then add the reason to the note.",
+            "- **commitment** or **needs info**: park the item and add the reason to the note. For needs info, the reason is the question to ask the observer.",
+            "- **won't do**: drop the item and add the reason to the note.",
+            "",
+            "The commands, with the placeholders replaced:",
+            "",
+            "crow todo link --id \(id) --type ticket --url <issue-url> --label \"<owner/repo#N>\"",
+            "crow todo edit --id \(id) --append-note \"Diagnosed by /crow-diagnose: <outcome>. <reason>\"",
+            "crow todo park --id \(id)",
+            "crow todo drop --id \(id)",
+            "",
+            "Write the reason yourself, in one or two sentences. `--append-note` keeps the note the item already has. Never paste the item's text or any other source text into a shell command.",
+            "Do not run `crow todo ticket` — a second call within 15 minutes does nothing, and after that it opens another Manager. Do not create a worktree or start a work session.",
             "",
             "## Scratch item",
             item.text,
@@ -365,6 +466,10 @@ public enum TodoRPC {
         lines.append("")
         return lines.joined(separator: "\n") + "\n"
     }
+
+    /// Where the scaffolder installs `/crow-diagnose`, relative to the
+    /// development root (CROW-1415).
+    public static let diagnoseSkillRelativePath = ".claude/skills/crow-diagnose/SKILL.md"
 
     /// Attaching a ticket link moves a pre-ticket item to `ticketed`.
     /// `working` and `done` stay put so a late link cannot walk them back.

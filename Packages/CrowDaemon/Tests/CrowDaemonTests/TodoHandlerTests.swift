@@ -270,6 +270,58 @@ import CrowEngine
         #expect(linked.result?["todo"]?.objectValue?["state"]?.stringValue == "ticketed")
     }
 
+    /// An epic files several issues; each is linked once and the item moves
+    /// to `ticketed` once. Re-linking a URL leaves one badge (CROW-1416).
+    @Test @MainActor func linkingAnEpicsIssuesKeepsOneLinkEach() async throws {
+        let (router, _) = harness()
+        let added = await call(router, "todo-add", ["text": .string("file an epic")])
+        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
+        var last: [String: JSONValue] = [:]
+        for n in [11, 12, 10, 10] {
+            let linked = await call(router, "todo-link", [
+                "todo_id": .string(id),
+                "type": .string("ticket"),
+                "url": .string("https://github.com/corveil/crow/issues/\(n)"),
+                "label": .string("corveil/crow#\(n)"),
+            ])
+            last = try #require(linked.result?["todo"]?.objectValue)
+            #expect(last["state"]?.stringValue == "ticketed")
+        }
+        let urls = (last["links"]?.arrayValue ?? []).compactMap { $0.objectValue?["url"]?.stringValue }
+        #expect(urls == [11, 12, 10].map { "https://github.com/corveil/crow/issues/\($0)" })
+    }
+
+    /// The Ticket Manager records a non-ticket outcome: the reason is appended
+    /// to the note, and parking ends the pending dispatch (CROW-1416).
+    @Test @MainActor func nonTicketOutcomeAppendsReasonAndEndsTheDispatch() async throws {
+        let (router, store) = harness()
+        let added = await call(router, "todo-add", [
+            "text": .string("send the deck"), "note": .string("from the 1:1"),
+        ])
+        let id = try #require(added.result?["todo"]?.objectValue?["id"]?.stringValue)
+        let uuid = try #require(UUID(uuidString: id))
+        var item = try #require(store.data.todos?.first { $0.id == uuid })
+        item.ticketRequestedAt = Date()
+        item.state = .exploring
+        TodoRepository(store: store).save(item)
+
+        let edited = await call(router, "todo-edit", [
+            "todo_id": .string(id),
+            "append_note": .string("Diagnosed by /crow-diagnose: commitment. Not a code change."),
+        ])
+        #expect(edited.result?["todo"]?.objectValue?["note"]?.stringValue
+            == "from the 1:1\n\nDiagnosed by /crow-diagnose: commitment. Not a code change.")
+
+        let parked = await call(router, "todo-park", ["todo_id": .string(id)])
+        let todo = try #require(parked.result?["todo"]?.objectValue)
+        #expect(todo["state"]?.stringValue == "parked")
+        #expect(todo["ticket_requested_at"] == nil)
+        // The next Ticket is not swallowed as already dispatched.
+        let again = await call(router, "todo-ticket", ["todo_id": .string(id)])
+        #expect(again.result?["already_dispatched"] == nil)
+        #expect(again.error?.message.contains("tmux") == true)
+    }
+
     @Test @MainActor func linkingATicketDoesNotRegressWorking() async throws {
         let (router, _) = harness()
         let added = await call(router, "todo-add", ["text": .string("already working")])

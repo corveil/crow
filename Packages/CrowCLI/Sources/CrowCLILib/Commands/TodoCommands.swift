@@ -132,14 +132,18 @@ public struct TodoEdit: ParsableCommand {
         abstract: "Update fields on an existing Scratch item",
         discussion: """
         Only the provided flags change. --add-tag / --remove-tag compose; \
-        they do not replace the whole list. --workspace "" clears the workspace; \
-        --agent "" clears the agent.
+        they do not replace the whole list. --append-note adds a paragraph \
+        after the existing note (after --note, when both are given) instead of \
+        replacing it. --workspace "" clears the workspace; --agent "" clears \
+        the agent.
         """
     )
 
     @Option(name: .long, help: "Todo UUID") var id: String
     @Option(name: .long, help: "Replacement item text") var text: String?
     @Option(name: .long, help: "Replacement note") var note: String?
+    @Option(name: .customLong("append-note"), help: "Paragraph to add after the existing note")
+    var appendNote: String?
     @Option(name: .long, help: "Priority: p1, p2, p3, or p4") var priority: String?
     @Option(name: .long, help: "Workspace name or UUID; \"\" clears it") var workspace: String?
     @Option(name: .long, help: "Coding agent kind; \"\" clears it") var agent: String?
@@ -160,6 +164,7 @@ public struct TodoEdit: ParsableCommand {
         var params: [String: JSONValue] = ["todo_id": .string(id)]
         if let text { params["text"] = .string(text) }
         if let note { params["note"] = .string(note) }
+        if let appendNote { params["append_note"] = .string(appendNote) }
         if let priority { params["priority"] = .string(priority) }
         if let workspace { params["workspace"] = .string(workspace) }
         if let agent { params["agent_kind"] = .string(agent) }
@@ -286,7 +291,7 @@ public struct TodoExplore: ParsableCommand {
 public struct TodoTicket: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "ticket",
-        abstract: "Open a Manager and seed the item as a file-ticket brief"
+        abstract: "Open a Manager that runs /crow-diagnose on the item"
     )
 
     @Option(name: .long, help: "Todo UUID") var id: String
