@@ -137,7 +137,8 @@ func makeEngineSessionHandlers(
                         worktreePath: capturedAppState.primaryWorktree(for: id)?.worktreePath,
                         prLinks: capturedAppState.links(for: id),
                         devRoot: recDevRoot, config: recConfig, ledger: recLedger,
-                        skipNotes: LogSyncSkipBoard.shared.notes(for: id)),
+                        skipNotes: LogSyncSkipBoard.shared.notes(for: id),
+                        traffic: GatewayTrafficBoard.shared.evidence(for: id)),
                 ]
             }
         },

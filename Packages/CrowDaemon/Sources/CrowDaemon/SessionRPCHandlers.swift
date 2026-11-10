@@ -165,7 +165,8 @@ func makeSessionHandlers(
                         worktreePath: appState.primaryWorktree(for: session.id)?.worktreePath,
                         prLinks: appState.links(for: session.id),
                         devRoot: devRoot, config: config, ledger: ledger,
-                        skipNotes: LogSyncSkipBoard.shared.notes(for: session.id), now: now)
+                        skipNotes: LogSyncSkipBoard.shared.notes(for: session.id),
+                        traffic: GatewayTrafficBoard.shared.evidence(for: session.id), now: now)
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
                         object["branch"] = .string(worktree.branch)

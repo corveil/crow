@@ -17,11 +17,11 @@ public enum RecordingStatusJSON {
     public static func build(
         session: Session, worktreePath: String?, prLinks: [SessionLink],
         devRoot: String?, config: AppConfig?, ledger: LogSyncLedger,
-        skipNotes: [LogSyncSkipNote], now: Date = Date()
+        skipNotes: [LogSyncSkipNote], traffic: GatewayTraffic.Evidence? = nil, now: Date = Date()
     ) -> JSONValue {
         let gateway = gatewayIndicator(
             session: session, worktreePath: worktreePath, prLinks: prLinks,
-            devRoot: devRoot, config: config)
+            devRoot: devRoot, config: config, traffic: traffic)
         let transcripts = RecordingStatus.transcripts(
             session: session, worktreePath: worktreePath, devRoot: devRoot, config: config,
             ledger: ledger, skipNotes: skipNotes, now: now)
@@ -31,6 +31,19 @@ public enum RecordingStatusJSON {
             "base_url": gateway.baseURL.map { .string($0) } ?? .null,
             "detail": .string(gateway.detail),
         ]
+        // Request-log proof (key ids/names and org names only — never a key).
+        if let traffic, traffic.state != .none {
+            var v: [String: JSONValue] = [
+                "state": .string(traffic.state.rawValue),
+                "count": .int(traffic.count),
+            ]
+            if let at = traffic.lastAt { v["last_seen_at"] = .string(ISO8601DateFormatter().string(from: at)) }
+            if let org = traffic.seenOrganizationName { v["seen_org"] = .string(org) }
+            if let key = traffic.seenAPIKeyName { v["seen_key_name"] = .string(key) }
+            if let id = traffic.seenAPIKeyID { v["seen_key_id"] = .string(id) }
+            if let org = traffic.expectedOrganizationName { v["expected_org"] = .string(org) }
+            g["traffic"] = .object(v)
+        }
         if let launched = session.launchedGateway {
             g["launched_at"] = .string(ISO8601DateFormatter().string(from: launched.at))
             g["launched_via"] = .string(launched.via.rawValue)
@@ -48,7 +61,7 @@ public enum RecordingStatusJSON {
     /// against what it was launched with.
     static func gatewayIndicator(
         session: Session, worktreePath: String?, prLinks: [SessionLink],
-        devRoot: String?, config: AppConfig?
+        devRoot: String?, config: AppConfig?, traffic: GatewayTraffic.Evidence? = nil
     ) -> RecordingStatus.GatewayIndicator {
         var configuredGateway: WorkspaceGateway?
         if let config {
@@ -82,6 +95,7 @@ public enum RecordingStatusJSON {
         return RecordingStatus.gateway(
             launched: session.launchedGateway, configuredBaseURL: configuredURL,
             harnessRoutable: routable,
-            agentName: CrowAttribution.agentDisplayName(for: kind))
+            agentName: CrowAttribution.agentDisplayName(for: kind),
+            traffic: traffic)
     }
 }

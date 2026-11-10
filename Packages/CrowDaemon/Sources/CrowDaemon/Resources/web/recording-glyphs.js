@@ -14,7 +14,13 @@
 const recordingExpanded = new Set();
 
 const REC_GATEWAY = {
-  routed: { color: 'var(--green)', label: 'Through gateway' },
+  // Proven from Corveil's gateway request log (deterministic join on the
+  // Claude Code conversation id).
+  verified: { color: 'var(--green)', label: 'Verified in the gateway log', check: true },
+  mismatch: { color: 'var(--red)', label: 'Requests land under another org/key', bang: true },
+  silent: { color: 'var(--orange)', label: 'Active, but no gateway requests seen', bang: true },
+  // Launch-time record only: what the agent was started with.
+  routed: { color: 'var(--green)', label: 'Launched through gateway (not yet verified)', faint: true },
   drift: { color: 'var(--orange)', label: 'Gateway changed since launch' },
   unverified: { color: 'var(--yellow)', label: 'Gateway configured, launch not recorded', faint: true },
   direct: { color: 'var(--text-muted)', label: 'No gateway (vendor direct)', slash: true },
@@ -38,13 +44,17 @@ const REC_SVG = {
   transcripts: '<path d="M4 1.8h5.5L12.5 4.8V14.2H4z"/><path d="M8.2 11.5V6.8"/><path d="M6.4 8.5 8.2 6.7 10 8.5"/>',
 };
 const REC_SLASH = '<path d="M2.5 13.5 13.5 2.5"/>';
+// Small badge marks in the glyph's lower-right corner.
+const REC_CHECK = '<path d="M9.8 13.2l1.6 1.5 3-3.4" stroke-width="1.8"/>';
+const REC_BANG = '<circle cx="13" cy="13" r="2.6" fill="currentColor" stroke="none"/>';
 
 function recordingMark(kind, info, extraText) {
   const span = el('span', 'rec-mark rec-' + kind + (info.faint ? ' rec-faint' : ''));
   span.style.color = info.color;
   span.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
     + 'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
-    + REC_SVG[kind] + (info.slash ? REC_SLASH : '') + '</svg>';
+    + REC_SVG[kind] + (info.slash ? REC_SLASH : '') + (info.check ? REC_CHECK : '')
+    + (info.bang ? REC_BANG : '') + '</svg>';
   if (extraText) span.appendChild(el('span', 'rec-count', extraText));
   return span;
 }

@@ -16,6 +16,15 @@ public enum RecordingStatus {
     // MARK: - Gateway
 
     public enum GatewayState: String, Sendable, Equatable, CaseIterable {
+        /// Proven: the gateway's request log holds this session's
+        /// conversations, under the expected org/key.
+        case verified
+        /// Proven wrong: requests were seen, but under a different org or key
+        /// than the session's resolved gateway.
+        case mismatch
+        /// Launched through a gateway and active, but its expected org's log
+        /// shows no request from it.
+        case silent
         /// Launched through the gateway that is configured now.
         case routed
         /// Launched with something other than what is configured now: a
@@ -50,6 +59,31 @@ public enum RecordingStatus {
     ///     gateway at all (Claude always; Codex when its gateway opted in).
     ///   - agentName: display name for the text.
     public static func gateway(
+        launched: LaunchedGateway?, configuredBaseURL: String?,
+        harnessRoutable: Bool, agentName: String,
+        traffic: GatewayTraffic.Evidence? = nil
+    ) -> GatewayIndicator {
+        var base = launchGateway(launched: launched, configuredBaseURL: configuredBaseURL,
+                                 harnessRoutable: harnessRoutable, agentName: agentName)
+        guard let traffic else { return base }
+        switch traffic.state {
+        case .verified:
+            base.state = .verified
+            base.detail = traffic.detail + "\n" + base.detail
+        case .mismatch:
+            base.state = .mismatch
+            base.detail = traffic.detail + "\n" + base.detail
+        case .silent:
+            base.state = .silent
+            base.detail = traffic.detail + "\n" + base.detail
+        case .unavailable, .none:
+            if !traffic.detail.isEmpty { base.detail += "\n" + traffic.detail }
+        }
+        return base
+    }
+
+    /// The launch-vs-config half of ``gateway(launched:configuredBaseURL:harnessRoutable:agentName:traffic:)``.
+    static func launchGateway(
         launched: LaunchedGateway?, configuredBaseURL: String?,
         harnessRoutable: Bool, agentName: String
     ) -> GatewayIndicator {
