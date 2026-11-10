@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CrowCore
 
-/// Spike: sidebar recording indicator. The pure rules behind the two glyphs.
+/// CROW-1423: the pure rules behind the two recording-indicator glyphs.
 @Suite struct RecordingStatusTests {
     static let devRoot = "/dev/root"
     static let now = Date(timeIntervalSince1970: 1_000_000)
@@ -67,6 +67,73 @@ import Testing
         #expect(viaSettings.baseURL == "https://corveil.io")
         let direct = LaunchedGateway.record(launchText: "claude", agentKind: .claudeCode, settingsJSON: nil)
         #expect(direct.via == LaunchedGateway.Via.none)
+    }
+
+    /// Claude Code applies its settings `env` over the inherited environment,
+    /// so the settings value wins over whatever the launch line said.
+    @Test func claudeSettingsEnvBeatsTheLaunchLine() {
+        let settings = Data(#"{"env":{"ANTHROPIC_BASE_URL":"https://corveil.io"}}"#.utf8)
+        let overUnset = LaunchedGateway.record(
+            launchText: "unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && claude",
+            agentKind: .claudeCode, settingsJSON: settings)
+        #expect(overUnset.via == .settingsEnv)
+        #expect(overUnset.baseURL == "https://corveil.io")
+        let overOther = LaunchedGateway.record(
+            launchText: "export ANTHROPIC_BASE_URL='https://other.example' && claude",
+            agentKind: .claudeCode, settingsJSON: settings)
+        #expect(overOther.baseURL == "https://corveil.io")
+        // No settings value: the launch line decides.
+        let lineOnly = LaunchedGateway.record(
+            launchText: "export ANTHROPIC_BASE_URL='https://other.example' && claude",
+            agentKind: .claudeCode, settingsJSON: Data(#"{"env":{}}"#.utf8))
+        #expect(lineOnly.via == .launchLine)
+        #expect(lineOnly.baseURL == "https://other.example")
+        let cleared = LaunchedGateway.record(
+            launchText: "unset ANTHROPIC_BASE_URL && claude", agentKind: .claudeCode, settingsJSON: nil)
+        #expect(cleared.via == LaunchedGateway.Via.none)
+    }
+
+    /// A Codex override on a Claude line (or the reverse) is not that
+    /// harness's route.
+    @Test func eachHarnessReadsOnlyItsOwnRoute() {
+        let codexLine = "codex -c model_providers.crow-corveil.base_url='https://corveil.io/v1'"
+        #expect(LaunchedGateway.record(launchText: codexLine, agentKind: .claudeCode, settingsJSON: nil).via
+            == LaunchedGateway.Via.none)
+        #expect(LaunchedGateway.record(
+            launchText: "ANTHROPIC_BASE_URL='https://corveil.io' codex", agentKind: .codex, settingsJSON: nil).via
+            == LaunchedGateway.Via.none)
+    }
+
+    /// The record rides remote-readable RPCs: user info, query and fragment
+    /// never survive, and something that isn't an http(s) URL isn't shown.
+    @Test func recordedBaseURLIsReducedToSchemeHostPortPath() {
+        #expect(LaunchedGateway.displayableBaseURL("https://user:pw@gw.example:8443/v1?key=sk-1#frag")
+            == "https://gw.example:8443/v1")
+        #expect(LaunchedGateway.displayableBaseURL("javascript:alert(1)") == nil)
+        #expect(LaunchedGateway.displayableBaseURL("not a url") == nil)
+        #expect(LaunchedGateway.displayableBaseURL("https://" + String(repeating: "a", count: 400) + ".io")?.count == 256)
+        let settings = Data(#"{"env":{"ANTHROPIC_BASE_URL":"https://u:secret@gw.example/?token=t"}}"#.utf8)
+        let rec = LaunchedGateway.record(launchText: "claude", agentKind: .claudeCode, settingsJSON: settings)
+        #expect(rec.baseURL == "https://gw.example/")
+        #expect(rec.via == .settingsEnv)
+        let junk = Data(#"{"env":{"ANTHROPIC_BASE_URL":"file:///etc/passwd"}}"#.utf8)
+        let unknown = LaunchedGateway.record(launchText: "claude", agentKind: .claudeCode, settingsJSON: junk)
+        #expect(unknown.baseURL == nil)
+        #expect(unknown.via == .unknown)
+    }
+
+    @Test func ledgerIndexGroupsByUIDAndHarness() {
+        var ledger = LogSyncLedger()
+        let uid = UUID().uuidString
+        ledger.record(key: LogSyncLedger.key(sessionUID: uid, harness: .codex, kind: .sessionTranscript),
+                      entry: Self.entry(.uploaded))
+        ledger.record(key: LogSyncLedger.key(sessionUID: uid, harness: .claude, kind: .sessionTranscript),
+                      entry: Self.entry(.failedTransient))
+        ledger.record(key: LogSyncLedger.key(sessionUID: "other", harness: .claude, kind: .sessionTranscript),
+                      entry: Self.entry(.uploaded))
+        let index = RecordingStatus.LedgerIndex(ledger)
+        #expect(index.entries(uid: uid).map(\.harness) == [LogSyncHarness.claude.rawValue, LogSyncHarness.codex.rawValue])
+        #expect(index.entries(uid: "missing").isEmpty)
     }
 
     @Test func otherHarnessesAreUnknownAndCodexWithoutOverrideIsDirect() {

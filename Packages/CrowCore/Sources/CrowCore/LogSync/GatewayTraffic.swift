@@ -1,7 +1,7 @@
 import Foundation
 
-/// Proof that a session's traffic actually reaches the Corveil gateway (spike
-/// follow-up: sidebar recording indicator).
+/// Proof that a session's traffic actually reaches the Corveil gateway
+/// (CROW-1423, the debug-mode recording indicator).
 ///
 /// "Configured" and even "launched" can disagree with reality: a Manager
 /// tagged with one org's workspace can still send its requests under another

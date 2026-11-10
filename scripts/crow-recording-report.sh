@@ -3,8 +3,10 @@
 #
 # Deterministic, read-only, no LLM, and never prints a secret. Works on any
 # Crow install: it needs only the `crow` CLI (talking to a running crowd), `jq`,
-# and optionally a `corveil` CLI login. It does NOT need the sidebar-recording
-# spike build; the spike's sidebar glyphs compute the same answers in crowd.
+# and optionally a `corveil` CLI login. It does NOT need a build with the
+# debug-mode recording indicator (CROW-1423); that indicator computes the same
+# answers inside crowd, and also checks the org each request landed in, which
+# this script does not.
 #
 # Usage:
 #   cd <devRoot or any folder under it>        # e.g. a Manager's .crow/managers/<id>
@@ -13,25 +15,18 @@
 #   CROW_DEVROOT=/path/to/devroot  scripts/crow-recording-report.sh   # from anywhere
 #   GW_PAGES=10                    scripts/crow-recording-report.sh   # scan 10×500 requests
 #
-# Columns: name, kind, status, workspace, gw_launch (settings.local.json routes
-# through a gateway), gw_seen (PROOF: the session's Claude Code conversation ids
-# in Corveil's gateway request log), transcripts (log-sync ledger status).
+# Columns:
+#   gw_launch   did the agent launch with a gateway (its .claude/settings.local.json env)
+#   gw_seen     PROOF: requests from this session's Claude Code conversations in
+#               Corveil's gateway request log (metadata.request_body_claude_code_session)
+#   transcripts log-sync ledger status
 #
 # gw_seen only sees the org your `corveil` login belongs to
 # (`corveil control observability logs-list`); sessions whose traffic goes to
 # another org read "no requests in window". Without a login it reads "unknown".
 #
-# crow-recording-report.sh — deterministic, read-only, no LLM.
-# For every Crow session:
-#   gw_launch : did the agent launch with a gateway (its .claude/settings.local.json env)
-#   gw_seen   : PROOF — requests from this session's Claude Code conversations in
-#               Corveil's gateway request log (metadata.request_body_claude_code_session)
-#   transcripts: log-sync ledger status
-# Needs: crow, jq, and a `corveil` login that can read the org request log
-# (`corveil control observability logs-list`). Without it gw_seen is "unknown".
-#
-# Env: GW_LOG_LIMIT (default 2000) — how many recent gateway requests to scan.
-#      CROW_DEVROOT  — defaults to the folder holding .crow/ above $PWD.
+# Env: GW_PAGES (default 6) — pages of 500 recent gateway requests to scan.
+#      CROW_DEVROOT         — defaults to the folder holding .crow/ above $PWD.
 set -uo pipefail
 
 DEVROOT="${CROW_DEVROOT:-}"

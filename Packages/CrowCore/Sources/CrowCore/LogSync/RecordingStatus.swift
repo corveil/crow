@@ -1,7 +1,7 @@
 import Foundation
 
 /// The two per-session "is this being recorded by Corveil?" indicators shown
-/// on every sidebar row (spike: sidebar recording indicator).
+/// on every sidebar row while debug mode is on (CROW-1423).
 ///
 /// Pure: every input is a value the caller already has (the session, config,
 /// a ledger snapshot, the collector's skip notes, a clock). No disk, no
@@ -213,6 +213,17 @@ public enum RecordingStatus {
         session: Session, worktreePath: String?, devRoot: String?, config: AppConfig?,
         ledger: LogSyncLedger, skipNotes: [LogSyncSkipNote], now: Date
     ) -> TranscriptIndicator {
+        transcripts(session: session, worktreePath: worktreePath, devRoot: devRoot, config: config,
+                    ledger: LedgerIndex(ledger), skipNotes: skipNotes, now: now)
+    }
+
+    /// The same, against a ledger indexed once per read (`list-sessions`
+    /// builds one ``LedgerIndex`` for all its rows rather than scanning the
+    /// ledger per row).
+    public static func transcripts(
+        session: Session, worktreePath: String?, devRoot: String?, config: AppConfig?,
+        ledger: LedgerIndex, skipNotes: [LogSyncSkipNote], now: Date
+    ) -> TranscriptIndicator {
         func notOptedIn(_ why: String) -> TranscriptIndicator {
             TranscriptIndicator(state: .notOptedIn, detail: "Not opted in: \(why)")
         }
@@ -265,20 +276,39 @@ public enum RecordingStatus {
 
     private static let kindSuffix = ":" + LogSyncArtifactKind.sessionTranscript.rawValue
 
-    /// Ledger entries for one upload uid (any harness), as `(harness, entry)`.
-    static func entries(uid: String, in ledger: LogSyncLedger) -> [(harness: String, entry: LogSyncLedger.Entry)] {
-        ledger.entries.compactMap { key, entry in
-            guard key.hasPrefix(uid + ":"), key.hasSuffix(kindSuffix) else { return nil }
-            let harness = key.dropFirst(uid.count + 1).dropLast(kindSuffix.count)
-            return (String(harness), entry)
-        }.sorted { $0.harness < $1.harness }
+    /// The ledger's session-transcript entries grouped by upload uid (a
+    /// session id, or a Manager conversation id). Keys are
+    /// `{uid}:{harness}:{kind}` (`LogSyncLedger.key`); the uid never contains
+    /// a colon, so it is everything before the first one.
+    public struct LedgerIndex: Sendable {
+        public struct Slot: Sendable {
+            public var harness: String
+            public var entry: LogSyncLedger.Entry
+        }
+        var byUID: [String: [Slot]]
+
+        public init(_ ledger: LogSyncLedger) {
+            var byUID: [String: [Slot]] = [:]
+            for (key, entry) in ledger.entries where key.hasSuffix(RecordingStatus.kindSuffix) {
+                guard let colon = key.firstIndex(of: ":") else { continue }
+                let uid = String(key[..<colon])
+                let rest = key[key.index(after: colon)...].dropLast(RecordingStatus.kindSuffix.count)
+                byUID[uid, default: []].append(Slot(harness: String(rest), entry: entry))
+            }
+            self.byUID = byUID.mapValues { $0.sorted { $0.harness < $1.harness } }
+        }
+
+        /// Entries for one uid (any harness), sorted by harness.
+        public func entries(uid: String) -> [(harness: String, entry: LogSyncLedger.Entry)] {
+            (byUID[uid] ?? []).map { ($0.harness, $0.entry) }
+        }
     }
 
     private static func workTranscripts(
-        session: Session, ledger: LogSyncLedger, skipNotes: [LogSyncSkipNote],
+        session: Session, ledger: LedgerIndex, skipNotes: [LogSyncSkipNote],
         quietMinutes: Int, now: Date
     ) -> TranscriptIndicator {
-        let found = entries(uid: session.id.uuidString, in: ledger)
+        let found = ledger.entries(uid: session.id.uuidString)
         let terminal = session.status == .completed || session.status == .archived
         let uploaded = found.filter { $0.entry.status == .uploaded }
         if !uploaded.isEmpty {
@@ -315,7 +345,7 @@ public enum RecordingStatus {
     }
 
     private static func managerTranscripts(
-        session: Session, ledger: LogSyncLedger, skipNotes: [LogSyncSkipNote],
+        session: Session, ledger: LedgerIndex, skipNotes: [LogSyncSkipNote],
         quietMinutes: Int, now: Date
     ) -> TranscriptIndicator {
         let conversations = managerConversations(session)
@@ -328,7 +358,7 @@ public enum RecordingStatus {
         var lines: [String] = []
         for ref in conversations {
             let short = String(ref.id.prefix(8))
-            let found = entries(uid: ref.id, in: ledger)
+            let found = ledger.entries(uid: ref.id)
             if found.contains(where: { $0.entry.status == .uploaded }) {
                 uploaded += 1
             } else if let t = found.first(where: { $0.entry.status == .failedTransient }) {

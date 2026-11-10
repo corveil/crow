@@ -6,7 +6,7 @@ import Testing
 @Suite struct GatewayTrafficTests {
     static let now = Date(timeIntervalSince1970: 2_000_000)
     static let corveil = "org-corveil", rm = "org-rm"
-    static let names = [corveil: "Corveil, Inc.", rm: "Radius Method"]
+    static let names = [corveil: "Corveil, Inc.", rm: "Client A"]
 
     static func entry(_ id: String, conv: String?, org: String = corveil, key: String = "key-c",
                       name: String = "Crow gateway", ago: TimeInterval = 60) -> GatewayTraffic.Entry {
@@ -23,7 +23,7 @@ import Testing
     }
 
     static let expectCorveil = GatewayTraffic.Expected(organizationID: corveil, organizationName: "Corveil, Inc.", apiKeyID: "key-c")
-    static let expectRM = GatewayTraffic.Expected(organizationID: rm, organizationName: "Radius Method", apiKeyID: "key-rm")
+    static let expectRM = GatewayTraffic.Expected(organizationID: rm, organizationName: "Client A", apiKeyID: "key-rm")
 
     // MARK: decode
 
@@ -97,15 +97,15 @@ import Testing
         #expect(ev.detail.contains("Crow gateway"))
     }
 
-    /// The "bad" Manager: tagged with the Radius Method workspace, but its
+    /// The "bad" Manager: tagged with the Client A workspace, but its
     /// requests land under the Corveil, Inc. key.
     @Test func mismatchWhenRequestsLandInAnotherOrg() {
         let index = GatewayTraffic.index(entries: [Self.entry("1", conv: "c1")], readOrgs: [Self.corveil])
         let ev = Self.evidence([.init(id: "c1", lastWrite: Self.now)], index, expected: Self.expectRM)
         #expect(ev.state == .mismatch)
         #expect(ev.seenOrganizationName == "Corveil, Inc.")
-        #expect(ev.expectedOrganizationName == "Radius Method")
-        #expect(ev.detail.contains("belongs to Radius Method"))
+        #expect(ev.expectedOrganizationName == "Client A")
+        #expect(ev.detail.contains("belongs to Client A"))
     }
 
     @Test func mismatchOnKeyIDWithinTheSameOrg() {
@@ -145,7 +145,7 @@ import Testing
         let index = GatewayTraffic.index(entries: [Self.entry("1", conv: "x")], readOrgs: [Self.corveil])
         let ev = Self.evidence([.init(id: "c1", lastWrite: Self.now)], index, expected: Self.expectRM)
         #expect(ev.state == .unavailable)
-        #expect(ev.detail.contains("Radius Method"))
+        #expect(ev.detail.contains("Client A"))
     }
 
     @Test func noClaimWithoutAGatewayOrConversations() {

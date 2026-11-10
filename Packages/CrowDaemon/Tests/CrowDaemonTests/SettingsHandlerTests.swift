@@ -58,6 +58,7 @@ import CrowEngine
             "sidebar": .object(["hide_session_details": .bool(false)]),
             "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
             "chat_view": .object(["enabled": .bool(false)]),
+            "debug_mode": .object(["enabled": .bool(false)]),
         ]))
     }
 
@@ -123,6 +124,33 @@ import CrowEngine
         #expect(onDisk.chatView.enabled == false)
     }
 
+    /// `crow ui set --debug-mode` (CROW-1423): writes `debugMode.enabled` and
+    /// nothing else, echoed under `ui.debug_mode`; off is a real write.
+    @Test @MainActor func uiSetTogglesDebugMode() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var seed = AppConfig()
+        seed.chatView.enabled = true
+        try ConfigStore.saveConfig(seed, devRoot: devRoot)
+
+        let on = await call("ui-set", ["debug_mode_enabled": .bool(true)], devRoot: devRoot)
+        #expect(on.error == nil)
+        #expect(on.result?["ui"]?.objectValue?["debug_mode"] == .object(["enabled": .bool(true)]))
+        var onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.debugMode.enabled == true)
+        #expect(onDisk.chatView.enabled == true)
+
+        let read = await call("ui-get", devRoot: devRoot)
+        #expect(read.result?["ui"]?.objectValue?["debug_mode"] == .object(["enabled": .bool(true)]))
+
+        _ = await call("ui-set", ["debug_mode_enabled": .bool(false)], devRoot: devRoot)
+        onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.debugMode.enabled == false)
+
+        let bad = await call("ui-set", ["debug_mode_enabled": .string("yes")], devRoot: devRoot)
+        #expect(bad.error != nil)
+    }
+
     /// The whole reason these are granular RPCs rather than a `set-config` blob
     /// round-trip: a settings write must not disturb anything else in the file.
     @Test @MainActor func writesPreserveUnrelatedConfig() async throws {
@@ -181,6 +209,7 @@ import CrowEngine
                 ]),
             ]),
             "chat_view": .object(["enabled": .bool(false)]),
+            "debug_mode": .object(["enabled": .bool(false)]),
         ]))
 
         let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))

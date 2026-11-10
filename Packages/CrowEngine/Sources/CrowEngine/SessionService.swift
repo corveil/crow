@@ -821,7 +821,10 @@ public final class SessionService {
         let pasteText = pasteCommand
             ? t.command.map { codexGatewayKeyPrefix(sessionID: t.sessionID, command: $0) + $0 }
             : nil
-        // Spike (recording indicator): a pasted agent command is a launch.
+        // A pasted agent command is a launch (CROW-1423). `prepareTerminal`
+        // always opens a new window, so this is a fresh process even when it
+        // restores a pane after a cold start; a warm restart adopts the live
+        // window through `adoptTerminal` instead and records nothing.
         if pasteCommand, let command = t.command, let session,
            let agent = AgentRegistry.shared.agent(for: session.agentKind),
            AgentLaunch.commandLaunchesAgent(command, agent: agent) {

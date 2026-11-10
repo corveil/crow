@@ -510,6 +510,7 @@ import CrowPersistence
 
         let sources = sourcesByWorktree
         let lines = LockedLines()
+        let skipBoard = LogSyncSkipBoard()
         let collector = LogSyncCollector(
             devRoot: devRoot,
             uploader: TranscriptUploader(transport: StatusTransport(status: 201)),
@@ -523,7 +524,8 @@ import CrowPersistence
                 }
             },
             locateConversation: { _, _, _ in nil },
-            log: LogSyncLog(sink: { lines.append($0) }))
+            log: LogSyncLog(sink: { lines.append($0) }),
+            skipBoard: skipBoard)
 
         await collector.sweep(appState: appState)
         let first = lines.snapshot()
@@ -565,6 +567,16 @@ import CrowPersistence
         #expect(skipLines(optedOut).isEmpty)
         #expect(skipLines(managerOff).isEmpty)
         #expect(skipLines(quiet).isEmpty)
+
+        // CROW-1423: every logged skip is also a structured note the sidebar
+        // shows, restated on each sweep (the second sweep re-recorded them);
+        // a truncated-but-uploaded transcript and a quiet one are not skips.
+        #expect(skipBoard.notes(for: noWorktree.id).map(\.reason) == ["no-worktree"])
+        #expect(skipBoard.notes(for: noTranscript.id).first?.detail.contains("no claude-code transcript") == true)
+        #expect(skipBoard.notes(for: managerNoFile.id).first?.scope == "conv-404")
+        #expect(skipBoard.notes(for: truncated.id).isEmpty)
+        #expect(skipBoard.notes(for: quiet.id).isEmpty)
+        #expect(skipBoard.notes(for: optedOut.id).isEmpty)
     }
     // MARK: Upload on delete + every harness (CROW-1394)
 

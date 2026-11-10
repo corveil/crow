@@ -126,7 +126,7 @@
       'Turns on diagnostic features. Today: the sidebar recording indicator — a gateway '
       + 'glyph (did this session\u2019s traffic reach the Corveil gateway, under the right org?) '
       + 'and a transcript glyph (has log sync uploaded it?) on every session row. While on, '
-      + 'crowd also reads the Corveil request log every 5 minutes to verify gateway traffic. '
+      + 'crowd also reads the Corveil request log (within 30 seconds, then every 5 minutes) to verify gateway traffic. '
       + 'CLI: crow ui set --debug-mode true|false.'));
 
     // Maintenance actions — the desktop app's old Restart/Reload menu items,

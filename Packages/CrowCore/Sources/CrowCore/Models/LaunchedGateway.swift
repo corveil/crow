@@ -1,7 +1,7 @@
 import Foundation
 
-/// What gateway a session's agent was actually **launched** with (spike:
-/// sidebar recording indicator).
+/// What gateway a session's agent was actually **launched** with (CROW-1423,
+/// the debug-mode recording indicator).
 ///
 /// `crow get-session`'s `gateway_set` / `gateway_base_url` describe
 /// *configuration*: the gateway a launch would pick up now. A session launched
@@ -9,10 +9,15 @@ import Foundation
 /// This record is taken at the moment Crow types the launch line into the
 /// pane, so it describes the running process instead.
 ///
-/// Holds the **base URL only**. Header names and values are credentials and
+/// Holds the **base URL only**, reduced to scheme, host, port and path by
+/// ``displayableBaseURL(_:)``. Header names and values are credentials and
 /// never enter this type (see the ⚠️ REDACTION note in
 /// `EngineSessionRPCHandlers`), because `list-sessions` is readable by remote
 /// `/rpc` peers.
+///
+/// Recorded on every launch whether or not debug mode is on: it is one
+/// in-memory write plus a store save, and it means turning debug mode on shows
+/// the real launch state at once instead of after every agent relaunches.
 public struct LaunchedGateway: Codable, Sendable, Equatable {
     /// How the gateway reached the launched process.
     public enum Via: String, Codable, Sendable, Equatable {
@@ -20,16 +25,17 @@ public struct LaunchedGateway: Codable, Sendable, Equatable {
         case launchLine
         /// `-c model_providers.<id>.base_url=…` on a Codex launch (CROW-1407).
         case codexOverride
-        /// The launch line said nothing; the `env` block of the cwd's
-        /// `.claude/settings.local.json` did (a Claude Manager, whose stored
-        /// command carries no prefix).
+        /// The `env` block of the cwd's `.claude/settings.local.json` set it.
+        /// For Claude this beats the launch line (see ``record(launchText:agentKind:settingsJSON:at:)``),
+        /// and it is how a Claude Manager, whose stored command carries no
+        /// prefix, gets its gateway.
         case settingsEnv
         /// The launch line explicitly cleared the gateway
         /// (`unset ANTHROPIC_BASE_URL`), or a Claude launch with no settings
         /// `env` block either: the process talks to the vendor directly.
         case none
         /// A harness Crow has no gateway route for (Cursor, OpenCode, …), or a
-        /// launch line Crow could not read a gateway decision from.
+        /// gateway URL that isn't an absolute http(s) URL Crow can show.
         case unknown
     }
 
@@ -69,28 +75,67 @@ public struct LaunchedGateway: Codable, Sendable, Equatable {
 
     /// The record for one launch of `agentKind`.
     ///
-    /// The launch line wins. When it says nothing, a Claude launch falls back to
-    /// the cwd's `settings.local.json` `env` block (`settingsJSON`, nil when
-    /// absent), which is how a Claude Manager gets its gateway; with neither,
-    /// Claude talks to Anthropic directly. A Codex launch with no
-    /// `crow-corveil` override goes to OpenAI directly. Every other harness is
-    /// `.unknown`: Crow has no gateway route for it.
+    /// **Claude:** the cwd's `settings.local.json` `env` block wins, then the
+    /// launch line, then nothing (vendor direct). Claude Code applies its
+    /// settings `env` on top of the environment it inherited, so a launch
+    /// line's `ANTHROPIC_BASE_URL=…` or `unset ANTHROPIC_BASE_URL` loses to a
+    /// settings value (checked against Claude Code 2.1.322: a variable set in
+    /// both reads the settings value inside the agent). Crow writes the same
+    /// gateway to both places on a normal launch, so they only disagree when
+    /// something else edited the file. `settingsJSON` is nil when the file is
+    /// absent.
+    ///
+    /// **Codex:** the launch line's `crow-corveil` override, else OpenAI
+    /// directly. **Every other harness** is `.unknown`: Crow has no gateway
+    /// route for it.
     public static func record(
         launchText: String, agentKind: AgentKind, settingsJSON: Data?, at: Date = Date()
     ) -> LaunchedGateway {
-        if let found = detect(launchText: launchText) {
-            return LaunchedGateway(baseURL: found.baseURL, via: found.via, agentKind: agentKind, at: at)
+        func make(_ url: String?, _ via: Via) -> LaunchedGateway {
+            let shown = url.flatMap(displayableBaseURL)
+            // A URL we can't show safely is still a gateway, just an unnamed one.
+            let recorded: Via = (url != nil && shown == nil && via != .none) ? .unknown : via
+            return LaunchedGateway(baseURL: shown, via: recorded, agentKind: agentKind, at: at)
         }
-        if agentKind == .claudeCode {
+        switch agentKind {
+        case .claudeCode:
             if let settingsJSON, let url = settingsEnvBaseURL(settingsJSON: settingsJSON) {
-                return LaunchedGateway(baseURL: url, via: .settingsEnv, agentKind: agentKind, at: at)
+                return make(url, .settingsEnv)
             }
-            return LaunchedGateway(baseURL: nil, via: .none, agentKind: agentKind, at: at)
+            if let found = detect(launchText: launchText), found.via != .codexOverride {
+                return make(found.baseURL, found.via)
+            }
+            return make(nil, .none)
+        case .codex:
+            if let found = detect(launchText: launchText), found.via == .codexOverride {
+                return make(found.baseURL, found.via)
+            }
+            return make(nil, .none)
+        default:
+            return make(nil, .unknown)
         }
-        if agentKind == .codex {
-            return LaunchedGateway(baseURL: nil, via: .none, agentKind: agentKind, at: at)
-        }
-        return LaunchedGateway(baseURL: nil, via: .unknown, agentKind: agentKind, at: at)
+    }
+
+    /// A base URL reduced to what is safe to show a remote `/rpc` peer:
+    /// scheme, host, port and path. User info, query and fragment are dropped
+    /// (a hand-written URL can carry a credential in any of them), and the
+    /// result is capped at 256 characters. Nil when `raw` isn't an absolute
+    /// URL with a host.
+    ///
+    /// The settings file it is read from can come from a review clone, so its
+    /// content is treated as untrusted text.
+    public static func displayableBaseURL(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var comps = URLComponents(string: trimmed),
+              let scheme = comps.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = comps.host, !host.isEmpty
+        else { return nil }
+        comps.user = nil
+        comps.password = nil
+        comps.query = nil
+        comps.fragment = nil
+        guard let shown = comps.string else { return nil }
+        return shown.count > 256 ? String(shown.prefix(256)) : shown
     }
 
     /// `ANTHROPIC_BASE_URL` from a `settings.local.json` `env` block, or nil.

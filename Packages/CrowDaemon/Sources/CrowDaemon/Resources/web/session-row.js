@@ -68,8 +68,9 @@ function sessionRow(s) {
   top.appendChild(lead);
 
   const trail = el('div', 'row-trail');
-  // Gateway-at-launch + transcript-upload glyphs (spike). Shown regardless of
-  // hideSessionDetails: "is Corveil recording this?" is the at-a-glance part.
+  // Gateway + transcript-upload glyphs (debug mode, CROW-1423). Shown
+  // regardless of hideSessionDetails: "is Corveil recording this?" is the
+  // at-a-glance part.
   const rec = recordingGlyphs(s);
   if (rec) trail.appendChild(rec);
   if (isGridPinned(s.id)) {

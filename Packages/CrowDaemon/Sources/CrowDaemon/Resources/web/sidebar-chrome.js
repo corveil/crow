@@ -252,7 +252,7 @@ function sidebarLeftStack() {
     mgr.insertBefore(dot, mgr.firstChild);
     if (liveFor(primaryManager.id).remote_control_active) mgr.appendChild(rcGlyph());
     // The primary never uploads transcripts (by design), so only its
-    // gateway glyph is worth the pill's space (spike).
+    // gateway glyph is worth the pill's space.
     const recG = recordingGlyphs(primaryManager, { gatewayOnly: true });
     if (recG) mgr.appendChild(recG);
     row3.appendChild(mgr);

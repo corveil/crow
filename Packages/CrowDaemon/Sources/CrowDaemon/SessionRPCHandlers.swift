@@ -90,21 +90,16 @@ func makeSessionHandlers(
         // worktree), plus ticket labels and hook-activity state. Live PR status
         // is not here — it comes from `list-sessions-live`.
         "list-sessions": { _ in
-            // Workspace names for tagged extra Managers (CROW-1382). Read off
-            // the main actor, and only when some Manager is tagged at all.
-            // One config read per poll now: the recording indicator (spike)
-            // needs it for every row, not only tagged Managers.
+            // One config read per poll, off the main actor: workspace names for
+            // tagged extra Managers (CROW-1382) and the debug-mode gate.
             let config = ConfigStore.loadConfig(devRoot: devRoot)
             let workspaceNames: [UUID: String] = Dictionary(
                 (config?.workspaces ?? []).map { ($0.id, $0.name) },
                 uniquingKeysWith: { first, _ in first })
-            // The recording indicator is a debug-mode feature: off, rows carry
-            // no `recording` and the ledger isn't read at all.
-            let debugMode = config?.debugMode.enabled == true
-            let ledger = debugMode
-                ? await LogSyncLedgerStore.shared(devRoot: devRoot).snapshot()
-                : LogSyncLedger()
-            let now = Date()
+            // The recording indicator (CROW-1423) is a debug-mode feature: off,
+            // there is no context, the ledger isn't read and rows carry no
+            // `recording`.
+            let recording = await RecordingStatusJSON.Context.load(devRoot: devRoot, config: config)
             let items: [JSONValue] = await MainActor.run {
                 // One pass per poll. Newest open item wins when more than one
                 // Scratch points at the same Manager (Explore itself is 1:1;
@@ -162,16 +157,10 @@ func makeSessionHandlers(
                         // yes, GitLab no). Gates the web "In Review" button (CROW-749).
                         "can_set_project_status": .bool(tracker?.canSetProjectStatus(for: session) ?? false),
                     ]
-                    // Spike: gateway-at-launch + transcript upload indicator.
-                    // Base URL + fixed text only — `list-sessions` is remote-
-                    // readable (see the ⚠️ REDACTION note on `get-session`).
-                    if debugMode { object["recording"] = RecordingStatusJSON.build(
-                        session: session,
-                        worktreePath: appState.primaryWorktree(for: session.id)?.worktreePath,
-                        prLinks: appState.links(for: session.id),
-                        devRoot: devRoot, config: config, ledger: ledger,
-                        skipNotes: LogSyncSkipBoard.shared.notes(for: session.id),
-                        traffic: GatewayTrafficBoard.shared.evidence(for: session.id), now: now) }
+                    // Gateway traffic + transcript upload. Base URL, key ids/names,
+                    // org names and text only — `list-sessions` is remote-readable
+                    // (see the ⚠️ REDACTION note on `RecordingStatusJSON`).
+                    if let recording { object["recording"] = recording.row(for: session, appState: appState) }
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
                         object["branch"] = .string(worktree.branch)

@@ -110,32 +110,23 @@ extension CrowDaemon {
     /// takes effect within one tick. The whole pass is a cheap no-op while the
     /// feature is off (the default), and every upload is best-effort — a failure
     /// never touches session state.
-    /// One gateway-traffic verification pass (spike: recording indicator).
-    static func verifyGatewayTraffic(appState: AppState, devRoot: String) async {
-        guard let config = ConfigStore.loadConfig(devRoot: devRoot) else { return }
-        // A debug-mode feature: off, read no request log and drop old evidence.
-        guard config.debugMode.enabled else {
-            GatewayTrafficBoard.shared.replace([:], sources: [], at: Date())
-            return
-        }
-        let inputs = await MainActor.run { SessionService.gatewayTrafficInputs(appState) }
-        let (evidence, sources) = await GatewayTrafficVerifier().run(inputs: inputs, config: config)
-        GatewayTrafficBoard.shared.replace(evidence, sources: sources, at: Date())
-        for s in sources where !s.readable {
-            CrowLog.info("[GatewayTraffic] \(s.label): \(s.note)")
-        }
-    }
-
     static func startLogSyncPoll(appState: AppState, collector: LogSyncCollector) {
         Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
                 await collector.sweep(appState: appState)
-                // Spike: prove gateway traffic from Corveil's request log, on
-                // this same tick (never faster).
-                await verifyGatewayTraffic(appState: appState, devRoot: collector.devRoot)
             }
         }
+    }
+
+    /// Drive the gateway-traffic verifier behind the debug-mode recording
+    /// indicator (CROW-1423). Checks config every 30 s; with debug mode off it
+    /// reads no Corveil request log, and with it on it runs at once (at start,
+    /// or within one check of turning it on) and then at most every 5 minutes.
+    /// The cadence lives in `GatewayTrafficSchedule`, unit-tested in CrowEngine.
+    @discardableResult
+    static func startGatewayTrafficPoll(appState: AppState, devRoot: String) -> Task<Void, Never> {
+        GatewayTrafficPoller(devRoot: devRoot, appState: appState).start()
     }
 
     /// Poll `store.json`'s mtime and reload when the desktop app writes it, so

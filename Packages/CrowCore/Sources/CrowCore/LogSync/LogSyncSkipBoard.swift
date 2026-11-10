@@ -1,7 +1,7 @@
 import Foundation
 
 /// One reason the log-sync collector gave for not uploading a session, kept
-/// in memory so the sidebar can say it (spike: recording indicator).
+/// in memory so the sidebar can say it (CROW-1423, the recording indicator).
 ///
 /// The collector already logs every skip once (CROW-1395). This is the same
 /// fact as a structured value, so the reason shows up on the session row

@@ -5,17 +5,32 @@ import FoundationNetworking  // URLRequest/URLSession live here on Linux
 import CrowCore
 import CrowPersistence
 
-/// Proves gateway traffic per session from Corveil's request log (spike
-/// follow-up: sidebar recording indicator). Deterministic, no LLM.
+/// Proves gateway traffic per session from Corveil's request log (CROW-1423,
+/// the debug-mode recording indicator). Deterministic, no LLM. Driven by
+/// ``GatewayTrafficPoller``, at most once per 5 minutes and only while debug
+/// mode is on.
 ///
-/// One pass, on the log-sync tick (~5 min, never faster):
+/// One pass:
 ///
 /// 1. **Read** each Corveil-connection org's request log (`GET /api/logs`) with
 ///    that org's own stored `sk-citadel` key, newest first, paged by
-///    `next_cursor` (500 a page), bounded by `maxPages` and `maxAge`. A key
-///    that is refused (401/403) is recorded as such — never widened — and the
-///    operator's `corveil` CLI login is tried instead (`corveil control
-///    observability logs-list`), which sees whichever org it is logged into.
+///    `next_cursor` (500 a page), bounded by `maxPages` and `maxAge`.
+///
+///    *Can a stored org key read it?* Yes, by Corveil's own rules: a key minted
+///    through `POST /api/keys` (`crow corveil select-org`) is an ordinary user
+///    API key, `/api/*` admits API keys, and `GET /api/logs` needs only
+///    `logs.read.own`, which every org role holds. An org admin's key sees the
+///    whole org's log; a member's sees their own requests, which are all
+///    Crow's sessions send. The connection's OAuth token is **not** an option:
+///    Corveil refuses OAuth bearers on `/api/*` outside a short allowlist
+///    (`/api/me/organizations`, the key-provisioning routes), and `/api/logs`
+///    isn't on it. So no scope is widened anywhere.
+///
+///    A key that is refused anyway (401/403: revoked, or a role change) is
+///    recorded as such, and the operator's `corveil` CLI login is tried
+///    instead (`corveil control observability logs-list`), which sees
+///    whichever org it is logged into. The CLI is also the only reader for a
+///    gateway the connection doesn't manage.
 /// 2. **Index** `conversation id → {count, lastAt, apiKeyId, orgId}` across
 ///    every org read (``GatewayTraffic/index(entries:readOrgs:)``).
 /// 3. **Match** each Claude Code session's conversations — Managers by
@@ -61,8 +76,8 @@ public struct GatewayTrafficVerifier: Sendable {
     let now: @Sendable () -> Date
     let maxPages: Int
     let maxAge: TimeInterval
-    /// Whether to read with the connection's org keys (the operator can turn
-    /// this off and rely on the CLI login).
+    /// Whether to read with the connection's org keys. Always true in
+    /// `crowd`; a test sets it false to exercise the CLI path alone.
     let useOrgKeys: Bool
 
     public init(
@@ -89,7 +104,7 @@ public struct GatewayTrafficVerifier: Sendable {
 
     /// Read, index and match. Returns per-session evidence plus one status
     /// line per log source tried.
-    public func run(inputs: [SessionInput], config: AppConfig) async
+    public func run(inputs: [SessionInput], config: AppConfig, devRoot: String?) async
         -> (evidence: [UUID: GatewayTraffic.Evidence], sources: [GatewayTrafficBoard.SourceStatus]) {
         let claudeInputs = inputs.filter { $0.session.agentKind == .claudeCode }
         guard !claudeInputs.isEmpty else { return ([:], []) }
@@ -161,8 +176,8 @@ public struct GatewayTrafficVerifier: Sendable {
             evidence[input.session.id] = GatewayTraffic.evidence(
                 conversations: conversations(for: input),
                 index: index,
-                expected: Self.expected(for: input, config: config),
-                throughGateway: Self.throughGateway(input, config: config),
+                expected: Self.expected(for: input, config: config, devRoot: devRoot),
+                throughGateway: Self.throughGateway(input, config: config, devRoot: devRoot),
                 orgNames: names, now: at)
         }
         return (evidence, sources)
@@ -241,29 +256,40 @@ public struct GatewayTrafficVerifier: Sendable {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
-    /// The gateway this session resolves to now (the same rule the launch uses).
-    static func resolvedGateway(_ input: SessionInput, config: AppConfig) -> WorkspaceGateway? {
-        if input.session.isManager {
+    /// The gateway this session resolves to now: the same rule the launch
+    /// uses (a Manager by its workspace tag, anything else by worktree path or
+    /// PR slug). Shared with the `recording` payload.
+    static func resolvedGateway(
+        session: Session, worktreePath: String?, prLinks: [SessionLink], devRoot: String?, config: AppConfig
+    ) -> WorkspaceGateway? {
+        if session.isManager {
             return ManagerSessionController.managerGatewayMatch(
-                workspaceTag: input.session.managerWorkspaceTag, config: config).gateway
+                workspaceTag: session.managerWorkspaceTag, config: config).gateway
         }
-        guard let devRoot = ConfigStore.loadDevRoot() else { return nil }
+        guard let devRoot else { return nil }
         return SessionService.gatewayMatch(
-            worktreePath: input.worktreePath, prLinks: input.prLinks, devRoot: devRoot, config: config)?.gateway
+            worktreePath: worktreePath, prLinks: prLinks, devRoot: devRoot, config: config)?.gateway
+    }
+
+    static func resolvedGateway(_ input: SessionInput, config: AppConfig, devRoot: String?) -> WorkspaceGateway? {
+        resolvedGateway(session: input.session, worktreePath: input.worktreePath, prLinks: input.prLinks,
+                        devRoot: devRoot, config: config)
     }
 
     /// The org/key the session's resolved gateway belongs to, when the Corveil
     /// connection manages it.
-    static func expected(for input: SessionInput, config: AppConfig) -> GatewayTraffic.Expected? {
-        CorveilGatewayMigration.managedOrgKey(for: resolvedGateway(input, config: config), config: config)
+    static func expected(for input: SessionInput, config: AppConfig, devRoot: String?) -> GatewayTraffic.Expected? {
+        CorveilGatewayMigration.managedOrgKey(for: resolvedGateway(input, config: config, devRoot: devRoot), config: config)
             .map { GatewayTraffic.Expected(organizationID: $0.orgID, organizationName: $0.orgName, apiKeyID: $0.keyID) }
     }
 
-    static func throughGateway(_ input: SessionInput, config: AppConfig) -> Bool {
-        if let launched = input.session.launchedGateway {
+    /// Whether silence in the log means something: the agent launched
+    /// through a gateway, or (no launch recorded) one is configured.
+    static func throughGateway(_ input: SessionInput, config: AppConfig, devRoot: String?) -> Bool {
+        if let launched = input.session.launchedGateway, launched.via != .unknown {
             return launched.baseURL != nil
         }
-        return !(resolvedGateway(input, config: config)?.isEmpty ?? true)
+        return !(resolvedGateway(input, config: config, devRoot: devRoot)?.isEmpty ?? true)
     }
 
     // MARK: - Default I/O

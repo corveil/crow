@@ -125,7 +125,7 @@ public struct Session: Identifiable, Codable, Sendable {
     public var harnessConversationHistory: [HarnessConversationRef]
 
     // The gateway the agent was last **launched** with, recorded when Crow
-    // typed the launch line (spike: sidebar recording indicator). Nil for a
+    // typed the launch line (CROW-1423, the recording indicator). Nil for a
     // session launched before this field existed. Base URL only — never a
     // header.
     public var launchedGateway: LaunchedGateway?

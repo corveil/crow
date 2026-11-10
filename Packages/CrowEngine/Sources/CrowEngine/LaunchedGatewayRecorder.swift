@@ -1,8 +1,10 @@
 import Foundation
 import CrowCore
 
-// Spike: sidebar recording indicator. Records the gateway each agent launch
-// actually went out with, at the moment Crow types the launch line.
+// CROW-1423: records the gateway each agent launch actually went out with, at
+// the moment Crow types the launch line. Always on (one in-memory write and a
+// store save per launch), so turning debug mode on shows real launch states
+// at once; only *showing* it is gated by debug mode.
 extension SessionService {
     /// Persist ``Session/launchedGateway`` for one launch of `agentKind`.
     ///
@@ -12,7 +14,9 @@ extension SessionService {
     /// logged. `cwd` is where Claude reads `.claude/settings.local.json`.
     @MainActor
     func recordLaunchedGateway(sessionID: UUID, agentKind: AgentKind, launchText: String, cwd: String?) {
-        let settings = cwd.flatMap {
+        // Only Claude reads the settings `env` block; don't open a file that
+        // can hold a resolved credential for any other harness.
+        let settings = agentKind != .claudeCode ? nil : cwd.flatMap {
             try? Data(contentsOf: URL(fileURLWithPath: $0)
                 .appendingPathComponent(".claude", isDirectory: true)
                 .appendingPathComponent("settings.local.json"))

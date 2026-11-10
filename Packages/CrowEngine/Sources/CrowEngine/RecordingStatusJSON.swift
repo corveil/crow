@@ -3,20 +3,67 @@ import CrowCore
 import CrowIPC
 import Foundation
 
-/// The `recording` object on `list-sessions` / `get-session` rows (spike:
-/// sidebar recording indicator): did the agent launch through a gateway, and
-/// has its transcript reached Corveil?
+/// The `recording` object on `list-sessions` / `get-session` rows (CROW-1423,
+/// a debug-mode feature): did the agent's traffic reach the gateway, and has
+/// its transcript reached Corveil?
 ///
 /// ⚠️ REDACTION. Both RPCs are readable by remote `/rpc` peers. This object
-/// carries a gateway **base URL** and fixed explanatory text only, the same
-/// line `WorkspaceRPC.workspaceJSON` holds: never a header name or value.
+/// carries a gateway **base URL** (scheme, host, port, path), key **ids and
+/// names**, org names and fixed explanatory text only — the same line
+/// `WorkspaceRPC.workspaceJSON` holds. Never a header name or value, never a
+/// key. `RecordingStatusJSONTests` asserts it against a config full of
+/// credentials.
 ///
-/// Read-path cheap: config + ledger are passed in (one read per poll), and
-/// nothing here shells out (`op read` is never called).
+/// Read-path cheap: one ``Context`` per RPC loads config and the ledger once
+/// and indexes the ledger, and nothing here shells out (`op read` is never
+/// called) or touches the network.
 public enum RecordingStatusJSON {
+
+    /// What one read of the indicator needs, loaded once per RPC and shared by
+    /// every row.
+    public struct Context: Sendable {
+        public let devRoot: String?
+        public let config: AppConfig
+        public let ledger: RecordingStatus.LedgerIndex
+        public let now: Date
+        let skipBoard: LogSyncSkipBoard
+        let trafficBoard: GatewayTrafficBoard
+
+        /// Nil — and the ledger is never loaded — unless debug mode is on.
+        /// That is the whole gate for the RPC side: no context, no
+        /// `recording` field.
+        public static func load(
+            devRoot: String?, config: AppConfig?, now: Date = Date(),
+            loadLedger: @Sendable (String) async -> LogSyncLedger = {
+                await LogSyncLedgerStore.shared(devRoot: $0).snapshot()
+            },
+            skipBoard: LogSyncSkipBoard = .shared,
+            trafficBoard: GatewayTrafficBoard = .shared
+        ) async -> Context? {
+            guard let config, config.debugMode.enabled else { return nil }
+            var ledger = LogSyncLedger()
+            if let devRoot { ledger = await loadLedger(devRoot) }
+            return Context(
+                devRoot: devRoot, config: config, ledger: RecordingStatus.LedgerIndex(ledger), now: now,
+                skipBoard: skipBoard, trafficBoard: trafficBoard)
+        }
+
+        /// The `recording` object for one session row.
+        @MainActor
+        public func row(for session: Session, appState: AppState) -> JSONValue {
+            RecordingStatusJSON.build(
+                session: session,
+                worktreePath: appState.primaryWorktree(for: session.id)?.worktreePath,
+                prLinks: appState.links(for: session.id),
+                devRoot: devRoot, config: config, ledger: ledger,
+                skipNotes: skipBoard.notes(for: session.id),
+                traffic: trafficBoard.evidence(for: session.id), now: now)
+        }
+    }
+
     public static func build(
         session: Session, worktreePath: String?, prLinks: [SessionLink],
-        devRoot: String?, config: AppConfig?, ledger: LogSyncLedger,
+        devRoot: String?, config: AppConfig?, ledger: RecordingStatus.LedgerIndex,
         skipNotes: [LogSyncSkipNote], traffic: GatewayTraffic.Evidence? = nil, now: Date = Date()
     ) -> JSONValue {
         let gateway = gatewayIndicator(
@@ -65,13 +112,8 @@ public enum RecordingStatusJSON {
     ) -> RecordingStatus.GatewayIndicator {
         var configuredGateway: WorkspaceGateway?
         if let config {
-            if session.isManager {
-                configuredGateway = ManagerSessionController.managerGatewayMatch(
-                    workspaceTag: session.managerWorkspaceTag, config: config).gateway
-            } else if let devRoot {
-                configuredGateway = SessionService.gatewayMatch(
-                    worktreePath: worktreePath, prLinks: prLinks, devRoot: devRoot, config: config)?.gateway
-            }
+            configuredGateway = GatewayTrafficVerifier.resolvedGateway(
+                session: session, worktreePath: worktreePath, prLinks: prLinks, devRoot: devRoot, config: config)
         }
         let kind = session.agentKind
         let routable: Bool
@@ -93,7 +135,9 @@ public enum RecordingStatusJSON {
             configuredURL = nil
         }
         return RecordingStatus.gateway(
-            launched: session.launchedGateway, configuredBaseURL: configuredURL,
+            launched: session.launchedGateway,
+            // Shown to remote peers: the same reduction the launch record gets.
+            configuredBaseURL: configuredURL.map { LaunchedGateway.displayableBaseURL($0) ?? "(a URL Crow can't display)" },
             harnessRoutable: routable,
             agentName: CrowAttribution.agentDisplayName(for: kind),
             traffic: traffic)

@@ -3,7 +3,7 @@ import Testing
 @testable import CrowCore
 @testable import CrowEngine
 
-/// Spike follow-up: the gateway-traffic verifier's read loop and matching,
+/// CROW-1423: the gateway-traffic verifier's read loop and matching,
 /// with fake log sources (no network, no real keys).
 @Suite struct GatewayTrafficVerifierTests {
     static let now = Date(timeIntervalSince1970: 2_000_000)
@@ -27,9 +27,9 @@ import Testing
         var all: [String] { lock.withLock { urls } }
     }
 
-    /// Two connection orgs. The Radius Method key is refused (403); the
+    /// Two connection orgs. The Client A key is refused (403); the
     /// Corveil key reads two pages. The "bad" Manager is tagged with the
-    /// Radius Method workspace, yet its conversation shows up under Corveil.
+    /// Client A workspace, yet its conversation shows up under Corveil.
     @Test func mismatchPagingAndRefusedKeyFallback() async throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
         let cwd = "/dev/root/.crow/managers/bad"
@@ -45,7 +45,7 @@ import Testing
         var config = AppConfig(workspaces: [rmWorkspace])
         config.corveilConnection = CorveilConnection(
             baseURL: Self.base, clientID: "client",
-            orgKeys: [CorveilOrgKey(orgID: "org-rm", orgName: "Radius Method", keyID: "key-rm", keyPrefix: "sk-test-r"),
+            orgKeys: [CorveilOrgKey(orgID: "org-rm", orgName: "Client A", keyID: "key-rm", keyPrefix: "sk-test-r"),
                       CorveilOrgKey(orgID: "org-c", orgName: "Corveil, Inc.", keyID: "key-c", keyPrefix: "sk-test-c")],
             orgKeySecrets: ["org-rm": "sk-test-rm", "org-c": "sk-test-corveil"])
 
@@ -71,16 +71,16 @@ import Testing
         let inputs = [bad, quiet].map {
             GatewayTrafficVerifier.SessionInput(session: $0, worktreePath: nil, prLinks: [], managerCwd: cwd)
         }
-        let (evidence, sources) = await verifier.run(inputs: inputs, config: config)
+        let (evidence, sources) = await verifier.run(inputs: inputs, config: config, devRoot: nil)
 
         let badEv = try #require(evidence[bad.id])
         #expect(badEv.state == .mismatch)
         #expect(badEv.count == 2)  // both pages
         #expect(badEv.seenOrganizationName == "Corveil, Inc.")
-        #expect(badEv.expectedOrganizationName == "Radius Method")
+        #expect(badEv.expectedOrganizationName == "Client A")
         #expect(badEv.seenAPIKeyID == "key-c")
 
-        // Radius Method's log was never readable, so silence proves nothing.
+        // Client A's log was never readable, so silence proves nothing.
         #expect(evidence[quiet.id]?.state == .unavailable)
 
         // One refused read, then two pages for Corveil; limit is always 500.
@@ -97,7 +97,7 @@ import Testing
             cli: { _, _ in nil }, corveilBinary: { _ in nil }, now: { Self.now })
         let cursor = Session(name: "c", kind: .work, agentKind: .cursor)
         let (evidence, sources) = await verifier.run(
-            inputs: [.init(session: cursor, worktreePath: nil, prLinks: [], managerCwd: nil)], config: AppConfig())
+            inputs: [.init(session: cursor, worktreePath: nil, prLinks: [], managerCwd: nil)], config: AppConfig(), devRoot: nil)
         #expect(evidence.isEmpty)
         #expect(sources.isEmpty)
     }

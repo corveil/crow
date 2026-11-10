@@ -1184,7 +1184,7 @@ button.scratch-link:hover { border-color: var(--blue); }
 .row-trail { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .dot.glow { box-shadow: 0 0 5px 0 currentColor; }
 .rc-glyph { color: var(--accent); display: inline-flex; align-items: center; flex: 0 0 auto; }
-/* Recording indicator (spike): gateway-at-launch + transcript-upload glyphs. */
+/* Recording indicator (debug mode, CROW-1423): gateway + transcript-upload glyphs. */
 .rec-glyphs { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; cursor: pointer;
   padding: 1px 3px; border-radius: 6px; }
 .rec-glyphs:hover, .rec-glyphs:focus-visible { background: var(--accent-wash); outline: none; }

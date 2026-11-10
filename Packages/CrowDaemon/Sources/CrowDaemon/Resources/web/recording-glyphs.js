@@ -1,14 +1,16 @@
 'use strict';
-// Crow web UI — per-session "is Corveil recording this?" glyphs (spike:
-// sidebar recording indicator). Two small marks in the row's trailing
-// cluster, fed by `list-sessions` → `s.recording`:
+// Crow web UI — per-session "is Corveil recording this?" glyphs (CROW-1423).
+// Two small marks in the row's trailing cluster, fed by `list-sessions` →
+// `s.recording`:
 //
-//   gateway      did the agent LAUNCH through an AI gateway (not merely: is one
-//                configured)?
+//   gateway      did this session's traffic reach the AI gateway, under the
+//                right org? (Proven from Corveil's request log when it can be;
+//                otherwise what the agent was launched with.)
 //   transcripts  has the log-sync collector shipped the transcript to Corveil?
 //
 // Hover shows the detail; a tap (phones have no hover) expands it under the
-// row. The payload carries a base URL and fixed text only — never a header.
+// row. The payload carries base URLs, key ids/names, org names and fixed text
+// only — never a header.
 //
 // Debug mode only (Settings → About → Debug mode, or
 // `crow ui set --debug-mode true`).
@@ -82,17 +84,30 @@ function recordingGlyphs(s, opts) {
   const wrap = el('span', 'rec-glyphs');
   const gm = recordingMark('gateway', g);
   gm.title = gText;
-  gm.setAttribute('aria-label', gText.replace('\n', '. '));
+  gm.setAttribute('aria-label', gText.replaceAll('\n', '. '));
   wrap.appendChild(gm);
+  let tm = null;
   if (!(opts && opts.gatewayOnly)) {
     const tr = rec.transcripts || {};
     const count = (s.kind === 'manager' && tr.total != null && tr.total > 0)
       ? tr.uploaded + '/' + tr.total : null;
-    const tm = recordingMark('transcripts', t, count);
+    tm = recordingMark('transcripts', t, count);
     tm.title = tText;
-    tm.setAttribute('aria-label', tText.replace('\n', '. '));
+    tm.setAttribute('aria-label', tText.replaceAll('\n', '. '));
     wrap.appendChild(tm);
   }
+  // The detail text ("last seen 3m ago") is left out of the sidebar signature
+  // so it doesn't force a repaint every minute (recordingSignatureView), so
+  // the tooltip is refreshed from the latest poll when it is about to show.
+  const refresh = () => {
+    const now = (typeof sessions !== 'undefined' && sessions.find((x) => x.id === s.id)) || s;
+    if (!now.recording) return;
+    const latest = recordingTitles(now.recording);
+    gm.title = latest.gText;
+    if (tm) tm.title = latest.tText;
+  };
+  wrap.addEventListener('mouseenter', refresh);
+  wrap.addEventListener('focus', refresh);
   wrap.setAttribute('role', 'button');
   wrap.tabIndex = 0;
   const toggle = (e) => {
@@ -105,6 +120,21 @@ function recordingGlyphs(s, opts) {
   wrap.onclick = toggle;
   wrap.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') toggle(e); };
   return wrap;
+}
+
+// What of `recording` the sidebar signature watches: states and counts for
+// every row, full text only for expanded rows. Keeps the "Nm ago" in the
+// detail from repainting the whole sidebar once a minute.
+function recordingSignatureView(list) {
+  if (!uiConfig.debugMode) return null;
+  return (list || []).map((s) => {
+    const r = s.recording;
+    if (!r) return null;
+    if (recordingExpanded.has(s.id)) return [s.id, r];
+    const g = r.gateway || {};
+    const tr = r.transcripts || {};
+    return [s.id, g.state, g.traffic && g.traffic.state, tr.state, tr.uploaded, tr.total];
+  });
 }
 
 // The tap-to-expand detail block under a row (both indicators, full text).

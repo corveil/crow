@@ -58,14 +58,12 @@ func makeEngineSessionHandlers(
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw RPCError.invalidParams("session_id required")
             }
-            // Recording indicator inputs (spike), read off the main actor.
+            // The recording indicator (CROW-1423) is a debug-mode feature:
+            // with it off there is no context, no ledger read and no
+            // `recording` field. Loaded off the main actor.
             let recDevRoot = ConfigStore.loadDevRoot()
-            let recConfig = recDevRoot.flatMap { ConfigStore.loadConfig(devRoot: $0) }
-            // Debug mode only (Settings → About): off, no `recording` field.
-            let recDebug = recConfig?.debugMode.enabled == true
-            let recLedger: LogSyncLedger
-            if recDebug, let recDevRoot { recLedger = await LogSyncLedgerStore.shared(devRoot: recDevRoot).snapshot() }
-            else { recLedger = LogSyncLedger() }
+            let recording = await RecordingStatusJSON.Context.load(
+                devRoot: recDevRoot, config: recDevRoot.flatMap { ConfigStore.loadConfig(devRoot: $0) })
             return try await MainActor.run {
                 guard let s = capturedAppState.sessions.first(where: { $0.id == id }) else {
                     throw RPCError.applicationError("Session not found")
@@ -132,17 +130,11 @@ func makeEngineSessionHandlers(
                     // this session has no PR status yet.
                     "reviewing_by": capturedAppState.prStatus[id]?.reviewingBy.map { .string($0) } ?? .null,
                 ]
-                // Debug mode only: did the agent launch through a gateway, and
-                // has its transcript reached Corveil? Base URL + text only
-                // (same redaction line as above).
-                if recDebug {
-                    result["recording"] = RecordingStatusJSON.build(
-                        session: s,
-                        worktreePath: capturedAppState.primaryWorktree(for: id)?.worktreePath,
-                        prLinks: capturedAppState.links(for: id),
-                        devRoot: recDevRoot, config: recConfig, ledger: recLedger,
-                        skipNotes: LogSyncSkipBoard.shared.notes(for: id),
-                        traffic: GatewayTrafficBoard.shared.evidence(for: id))
+                // Did the agent's traffic reach the gateway, and has its
+                // transcript reached Corveil? Base URL, key ids/names, org names
+                // and text only (the same redaction line as above).
+                if let recording {
+                    result["recording"] = recording.row(for: s, appState: capturedAppState)
                 }
                 return result
             }
