@@ -68,7 +68,14 @@ if [ -s "$WORK/pages.jsonl" ]; then
 fi
 
 slug() { printf '%s' "$1" | sed 's#[^A-Za-z0-9]#-#g'; }
-convs() { ls -t "$HOME/.claude/projects/$(slug "$1")"/*.jsonl 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.jsonl$//'; }
+# Conversation ids for a cwd (order doesn't matter: callers count and look up).
+convs() {
+  local f
+  for f in "$HOME/.claude/projects/$(slug "$1")"/*.jsonl; do
+    [ -e "$f" ] || continue
+    f="${f##*/}"; printf '%s\n' "${f%.jsonl}"
+  done
+}
 
 gw_env() {
   local f="$1/.claude/settings.local.json"
