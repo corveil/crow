@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLRequest/URLSession live here on Linux
+#endif
 import CrowCore
 import CrowPersistence
 
