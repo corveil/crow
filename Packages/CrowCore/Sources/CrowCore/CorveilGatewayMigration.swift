@@ -276,6 +276,21 @@ public enum CorveilGatewayMigration {
 
     // MARK: - Helpers
 
+    /// The connection org key a gateway belongs to — the same "managed" match
+    /// ``detect(config:)`` reports (same base URL, same stored secret). Nil for
+    /// a gateway the connection doesn't manage. Returns the key's **metadata**
+    /// (org id/name, key id) only, never its secret. The recording indicator
+    /// (CROW-1423) uses it as a session's expected org.
+    public static func managedOrgKey(for gateway: WorkspaceGateway?, config: AppConfig) -> CorveilOrgKey? {
+        guard let gateway, let value = citadelValue(gateway),
+              case .managed(let orgID, _) = classifyValue(
+                base: gateway.baseURL.trimmingCharacters(in: .whitespaces), value: value,
+                kind: isOpReference(value) ? .opReference : .plaintext,
+                connection: usableConnection(config))
+        else { return nil }
+        return config.corveilConnection?.orgKeys.first { $0.orgID == orgID }
+    }
+
     /// The stored connection, or nil when there is none / it's an empty shell.
     private static func usableConnection(_ config: AppConfig) -> CorveilConnection? {
         guard let connection = config.corveilConnection, !connection.isEmpty else { return nil }

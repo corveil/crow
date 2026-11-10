@@ -119,6 +119,16 @@ extension CrowDaemon {
         }
     }
 
+    /// Drive the gateway-traffic verifier behind the debug-mode recording
+    /// indicator (CROW-1423). Checks config every 30 s; with debug mode off it
+    /// reads no Corveil request log, and with it on it runs at once (at start,
+    /// or within one check of turning it on) and then at most every 5 minutes.
+    /// The cadence lives in `GatewayTrafficSchedule`, unit-tested in CrowEngine.
+    @discardableResult
+    static func startGatewayTrafficPoll(appState: AppState, devRoot: String) -> Task<Void, Never> {
+        GatewayTrafficPoller(devRoot: devRoot, appState: appState).start()
+    }
+
     /// Poll `store.json`'s mtime and reload when the desktop app writes it, so
     /// the web UI reflects new sessions/status/terminals/links without a daemon
     /// restart. Cheap (a stat every 2s) and robust against the atomic renames

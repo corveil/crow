@@ -344,10 +344,16 @@ function el(tag, className, text) {
 // poll returns identical data (avoids the repaint/layout jump).
 let lastSidebarSig = null;
 function sidebarSignature() {
+  // `recording` (debug mode, CROW-1423) is folded in by recordingSignatureView,
+  // which drops its relative-time text unless the row is expanded.
+  const rows = uiConfig.debugMode
+    ? sessions.map((s) => (s.recording ? Object.assign({}, s, { recording: undefined }) : s))
+    : sessions;
   return JSON.stringify([
-    sessionsLoaded, sidebarCacheHit, sessions, liveById, selectedId, selectedBoard,
+    sessionsLoaded, sidebarCacheHit, rows, recordingSignatureView(sessions), liveById, selectedId, selectedBoard,
     selectionMode, [...selectedSessionIDs],
     uiConfig.hideSessionDetails,
+    uiConfig.debugMode,
     gridPinnedIds,
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,

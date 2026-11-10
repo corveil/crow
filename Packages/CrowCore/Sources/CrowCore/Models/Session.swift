@@ -124,6 +124,12 @@ public struct Session: Identifiable, Codable, Sendable {
     // `conversationHistoryLimit`.
     public var harnessConversationHistory: [HarnessConversationRef]
 
+    // The gateway the agent was last **launched** with, recorded when Crow
+    // typed the launch line (CROW-1423, the recording indicator). Nil for a
+    // session launched before this field existed. Base URL only — never a
+    // header.
+    public var launchedGateway: LaunchedGateway?
+
     /// Most conversations `harnessConversationHistory` keeps. Older entries
     /// drop off the front; a Manager that clears this often has long since
     /// shipped (or given up on) the early ones.
@@ -282,7 +288,8 @@ public struct Session: Identifiable, Codable, Sendable {
         isExplore: Bool = false,
         harnessConversationID: String? = nil,
         workspaceID: UUID? = nil,
-        harnessConversationHistory: [HarnessConversationRef] = []
+        harnessConversationHistory: [HarnessConversationRef] = [],
+        launchedGateway: LaunchedGateway? = nil
     ) {
         self.id = id
         self.name = name
@@ -310,6 +317,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.harnessConversationID = harnessConversationID
         self.workspaceID = workspaceID
         self.harnessConversationHistory = harnessConversationHistory
+        self.launchedGateway = launchedGateway
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -357,6 +365,7 @@ public struct Session: Identifiable, Codable, Sendable {
         workspaceID = try container.decodeIfPresent(UUID.self, forKey: .workspaceID)
         harnessConversationHistory = try container.decodeIfPresent(
             [HarnessConversationRef].self, forKey: .harnessConversationHistory) ?? []
+        launchedGateway = try container.decodeIfPresent(LaunchedGateway.self, forKey: .launchedGateway)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.

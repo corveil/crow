@@ -257,12 +257,17 @@ public struct UISet: ParsableCommand {
         help: "Show the experimental web Chat view toggle in session headers (true or false; default false)")
     var chatView: Bool?
 
+    @Option(
+        name: .customLong("debug-mode"),
+        help: "Debug mode: diagnostic features such as the sidebar recording indicator (true or false; default false)")
+    var debugMode: Bool?
+
     public init() {}
 
     public func validate() throws {
         guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
             || switcherCaptureInTerminal != nil || switcherOrder != nil || switcherPreview != nil
-            || !switcherIncludes.isEmpty || chatView != nil else {
+            || !switcherIncludes.isEmpty || chatView != nil || debugMode != nil else {
             throw ValidationError(
                 "Nothing to set — provide at least one UI preference flag.")
         }
@@ -304,6 +309,9 @@ public struct UISet: ParsableCommand {
         }
         if let chatView {
             params["chat_view_enabled"] = .bool(chatView)
+        }
+        if let debugMode {
+            params["debug_mode_enabled"] = .bool(debugMode)
         }
         for item in switcherIncludes {
             let parts = item.split(separator: "=", maxSplits: 1).map(String.init)

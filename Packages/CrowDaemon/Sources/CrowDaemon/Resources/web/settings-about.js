@@ -118,6 +118,17 @@
     checkRow.appendChild(checkBtn);
     body.appendChild(checkRow);
 
+    // Debug mode: one switch for diagnostic features (DebugModeSettings). Each
+    // feature it turns on is listed in the help so the toggle says what it does.
+    body.appendChild(S.group('Debug mode'));
+    S.cfg.debugMode = S.cfg.debugMode || { enabled: false };
+    body.appendChild(S.toggleField('Enable debug mode', S.cfg.debugMode, 'enabled',
+      'Turns on diagnostic features. Today: the sidebar recording indicator — a gateway '
+      + 'glyph (did this session\u2019s traffic reach the Corveil gateway, under the right org?) '
+      + 'and a transcript glyph (has log sync uploaded it?) on every session row. While on, '
+      + 'crowd also reads the Corveil request log (within 30 seconds, then every 5 minutes) to verify gateway traffic. '
+      + 'CLI: crow ui set --debug-mode true|false.'));
+
     // Maintenance actions — the desktop app's old Restart/Reload menu items,
     // now reachable from any browser (CROW-593).
     function actBtn(label, labelText, help, run) {

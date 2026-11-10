@@ -182,7 +182,7 @@ When a session resolves to a workspace with a `gateway`, Crow injects these vars
 
 When no workspace claims the session — or the one that does has **no** `gateway` — Crow instead prefixes the launch with `unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS` so a global shell export, or a sibling workspace's gateway, can't bleed into it. Edit a workspace's gateway in **Settings → Workspaces**.
 
-> **Precedence note:** the launch-line assignment is what reliably overrides a value exported by your shell for the initial launch. Whether Claude Code's `settings.local.json` `env` block *alone* overrides an inherited shell variable (e.g. an `ANTHROPIC_BASE_URL` still left in `~/.zshrc`) is not something Crow controls — so the intended end state is to delete the global `~/.zshrc` exports once per-workspace gateways are configured, leaving `config.json` the single source of truth.
+> **Precedence note:** Claude Code applies its `settings.local.json` `env` block on top of the environment it inherited, so a value in that block wins over the launch line and over a `~/.zshrc` export (checked against Claude Code 2.1.322: a variable set in both reads the settings value inside the agent). Crow writes the same gateway to both places, so they agree on a normal launch; the launch line still matters for a variable the block doesn't set, such as an inherited `ANTHROPIC_CUSTOM_HEADERS` it `unset`s. The intended end state is still to delete the global `~/.zshrc` exports once per-workspace gateways are configured, leaving `config.json` the single source of truth. The debug-mode recording indicator ([Telemetry, Cleanup & UI](#telemetry-cleanup--ui)) records the launch by the same rule.
 
 > **Applied at launch:** the gateway env is resolved and written when the agent **starts** (or is handed off to another agent). A session that was already running when you edited a gateway keeps the environment it launched with — relaunch it, or hand it off, to pick up the change.
 
@@ -449,6 +449,21 @@ Three top-level blocks in `{devRoot}/.claude/config.json`, editable from **Setti
 | Key       | Default | Range   | Description                                                                 |
 | --------- | ------- | ------- | --------------------------------------------------------------------------- |
 | `enabled` | `false` | boolean | Shows the Terminal \| Chat toggle in session headers. Off: no toggle, no transcript polling |
+
+**`debugMode`** — diagnostic features (`crow ui set --debug-mode`, Settings → About → Debug mode).
+
+| Key       | Default | Range   | Description                                                                 |
+| --------- | ------- | ------- | --------------------------------------------------------------------------- |
+| `enabled` | `false` | boolean | Turns on the sidebar recording indicator: per-session gateway and transcript glyphs, plus a Corveil request-log read (at most every 5 min) to verify gateway traffic. Off: no glyphs, no `recording` field on `list-sessions` / `get-session`, no request-log reads |
+
+The **recording indicator** answers "is Corveil recording this session?" on every sidebar row. Hover a glyph for the reason, request count, when it was last seen and the org names, or tap it on a phone to expand the same text under the row. The same data is on `list-sessions` / `get-session` as `recording`: base URLs, key ids and names, org names and text only, never a header or a key.
+
+| Glyph | States |
+| ----- | ------ |
+| Gateway | `verified` (this session's requests are in the gateway's request log, under its own org and key) · `mismatch` (requests landed under another org or key) · `silent` (the agent was active inside the log window, but no request carried its conversation id) · `routed` (launched through the configured gateway, not yet proven) · `drift` (launched with something other than what is configured now) · `unverified` (a gateway is configured, but the launch predates launch recording) · `direct` / `off` (no gateway) · `unsupported` (a harness Crow doesn't route) |
+| Transcripts | `uploaded` · `waiting` · `retrying` · `rejected` · `not_opted_in` (the configuration says this session never uploads) · `skipped` (opted in, but the collector couldn't upload; the reason is in the detail). Managers also show uploaded/total conversations, e.g. `1/2` |
+
+How it is proven: Corveil's request log (`GET /api/logs`) stamps each Claude Code request with the conversation id, which is also the transcript's file name, so `crowd` joins the two. It reads each [Corveil connection](#corveil-connection-first-class) org's log with that org's own stored key (an org admin's key sees the org, a member's sees their own requests), and falls back to your `corveil` CLI login for a gateway the connection doesn't manage. Only Claude Code stamps a conversation id, so other harnesses show their launch state only. With debug mode on, the first check runs within 30 seconds (or when `crowd` starts), then every 5 minutes.
 
 **Live in the browser — no restart, no reload.** The daemon watches `config.json`'s mtime and pushes a `configReloaded` event on change, so connected clients re-read the view-affecting slice within a couple of seconds regardless of who wrote it (Settings modal, `crow ui set`, or a hand edit).
 ## Notifications

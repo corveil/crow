@@ -379,6 +379,10 @@ func makeEngineTerminalHandlers(
                 // hooks on startup. The agent dispatch is driven by the
                 // session's `agentKind` and the agent's
                 // `launchCommandToken` (e.g. "claude", "codex").
+                // An agent launch typed through `send` (the documented pane-
+                // recovery path, `crow send … "claude --continue"`) is a launch
+                // like any other, so it updates the launch record (CROW-1423).
+                var launch: (kind: AgentKind, command: String, cwd: String)?
                 if let terminals = capturedAppState.terminals[sessionID],
                    let terminal = terminals.first(where: { $0.id == terminalID }),
                    terminal.isManaged,
@@ -407,6 +411,7 @@ func makeEngineTerminalHandlers(
                             ownership: SessionService.HookOwnership.snapshot(
                                 capturedAppState, crowPath: crowPath))
                     }
+                    let typed = text
                     let prepared = AgentLaunch.prepareAgentLaunchText(
                         command: text,
                         agent: agent,
@@ -418,11 +423,18 @@ func makeEngineTerminalHandlers(
                     text = prepared.text
                     if prepared.didLaunch {
                         capturedAppState.terminalReadiness[terminalID] = .agentLaunched
+                        launch = (agent.kind, typed, terminal.cwd)
                     }
                 }
 
                 if let routedTerminal {
                     TerminalRouter.send(routedTerminal, text: text)
+                    if let launch {
+                        // Parsed for the base URL only; the text is never stored.
+                        capturedService.recordLaunchedGateway(
+                            sessionID: sessionID, agentKind: launch.kind,
+                            launchText: launch.command, cwd: launch.cwd)
+                    }
                 } else {
                     // No SessionTerminal row known — nothing to route to.
                     CrowLog.info("[Crow] crow send for unknown terminal \(terminalID); ignoring")

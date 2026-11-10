@@ -90,16 +90,16 @@ func makeSessionHandlers(
         // worktree), plus ticket labels and hook-activity state. Live PR status
         // is not here — it comes from `list-sessions-live`.
         "list-sessions": { _ in
-            // Workspace names for tagged extra Managers (CROW-1382). Read off
-            // the main actor, and only when some Manager is tagged at all.
-            let anyTagged = await MainActor.run {
-                appState.sessions.contains { $0.managerWorkspaceTag != nil }
-            }
-            let workspaceNames: [UUID: String] = anyTagged
-                ? Dictionary(
-                    (ConfigStore.loadConfig(devRoot: devRoot)?.workspaces ?? []).map { ($0.id, $0.name) },
-                    uniquingKeysWith: { first, _ in first })
-                : [:]
+            // One config read per poll, off the main actor: workspace names for
+            // tagged extra Managers (CROW-1382) and the debug-mode gate.
+            let config = ConfigStore.loadConfig(devRoot: devRoot)
+            let workspaceNames: [UUID: String] = Dictionary(
+                (config?.workspaces ?? []).map { ($0.id, $0.name) },
+                uniquingKeysWith: { first, _ in first })
+            // The recording indicator (CROW-1423) is a debug-mode feature: off,
+            // there is no context, the ledger isn't read and rows carry no
+            // `recording`.
+            let recording = await RecordingStatusJSON.Context.load(devRoot: devRoot, config: config)
             let items: [JSONValue] = await MainActor.run {
                 // One pass per poll. Newest open item wins when more than one
                 // Scratch points at the same Manager (Explore itself is 1:1;
@@ -157,6 +157,10 @@ func makeSessionHandlers(
                         // yes, GitLab no). Gates the web "In Review" button (CROW-749).
                         "can_set_project_status": .bool(tracker?.canSetProjectStatus(for: session) ?? false),
                     ]
+                    // Gateway traffic + transcript upload. Base URL, key ids/names,
+                    // org names and text only — `list-sessions` is remote-readable
+                    // (see the ⚠️ REDACTION note on `RecordingStatusJSON`).
+                    if let recording { object["recording"] = recording.row(for: session, appState: appState) }
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
                         object["branch"] = .string(worktree.branch)

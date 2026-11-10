@@ -380,13 +380,17 @@ const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSe
   wheelScrollLines: 3, agentWheelNotches: 1,
   // Experimental Chat view (`crow ui set --chat-view`). null until the config
   // loads, so neither the toggle nor a sticky Chat mode flashes the wrong way.
-  chatViewEnabled: null };
+  chatViewEnabled: null,
+  // Debug mode (Settings → About, `crow ui set --debug-mode`): gates
+  // diagnostic features such as the sidebar recording indicator.
+  debugMode: false };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
     uiConfig.chatViewEnabled = !!(cfg.chatView && cfg.chatView.enabled);
+    uiConfig.debugMode = !!(cfg.debugMode && cfg.debugMode.enabled);
     const sw = cfg.switcher || {};
     uiConfig.switcherEnabled = sw.enabled !== false;
     uiConfig.switcherBinding = (sw.binding && String(sw.binding)) || 'cmd+/';

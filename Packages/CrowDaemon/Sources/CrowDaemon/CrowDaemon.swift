@@ -412,6 +412,10 @@ public enum CrowDaemon {
         ConfigStore.migrateLogSyncAtBoot(devRoot: options.devRoot)
         startLogSyncPoll(appState: appState, collector: logSyncCollector)
 
+        // Gateway-traffic verification for the debug-mode recording indicator
+        // (CROW-1423). Reads no Corveil request log unless debug mode is on.
+        startGatewayTrafficPoll(appState: appState, devRoot: options.devRoot)
+
         // Wire the IssueTracker's config-flag providers and its notification-only
         // outcome hooks. Terminal-INDEPENDENT, so this runs whenever `crowd` runs —
         // enabling GitHub native auto-merge is a pure gh/GraphQL call and

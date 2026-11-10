@@ -840,6 +840,17 @@ public final class SessionService {
                 return t
             }
             t.tmuxBinding = binding
+            // A pasted agent command is a launch (CROW-1423), recorded once the
+            // window exists and the command went into it. `prepareTerminal`
+            // always opens a new window, so this is a fresh process even when
+            // it restores a pane after a cold start; a warm restart adopts the
+            // live window through `adoptTerminal` instead and records nothing.
+            if pasteCommand, let command = t.command, let session,
+               let agent = AgentRegistry.shared.agent(for: session.agentKind),
+               AgentLaunch.commandLaunchesAgent(command, agent: agent) {
+                recordLaunchedGateway(
+                    sessionID: session.id, agentKind: agent.kind, launchText: command, cwd: t.cwd)
+            }
             // CROW-1410: a pasted Codex Manager launch gets the startup-prompt watch.
             if pasteCommand { armCodexStartupPromptWatch(terminalID: t.id, command: t.command) }
         } catch {

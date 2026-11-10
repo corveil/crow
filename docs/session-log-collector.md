@@ -102,6 +102,12 @@ SessionService.deleteSession (CLI, web UI, cleanup reaper)
        the same path for that one session, no quiet period, bounded at 10 s
 ```
 
+- **Skips are visible, not only logged** (CROW-1395, CROW-1423). Every reason
+  the collector skips a session is logged once, and also kept in memory as a
+  structured note (`LogSyncSkipBoard`, restated on each sweep). With debug mode
+  on, the sidebar's transcript glyph shows it as `skipped` with the reason, and
+  `list-sessions` / `get-session` carry it under `recording.transcripts`. See
+  [Configuration](configuration.md#telemetry-cleanup--ui).
 - **Every harness, one artifact each** (CROW-1394). A work session's worktree
   is checked against every known agent's `logSources`, not only the session's
   `agentKind`: a session handed from Codex to Claude keeps its Codex label, and a

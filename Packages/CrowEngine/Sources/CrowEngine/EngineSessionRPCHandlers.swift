@@ -58,6 +58,12 @@ func makeEngineSessionHandlers(
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw RPCError.invalidParams("session_id required")
             }
+            // The recording indicator (CROW-1423) is a debug-mode feature:
+            // with it off there is no context, no ledger read and no
+            // `recording` field. Loaded off the main actor.
+            let recDevRoot = ConfigStore.loadDevRoot()
+            let recording = await RecordingStatusJSON.Context.load(
+                devRoot: recDevRoot, config: recDevRoot.flatMap { ConfigStore.loadConfig(devRoot: $0) })
             return try await MainActor.run {
                 guard let s = capturedAppState.sessions.first(where: { $0.id == id }) else {
                     throw RPCError.applicationError("Session not found")
@@ -78,7 +84,7 @@ func makeEngineSessionHandlers(
                 let match = s.kind == .manager
                     ? capturedService.managerGatewayMatch(for: s)
                     : capturedService.workspaceGatewayMatch(for: id)
-                return [
+                var result: [String: JSONValue] = [
                     "id": .string(s.id.uuidString),
                     "name": .string(s.name),
                     "status": .string(s.status.rawValue),
@@ -124,6 +130,13 @@ func makeEngineSessionHandlers(
                     // this session has no PR status yet.
                     "reviewing_by": capturedAppState.prStatus[id]?.reviewingBy.map { .string($0) } ?? .null,
                 ]
+                // Did the agent's traffic reach the gateway, and has its
+                // transcript reached Corveil? Base URL, key ids/names, org names
+                // and text only (the same redaction line as above).
+                if let recording {
+                    result["recording"] = recording.row(for: s, appState: capturedAppState)
+                }
+                return result
             }
         },
 
