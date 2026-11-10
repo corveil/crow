@@ -98,7 +98,12 @@ func makeSessionHandlers(
             let workspaceNames: [UUID: String] = Dictionary(
                 (config?.workspaces ?? []).map { ($0.id, $0.name) },
                 uniquingKeysWith: { first, _ in first })
-            let ledger = await LogSyncLedgerStore.shared(devRoot: devRoot).snapshot()
+            // The recording indicator is a debug-mode feature: off, rows carry
+            // no `recording` and the ledger isn't read at all.
+            let debugMode = config?.debugMode.enabled == true
+            let ledger = debugMode
+                ? await LogSyncLedgerStore.shared(devRoot: devRoot).snapshot()
+                : LogSyncLedger()
             let now = Date()
             let items: [JSONValue] = await MainActor.run {
                 // One pass per poll. Newest open item wins when more than one
@@ -160,13 +165,13 @@ func makeSessionHandlers(
                     // Spike: gateway-at-launch + transcript upload indicator.
                     // Base URL + fixed text only — `list-sessions` is remote-
                     // readable (see the ⚠️ REDACTION note on `get-session`).
-                    object["recording"] = RecordingStatusJSON.build(
+                    if debugMode { object["recording"] = RecordingStatusJSON.build(
                         session: session,
                         worktreePath: appState.primaryWorktree(for: session.id)?.worktreePath,
                         prLinks: appState.links(for: session.id),
                         devRoot: devRoot, config: config, ledger: ledger,
                         skipNotes: LogSyncSkipBoard.shared.notes(for: session.id),
-                        traffic: GatewayTrafficBoard.shared.evidence(for: session.id), now: now)
+                        traffic: GatewayTrafficBoard.shared.evidence(for: session.id), now: now) }
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
                         object["branch"] = .string(worktree.branch)

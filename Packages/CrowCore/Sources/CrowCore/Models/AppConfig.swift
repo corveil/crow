@@ -14,6 +14,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var switcher: SwitcherSettings
     /// Experimental web Chat view toggle (`crow ui set --chat-view`). Off by default.
     public var chatView: ChatViewSettings
+    /// Debug mode (Settings → About, `crow ui set --debug-mode`). Off by
+    /// default; gates diagnostic features such as the sidebar recording
+    /// indicator. See ``DebugModeSettings``.
+    public var debugMode: DebugModeSettings
     public var remoteControlEnabled: Bool
     public var managerAutoPermissionMode: Bool
     /// When true, sessions launched by the Jobs scheduler start with
@@ -185,6 +189,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         sidebar: SidebarSettings = SidebarSettings(),
         switcher: SwitcherSettings = SwitcherSettings(),
         chatView: ChatViewSettings = ChatViewSettings(),
+        debugMode: DebugModeSettings = DebugModeSettings(),
         remoteControlEnabled: Bool = false,
         managerAutoPermissionMode: Bool = true,
         jobsAutoPermissionMode: Bool = true,
@@ -216,6 +221,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.sidebar = sidebar
         self.switcher = switcher
         self.chatView = chatView
+        self.debugMode = debugMode
         self.remoteControlEnabled = remoteControlEnabled
         self.managerAutoPermissionMode = managerAutoPermissionMode
         self.jobsAutoPermissionMode = jobsAutoPermissionMode
@@ -250,6 +256,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         sidebar = try container.decodeIfPresent(SidebarSettings.self, forKey: .sidebar) ?? SidebarSettings()
         switcher = try container.decodeIfPresent(SwitcherSettings.self, forKey: .switcher) ?? SwitcherSettings()
         chatView = try container.decodeIfPresent(ChatViewSettings.self, forKey: .chatView) ?? ChatViewSettings()
+        debugMode = try container.decodeIfPresent(DebugModeSettings.self, forKey: .debugMode) ?? DebugModeSettings()
         remoteControlEnabled = try container.decodeIfPresent(Bool.self, forKey: .remoteControlEnabled) ?? false
         managerAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .managerAutoPermissionMode) ?? true
         jobsAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .jobsAutoPermissionMode) ?? true
@@ -321,7 +328,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, chatView, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection, webDefaultSkin
+        case workspaces, defaults, notifications, sidebar, switcher, chatView, debugMode, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection, webDefaultSkin
     }
 
     /// Resolve the agent that should drive a newly-created session of the

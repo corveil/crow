@@ -239,3 +239,23 @@ import Testing
         #expect(board.notes(for: id).isEmpty)
     }
 }
+
+/// Debug mode gates the recording indicator; it must be off for every
+/// existing config (no `debugMode` block) and tolerate a partial block.
+@Suite struct DebugModeSettingsTests {
+    @Test func offWhenAbsentAndTolerantOfPartialBlock() throws {
+        let absent = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(absent.debugMode.enabled == false)
+        let partial = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"debugMode":{}}"#.utf8))
+        #expect(partial.debugMode.enabled == false)
+        let on = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"debugMode":{"enabled":true}}"#.utf8))
+        #expect(on.debugMode.enabled)
+    }
+
+    @Test func roundTrips() throws {
+        var config = AppConfig()
+        config.debugMode.enabled = true
+        let back = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(back.debugMode.enabled)
+    }
+}

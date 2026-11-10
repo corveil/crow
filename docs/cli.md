@@ -2746,7 +2746,7 @@ crow ui get
 Change UI display preferences.
 
 ```
-crow ui set [--hide-session-details <hide-session-details>] [--switcher-enabled <switcher-enabled>] [--switcher-binding <switcher-binding>] [--switcher-capture-in-terminal <switcher-capture-in-terminal>] [--switcher-order <switcher-order>] [--switcher-preview <switcher-preview>] [--switcher-include <switcher-include> ...] [--chat-view <chat-view>]
+crow ui set [--hide-session-details <hide-session-details>] [--switcher-enabled <switcher-enabled>] [--switcher-binding <switcher-binding>] [--switcher-capture-in-terminal <switcher-capture-in-terminal>] [--switcher-order <switcher-order>] [--switcher-preview <switcher-preview>] [--switcher-include <switcher-include> ...] [--chat-view <chat-view>] [--debug-mode <debug-mode>]
 ```
 
 Only the flags you pass change; at least one is required. Connected browsers pick the change up within a couple of seconds — no reload.
@@ -2765,6 +2765,7 @@ Only the flags you pass change; at least one is required. Connected browsers pic
 | `--switcher-preview` | `<switcher-preview>` | no | Fetch a tmux pane preview for the highlighted switcher card (true or false) |
 | `--switcher-include` | `<switcher-include>` _(repeatable)_ | no | Include filter as key=value (managers, jobs, reviews, active, paused, in_review, completed, archived) |
 | `--chat-view` | `<chat-view>` | no | Show the experimental web Chat view toggle in session headers (true or false; default false) |
+| `--debug-mode` | `<debug-mode>` | no | Debug mode: diagnostic features such as the sidebar recording indicator (true or false; default false) |
 
 ---
 

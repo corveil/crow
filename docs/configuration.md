@@ -450,6 +450,12 @@ Three top-level blocks in `{devRoot}/.claude/config.json`, editable from **Setti
 | --------- | ------- | ------- | --------------------------------------------------------------------------- |
 | `enabled` | `false` | boolean | Shows the Terminal \| Chat toggle in session headers. Off: no toggle, no transcript polling |
 
+**`debugMode`** — diagnostic features (`crow ui set --debug-mode`, Settings → About → Debug mode).
+
+| Key       | Default | Range   | Description                                                                 |
+| --------- | ------- | ------- | --------------------------------------------------------------------------- |
+| `enabled` | `false` | boolean | Turns on the sidebar recording indicator: per-session gateway and transcript glyphs, plus a Corveil request-log read every log-sync tick (~5 min) to verify gateway traffic. Off: no glyphs, no `recording` field on `list-sessions` / `get-session`, no request-log reads |
+
 **Live in the browser — no restart, no reload.** The daemon watches `config.json`'s mtime and pushes a `configReloaded` event on change, so connected clients re-read the view-affecting slice within a couple of seconds regardless of who wrote it (Settings modal, `crow ui set`, or a hand edit).
 ## Notifications
 

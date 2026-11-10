@@ -348,6 +348,7 @@ function sidebarSignature() {
     sessionsLoaded, sidebarCacheHit, sessions, liveById, selectedId, selectedBoard,
     selectionMode, [...selectedSessionIDs],
     uiConfig.hideSessionDetails,
+    uiConfig.debugMode,
     gridPinnedIds,
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,

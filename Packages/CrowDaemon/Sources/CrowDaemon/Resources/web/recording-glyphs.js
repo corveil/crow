@@ -9,6 +9,9 @@
 //
 // Hover shows the detail; a tap (phones have no hover) expands it under the
 // row. The payload carries a base URL and fixed text only — never a header.
+//
+// Debug mode only (Settings → About → Debug mode, or
+// `crow ui set --debug-mode true`).
 
 // Session ids whose recording detail is expanded under the row.
 const recordingExpanded = new Set();
@@ -69,11 +72,12 @@ function recordingTitles(rec) {
   };
 }
 
-// The two-glyph cluster for a row. Returns null when the daemon sent no
-// `recording` (an older crowd).
+// The two-glyph cluster for a row. A debug-mode feature: null unless debug
+// mode is on (Settings → About) and the daemon sent `recording` (it omits it
+// while debug mode is off, and an older crowd never sends it).
 function recordingGlyphs(s, opts) {
   const rec = s.recording;
-  if (!rec) return null;
+  if (!uiConfig.debugMode || !rec) return null;
   const { g, t, gText, tText } = recordingTitles(rec);
   const wrap = el('span', 'rec-glyphs');
   const gm = recordingMark('gateway', g);
@@ -105,7 +109,7 @@ function recordingGlyphs(s, opts) {
 
 // The tap-to-expand detail block under a row (both indicators, full text).
 function recordingDetail(s) {
-  if (!s.recording || !recordingExpanded.has(s.id)) return null;
+  if (!uiConfig.debugMode || !s.recording || !recordingExpanded.has(s.id)) return null;
   const { gText, tText } = recordingTitles(s.recording);
   const box = el('div', 'rec-detail');
   box.appendChild(el('div', 'rec-detail-line', gText));

@@ -119,7 +119,16 @@ struct SettingsRPCSupportTests {
             "sidebar": .object(["hide_session_details": .bool(true)]),
             "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
             "chat_view": .object(["enabled": .bool(true)]),
+            "debug_mode": .object(["enabled": .bool(false)]),
         ]))
+    }
+
+    /// Debug mode rides the `ui` group, off unless set (spike: recording indicator).
+    @Test func uiJSONCarriesDebugMode() throws {
+        let json = SettingsRPC.uiJSON(
+            sidebar: SidebarSettings(), switcher: SwitcherSettings(),
+            chatView: ChatViewSettings(), debugMode: DebugModeSettings(enabled: true))
+        #expect(json.objectValue?["debug_mode"] == .object(["enabled": .bool(true)]))
     }
 
     @Test func terminalJSONUsesSnakeCaseScalars() throws {

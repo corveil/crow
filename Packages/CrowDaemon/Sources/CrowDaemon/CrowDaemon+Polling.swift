@@ -113,6 +113,11 @@ extension CrowDaemon {
     /// One gateway-traffic verification pass (spike: recording indicator).
     static func verifyGatewayTraffic(appState: AppState, devRoot: String) async {
         guard let config = ConfigStore.loadConfig(devRoot: devRoot) else { return }
+        // A debug-mode feature: off, read no request log and drop old evidence.
+        guard config.debugMode.enabled else {
+            GatewayTrafficBoard.shared.replace([:], sources: [], at: Date())
+            return
+        }
         let inputs = await MainActor.run { SessionService.gatewayTrafficInputs(appState) }
         let (evidence, sources) = await GatewayTrafficVerifier().run(inputs: inputs, config: config)
         GatewayTrafficBoard.shared.replace(evidence, sources: sources, at: Date())

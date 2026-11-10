@@ -61,8 +61,10 @@ func makeEngineSessionHandlers(
             // Recording indicator inputs (spike), read off the main actor.
             let recDevRoot = ConfigStore.loadDevRoot()
             let recConfig = recDevRoot.flatMap { ConfigStore.loadConfig(devRoot: $0) }
+            // Debug mode only (Settings → About): off, no `recording` field.
+            let recDebug = recConfig?.debugMode.enabled == true
             let recLedger: LogSyncLedger
-            if let recDevRoot { recLedger = await LogSyncLedgerStore.shared(devRoot: recDevRoot).snapshot() }
+            if recDebug, let recDevRoot { recLedger = await LogSyncLedgerStore.shared(devRoot: recDevRoot).snapshot() }
             else { recLedger = LogSyncLedger() }
             return try await MainActor.run {
                 guard let s = capturedAppState.sessions.first(where: { $0.id == id }) else {
@@ -84,7 +86,7 @@ func makeEngineSessionHandlers(
                 let match = s.kind == .manager
                     ? capturedService.managerGatewayMatch(for: s)
                     : capturedService.workspaceGatewayMatch(for: id)
-                return [
+                var result: [String: JSONValue] = [
                     "id": .string(s.id.uuidString),
                     "name": .string(s.name),
                     "status": .string(s.status.rawValue),
@@ -129,17 +131,20 @@ func makeEngineSessionHandlers(
                     // (CROW-1310). Null when the label isn't there, or when
                     // this session has no PR status yet.
                     "reviewing_by": capturedAppState.prStatus[id]?.reviewingBy.map { .string($0) } ?? .null,
-                    // Spike: did the agent launch through a gateway, and has
-                    // its transcript reached Corveil? Base URL + text only
-                    // (same redaction line as above).
-                    "recording": RecordingStatusJSON.build(
+                ]
+                // Debug mode only: did the agent launch through a gateway, and
+                // has its transcript reached Corveil? Base URL + text only
+                // (same redaction line as above).
+                if recDebug {
+                    result["recording"] = RecordingStatusJSON.build(
                         session: s,
                         worktreePath: capturedAppState.primaryWorktree(for: id)?.worktreePath,
                         prLinks: capturedAppState.links(for: id),
                         devRoot: recDevRoot, config: recConfig, ledger: recLedger,
                         skipNotes: LogSyncSkipBoard.shared.notes(for: id),
-                        traffic: GatewayTrafficBoard.shared.evidence(for: id)),
-                ]
+                        traffic: GatewayTrafficBoard.shared.evidence(for: id))
+                }
+                return result
             }
         },
 
