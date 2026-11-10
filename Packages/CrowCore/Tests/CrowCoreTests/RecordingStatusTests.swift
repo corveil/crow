@@ -280,6 +280,35 @@ import Testing
         #expect(Self.transcripts(m, wt: nil, config: cfg, ledger: failing).state == .retrying)
     }
 
+    /// The collector's Manager-wide skips (no agent terminal, no gateway key)
+    /// carry no conversation scope; they still make the glyph `skipped` with
+    /// the reason, not "waiting". A per-conversation skip does too.
+    @Test func managerSkipNotesMakeTheGlyphSkipped() {
+        let wsID = UUID()
+        var m = Session(name: "m", kind: .manager, workspaceID: wsID)
+        m.harnessConversationID = "conv-a"
+        let cfg = Self.config(id: wsID)
+        let noCwd = LogSyncSkipNote(reason: "no-cwd", detail: "Manager has no agent terminal")
+        let wide = Self.transcripts(m, wt: nil, config: cfg, notes: [noCwd])
+        #expect(wide.state == .skipped)
+        #expect(wide.detail.contains("Manager has no agent terminal"))
+        #expect(wide.uploaded == 0 && wide.total == 1)
+
+        let scoped = LogSyncSkipNote(reason: "no-transcript", detail: "no transcript file", scope: "conv-a")
+        let one = Self.transcripts(m, wt: nil, config: cfg, notes: [scoped])
+        #expect(one.state == .skipped)
+        #expect(one.detail.contains("conv-a: no transcript file"))
+
+        // Already uploaded stays uploaded, whatever the collector says now.
+        let ledger = LogSyncLedger(entries: ["conv-a:claude:session_transcript": Self.entry(.uploaded)])
+        #expect(Self.transcripts(m, wt: nil, config: cfg, ledger: ledger, notes: [noCwd]).state == .uploaded)
+
+        // No conversation yet, but the collector can't reach it anyway.
+        var fresh = Session(name: "f", kind: .manager, workspaceID: wsID)
+        fresh.harnessConversationID = nil
+        #expect(Self.transcripts(fresh, wt: nil, config: cfg, notes: [noCwd]).state == .skipped)
+    }
+
     @Test func managerWithNoConversationIsWaitingZeroOfZero() {
         let wsID = UUID()
         let m = Session(name: "m", kind: .manager, workspaceID: wsID)

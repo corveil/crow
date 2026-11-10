@@ -348,13 +348,23 @@ public enum RecordingStatus {
         session: Session, ledger: LedgerIndex, skipNotes: [LogSyncSkipNote],
         quietMinutes: Int, now: Date
     ) -> TranscriptIndicator {
+        // A note with no `scope` is about the whole Manager (no agent terminal,
+        // its workspace gone, an unresolvable gateway key): the collector
+        // stopped before looking at any conversation, so nothing pending can
+        // upload. A scoped note is about one conversation (no transcript file).
+        // Either is a skip, shown as one, exactly like a work session's.
+        let unscoped = skipNotes.filter { $0.scope == nil }
+        let managerWide = unscoped.isEmpty ? nil : "Not uploading: " + unscoped.map(\.detail).joined(separator: "; ")
         let conversations = managerConversations(session)
         guard !conversations.isEmpty else {
+            if let managerWide {
+                return TranscriptIndicator(state: .skipped, detail: managerWide, uploaded: 0, total: 0)
+            }
             return TranscriptIndicator(
                 state: .waiting, detail: "Waiting: no harness conversation recorded yet",
                 uploaded: 0, total: 0)
         }
-        var uploaded = 0, retrying = 0, rejected = 0, pending = 0
+        var uploaded = 0, retrying = 0, rejected = 0, skipped = 0, pending = 0
         var lines: [String] = []
         for ref in conversations {
             let short = String(ref.id.prefix(8))
@@ -367,21 +377,27 @@ public enum RecordingStatus {
             } else if let r = found.first(where: { $0.entry.status == .skippedPermanent }) {
                 rejected += 1
                 lines.append("\(short): \(describe(r.entry, now))")
+            } else if let note = skipNotes.first(where: { $0.scope == ref.id }) {
+                skipped += 1
+                lines.append("\(short): \(note.detail)")
+            } else if managerWide != nil {
+                skipped += 1
             } else {
                 pending += 1
-                let note = skipNotes.first(where: { $0.scope == ref.id })
-                lines.append("\(short): " + (note?.detail ?? "waiting for \(quietMinutes) min idle"))
+                lines.append("\(short): waiting for \(quietMinutes) min idle")
             }
         }
         let total = conversations.count
         let state: TranscriptState
         if uploaded == total { state = .uploaded }
         else if retrying > 0 { state = .retrying }
+        else if skipped > 0 { state = .skipped }
         else if pending > 0 { state = .waiting }
         else { state = .rejected }
         let head = "\(uploaded) of \(total) conversation\(total == 1 ? "" : "s") uploaded"
+        let body = (managerWide.map { [$0] } ?? []) + lines
         return TranscriptIndicator(
-            state: state, detail: ([head] + lines).joined(separator: "\n"),
+            state: state, detail: ([head] + body).joined(separator: "\n"),
             uploaded: uploaded, total: total)
     }
 

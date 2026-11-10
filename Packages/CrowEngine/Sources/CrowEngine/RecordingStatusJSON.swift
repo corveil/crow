@@ -34,9 +34,7 @@ public enum RecordingStatusJSON {
         /// `recording` field.
         public static func load(
             devRoot: String?, config: AppConfig?, now: Date = Date(),
-            loadLedger: @Sendable (String) async -> LogSyncLedger = {
-                await LogSyncLedgerStore.shared(devRoot: $0).snapshot()
-            },
+            loadLedger: @Sendable (String) async -> LogSyncLedger = Context.sharedLedger,
             skipBoard: LogSyncSkipBoard = .shared,
             trafficBoard: GatewayTrafficBoard = .shared
         ) async -> Context? {
@@ -46,6 +44,11 @@ public enum RecordingStatusJSON {
             return Context(
                 devRoot: devRoot, config: config, ledger: RecordingStatus.LedgerIndex(ledger), now: now,
                 skipBoard: skipBoard, trafficBoard: trafficBoard)
+        }
+
+        /// The process-wide ledger for `devRoot` (the store the collector writes).
+        @Sendable public static func sharedLedger(devRoot: String) async -> LogSyncLedger {
+            await LogSyncLedgerStore.shared(devRoot: devRoot).snapshot()
         }
 
         /// The `recording` object for one session row.

@@ -53,4 +53,44 @@ import CrowPersistence
         _ = try await f.handler(params(f.session, f.terminal, "yes\n"))
         #expect(f.appState.sessions.first?.launchedGateway == nil)
     }
+
+    /// `prepareTerminal` records the pasted launch only once the window is
+    /// bound: with no tmux (or a failed register) nothing was launched.
+    @Test @MainActor func prepareTerminalRecordsOnlyABoundWindow() throws {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-1423-prep-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let appState = AppState()
+        let service = SessionService(store: JSONStore(directory: root.appendingPathComponent("store")), appState: appState)
+        let session = Session(name: "m", kind: .manager, agentKind: .claudeCode)
+        appState.sessions = [session]
+        let terminal = SessionTerminal(sessionID: session.id, cwd: root.path, command: "claude --continue")
+
+        service.terminalRegistrar = { _ in nil }  // tmux not configured
+        _ = service.prepareTerminal(terminal, trackReadiness: false)
+        #expect(appState.sessions.first?.launchedGateway == nil)
+
+        service.terminalRegistrar = { _ in throw CocoaError(.featureUnsupported) }
+        _ = service.prepareTerminal(terminal, trackReadiness: false)
+        #expect(appState.sessions.first?.launchedGateway == nil)
+
+        service.terminalRegistrar = { _ in
+            TmuxBinding(socketPath: root.appendingPathComponent("t.sock").path, sessionName: "s", windowIndex: 1)
+        }
+        _ = service.prepareTerminal(terminal, trackReadiness: false)
+        #expect(appState.sessions.first?.launchedGateway?.agentKind == .claudeCode)
+    }
+
+    /// The `corveil` CLI fallback is bounded like the HTTP read: a hung
+    /// process is killed at the deadline instead of stalling the poller.
+    @Test func cliFallbackIsKilledAtTheDeadline() async {
+        let start = Date()
+        let hung = await GatewayTrafficVerifier.runBounded(binary: "/bin/sleep", arguments: ["30"], timeout: 0.5)
+        #expect(hung == nil)
+        #expect(Date().timeIntervalSince(start) < 10)
+        let ok = await GatewayTrafficVerifier.runBounded(binary: "/bin/echo", arguments: ["hi"], timeout: 5)
+        #expect(ok.map { String(decoding: $0, as: UTF8.self) } == "hi\n")
+        #expect(await GatewayTrafficVerifier.runBounded(binary: "/usr/bin/false", arguments: [], timeout: 5) == nil)
+    }
 }

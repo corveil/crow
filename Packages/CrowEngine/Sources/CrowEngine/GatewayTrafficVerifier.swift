@@ -318,19 +318,39 @@ public struct GatewayTrafficVerifier: Sendable {
         return (http.statusCode, data)
     }
 
+    /// How long one `corveil` CLI page may take — the same bound the HTTP
+    /// read gets (`timeoutInterval: 20`). A hung CLI would otherwise stall the
+    /// poller's only Task, and every later pass with it.
+    public static let cliTimeout: TimeInterval = 20
+
     public static let runCorveilCLI: CLIList = { binary, cursor in
         var args = ["control", "observability", "logs-list", "--limit", String(GatewayTraffic.pageSize)]
         if let cursor { args += ["--cursor", cursor] }
-        return await Task.detached { () -> Data? in
+        return await runBounded(binary: binary, arguments: args, timeout: cliTimeout)
+    }
+
+    /// Run `binary` and return its stdout when it exits 0 within `timeout`;
+    /// nil when it can't launch, fails, or is killed by the deadline
+    /// (`ScaffolderTimeoutWatchdog`, as `CorveilCLI.verify` does).
+    static func runBounded(binary: String, arguments: [String], timeout: TimeInterval) async -> Data? {
+        await Task.detached { () -> Data? in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: binary)
-            p.arguments = args
+            p.arguments = arguments
             let out = Pipe()
             p.standardOutput = out
             p.standardError = FileHandle.nullDevice
             do { try p.run() } catch { return nil }
+            // Armed before the blocking read: terminating the process closes
+            // its end of the pipe, which ends the read.
+            let watchdog = ScaffolderTimeoutWatchdog(deadline: timeout, proc: p)
+            watchdog.start()
             let data = out.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()
+            if watchdog.cancel() {
+                CrowLog.info("[GatewayTraffic] corveil CLI timed out after \(Int(timeout))s")
+                return nil
+            }
             return p.terminationStatus == 0 ? data : nil
         }.value
     }
