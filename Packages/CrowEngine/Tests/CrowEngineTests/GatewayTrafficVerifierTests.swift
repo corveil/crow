@@ -102,6 +102,29 @@ import Testing
         #expect(sources.isEmpty)
     }
 
+    /// A reused worktree path can hold a previous session's transcripts; one
+    /// that last changed before this session existed isn't this session's.
+    @Test func workSessionIgnoresTranscriptsOlderThanTheSession() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let wt = "/dev/root/corveil/crow-1-x"
+        let verifier = GatewayTrafficVerifier(home: home)
+        let dir = verifier.projectDir(cwd: wt)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let created = Date(timeIntervalSince1970: 1_000_000)
+        for (name, at) in [("old", created.addingTimeInterval(-60)), ("new", created.addingTimeInterval(60))] {
+            let url = dir.appendingPathComponent("\(name).jsonl")
+            try Data("{}".utf8).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: at], ofItemAtPath: url.path)
+        }
+        let session = Session(name: "w", kind: .work, createdAt: created)
+        let convs = verifier.conversations(
+            for: .init(session: session, worktreePath: wt, prLinks: [], managerCwd: nil))
+        #expect(convs.map(\.id) == ["new"])
+        #expect(GatewayTrafficVerifier.ownConversations(
+            [.init(id: "unknown-mtime", lastWrite: nil)], sessionCreatedAt: created).count == 1)
+    }
+
     @Test func logsURLCarriesLimitAndCursor() {
         let url = GatewayTrafficVerifier.logsURL(base: "https://corveil.io/", cursor: "a+b")
         #expect(url?.absoluteString == "https://corveil.io/api/logs?limit=500&cursor=a%2Bb")

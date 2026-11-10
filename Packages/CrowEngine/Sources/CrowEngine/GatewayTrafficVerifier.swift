@@ -237,13 +237,28 @@ public struct GatewayTrafficVerifier: Sendable {
                     return GatewayTraffic.Conversation(id: ref.id, lastWrite: mtime)
                 }
         }
+        // A work, review or job session owns every Claude transcript in its
+        // worktree's project folder: the same set `LogSyncCollector` uploads
+        // for it, and the only record that covers `/clear`, resumes and
+        // relaunches (`harnessConversationID` holds just the latest). Worktree
+        // paths are unique per session, but a path can be reused after a
+        // delete, so a transcript that last changed before this session
+        // existed is a previous tenant's and is left out.
         guard let wt = input.worktreePath else { return [] }
         let dir = projectDir(cwd: wt)
         let files = (try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        return files.filter { $0.pathExtension == "jsonl" }.map {
+        return Self.ownConversations(files.filter { $0.pathExtension == "jsonl" }.map {
             GatewayTraffic.Conversation(id: $0.deletingPathExtension().lastPathComponent, lastWrite: Self.mtime($0))
-        }
+        }, sessionCreatedAt: s.createdAt)
+    }
+
+    /// Drop transcripts whose last write predates the session (a previous
+    /// tenant of a reused worktree path). One with no readable mtime is kept.
+    static func ownConversations(
+        _ conversations: [GatewayTraffic.Conversation], sessionCreatedAt: Date
+    ) -> [GatewayTraffic.Conversation] {
+        conversations.filter { conv in conv.lastWrite.map { $0 >= sessionCreatedAt } ?? true }
     }
 
     func projectDir(cwd: String) -> URL {
