@@ -162,10 +162,14 @@ public struct OpenAICodexAgent: CodingAgent {
             // but never took a turn) `codex resume --last` gracefully opens a new
             // interactive TUI rather than erroring — verified against 0.141.0 in
             // a pty, so no `|| codex` fallback is needed (#843 review round 3).
-            // `--last` is also provider-filtered: a thread recorded under another
-            // `model_provider` (routing toggled, CROW-1407) is skipped and a
-            // fresh TUI opens — still a clean open, not an error, on 0.166.0
-            // (CROW-1409; unlike by-id resume, see `managerLaunchCommand`).
+            // Provider changes (routing toggled, CROW-1407): through 0.166,
+            // `--last` skipped a thread recorded under another `model_provider`
+            // and opened a fresh TUI. From 0.167.0 it finds that thread and
+            // opens it read-only behind a `🔒` notice waiting on `c` / `n` /
+            // `Esc`. The startup-prompt watch answers `n` (start fresh), so a
+            // restart still lands on a fresh composer (CROW-1425,
+            // `CodexStartupNotices`). This applies to the `.job` / `.review`
+            // restarts below as well.
             // No env prefix (Codex has no OTEL equivalent), and no `--rc` —
             // Codex ships no such flag, so `remoteControlEnabled` never changes
             // the launch text even though `supportsRemoteControl` is `true`
@@ -340,7 +344,9 @@ public struct OpenAICodexAgent: CodingAgent {
         // CROW-1409: Codex 0.166 refuses a by-id resume recorded under another
         // `model_provider` and drops the pane to a shell, so the id is dropped
         // (fresh TUI) unless the thread's recorded provider is known to equal
-        // this launch's. Unknown counts as a mismatch.
+        // this launch's. Unknown counts as a mismatch. 0.167 shows a read-only
+        // notice instead of erroring; the gate still avoids it, and the
+        // startup-prompt watch answers it if the gate guesses wrong (CROW-1425).
         let codexPath = Self.launchPrefix(binary: launchBinary(), gatewayRoute: gatewayRoute)
         if let id = resumableThreadID(conversationID, gatewayRoute: gatewayRoute) {
             let quoted = "'" + id.replacingOccurrences(of: "'", with: "'\\''") + "'"

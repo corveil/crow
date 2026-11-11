@@ -3,26 +3,31 @@ import CrowCodex
 import CrowCore
 import CrowTerminal
 
-/// Watches a freshly launched Codex pane for the model-migration screen and
-/// answers it with "Use existing model" (CROW-1410).
+/// Watches a freshly launched Codex pane for the startup screens Crow answers
+/// (CROW-1410, CROW-1425): the model-migration prompt and, on Codex 0.167+,
+/// the read-only model-provider notice on a resumed thread.
 ///
-/// Codex has no config key that hides that screen ahead of time (see
-/// ``CodexStartupNotices``), and it blocks every launch, seeded or not. So for
-/// a few minutes after Crow types a Codex launch into a pane, this polls the
-/// pane's visible rows once a second and acts on
+/// Codex has no config key that hides either screen ahead of time (see
+/// ``CodexStartupNotices``), and they block unattended launches. So for a few
+/// minutes after Crow types a Codex launch into a pane, this polls the pane's
+/// visible rows once a second and acts on
 /// ``CodexStartupNotices/response(toScreen:)``:
 ///
-/// - `.answer` presses `2`, then Enter, which keeps the current model. That
-///   choice changes nothing about the session, so Crow makes it unattended.
-///   Codex records the acknowledgment in its own config, as it would for the
-///   operator. If the screen is still up on the next poll (a key was lost),
-///   it answers again, at most ``maxAnswers`` times.
-/// - `.needsOperator` (the screen with no keep-current option) is reported once
-///   through `onNeedsOperator` and left alone, because every answer switches
-///   the model.
+/// - `.answer` sends the screen's keys. On the migration prompt that is `2`,
+///   then Enter, which keeps the current model; Codex records the
+///   acknowledgment in its own config, as it would for the operator. On the
+///   provider notice it is `n` (start fresh), the fresh TUI Codex 0.166 opened
+///   on its own. Neither choice loses anything Crow relies on, so Crow makes
+///   them unattended. If a screen is still up on the next poll (a key was
+///   lost), it answers again, at most ``maxAnswers`` times per screen.
+/// - `.needsOperator` (the migration screen with no keep-current option) is
+///   reported once through `onNeedsOperator` and left alone, because every
+///   answer switches the model.
 ///
-/// The watch ends after an answer clears the screen, when the window goes
-/// away, or after ``budget``. It is armed at every place a Codex launch is typed
+/// The watch ends once the provider notice has been answered and cleared (no
+/// startup screen follows it), when the window goes away, or after ``budget``.
+/// Answering the migration prompt doesn't end it: Codex resumes the thread
+/// after that prompt, so the provider notice can still come up. It is armed at every place a Codex launch is typed
 /// into a pane, keyed on ``CodexStartupNotices/isCodexLaunch(_:)``, so it
 /// covers `setup.sh` work sessions, jobs, reviews, handoffs, and Managers alike.
 @MainActor
@@ -82,7 +87,8 @@ final class CodexStartupPromptWatcher {
 
     /// Run the watch to completion. Internal so tests can await it directly.
     func watch(terminalID: UUID) async {
-        var answers = 0
+        var answers: [CodexStartupNotices.Screen: Int] = [:]
+        var lastAnswered: CodexStartupNotices.Screen?
         var reportedOperator = false
         let polls = Int(Self.budget / Self.pollInterval)
         for _ in 0..<polls {
@@ -90,14 +96,16 @@ final class CodexStartupPromptWatcher {
             if Task.isCancelled || !io.isAlive(terminalID) { return }
             guard let screen = io.capture(terminalID) else { continue }
             switch CodexStartupNotices.response(toScreen: screen) {
-            case .answer(let keys):
-                guard answers < Self.maxAnswers else {
-                    CrowLog.info("[CodexStartupPrompt] terminal=\(terminalID): migration prompt still up after \(answers) answers; leaving it for the operator")
-                    onNeedsOperator(terminalID, "Codex's model-migration prompt did not accept Crow's answer")
+            case .answer(let keys, let kind):
+                let count = answers[kind, default: 0]
+                guard count < Self.maxAnswers else {
+                    CrowLog.info("[CodexStartupPrompt] terminal=\(terminalID): \(kind.rawValue) still up after \(count) answers; leaving it for the operator")
+                    onNeedsOperator(terminalID, "Codex's \(kind.rawValue) did not accept Crow's answer")
                     return
                 }
-                answers += 1
-                CrowLog.info("[CodexStartupPrompt] terminal=\(terminalID): answering the model-migration prompt with \"Use existing model\" (attempt \(answers))")
+                answers[kind] = count + 1
+                lastAnswered = kind
+                CrowLog.info("[CodexStartupPrompt] terminal=\(terminalID): answering the \(kind.rawValue) with \(Self.choice(for: kind)) (attempt \(count + 1))")
                 await press(keys, terminalID: terminalID)
             case .needsOperator(let reason):
                 if !reportedOperator {
@@ -106,9 +114,20 @@ final class CodexStartupPromptWatcher {
                     onNeedsOperator(terminalID, reason)
                 }
             case nil:
-                // An answer that took, or an operator who answered first: done.
-                if answers > 0 || reportedOperator { return }
+                // The provider notice is the last startup screen Codex draws, so
+                // once an answer to it has taken, the watch is done. After the
+                // migration prompt the thread is still being resumed, and the
+                // notice can follow, so the watch runs on.
+                if lastAnswered?.isLastStartupScreen == true { return }
             }
+        }
+    }
+
+    /// The option an answer picks, for the log line.
+    private static func choice(for screen: CodexStartupNotices.Screen) -> String {
+        switch screen {
+        case .modelMigration: return "\"Use existing model\""
+        case .providerNotice: return "\"start fresh\" (n), as Codex 0.166 did on its own"
         }
     }
 

@@ -28,10 +28,24 @@ import CrowCore
 /// by-id resume of a thread Codex can't find (or can't match) errors the same
 /// way, and a fresh TUI is the recoverable outcome.
 ///
-/// `resume --last` (`.work` / `.job` / `.review`) needs none of this. On 0.166
-/// it is still provider-filtered: it skips another provider's thread and opens
-/// a fresh TUI rather than erroring (verified in a pty against a scratch
-/// `CODEX_HOME`, 2026-11-05).
+/// Codex 0.167.0 (openai/codex#58202) no longer errors here. It opens the
+/// thread as read-only history with a `🔒` notice ("Continue in a new chat",
+/// or "Model provider unavailable" when the recorded provider isn't configured
+/// at all) that waits for `c` / `n` / `Esc`. The gate still applies on 0.167:
+/// a fresh TUI is a cleaner launch than a recovery screen. If the gate's guess
+/// is wrong, `CodexStartupPromptWatcher` answers the notice with `n` (start
+/// fresh), so the outcome is the same either way.
+///
+/// `resume --last` (`.work` / `.job` / `.review`) is not gated here. Through
+/// 0.166 it was provider-filtered: it skipped another provider's thread and
+/// opened a fresh TUI (verified in a pty against a scratch `CODEX_HOME`,
+/// 2026-11-05). From 0.167.0 it finds the cwd's newest thread whatever its
+/// provider, and a mismatch opens the same read-only notice (reproduced on
+/// 0.167.1, 2026-11-11, CROW-1425). Crow doesn't predict which thread `--last`
+/// will pick. The pane watch answers the notice with `n`, which gives the
+/// 0.166 outcome, a fresh TUI (`CodexStartupNotices`, screen 3). One
+/// difference remains: 0.166 could fall back to an older same-provider thread
+/// in that cwd, and 0.167 starts fresh instead.
 public enum CodexThreadProvider {
     /// Codex's built-in provider id, used when `config.toml` names none.
     /// Rollouts recorded without a `model_provider` override carry `"openai"`.

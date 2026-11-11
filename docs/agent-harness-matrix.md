@@ -32,7 +32,7 @@ capabilities, update this table in the same PR.
 |---|---|---|---|---|---|---|---|
 | Binary token (`launchCommandToken`) | `claude` | `cursor-agent` ✅ (alias `agent` ⚠️ collides with grok-build) — identity-probed | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision | `muse` ⚠️ collision (Muse Sequencer) — identity-probed |
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
-| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829); `agent persist` evaluated and **declined** (CROW-1175 — TTY-detach, no-ops in `$TMUX`) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
+| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829); `agent persist` evaluated and **declined** (CROW-1175 — TTY-detach, no-ops in `$TMUX`) | ✅ `resume --last` (provider change → fresh TUI; 0.167+ via the startup-prompt watch, CROW-1425) | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste (`agent persist` is not native RC — CROW-1175) | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
 | Auto-permission | ⚠️ `--permission-mode auto` (stalls on first extra-workdir Read ≥ 2.1.257; `--permission-prompts none` is print-mode only — declined CROW-1215; behind a gateway ≥ 2.1.319 needs the server-side check — Corveil forwards it, gateway launches export `CLAUDE_CODE_AUTO_MODE_SERVER=1`, CROW-1426) | ✅ `--force --approve-mcps` (Run Everything, #829; `--auto-review` declined — stalls on an approval card and loses to a persisted Run Everything, CROW-1345) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
@@ -253,6 +253,14 @@ managed-terminal command needs hook/env prep.
   when the rollout's recorded `model_provider` matches the launch's; otherwise
   (or when it can't be read) a fresh TUI, because Codex 0.166 refuses a
   cross-provider resume by id (#1409, ADR 0030 amendment).
+  **Provider changes on ≥ 0.167.0** (openai/codex#58202): `resume --last` and
+  by-id resume now *find* a thread recorded under another `model_provider` and
+  open it read-only behind a `🔒` notice (`c continue in new chat · n start
+  fresh · esc other chats`) with the composer disabled. A `crow send` there is
+  dropped, or fires a shortcut. `CodexStartupPromptWatcher` answers `n`, so a
+  `.work` / `.job` / `.review` restart or a `crow recreate-terminal` still lands
+  on a fresh composer, as on 0.166 (CROW-1425; see Startup prompts). The
+  Manager's provider gate still skips the notice when it can.
 - **OpenCode:** review/job sessions run headless `opencode run "$prompt"` on
   first launch, then chain `; opencode --continue` to reopen the same session in
   the TUI on restart (`resumeTUICommand` / `firstLaunchChainedCommand`,
@@ -1022,28 +1030,36 @@ else.
 
 Codex can stop before its first turn on a full-screen prompt that needs a
 keypress, which stalls every launch nobody is watching: jobs, reviews, seeded
-Scratch Managers, handoffs. Two screens matter. Both were read from the
-`rust-v0.166.0` source of openai/codex and reproduced on codex-cli **0.166.0**
-in a scratch `CODEX_HOME` (offline: a dummy `requires_openai_auth = false`
-provider plus a `model_catalog_json` whose current model carries an `upgrade`),
-never against `~/.codex`.
+Scratch Managers, handoffs. Three screens matter. The first two were read from
+the `rust-v0.166.0` source of openai/codex and reproduced on codex-cli
+**0.166.0** in a scratch `CODEX_HOME` (offline: a dummy `requires_openai_auth =
+false` provider plus a `model_catalog_json` whose current model carries an
+`upgrade`), never against `~/.codex`. The third arrived in **0.167.0** and was
+reproduced on 0.167.1 the same way, with two dummy providers (CROW-1425).
 
 | Screen | When Codex shows it | How Crow handles it |
 |---|---|---|
 | **Update available** (`update_prompt.rs`). Default highlight is *Update now*, which runs `npm install -g @openai/codex` | `version.json` names a newer release, and **no prompt was passed on argv** (`lib.rs` skips it then). So it blocks Managers and every `resume`, not seeded launches | Suppressed by a per-run key: `-c check_for_update_on_startup=false` (`CodexStartupNotices.configOverrides`), on every Crow Codex launch: `OpenAICodexAgent` (all kinds, fresh and resume, Manager), `CodexLauncher` (handoff), `setup.sh` `launch_codex`. Verified: with a pending `9.9.9`, the bare launch shows the screen and the override opens straight to the composer. It also stops Codex's in-session "new version" notice |
 | **Model migration** (`model_migration.rs`, *"Meet GPT-6 Sol … 1. Try new model / 2. Use existing model"*) | The server's model catalog gives the current model an `upgrade`. Shown **with or without** a prompt on argv | **No key exists.** `startup_prompts.rs` skips it only when `notice.model_migrations[<current>] == <target>` (or for the two retired `hide_gpt5_1…` slugs). Both slugs come from the catalog fetched at startup, so no override can be written in advance (verified: `-c notice.model_migrations.crow-old=crow-new` suppresses only that exact pair). Crow reads the pane instead (`CodexStartupPromptWatcher`) and presses `2`, then Enter, which keeps the current model. Codex writes the ack to `config.toml` itself, as it would for the operator |
+| **Read-only provider notice** (0.167.0+, `chatwidget/provider_error.rs`, openai/codex#58202). `🔒  Continue in a new chat` / *"This chat uses A, but Codex now uses B, so this chat is read-only."*, or `🔒  Model provider unavailable` / *"This chat uses model provider “crow-corveil”, which is no longer configured."*, over `c continue in new chat · n start fresh · esc other chats` | A resume (`resume --last` or by id) opens a thread recorded under a `model_provider` the launch can't continue. For Crow that means toggling `--codex-upstream` routing: on gives the mismatch title, off gives *unavailable*, because the per-run `crow-corveil` provider is gone. The composer is disabled, so typed text never lands. Letters other than `c` / `n` are dropped | **No key exists** (the provider comes from the thread). The watch presses `n` (*start fresh*), which reproduced on 0.167.1 as a clean composer with the launch's flags (`-a never -s workspace-write` included), the outcome 0.166 gave on its own. Not `c`, which fills the new composer with a draft of the old transcript that a later `crow send` would be appended to. The policy titles (`Model provider blocked by policy`, no `c` shortcut) are answered the same way |
 
 The watch is armed wherever a Codex launch is typed into a pane (grep the
 `armCodexStartupPromptWatch` call sites), keyed on the `check_for_update_on_startup` override
 being in the command (`CodexStartupNotices.isCodexLaunch`). It polls the visible
-rows once a second for 180s. It answers only when the bottom three non-blank rows
-are exactly the two options and the `enter/esc confirm` hint, so a transcript
-that quotes the screen never matches (the composer is always the bottom of a
-running session). `2` matters: Enter and Esc both confirm the *highlighted*
+rows once a second for 180s. It answers the migration screen only when the
+bottom three non-blank rows are exactly the two options and the `enter/esc
+confirm` hint, and the provider notice only when its key hint is the bottom
+(re-joined across up to three rows, since a narrow pane such as a phone wraps
+it) with a pinned `🔒` title at most ten rows above. So a transcript that quotes
+either screen never matches: the composer is always the bottom of a running
+session. Answering the migration screen doesn't end the watch, because Codex
+resumes the thread after it and the provider notice can still follow; answering
+the provider notice does, since nothing follows it. `2` matters: Enter and Esc both confirm the *highlighted*
 option, and *Try new model* is highlighted first. It re-answers a lost keypress
 up to three times. When the current model has left the catalog, the screen has
 no keep-current option (`enter/esc continue`); every answer switches models, so
-Crow presses nothing and marks the session `.waiting` for the operator.
+Crow presses nothing and marks the session `.waiting` for the operator. Each
+screen gets its own three re-answers.
 
 Other startup screens need nothing: folder trust and per-hook trust are seeded
 (`CodexTrustSeeder`, CROW-1381), and the GovCloud guidance screen
@@ -1136,11 +1152,15 @@ exhaustive, including the two Manager gateway writes noted below):
   stored terminal `command`, `config.toml` or `settings.local.json`. A Codex →
   Claude handoff builds a plain Claude command in a fresh pane (no Codex
   setting survives); Claude → Codex still clears the `ANTHROPIC_*` block. Off by
-  default; `resume --last` is provider-filtered (still true on 0.166: it opens
-  fresh, it doesn't error), so toggling routing makes the next `.work` restart
-  open a fresh thread. Resume by id is provider-checked too, and on 0.166 it
-  *errors* on a mismatch, so a Codex Manager whose stored thread was recorded
-  under another provider launches a fresh TUI instead (#1409).
+  default; through 0.166 `resume --last` is provider-filtered (it opens fresh,
+  it doesn't error), so toggling routing makes the next `.work` restart open a
+  fresh thread. From 0.167.0 it finds the other provider's thread and opens it
+  read-only behind a `🔒` notice; the startup-prompt watch answers `n` (start
+  fresh), so the restart still opens a fresh thread (CROW-1425). Resume by id is
+  provider-checked too, and on 0.166 it *errors* on a mismatch, so a Codex
+  Manager whose stored thread was recorded under another provider launches a
+  fresh TUI instead (#1409). On 0.167 by id shows the same notice, and the
+  watch covers it if the gate guesses wrong.
 - **OTEL telemetry env** — `AgentLaunch.prepareAgentLaunchText` prepends the
   `OTEL_*` exporter vars, gated on `agent.kind == .claudeCode` (Codex has no OTLP
   equivalent).
@@ -1335,6 +1355,7 @@ against current upstream CLIs.
 | Codex `Interrupt` hook (abort path; must not look like `Stop`) | Codex **≥ 0.150.0** (`#40511`); executor coverage **0.152.0** (`#41432`). Official hooks docs still omit it | `CodexHookConfigWriter.allEvents` / `CodexSignalSource` | 2026-09-02 (CROW-1177) — **wired**. `Stop` = natural completion → `.done`; `Interrupt` = `TurnAborted` → `.waiting` (jobs/reviews stay open). Timeout written 3s (upstream clamp). No `async: true` (would reopen CROW-1065). Pre-0.150 ignores the unknown key (`HookEventsToml` has no `deny_unknown_fields`). **Re-verified 2026-10-27 (CROW-1344) on codex 0.163.0, with `instant_interrupt` default-on since 0.162.0:** Esc gives `Interrupt` and no `Stop`. `crow send` while working is a **steer**, not abort-then-submit: `UserPromptSubmit` inside the same turn, no `Interrupt`, and one `Stop` at the real end (live TUI trace plus `turn.rs`; the same `!needs_follow_up` Stop gate is in the `rust-v0.164.0` source). No gate needed |
 | Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
 | Codex startup prompts: `check_for_update_on_startup=false` hides the update screen; the model-migration screen has no key, so the pane watch answers *Use existing model* by its exact bottom rows | codex-cli **0.166.0** (`rust-v0.166.0`: `updates.rs`, `app/startup_prompts.rs`, `model_migration.rs`) | `CodexStartupNotices` / `CodexStartupPromptWatcher` / `setup.sh` `launch_codex` | 2026-11-05 (CROW-1410). Re-check on each bump: the option labels, the `enter/esc confirm` hint, and whether a generic `notice.*` hide key has appeared (then prefer it to the watch) |
+| Codex 0.167 cross-provider resume: `resume --last` (and by id) opens another provider's thread read-only behind a `🔒` notice; the pane watch answers `n` (start fresh) by the notice's footer + title | codex-cli **0.167.0** (openai/codex#58202, `chatwidget/provider_error.rs`); reproduced on **0.167.1** | `CodexStartupNotices` (`providerNoticeTitles`, footer) / `CodexStartupPromptWatcher` | 2026-11-11 (CROW-1425). Re-check on each bump: the three titles, the `c continue in new chat · n start fresh · esc other chats` hint and that `n` still starts fresh without Enter, and whether `resume --last` regains provider filtering (then the watch is only a backstop) |
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
 | Claude auto-mode extra-workdir Read prompt can stall unattended sessions; no honest pre-answer | Claude Code **≥ 2.1.257** (`permissions.blockReadsOutsideWorkingDirectories` is a *block*, not a skip) | `ClaudeLaunchArgs` | 2026-09-02 (CROW-1176) — changelog-specified for `--permission-mode auto`. Working dirs = launch cwd + `--add-dir` + `permissions.additionalDirectories`. Crow worktree / review clone / Manager `{devRoot}` each have a different outside-set (sibling checkouts, `$TMPDIR`, `$HOME` for `gh` creds). No per-launch allow; `--dangerously-skip-permissions` / `bypassPermissions` would also drop the same-release Containment Escape rule (brittle-reject). `skipAutoPermissionPrompt` is a different notice. Installed probe binary was **2.1.232** (below the pin) so a live Crow-tmux PTY pass on ≥ 2.1.257 remains a human re-check. `--permission-prompts none` (2.1.259) is **not** that allow: it is deny-not-allow and print-mode only — declined CROW-1215 (next row) |
