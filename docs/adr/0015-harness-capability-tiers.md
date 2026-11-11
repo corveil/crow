@@ -490,7 +490,12 @@ deliberate, documented gaps (full grid in the
 >
 > **`.review` is excluded.** The clone is attacker-controlled, and the
 > sandbox-exit reviewer reads the PR's own text. Reviews keep the user's
-> configured mode, the same `session.kind != .review` posture as Codex.
+> configured mode. The `-p` path passes the three tests the CROW-1406 Codex
+> amendment above set for `.review`: a denial, not a card; the flag wins; the
+> sandbox stays. But Codex's clone keeps a folder-trust gate behind its strip,
+> and Antigravity's strip is its only defense, with exhaustiveness still an
+> open re-check row. Extending Auto to Antigravity reviews is a separate
+> decision.
 > `--dangerously-skip-permissions` stays unused.
 
 Until now, the *why* behind each gap lived only in scattered code comments —

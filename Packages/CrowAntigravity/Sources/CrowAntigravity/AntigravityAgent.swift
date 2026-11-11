@@ -101,8 +101,11 @@ public struct AntigravityAgent: CodingAgent {
         // outside the worktree) is approved by a reviewer agent whose context
         // includes the PR's own text. That is an escalation driven by hostile
         // input, so `.review` keeps the user's configured mode, as it did before.
-        // This is the same `session.kind != .review` guard as Codex and
-        // Cursor's trust seed.
+        // Codex's `.review` does get its Auto-review reviewer (CROW-1406), but a
+        // Codex clone still has a folder-trust gate behind its config strip.
+        // Antigravity's strip is its *only* defense, and whether it covers
+        // everything is an open re-check row. So this stays off, like Grok's
+        // human-gated reviews.
         let autoArgs = AntigravityLaunchArgs.autoPermissionSuffix(
             autoPermissionMode && session.kind != .review)
         // Session-scoped native Remote Control (CROW-1428), interactive

@@ -609,8 +609,11 @@ describes what the UI claims, not what Crow can do.
   - Hooks fire unchanged (`PreInvocation` / `PostInvocation` / `PostToolUse` /
     `Stop`).
   - **Reviews never get Auto.** The review clone is attacker-controlled, and the
-    sandbox-exit reviewer reads the PR's own text (the `session.kind != .review`
-    guard, like Codex). `--dangerously-skip-permissions` is never passed: it is
+    sandbox-exit reviewer reads the PR's own text. Codex's `.review` does get
+    Auto-review (CROW-1406), but a Codex clone keeps a folder-trust gate behind
+    its strip. Antigravity's strip is its only defense, and whether it covers
+    everything is still an open re-check row. `--dangerously-skip-permissions`
+    is never passed: it is
     still a full bypass after 1.5.2 narrowed it to block denylisted commands.
 - **Muse:** `--disable-approval` (`MuseLaunchArgs.autoPermissionSuffix`) —
   skip approval prompts, **keep the OS sandbox** (Seatbelt on macOS, bubblewrap
