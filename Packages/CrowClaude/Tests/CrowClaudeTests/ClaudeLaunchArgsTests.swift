@@ -91,7 +91,7 @@ import CrowCore
         customHeaders: "x-citadel-api-key: Bearer sk-1"
     )
     let prefix = ClaudeLaunchArgs.gatewayEnvPrefix(resolved)
-    #expect(prefix == "export ANTHROPIC_BASE_URL='https://corveil.io' ANTHROPIC_CUSTOM_HEADERS='x-citadel-api-key: Bearer sk-1' && ")
+    #expect(prefix == "export ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS='x-citadel-api-key: Bearer sk-1' && ")
     #expect(!prefix.contains("\n"))
 }
 
@@ -106,8 +106,50 @@ import CrowCore
         customHeaders: "x-a: one\nx-b: two"
     )
     let prefix = ClaudeLaunchArgs.gatewayEnvPrefix(resolved)
-    #expect(prefix == "unset ANTHROPIC_CUSTOM_HEADERS && export ANTHROPIC_BASE_URL='https://corveil.io' && ")
+    #expect(prefix == "unset ANTHROPIC_CUSTOM_HEADERS && export ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 && ")
     #expect(prefix.contains("unset ANTHROPIC_CUSTOM_HEADERS"))
     #expect(prefix.contains("export ANTHROPIC_BASE_URL='https://corveil.io'"))
     #expect(!prefix.contains("\n"))
+}
+
+// MARK: - Auto-mode server check behind a gateway (CROW-1426)
+
+@Test func gatewayEnvPrefixKeepsAutoModeServerCheckOn() throws {
+    // Claude Code ≥ 2.1.319 asks about or denies calls the server can't check
+    // behind a gateway; `=1` keeps the server check on even when the user's
+    // shell sets CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS. Both header shapes
+    // carry it.
+    for headers in ["x-citadel-api-key: Bearer sk-1", "x-a: one\nx-b: two"] {
+        let prefix = ClaudeLaunchArgs.gatewayEnvPrefix(
+            GatewayResolver.Resolved(baseURL: "https://corveil.io", customHeaders: headers))
+        #expect(prefix.contains(" CLAUDE_CODE_AUTO_MODE_SERVER=1 "))
+        // Classifier auto mode, never a bypass, and never the local fallback.
+        #expect(!prefix.contains("CLAUDE_CODE_AUTO_MODE_SERVER=0"))
+        #expect(!prefix.contains("--dangerously-skip-permissions"))
+        #expect(!prefix.contains("bypassPermissions"))
+    }
+}
+
+@Test func gatewayEnvPrefixOmitsAutoModeServerWithoutGateway() throws {
+    // No gateway → first-party API, where the server check is the default.
+    // Nothing to pin, and the operator's own value is left alone.
+    #expect(!ClaudeLaunchArgs.gatewayEnvPrefix(nil).contains("CLAUDE_CODE_AUTO_MODE_SERVER"))
+}
+
+@Test func autoModeServerRidesLaunchLineNotSettingsEnv() throws {
+    // CROW-1426: the settings.local.json `env` block outranks the operator's
+    // ~/.claude/settings.json, so writing the var there would take away their
+    // `=0` escape hatch for a gateway that drops the check. Launch line only.
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("crow-1426-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    ClaudeHookConfigWriter.writeGatewayEnv(
+        dirPath: dir.path,
+        resolved: GatewayResolver.Resolved(
+            baseURL: "https://corveil.io", customHeaders: "x-citadel-api-key: Bearer sk-1"))
+    let written = try String(
+        contentsOf: dir.appendingPathComponent(".claude/settings.local.json"), encoding: .utf8)
+    #expect(written.contains("ANTHROPIC_BASE_URL"))
+    #expect(!written.contains("CLAUDE_CODE_AUTO_MODE_SERVER"))
 }

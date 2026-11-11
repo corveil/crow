@@ -32,14 +32,15 @@ import Testing
     // MARK: - Launch detection
 
     @Test func detectsClaudeLaunchLinePrefixWithoutReadingHeaders() {
-        let line = "export ANTHROPIC_BASE_URL='https://corveil.io' ANTHROPIC_CUSTOM_HEADERS='x-citadel-api-key: Bearer sk-1' && claude --rc"
+        // Shape of ClaudeLaunchArgs.gatewayEnvPrefix, incl. CROW-1426's auto-mode var.
+        let line = "export ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS='x-citadel-api-key: Bearer sk-1' && claude --rc"
         let found = LaunchedGateway.detect(launchText: line)
         #expect(found?.baseURL == "https://corveil.io")
         #expect(found?.via == .launchLine)
     }
 
     @Test func detectsSetupShBarePrefix() {
-        let line = "unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL='https://gw.acme.io' claude 'prompt'"
+        let line = "unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL='https://gw.acme.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 claude 'prompt'"
         #expect(LaunchedGateway.detect(launchText: line)?.baseURL == "https://gw.acme.io")
     }
 
