@@ -146,7 +146,9 @@ deliberate, documented gaps (full grid in the
 > every launch path** (`prepareWorktreeForAgentLaunch` — the one gate `launchAgent`,
 > `pasteDeferredLaunch`, `createManagerTerminal`, the `send` RPC, and handoff all
 > route through), and review clones are never auto-trusted. The launch-path strip
-> is load-bearing, not redundant: `agy` has no trust gate behind the strip, and a
+> is load-bearing, not redundant: no trust gate stands behind the strip (`agy`
+> has a folder-trust prompt as of 1.4.6, but the review's `-p` launch never shows it —
+> CROW-1428), and a
 > warm `crowd` restart or an operator `crow send "agy -c"` reopens the clone after
 > the review skill's `gh pr checkout` may have restored a committed layer from
 > the head — so a creation-only strip would be insufficient (#902 review r2/r3).
@@ -513,6 +515,15 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    `agent persist` is the same class of documented reject (CROW-1175): it is
    Cursor's own tmux wrapper, not Crow's drive path, and wiring it would
    change non-Crow `agent` usage if it ever became the default launch.*
+
+   *Antigravity is no longer faked (CROW-1428). `agy` 1.2.6 added a
+   session-scoped `--remote-control`. Crow appends it to interactive launches
+   behind a shell-time `AGY_ADC_AUTH` guard, because ADC sign-in makes the flag
+   exit 2. It passes the honesty test that Codex's daemon fails: one
+   connection per process, torn down with it, and `crow send` still drives the
+   same TUI. The machine-global `agy remote-control start` OS service stays
+   unwired, the same reject class as `codex app-server daemon`. Live state:
+   the [harness matrix](../agent-harness-matrix.md#remote-control).*
 
 4. **Codex hooks were sync-only.** `CodexHookConfigWriter.asyncEvents` was
    empty: *"Codex's hook runtime is sync-only as of v0.139.0 — declaring

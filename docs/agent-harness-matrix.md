@@ -33,7 +33,7 @@ capabilities, update this table in the same PR.
 | Binary token (`launchCommandToken`) | `claude` | `cursor-agent` ✅ (alias `agent` ⚠️ collides with grok-build) — identity-probed | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision | `muse` ⚠️ collision (Muse Sequencer) — identity-probed |
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
 | Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829); `agent persist` evaluated and **declined** (CROW-1175 — TTY-detach, no-ops in `$TMUX`) | ✅ `resume --last` (provider change → fresh TUI; 0.167+ via the startup-prompt watch, CROW-1425) | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
-| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste (`agent persist` is not native RC — CROW-1175) | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
+| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste (`agent persist` is not native RC — CROW-1175) | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ✅ native session-scoped `--remote-control` on interactive launches (ADC-guarded, no `--name`; CROW-1428) | ⚠️ faked via `crow send` paste (no native RC) |
 | Auto-permission | ⚠️ `--permission-mode auto` (stalls on first extra-workdir Read ≥ 2.1.257; `--permission-prompts none` is print-mode only — declined CROW-1215; behind a gateway ≥ 2.1.319 needs the server-side check — Corveil forwards it, gateway launches export `CLAUDE_CODE_AUTO_MODE_SERVER=1`, CROW-1426) | ✅ `--force --approve-mcps` (Run Everything, #829; `--auto-review` declined — stalls on an approval card and loses to a persisted Run Everything, CROW-1345) | ✅ `-a never -s workspace-write` (`.job`, interactive); ⚠️ `.review` routes approvals to Auto-review (`approvals_reviewer=auto_review`, ≥ 0.166.0, CROW-1406), but the clone's folder-trust screen (once per PR) and Crow's unseeded hook-trust screen (per session, once trusted) still need a person | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
@@ -280,14 +280,46 @@ describes what the UI claims, not what Crow can do.
 > (`SessionService.launchAgent`), but the **Manager** lights it on the literal
 > `" --rc"` appearing in its built command (`ensureManagerSession`, CROW-433).
 > So on every harness whose `true` is the `crow send` fake — Cursor, Codex,
-> OpenCode, Grok, Antigravity — a Manager shows no badge while that harness's
+> OpenCode, Grok — a Manager shows no badge while that harness's
 > ordinary sessions do, even though `crow send` drives both identically. That
 > asymmetry predates CROW-1001 and is unchanged by it. Muse joins the same set.
+> Antigravity left it in CROW-1428: the Manager gate
+> (`ManagerSessionController.managerCommandCarriesRemoteControl`) also counts
+> Antigravity's ` --remote-control`, so its Manager badges like Claude's.
 
 - **Claude:** `true`, backed by real `--rc --name` flags
   (`ClaudeLaunchArgs.argsSuffix`). `--name` labels the session in claude.ai's
   Remote Control panel.
-- **Cursor, OpenCode, Grok, Antigravity & Muse:** `true`, but there is **no RC
+- **Antigravity:** `true`, backed by `agy`'s native **session-scoped**
+  `--remote-control` (CROW-1428; `agy` 1.2.6+, probed live on **1.4.6**).
+  With the Remote Control toggle on, `AntigravityLaunchArgs.remoteControlSuffix`
+  is appended to the **interactive** launches: `.work`, the `-c` resume of
+  `.job`/`.review`, and the Manager. It is not appended to the first-launch
+  `-p` print turn, which is unattended, exits when done, and prints no
+  connection URL. What the live probe showed:
+  - **Per session.** Two concurrent `agy --remote-control` panes each got
+    their own connection, a distinct `antigravity.google.com/r/<id>` URL and
+    an `agy`-generated hostname label. `/remote-control off` (or exiting) tears
+    the connection down.
+  - **`crow send` still works.** Both tmux `paste-buffer` (Crow's path) and
+    `send-keys` land in the composer, and a pasted slash command submits
+    normally. Crow's own drive path is unchanged.
+  - **ADC is unsupported.** With `AGY_ADC_AUTH` set, `agy --remote-control`
+    exits **2** (`--remote-control is not supported when using Application
+    Default Credentials (ADC)`) instead of starting. The variable usually
+    lives in the user's shell rc, where `crowd` can't see it, so the suffix is
+    a shell-time guard, `$([ -n "${AGY_ADC_AUTH-}" ] || printf %s
+    --remote-control)`. An ADC sign-in launches without RC, as before, and
+    the badge then over-claims.
+  - **No `--name`.** The connection is labelled by `agy`, not by the Crow
+    session name. `sessionRenameSlashCommand` stays `nil`.
+
+  **Not wired:** `agy remote-control start|status|stop`. It is a
+  machine-global OS-service daemon that survives logouts and reboots
+  (`--session` only scopes it to the login session), outside Crow's session
+  model. That is the same brittle-reject class as Codex's
+  `app-server daemon` (CROW-1001).
+- **Cursor, OpenCode, Grok & Muse:** `true`, but there is **no RC
   flag** — remote driving is `crow send` pasting into the interactive TUI (the
   agent-agnostic path: the `send` RPC handler in `EngineTerminalRPCHandlers.swift` →
   `TerminalRouter.send`). The badge reflects that Crow *can* drive them, not
@@ -1254,7 +1286,8 @@ it through the same `CodingAgent` protocol as the others — its adapter
 lifecycle events (JSON on stdin, JSON verdict on stdout) so the
 `HookConfigWriter`/`StateSignalSource` pair does real work; per-worktree
 `.agents/hooks.json` with the session UUID baked in (per-session scope, not
-`cwd`); remote control faked via `crow send`; `.review` dispatches the inlined
+`cwd`); remote control is native session-scoped `--remote-control` on interactive
+launches (CROW-1428 — [Remote control](#remote-control)); `.review` dispatches the inlined
 `crow-review-pr` SKILL body via `-p` (#902), like Codex/Cursor/OpenCode — its
 review clone's committed config (`.agents/` **and**, defensively, the
 Gemini-derived `.gemini/` — #902 r7) is stripped at creation
@@ -1262,7 +1295,9 @@ Gemini-derived `.gemini/` — #902 r7) is stripped at creation
 — the one gate `launchAgent`, `pasteDeferredLaunch`, `createManagerTerminal`, the
 `send` RPC, and handoff route through), so a hostile PR head's hooks/MCP servers
 can't fire when `agy` loads the clone. The launch-path strip is load-bearing, not
-redundant: `agy` has no trust gate behind it, and a warm `crowd` restart or `crow
+redundant: no trust gate stands behind it (`agy` 1.4.6 has a per-folder trust prompt —
+not inherited from a trusted dev root — but the review's first-launch `-p` never shows it;
+CROW-1428), and a warm `crowd` restart or `crow
 send "agy -c"` reopens the clone after the review skill's `gh pr checkout` may have
 restored a committed layer from the head (#902 review r2/r3). CROW-960 re-strips
 in the skill immediately after that checkout for the *current* session; this
@@ -1305,14 +1340,45 @@ mis-shaped reply denies every tool call (cmux #5358), so — like Antigravity's 
 bundled vibe-island plugin — Crow stays off it. **Consequence — named tool
 activity is a Tier-2 gap:** `PostToolUse` stdin carries no tool name (only
 `stepIdx`/`error`), and `toolCall.name` lives on `PreToolUse` alone, so Crow can
-signal "a tool ran, still working" but not *which* tool. `EngineHookRPCHandlers`'s
+signal "a tool ran, still working" but not *which* tool. `agy` 1.5.4 added
+`hookEventName`, `cwd` and `toolCall.id` to every hook's stdin, so a
+`PostToolUse` can be matched to its `PreToolUse`. That does **not** close this
+gap. The name is still on `PreToolUse` only, and pairing would mean
+registering the event Crow stays off for the verdict-risk reason above. It is
+also unverified here: the installed `agy` is 1.4.6. Left unwired (CROW-1428). `EngineHookRPCHandlers`'s
 `hookToolName` reads `tool_name` or the nested `toolCall.name` (future-proofing a
-`PreToolUse` re-enable; a no-op for the currently-registered events). Gaps: no
-`--output-format json`/`stream-json` (upstream FRs
-#119/#597), no ACP/JSON-RPC (FR #31), no dedicated "awaiting-input" event, and
+`PreToolUse` re-enable; a no-op for the currently-registered events). Structured transports now exist upstream but are **not adopted** (see
+*ACP / stream-json* below). Gaps: no dedicated "awaiting-input" event, and
 headless `-p` historically drops stdout on a **non-TTY** — which doesn't bite
 Crow because it launches `agy` inside a tmux PTY, so no shim is needed on the
 `.job` `-p` path.
+
+**ACP / stream-json — evaluated, not adopted (CROW-1428).** The old gap
+statements are false upstream. `agy` print mode has `--output-format
+json|stream-json` (on 1.4.6). `--input-format stream-json` runs one turn per
+NDJSON stdin message in one conversation (1.1.15), and `finished_reason` was
+added in 1.4.11. `agy acp` is an Agent Client Protocol server over stdio
+(1.5.0, sessions fixed in 1.5.1/1.5.4). It is absent on the installed 1.4.6,
+which falls through to the root help. These would close FRs #119/#597/#31. Crow
+still doesn't use them, for three reasons:
+- **It would be a second drive path.** Crow drives every harness as an
+  interactive TUI in a tmux PTY ([ADR 0001](adr/0001-tmux-only-terminal-backend.md)).
+  The operator watches and types into that pane, and `crow send`, readiness,
+  scrollback and the web terminal all assume it. An ACP or stream-json
+  session has no TUI, so Crow would need a headless runner, its own
+  rendering, permission routing (ACP's `session/request_permission`) and
+  lifecycle, for one Tier-2 harness. There is precedent: #829 scoped
+  Cursor's `-p --output-format stream-json`, and the adapter shipped
+  without it. Cursor's `-p` runs in the tmux pane like every other launch.
+- **Hooks already carry the signals Crow needs.** Working, done and tool
+  heartbeat come through hooks. The structured channel would mostly duplicate
+  them, not unlock a missing tier.
+- **Version floor.** ACP needs `agy` ≥ 1.5.0, above what is installed here.
+
+Revisit if Crow adds a non-TUI session kind. A headless `.job` is the natural
+first candidate: stream-json would give it a real completion signal and
+`finished_reason`. Write that up as an ADR before wiring. This note is the
+evaluation, not a decision to pursue.
 
 **Permanent gap — self-host.** The `agy` binary is **closed-source** and auth is
 **Google Sign-In / GCP**, so it runs only against Google's cloud models (Gemini
@@ -1422,9 +1488,12 @@ against current upstream CLIs.
 | Cursor interactive `--trust` (workspace-trust seed) — reverses the earlier headless-only omission; now emitted on **every** kind incl. `.review` | **min: Cursor CLI ≥ 2026.07.20** (changelog: interactive); verified `agent 2026.08.04` (`--help` drops "headless mode only"; pty run with no `--print` writes `.workspace-trusted` / `"trustMethod": "cli-flag"`) | `CursorLaunchArgs.trustSuffix` | 2026-08-10 (CROW-954) — emitted on every path. The `.review` carve-out is **removed**: `--force` was observed NOT to suppress the trust dialog (the CROW-890 "unverified" note, now settled), so the carve-out stranded unattended reviews on a prompt that gated nothing — review already runs `--force --approve-mcps`. Review clones are now defended by the launch-path `.cursor/` strip (`shouldStripCursorReviewClone`) instead. Pre-2026.07.20 CLI out of support; probed 2026.07.23 that the parser ignores a mode-gated flag (`--output-format json --version` exits 0), so older builds no-op `--trust` rather than reject. Re-probe if `--help` ever restores the headless-only qualifier |
 | OpenCode "done" signal is `session.status {idle}`, not the deprecated `session.idle` | opencode **1.18.5** (probed; `session.status` present) | `OpenCodeHookConfigWriter` | 2026-08-13 (CROW-1000) — upstream publishes **both** at turn end (`session/status.ts` `set` → Status then Idle, 246 µs apart), so the plugin latches on the first `session.status` and drops the compat event; older builds keep the `session.idle` fallback. `session.status` fires on every status write, not only on changes, so transitions are deduped per `sessionID`. ⚠️ Probed via headless `opencode run`, **not** the interactive TUI — the TUI pass is the open human re-check, as is a build ≥ **1.18.16** (the version the ticket cites for the deprecation docs). Re-probe if upstream stops emitting `session.idle` (fallback becomes dead code) or adds a fourth `SessionStatus` type |
 | OpenCode subagent child sessions carry no parent link on `session.status`/`session.idle` — only `session.created`'s `info.parentID` does | opencode **1.18.5** (child idle measured 1.9 s before parent finish) | `OpenCodeHookConfigWriter` | 2026-08-20 (CROW-1082) — plugin records every child id from `session.created` and drops that id's status/idle so only the **root** session moves the card; a child no longer emits `SessionStart` either. Scoped to premature `.done`; child tool hooks still map to working (parent is working). Re-probe if upstream stops populating `info.parentID` on `session.created`, or starts stamping a parent id onto `session.status`/`session.idle` (the guard could then key off that directly) |
-| Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **v1.1.7 (2026-07-26)** | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-07-26 — re-probe on upgrade |
-| Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
-| Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
+| Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **1.4.6** (`agy --help` re-probed; changelog read to **1.5.5**) — root flags now also include `--remote-control`, `--mode accept-edits\|auto\|plan`, `--output-format text\|json\|stream-json`, `--input-format`, `--json-schema`, `--print-timeout`, `--sandbox`, `--effort`; subcommands add `remote-control`, `plugin`, `mic-serve`; `acp` only from 1.5.0 | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-11-11 (CROW-1428) — `-p`, `-c`, `--conversation` unchanged. Re-probe on upgrade |
+| Antigravity session-scoped Remote Control (`--remote-control`) | `agy` **≥ 1.2.6** (flag), **1.1.19** free-port fix, **1.3.3** ADC exits with an error; probed live on **1.4.6** — two concurrent panes, distinct connections, `paste-buffer` still drives, ADC → exit 2 | `AntigravityLaunchArgs.remoteControlSuffix` | 2026-11-11 (CROW-1428) — wired on interactive launches behind the `AGY_ADC_AUTH` shell guard. Re-check if a `--name`-style label appears (then label with the session name) or ADC gains RC support (then drop the guard). The `agy remote-control start` OS service stays unwired (machine-global) |
+| Antigravity structured-stdout / ACP (would promote toward first-class parity) | `--output-format json\|stream-json` + `--input-format stream-json` present on **1.4.6**; `finished_reason` **1.4.11**; `agy acp` **1.5.0** (fixes 1.5.1/1.5.4) — upstream FRs **#119/#597/#31** landed | `AntigravitySignalSource` | 2026-11-11 (CROW-1428) — evaluated, **not adopted**: a second, non-tmux drive path against ADR 0001 (Cursor's adapter likewise shipped without the stream-json #829 scoped). Revisit with an ADR if Crow adds a headless session kind |
+| Antigravity hook stdin `hookEventName` / `cwd` / `toolCall.id` | `agy` **1.5.4** (changelog); installed **1.4.6** — unverified | `AntigravitySignalSource` / `EngineHookRPCHandlers.hookToolName` | 2026-11-11 (CROW-1428) — not wired. `toolCall.id` pairs `PostToolUse`↔`PreToolUse`, but the tool *name* is still `PreToolUse`-only, which Crow doesn't register. Re-check on ≥ 1.5.4 whether `PostToolUse` carries `toolCall.name` |
+| Antigravity folder-trust prompt on interactive launch | `agy` **1.4.6** — `Do you trust the contents of this project?` per folder (stored in `~/.gemini/antigravity-cli/settings.json` `trustedWorkspaces`; a trusted dev root does **not** cover a worktree below it); `-p` runs in an untrusted folder without it | none — Crow seeds no Antigravity trust | 2026-11-11 (CROW-1428) — found on this pass, not fixed. A fresh `.work` pane and the `-c` resume of a `.job`/`.review` open on this prompt (attended: the operator answers; unattended `-c` resume: stalls). Seeding trust for review clones would be wrong (they are attacker-controlled); a work-worktree seed would need its own ticket |
+| Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548). **1.4.6** now has `--mode auto` | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 — `--mode auto` evaluation tracked separately in #1427 |
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
 | Antigravity review-clone strip list exhaustiveness: is any project-scope config `agy` reads **outside** `.agents/` + `.gemini/` still uncovered? | `agy` **v1.1.7**; user-scope MCP is `<$GEMINI_CONFIG_HOME or ~/.gemini/config>/mcp_config.json` (`AntigravityMCPConfigWriter`, CROW-1207). `AntigravityLaunchArgs` notes approval posture is governed by `settings.json` modes | `stripAntigravityConfigFromReviewClone` | 2026-09-07 (CROW-1207) — the user-scope writer confirms official docs: global MCP is `mcp_config.json` under `GEMINI_CONFIG_HOME` (default `~/.gemini/config`), not a project file Crow writes. The strip still removes `.agents/` **and** `.gemini/` **defensively** (a project `.agents/mcp_config.json` or `.gemini/settings.json` could carry `mcpServers`/`always-proceed`). So the question remains "is the strip **list exhaustive**" — confirm no other project-scope surface on the manual pass before promoting out of Tier-2 |
 | Antigravity hook re-read timing: does `agy` read `.agents/hooks.json` **once at process start**, or per-event? | `agy` **v1.1.7** — unverified; assumed start-only | `prepareWorktreeForAgentLaunch` (launch-time strip) + `crow-review-pr` Step 1 re-strip (CROW-960) | 2026-08-28 (CROW-960) — the launch-time strip still mitigates a hook restored *between* launches. The review skill (and the re-review prompt) now re-strips immediately after `gh pr checkout`, which closes the mid-session restore for the current process **if the agent follows Step 1**. If `agy` re-reads per-event, the remaining window is checkout→`rm`, not checkout→session-end. Confirm re-read timing on the manual pass before promoting out of Tier-2 |

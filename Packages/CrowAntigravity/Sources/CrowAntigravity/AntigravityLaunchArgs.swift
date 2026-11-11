@@ -10,6 +10,38 @@ public enum AntigravityLaunchArgs {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// `agy`'s native, session-scoped Remote Control flag (CROW-1428; `agy`
+    /// 1.2.6+, probed live on **1.4.6**). Each interactive `agy` process opens
+    /// its own connection — two concurrent per-worktree sessions get two
+    /// distinct `antigravity.google.com/r/<id>` URLs and hostname labels — and
+    /// tears it down when the process exits. It is not the machine-global
+    /// `agy remote-control start` OS service, which Crow never runs (the same
+    /// brittle-reject class as Codex's `app-server daemon`, CROW-1001).
+    public static let remoteControlFlag = "--remote-control"
+
+    /// Leading-space Remote Control suffix for an **interactive** `agy` launch,
+    /// or `""` when the toggle is off.
+    ///
+    /// The flag sits behind a shell-time `AGY_ADC_AUTH` guard. Remote Control
+    /// does not support Application Default Credentials, and with ADC sign-in
+    /// `agy --remote-control` exits 2 (`--remote-control is not supported when
+    /// using Application Default Credentials (ADC)`) instead of starting the
+    /// TUI. Crow can't see that variable: it is usually exported from the
+    /// user's shell rc, not `crowd`'s environment. So the pane's shell decides
+    /// at launch time. When `AGY_ADC_AUTH` is non-empty the flag is dropped and
+    /// the session launches as it did before this change, driven by
+    /// `crow send` only. Any non-empty value counts as ADC, so an odd value
+    /// costs Remote Control, never the launch.
+    ///
+    /// The guard uses `$(…)`, like `ShellLaunchArgs.evalPromptLaunch`; launch
+    /// lines already assume a POSIX-family shell. It is not used on the `-p`
+    /// print path. A print turn is unattended and exits when it finishes, and
+    /// `agy -p --remote-control` prints no connection URL to follow.
+    public static func remoteControlSuffix(_ remoteControlEnabled: Bool) -> String {
+        guard remoteControlEnabled else { return "" }
+        return " $([ -n \"${AGY_ADC_AUTH-}\" ] || printf %s \(remoteControlFlag))"
+    }
+
     /// Auto-permission flags for unattended `.job` launches. Returns a
     /// leading-space suffix or `""`.
     ///

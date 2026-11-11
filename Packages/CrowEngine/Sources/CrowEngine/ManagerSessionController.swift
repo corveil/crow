@@ -752,13 +752,27 @@ final class ManagerSessionController {
             }
         }
 
-        if command.contains(" --rc") {
+        if Self.managerCommandCarriesRemoteControl(command) {
             // See hydrate path: gate on what the agent actually emitted, not
             // on the global toggle, so a Cursor Manager doesn't get a stale
             // RC badge or a `/rename` injection (CROW-433 review).
             appState.remoteControlActiveTerminals.insert(terminal.id)
         }
         return terminal
+    }
+
+    /// Whether a built Manager command launches the agent with a native
+    /// Remote Control flag. That decides the RC badge and Claude's `/rename`
+    /// injection, so it reads what the agent emitted, not the global toggle
+    /// (CROW-433). There are two spellings. Claude's `--rc` (`ClaudeLaunchArgs`)
+    /// and Antigravity's session-scoped `--remote-control` (CROW-1428,
+    /// `AntigravityLaunchArgs.remoteControlFlag`). The Antigravity flag sits
+    /// inside a shell-time ADC guard, so the badge also lights on an ADC
+    /// sign-in where the guard drops it (documented in the harness matrix).
+    /// Antigravity has no `/rename`, so the badge is all that over-claims.
+    nonisolated static func managerCommandCarriesRemoteControl(_ command: String) -> Bool {
+        command.contains(" --rc")
+            || command.contains(" \(AntigravityLaunchArgs.remoteControlFlag)")
     }
 
     /// Write the explore brief and wrap `baseCommand` so the agent starts

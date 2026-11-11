@@ -242,7 +242,8 @@ final class SessionSurfaceController {
                 // appearing in the built command so the RC badge and
                 // `/rename` injection don't fire for a Cursor Manager
                 // (CROW-433 review).
-                let rebuiltCarriesRC = rebuiltCommand.contains(" --rc")
+                let rebuiltCarriesRC = ManagerSessionController
+                    .managerCommandCarriesRemoteControl(rebuiltCommand)
                 for i in terminals.indices {
                     if terminals[i].command != nil {
                         // Mutate in place rather than reconstructing the row:

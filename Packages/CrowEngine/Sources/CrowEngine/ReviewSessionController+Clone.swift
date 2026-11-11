@@ -186,8 +186,10 @@ extension ReviewSessionController {
         // hostile PR head can commit `.agents/hooks.json` with arbitrary command
         // hooks that `agy` runs with no approval gate. Now that Antigravity
         // supports review (`autoLaunchCommand(.review)` dispatches the inlined
-        // SKILL), this strip is load-bearing — and because `agy` has no trust
-        // gate, `stripAntigravityConfigFromReviewClone` is also wired into
+        // SKILL), this strip is load-bearing. `agy` has a folder-trust prompt
+        // (seen on 1.4.6), but the review's `-p` launch never shows it
+        // (CROW-1428), so no trust gate stands behind the strip.
+        // `stripAntigravityConfigFromReviewClone` is also wired into
         // `prepareWorktreeForAgentLaunch` (every launch path), so the review
         // skill's `gh pr checkout` / a head-advancing re-review can't restore the
         // hooks for the next `agy` launch. Gated to Antigravity reviews for the
