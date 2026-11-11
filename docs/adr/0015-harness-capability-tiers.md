@@ -465,6 +465,39 @@ deliberate, documented gaps (full grid in the
 > (brittle-reject, as in CROW-1176), and writing the var into the user's
 > global settings.
 
+> **Amendment (2026-11-11, CROW-1427):** Antigravity's **Auto** agent mode
+> (`agy` ≥ 1.3.5) is the same classifier shape as Cursor's Auto-review, and the
+> same re-check was run in a private tmux server against `agy` 1.5.5. It
+> passes where Cursor did not, so it is **wired** on `.work` (coder-view
+> Auto), `.job` and the Manager:
+>
+> 1. **The selector that works is `--settings`, not `--mode`.** `--mode auto` is
+>    applied before sign-in loads and silently falls back to `default` (`cli.log`:
+>    `auto mode is unavailable`; `-p`: `not available for this account`). That
+>    happens even on an account where `/config` reaches Auto. The session-only
+>    `--settings '{"agentMode":"auto"}'` is applied after sign-in and is never
+>    saved.
+> 2. **The flag wins.** With `"agentMode": "plan"` persisted, the `--settings`
+>    launch still came up in Auto. Cursor lost this test.
+> 3. **Unattended runs get a denial.** An undecided sandbox-exit review
+>    soft-denies under `-p` and the run continues (exit 0). Crow's first `.job`
+>    launch is `-p`. An interactive TUI still shows an approval card, which the
+>    attended `.work` and Manager can answer. A `-c` job relaunch can wait on
+>    one, but the default `request-review` mode cards on every command, and
+>    under `-p` it soft-denies every command, `ls` included.
+> 4. **The reviewer approved the Manager's out-of-sandbox calls:** the `crow`
+>    socket, `gh`, and a sibling `git worktree add`. Hooks fire unchanged.
+>
+> **`.review` is excluded.** The clone is attacker-controlled, and the
+> sandbox-exit reviewer reads the PR's own text. Reviews keep the user's
+> configured mode. The `-p` path passes the three tests the CROW-1406 Codex
+> amendment above set for `.review`: a denial, not a card; the flag wins; the
+> sandbox stays. But Codex's clone keeps a folder-trust gate behind its strip,
+> and Antigravity's strip is its only defense, with exhaustiveness still an
+> open re-check row. Extending Auto to Antigravity reviews is a separate
+> decision.
+> `--dangerously-skip-permissions` stays unused.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -632,7 +665,11 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   `--auto-review` was the same kind of re-check and **declined**
   ([CROW-1345](https://github.com/corveil/crow/issues/1345) — a classifier block
   ends in a TUI approval card, not a denial, and a persisted Run Everything
-  `approvalMode` overrides the flag). The canonical
+  `approvalMode` overrides the flag). Antigravity Auto mode was the same kind
+  of re-check and was **wired**
+  ([CROW-1427](https://github.com/corveil/crow/issues/1427) — `--settings`
+  beats a persisted mode, `-p` denies instead of stalling, `.review`
+  excluded). The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);
@@ -645,7 +682,8 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   server check (**≥ 2.1.319**, CROW-1426 — no local fallback; Corveil forwards
   it; gateway launch lines pin `CLAUDE_CODE_AUTO_MODE_SERVER=1`), Cursor `--auto-review`
   (documented run mode; declined CROW-1345 — approval-card stall, loses to a
-  persisted Run Everything),
+  persisted Run Everything), Antigravity Auto mode (`agy` ≥ 1.3.5 via
+  `--settings`, not `--mode`; wired CROW-1427),
   OpenCode's `session.status` done
   signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
   `session.idle` question), and the one still-unpinned empirical timing
@@ -680,7 +718,7 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
 
 ## References
 
-- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175); `--permission-prompts none` re-check: [#1215](https://github.com/corveil/crow/issues/1215); Cursor `--auto-review` re-check: [#1345](https://github.com/corveil/crow/issues/1345)
+- Issue: [#827](https://github.com/corveil/crow/issues/827); persist re-check: [#1175](https://github.com/corveil/crow/issues/1175); `--permission-prompts none` re-check: [#1215](https://github.com/corveil/crow/issues/1215); Cursor `--auto-review` re-check: [#1345](https://github.com/corveil/crow/issues/1345); Antigravity Auto mode re-check: [#1427](https://github.com/corveil/crow/issues/1427)
 - Related ADRs: [0014](./0014-pluggable-coding-agent-adapter.md) (the adapter),
   [0004](./0004-manager-auto-permission-mode.md) (`--permission-mode auto`),
   [0011](./0011-agent-handoff-preserves-session-not-chat.md) (handoff)
