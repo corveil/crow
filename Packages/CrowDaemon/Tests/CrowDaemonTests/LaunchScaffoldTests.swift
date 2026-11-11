@@ -93,9 +93,13 @@ struct LaunchScaffoldTests {
     }
 
     /// `/my-follow-ups` (CROW-1429) ships as a skill named for its slash
-    /// command, beside the `/crow-diagnose` its Triage hands items to. Holds for
-    /// the repo copy and for the fallback stub a build without the template
-    /// writes: both name it and keep its Corveil read and write rails.
+    /// command, beside the `/crow-diagnose` its Triage hands items to.
+    ///
+    /// Under `swift test`, `loadFromRepo` walks up from the test helper, not
+    /// from the repo, and there is no bundled template, so this scaffold writes
+    /// the **fallback stub**. These assertions are the stub's contract: it still
+    /// names the skill and keeps the Corveil read and write rails. The repo copy
+    /// is checked by `myFollowUpsRepoSkillIsUnchangedByExpansion` below.
     @Test func myFollowUpsSkillLandsBesideCrowDiagnose() throws {
         let devRoot = try Self.makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
@@ -111,6 +115,25 @@ struct LaunchScaffoldTests {
         #expect(body.contains("ontology_update_entity"))
         #expect(FileManager.default.fileExists(
             atPath: (skills as NSString).appendingPathComponent("crow-diagnose/SKILL.md")))
+    }
+
+    /// The repo copy of `/my-follow-ups` is what a dev build and (through its
+    /// `Resources/` twin) a release build install. The scaffold runs it through
+    /// `CrowAttribution.expandSkillBody`, which must leave it byte-for-byte
+    /// alone for every agent: `$ARGUMENTS` is Claude Code's to substitute, and
+    /// the text has no attribution placeholders.
+    @Test func myFollowUpsRepoSkillIsUnchangedByExpansion() throws {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { root.deleteLastPathComponent() }  // …/Packages/CrowDaemon/Tests/CrowDaemonTests/<file>
+        let source = try String(
+            contentsOf: root.appendingPathComponent("skills/my-follow-ups/SKILL.md"), encoding: .utf8)
+
+        #expect(source.hasPrefix("---\nname: my-follow-ups\n"))
+        #expect(source.contains("Arguments: `$ARGUMENTS`."))
+        for kind in [AgentKind.claudeCode, .cursor] {
+            #expect(CrowAttribution.expandSkillBody(source, agentKind: kind) == source,
+                    "expandSkillBody rewrote the skill for \(kind.rawValue)")
+        }
     }
 
     /// The Manager runs each skill script directly as well as via `bash`

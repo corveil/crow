@@ -208,7 +208,7 @@ Check every URL in the source's `existing_tickets` too. Read each plausible hit 
 | You found | Outcome |
 |---|---|
 | An open issue or PR that covers the work | **duplicate.** Propose a comment only if the observation adds something new: another repro, another person who hit it, the meeting or thread context. |
-| A **raw** issue filed from this source: the quote and little else, with no repo, cause or way to tell it is done. `/my-follow-ups` bodies end `Filed with /my-follow-ups`. | **ticket.** Re-diagnose it: the provenance ends `· re-diagnosed from {url}`, and Step 7 comments on the raw issue. |
+| A **raw** issue filed from this source: the quote and little else, with no repo, cause or way to tell it is done. A `/my-follow-ups` body ends with the line ``Filed with `/my-follow-ups` from the Corveil Follow-up Ledger.`` | **ticket.** Re-diagnose it: the provenance ends `· re-diagnosed from {url}`, and Step 7 comments on the raw issue. |
 | A closed issue that fixed it, and the problem is back | **ticket.** Link the closed issue under **Related** as a regression. |
 | A closed issue that was won't do | **won't do**, unless something has changed since. Then it's a ticket that says what changed. |
 | Related work that doesn't cover the observation | Not a duplicate. Name it under **Related**. |
@@ -372,7 +372,7 @@ Crow filled in the agent name on that attribution line when it installed this sk
 
 **An observation that already has a ticket.** Run on the FollowUp behind epic #1413 (`05d9dcd9-e6a3-4450-a3be-34665e204be7`): `existing_tickets` names #1413, and `D dupes --id 05d9dcd9-e6a3-4450-a3be-34665e204be7` lists #1413 and its sub-tickets under `from_source`. #1413 is an open epic that covers the observation, so the outcome is **duplicate**, with `link` set to #1413. The skill proposes a comment only if the transcript adds something #1413 lacks, and the FollowUp's `ticket_url` already holds #1413, so there is no write-back.
 
-**A raw ticket.** Run on an issue whose body is a FollowUp quote and the `Filed with /my-follow-ups` footer. The skill resolves the FollowUp named in that footer, diagnoses it, and files a new ticket whose provenance ends `· re-diagnosed from {url}`. With the operator's go, it comments on the raw issue and asks whether to close it, then sets the FollowUp's `ticket_url` to the new ticket.
+**A raw ticket.** Run on an issue whose body is a FollowUp quote and the `/my-follow-ups` footer. The skill resolves the FollowUp named in that footer, diagnoses it, and files a new ticket whose provenance ends `· re-diagnosed from {url}`. With the operator's go, it comments on the raw issue and asks whether to close it, then sets the FollowUp's `ticket_url` to the new ticket.
 
 ## Failure modes
 

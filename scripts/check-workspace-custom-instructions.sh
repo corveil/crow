@@ -599,11 +599,32 @@ done
 # and its two halves stay byte-identical. It runs on meeting text that anyone in
 # the room said, so it must keep its rules: every Corveil read passes
 # --no-capture, FollowUps are written only through ontology_update_entity
-# (never replace_properties), FollowUp text never reaches a shell command, and
-# an org without the Follow-up Ledger stops before anything is filed. Its links
-# point at docs/my-follow-ups.md, which must keep the prerequisites.
+# (never replace_properties), FollowUp text never reaches a shell command, File
+# asks before quoting a meeting into a public repo (as /crow-diagnose's `file`
+# refuses one without --public-ok), and an org without the Follow-up Ledger
+# stops before anything is filed. Its links point at docs/my-follow-ups.md,
+# which must keep the prerequisites.
 myfu_left="skills/my-follow-ups/SKILL.md"
 myfu_right="Resources/my-follow-ups-SKILL.md.template"
+# The last line of every issue File files. /crow-diagnose recognizes a raw
+# /my-follow-ups issue by it, so both skills must spell it the same way.
+# shellcheck disable=SC2016
+myfu_footer='Filed with `/my-follow-ups` from the Corveil Follow-up Ledger.'
+
+# uncaptured_corveil_reads <file>: the lines that run `corveil entity`,
+# `entities` or `history` without --no-capture (corveil/corveil#5245). Skips
+# YAML frontmatter and a `### Permissions` section, which name allow-rule
+# patterns (`Bash(corveil entity *)`), not reads.
+uncaptured_corveil_reads() {
+    awk '
+        NR == 1 && /^---$/ { fm = 1; next }
+        fm && /^---$/ { fm = 0; next }
+        fm { next }
+        /^#+ / { perms = ($0 == "### Permissions") }
+        !perms { print NR ": " $0 }
+    ' "$1" | grep -E 'corveil (entity|entities|history) ' | grep -vF -- '--no-capture' || true
+}
+
 if [ -f "$myfu_left" ] && [ -f "$myfu_right" ] && ! diff -q "$myfu_left" "$myfu_right" >/dev/null; then
     echo "DRIFT: $myfu_left and $myfu_right differ — an edit must land in both halves" >&2
     diff -u "$myfu_right" "$myfu_left" | head -40 >&2 || true
@@ -623,34 +644,34 @@ for f in "$myfu_left" "$myfu_right"; do
         'never type them into a shell command yourself' \
         'corveil entity <id> --no-capture | jq -r '"'" \
         'gh issue create -R <owner/repo> --title "$(corveil entity <id> --no-capture | jq -r .canonical_name)" --body-file -' \
-        'Filed with `/my-follow-ups` from the Corveil Follow-up Ledger.' \
+        "\"$myfu_footer\"" \
+        '**Ask before you quote a meeting into a public repo.**' \
+        'gh api repos/<owner/repo> --jq .visibility' \
+        'Ask even when `gh issue create` is pre-approved' \
         "Don't fall back to any other write path." \
         'Pass nothing else: no title or quote, and no `--yes`, `--dry-run` or `--repos`.' \
         "the Follow-up Ledger isn't set up here" \
         "the Follow-up Ledger isn't set up for \`<org_name>\`" \
         'https://github.com/corveil/crow/blob/main/docs/my-follow-ups.md#prerequisites'
-    # Every corveil entity / entities / history invocation outside the
-    # frontmatter's allowed-tools carries --no-capture (corveil/corveil#5245).
-    if [ -f "$f" ]; then
-        uncaptured="$(awk 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next } !fm { print NR ": " $0 }' "$f" |
-            grep -E 'corveil (entity|entities|history) ' | grep -vF -- '--no-capture' || true)"
-        if [ -n "$uncaptured" ]; then
-            echo "DRIFT: $f reads Corveil without --no-capture:" >&2
-            echo "$uncaptured" | head -5 >&2
-            fail=1
-        fi
-    fi
 done
 # shellcheck disable=SC2016
 require docs/my-follow-ups.md \
     '## Prerequisites' \
     '`corveil` CLI' '`gh`' '`jq`' \
     '`mcp.write` scope' '`ontology_writes` flag' '`ontology.write` capability' \
-    'rm ~/.claude/commands/my-follow-ups.md'
-# The footer is what /crow-diagnose recognizes a raw /my-follow-ups issue by.
-# shellcheck disable=SC2016
+    'rm ~/.claude/commands/my-follow-ups.md' \
+    '**A public repo gets a question first.**'
+for f in "$myfu_left" "$myfu_right" docs/my-follow-ups.md; do
+    [ -f "$f" ] || continue
+    uncaptured="$(uncaptured_corveil_reads "$f")"
+    if [ -n "$uncaptured" ]; then
+        echo "DRIFT: $f reads Corveil without --no-capture:" >&2
+        echo "$uncaptured" | head -5 >&2
+        fail=1
+    fi
+done
 for f in skills/crow-diagnose/SKILL.md Resources/crow-diagnose-SKILL.md.template; do
-    require "$f" '`/my-follow-ups` bodies end `Filed with /my-follow-ups`'
+    require "$f" "\`\`$myfu_footer\`\`"
 done
 
 if [ "$fail" -ne 0 ]; then

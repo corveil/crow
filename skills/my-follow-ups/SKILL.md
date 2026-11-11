@@ -95,6 +95,13 @@ Work through the items one at a time. File an item and check it off before you s
    If there is a match, skip to step 3 with its URL.
 2. **File the issue.** This one command builds the title and body from the FollowUp itself and files the issue. Substitute only two values. `<id>` is the item's UUID from step 2. `<owner/repo>` may contain only letters, digits, `.`, `_` and `-`, with exactly one `/`. If either value doesn't fit that shape, stop and ask me. Don't put the title, quote or any other property into the command yourself (see Rules).
 
+   **Ask before you quote a meeting into a public repo.** Before the first issue you file in this run, run `gh api repos/<owner/repo> --jq .visibility` once. If that fails, stop and show me the error. If it prints `public`, anyone can read what you file there, and the issue's title and body come straight from the meeting, quote included. So before you file each item, show me its title and quote, say the repo is public, and ask me to reply:
+   - `file` to file it as it stands (`file all` covers the rest of this run's items);
+   - `skip` to leave it open and unfiled;
+   - `triage` to diagnose it in step 5 instead, if triage is on offer. `/crow-diagnose` drafts the body and asks whether each quote can be public, so that's the way to redact one.
+
+   Ask even when `gh issue create` is pre-approved: picking an item isn't a go to publish what was said in the meeting. If the repo is `private` or `internal`, file without asking.
+
    ```bash
    corveil entity <id> --no-capture | jq -r '
      .properties as $p
