@@ -133,6 +133,47 @@ behaves as force 2 says on 0.166.0: it skips another provider's thread and opens
 a fresh TUI rather than erroring (same scratch setup). The restart-continuity
 consequence above still applies to those paths.
 
+### Amendment — CROW-1425 (2026-11-11): Codex 0.167 resumes across providers
+
+Codex **0.167.0** (openai/codex#58202) dropped force 2. `resume --last`, the
+resume picker and by-id lookup now include every provider's threads. When the
+current provider can't continue a thread, Codex opens it as **read-only
+history** with the composer disabled and a `🔒` notice whose footer is
+`c continue in new chat · n start fresh · esc other chats`. Reproduced on
+0.167.1 in a scratch `CODEX_HOME`. Both directions of the `--codex-upstream`
+toggle reach it:
+
+- **Routing turned on** (thread `openai`, launch `crow-corveil`):
+  `🔒  Continue in a new chat` / *"This chat uses A, but Codex now uses B, so
+  this chat is read-only."*
+- **Routing turned off** (thread `crow-corveil`, now unconfigured):
+  `🔒  Model provider unavailable` / *"This chat uses model provider
+  “crow-corveil”, which is no longer configured."*
+
+Nothing answers that screen on an unattended `.job` / `.review` restart or a
+`crow recreate-terminal`, and typed text never reaches a composer there.
+
+**Decision.** `CodexStartupPromptWatcher` treats the notice as a third startup
+screen and presses `n` (start fresh), which is the outcome 0.166 gave on its
+own. `CodexStartupNotices` pins the footer and the three titles. Rejected:
+
+- **Predicting `--last`'s pick and launching fresh on a mismatch** (option 1 in
+  the ticket). Crow would have to re-implement Codex's cwd-scoped "newest
+  thread" selection over the global `sessions/` tree on every restart. A wrong
+  guess either drops continuity for nothing or still hits the screen. The watch
+  reacts to what Codex actually decided, and it also covers by-id and the
+  policy variants.
+- **`c` (continue in new chat).** It prefills the composer with a draft of the
+  old transcript. A later `crow send` would be appended to that draft.
+- **Pinning a provider in `~/.codex/config.toml`.** It changes the operator's
+  own Codex use outside Crow.
+
+The Manager's by-id gate (#1409) stays. On 0.167 a mismatched by-id resume
+shows this notice instead of erroring, so the watch now backs the gate up. One
+continuity difference remains: 0.166's filter could fall back to an older
+same-provider thread in the cwd, but 0.167 picks the newest thread, and Crow
+then starts fresh.
+
 ## Alternatives considered
 
 - **On by default for every gateway.** Rejected. It forwards ChatGPT
