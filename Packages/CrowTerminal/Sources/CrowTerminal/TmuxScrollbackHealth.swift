@@ -1,11 +1,11 @@
 import CrowCore
 import Foundation
 
-/// Scrollback-health classification, sticky alt-buffer latch (CROW-1023),
+/// Scrollback-health classification, alt-buffer set (CROW-1023; live state since CROW-1403),
 /// and `enableAlternateScreen` (#822 / ADR 0013).
 ///
 /// Extracted from `TmuxBackend` (CROW-1222). `list-terminals` still reports
-/// `uses_alternate_screen` from the latch, not the static per-kind flag.
+/// `uses_alternate_screen` from the runtime alt-buffer read, not the static per-kind flag.
 
 extension TmuxBackend {
     // MARK: - Scrollback health (CROW-804)
@@ -77,8 +77,8 @@ extension TmuxBackend {
     /// The per-window classifications the web UI needs, from ONE `list-windows`
     /// read: which windows are scrollback-degraded (CROW-804 ⚠ Recreate), which
     /// run the agent-TUI scroll model (ADR-0013 wheel/mouse routing), and which
-    /// have actually entered the alternate buffer (CROW-1023, the sticky
-    /// `uses_alternate_screen` latch).
+    /// are in the alternate buffer as of this read (CROW-1023's
+    /// `uses_alternate_screen`; no longer sticky since CROW-1403).
     ///
     /// They ship together on every `list-terminals` RPC, and each is derived
     /// from the same three fields, so reading twice would fork a second `tmux`
@@ -111,7 +111,7 @@ extension TmuxBackend {
                     floor: floor)
             }
             let agents = windows.filter(\.alternateScreenEnabled)
-            // CROW-1023: update the sticky alt-buffer latch from this read (pure
+            // CROW-1023: update the alt-buffer set from this read (pure
             // policy in `updatedAltBufferLatch`), then report it as the third set.
             observedAltBufferWindows = Self.updatedAltBufferLatch(
                 liveWindows: windows.map { ($0.index, $0.alternateOn) },

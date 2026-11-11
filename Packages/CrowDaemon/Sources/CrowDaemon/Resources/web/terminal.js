@@ -910,7 +910,13 @@ function noteScrollbackClear(params) {
   const first = arr && arr.length ? arr[0] : 0;
   if ((Array.isArray(first) ? first[0] : first) !== 3) return false;
   const buf = term && term.buffer && term.buffer.active;
-  if (replayScrollAnchor === null && buf && buf.viewportY < buf.baseY) {
+  // `viewportY > 0`: a reader parked on line 1 is the CROW-934 arrival-at-top
+  // hydrate asking for OLDER lines, and the rebuild already leaves them on the
+  // oldest ones (ydisp stays 0). Anchoring there would keep "how tall the local
+  // buffer was" from the live edge. A shell's local buffer is thinned (a few
+  // hundred of 20k lines), so that would park the reader near the bottom of the
+  // real history instead of at what they asked for (#1435 review).
+  if (replayScrollAnchor === null && buf && buf.viewportY > 0 && buf.viewportY < buf.baseY) {
     replayScrollAnchor = { linesFromBottom: buf.baseY - buf.viewportY };
   }
   return false; // xterm still performs the clear
@@ -1140,9 +1146,9 @@ function selectWindow(win, opts) {
 // bytes ARE the transcript. Re-injecting capture-pane onto that already-painted
 // chrome is how the idle/prompt tip, model line, and cwd stack after every
 // tool call (and when scrolling history). #1010 kept the unified 50k so the
-// wheel still works; connect/reload select-window still restores that history
-// (CROW-606). In-place agent switches skip replay (CROW-1035). Only a true
-// alt-buffer agent was already excluded server-side
+// wheel still works; connect/reload and in-place agent switches still restore
+// that history through select-window (CROW-606; switches replay again since
+// CROW-1403). Only a true alt-buffer agent was already excluded server-side
 // (capture returns just the viewport); CROW-1048 extends the skip to inline
 // agents for a different reason: the replay is harmful, not empty.
 //
@@ -1217,7 +1223,10 @@ let hydrateIdleTimer = null;
 // the user leaving the top mid-flight (the #668 pill calls `scrollToBottom()`,
 // clearing `isUserScrolling` so `ydisp` tracks the bottom), where it would yank
 // them off the live prompt to line 1 of a 20k buffer. It never helps and acts
-// only when acting is wrong, so it is gone (#935 review round 3).
+// only when acting is wrong, so it is gone (#935 review round 3). The CROW-1403
+// replay anchor (noteScrollbackClear) also leaves this path alone: it does not
+// anchor a reader on line 1, so the arrival hydrate still lands on the oldest
+// lines.
 function scheduleHydrateSettle(ms) {
   clearTimeout(hydrateSettleTimer);
   const remaining = hydrateArmedAt + HYDRATE_MAX_FLIGHT_MS - Date.now();
@@ -1346,8 +1355,9 @@ function scheduleHydrateIdle() {
 // path uses still applies (in-flight, latch, dirty, cooldown, settle), so #935's
 // extend-forever cannot return: a heal that finds new lines leaves scrollbackDirty
 // false until fresh output dirties it, and one that finds nothing new latches via
-// the unchanged settle. As on the arrival path there is no viewport restore, so
-// the rebuild (isUserScrolling) leaves the user at the top of the healed history.
+// the unchanged settle. Unlike the arrival path, the reader is not on line 1, so
+// the CROW-1403 replay anchor puts them back at the same distance from the live
+// edge after the rebuild, instead of at the top of the healed history.
 function hydrateWhenIdle() {
   if (!term) return;
   if (activeSurfaceIsAgent()) return; // defense in depth (CROW-1048 / #1047)

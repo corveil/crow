@@ -146,6 +146,21 @@ console.log('\na reader at the live edge is left to follow live output:');
   check('no scrollToLine at the live edge', T.term.scrolledTo === null);
 }
 
+// #1435 review: a reader on line 1 is the CROW-934 arrival-at-top hydrate
+// asking for OLDER lines. The shell's local buffer is thinned (273 of ~20k
+// lines), so keeping its height as the distance from the live edge would park
+// the reader at ~19663 of the rebuilt history instead of on the oldest lines.
+console.log('\nan arrival-at-top hydrate still lands on the oldest lines:');
+{
+  T.term = xtermish(273, 0);
+  const sock = openSocket();
+  T.term.nextBaseY = 19936;
+  sock.onmessage({ data: bytes(REPLAY) });
+  check('the replay reached xterm', T.term.replays === 1);
+  check('no anchor is taken on line 1', T.term.scrolledTo === null);
+  check('the reader stays on the oldest lines (ydisp 0)', T.term.buffer.active.viewportY === 0);
+}
+
 console.log('\nonly ED3 (clear scrollback) records an anchor:');
 {
   T.term = xtermish(100, 50);
