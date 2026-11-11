@@ -41,6 +41,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-diagnose/SKILL.md`                     | Diagnose skill invoked via `/crow-diagnose`                   |
 | `{devRoot}/.claude/skills/crow-diagnose/diagnose.sh`                  | Source, repos, scratch clones, duplicates, standard check, file |
 | `{devRoot}/.claude/diagnose/`                                         | Per-observation source, plan, bodies, and `filed.json`        |
+| `{devRoot}/.claude/skills/my-follow-ups/SKILL.md`                     | Corveil follow-ups skill invoked via `/my-follow-ups` ([docs](my-follow-ups.md)) |
 | `{devRoot}/crow-reviews/`                                             | Temporary clones for PR reviews and `/crow-diagnose` (reserved name) |
 
 ## Workspace Configuration

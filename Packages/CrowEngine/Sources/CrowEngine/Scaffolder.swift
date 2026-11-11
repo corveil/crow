@@ -90,6 +90,9 @@ public struct Scaffolder {
         let diagnoseSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-diagnose")
         try fm.createDirectory(atPath: diagnoseSkillsDir, withIntermediateDirectories: true)
 
+        let myFollowUpsSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/my-follow-ups")
+        try fm.createDirectory(atPath: myFollowUpsSkillsDir, withIntermediateDirectories: true)
+
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
@@ -224,6 +227,16 @@ public struct Scaffolder {
         let diagnoseScriptPath = (diagnoseSkillsDir as NSString).appendingPathComponent("diagnose.sh")
         try Self.bundledDiagnoseScript().write(toFile: diagnoseScriptPath, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: diagnoseScriptPath)
+
+        // Always overwrite the my-follow-ups skill (CROW-1429). It lists the
+        // operator's open Corveil FollowUps, files or triages (through
+        // /crow-diagnose, above) the ones they pick, and checks them off
+        // through the Corveil MCP server. Kept unprefixed: crow-diagnose, the
+        // ticket standard and the `Filed with /my-follow-ups` issue footer all
+        // name it.
+        let myFollowUpsSkillPath = (myFollowUpsSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try CrowAttribution.expandSkillBody(Self.bundledMyFollowUpsSkill(), agentKind: managerAgentKind)
+            .write(toFile: myFollowUpsSkillPath, atomically: true, encoding: .utf8)
 
         // Always overwrite the show-image skill (surfaces generated images in
         // Crow's Images panel). No attribution expansion — it has no agent
@@ -1149,6 +1162,36 @@ public struct Scaffolder {
         #!/bin/bash
         echo '{"status":"error","message":"diagnose.sh not bundled"}'
         exit 2
+        """
+    }
+
+    /// The my-follow-ups SKILL.md template bundled with the app (CROW-1429).
+    static func bundledMyFollowUpsSkill() -> String {
+        if let content = loadFromRepo("skills/my-follow-ups/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "my-follow-ups-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        ---
+        name: my-follow-ups
+        description: List my open Corveil follow-ups (FollowUp entities assigned to me), file or triage the ones I pick, and check them off in Corveil. Use when I ask for my follow-ups.
+        ---
+
+        # My follow-ups
+
+        ## Activation
+        This skill activates when the user invokes `/my-follow-ups` or asks for their follow-ups.
+
+        ## Important
+        The full skill was not bundled with this build. Its source and
+        prerequisites are `skills/my-follow-ups/SKILL.md` and
+        `docs/my-follow-ups.md` in corveil/crow. Pass `--no-capture` to every
+        `corveil` read, write a FollowUp only through the Corveil MCP tool
+        `ontology_update_entity` (never `replace_properties`), and never put
+        FollowUp text into a shell command.
         """
     }
 

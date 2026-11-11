@@ -137,7 +137,8 @@ Crow scaffolds the following under the dev root (see `Packages/CrowEngine/Source
         ├── crow-ci-queue/            # /crow-ci-queue skill + queue.sh
         ├── crow-backlog-brief/       # /crow-backlog-brief skill + page.html + brief.sh
         ├── crow-release-review/      # /crow-release-review skill + page.html + release.sh
-        └── crow-diagnose/            # /crow-diagnose skill + diagnose.sh
+        ├── crow-diagnose/            # /crow-diagnose skill + diagnose.sh
+        └── my-follow-ups/            # /my-follow-ups skill (Corveil follow-ups)
 ```
 
 ## 6. Install (Optional)
