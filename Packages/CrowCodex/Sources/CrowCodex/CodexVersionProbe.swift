@@ -38,6 +38,43 @@ public enum CodexVersionProbe {
     /// `HookExecutionMode::Async`.
     public static let minimumAsyncHookVersion = AgentSemVer(0, 148, 0)
 
+    /// First Codex release Crow routes an unattended `.review`'s approvals to
+    /// Codex's Auto-review reviewer on (CROW-1406, see
+    /// `OpenAICodexAgent.autoReviewConfigOverrides`).
+    ///
+    /// Not the first build that *parses* `approvals_reviewer = "auto_review"`.
+    /// It is the build the evaluation verified against: in a private tmux server
+    /// on `codex-cli 0.166.0`, the per-launch `-c` keys showed
+    /// "Permissions: Workspace (Approve for me)" in `/status` on a fresh launch
+    /// and on `resume --last`, and beat a persisted `approval_policy = "never"`
+    /// / `approvals_reviewer = "user"` / `sandbox_mode = "danger-full-access"`
+    /// user config. The releases right before it changed this exact path:
+    /// 0.165.0 (#56090) made fresh TUI sessions take the server's default
+    /// reviewer, and 0.166.0 (#56516) made TUI startup respect the server's
+    /// approval defaults. A build that predates the rename knows only
+    /// `guardian_subagent`, and an unknown enum value is a config error that
+    /// would stop the launch. So older and unreadable builds get no reviewer
+    /// flags, and the review keeps today's human-gated launch.
+    public static let minimumAutoReviewVersion = AgentSemVer(0, 166, 0)
+
+    /// Whether `detected` may carry the Auto-review launch keys. Fail-closed:
+    /// `nil` (no binary, timeout, unreadable banner) and any pre-release of
+    /// 0.166.0 answer `false`.
+    public static func autoReviewSupported(_ detected: AgentSemVer?) -> Bool {
+        guard let detected else { return false }
+        return detected >= minimumAutoReviewVersion
+    }
+
+    /// One boot-log line for the Auto-review gate, naming the version and pin.
+    public static func autoReviewLogLine(_ detected: AgentSemVer?) -> String {
+        guard let detected else {
+            return "review auto-review off (version unreadable; needs >= \(minimumAutoReviewVersion.displayString))"
+        }
+        return autoReviewSupported(detected)
+            ? "review auto-review available (codex \(detected.displayString) >= \(minimumAutoReviewVersion.displayString))"
+            : "review auto-review off (codex \(detected.displayString) < \(minimumAutoReviewVersion.displayString))"
+    }
+
     /// Flag Crow passes `codex` to read its version. Cheap and side-effect-free.
     static let versionArgument = "--version"
 

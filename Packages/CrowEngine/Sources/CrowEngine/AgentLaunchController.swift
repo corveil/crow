@@ -235,6 +235,10 @@ final class AgentLaunchController {
     ///     clone's `.cursor/` (`shouldStripCursorReviewClone`, CROW-954): now that
     ///     Cursor seeds `--trust` on review, no folder-trust dialog stands behind
     ///     the strip either, so it joins the every-launch set for the same reason.
+    ///     And for a Codex `.review` clone's `.codex/` (`shouldStripCodexReviewClone`,
+    ///     CROW-1406): a clone a person trusted once stays trusted, so a restored
+    ///     `.codex/config.toml` would load on the next resume and could rewrite
+    ///     the Auto-review reviewer's policy.
     ///     CROW-960 also re-strips in the review skill (and the re-review prompt)
     ///     immediately after checkout, which closes the *current* session; this
     ///     gate remains the next-process backstop if the agent skips that step.
@@ -279,6 +283,9 @@ final class AgentLaunchController {
         }
         if SessionService.shouldStripMuseReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
             SessionService.stripMuseConfigFromReviewClone(clonePath: worktreePath)
+        }
+        if SessionService.shouldStripCodexReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
+            SessionService.stripCodexConfigFromReviewClone(clonePath: worktreePath)
         }
         seedTrustIfNeeded(
             agentKind: agentKind, sessionKind: sessionKind, sessionID: sessionID,

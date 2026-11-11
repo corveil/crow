@@ -87,6 +87,40 @@ public struct OpenAICodexAgent: CodingAgent {
 
     private let launcher: CodexLauncher
 
+    /// Root-level `-c` overrides that send an unattended `.review`'s approval
+    /// requests to Codex's Auto-review reviewer instead of a person (CROW-1406).
+    /// These are the same three keys Codex's own `--approve-for-me` flag expands
+    /// to (`SharedCliOptions::take_auto_review_config_overrides`, rust-v0.166.0).
+    /// Crow spells out the config keys rather than passing the flag, so the
+    /// launch reads as exactly what it sets.
+    ///
+    /// The reviewer is a swap, not a bypass:
+    /// - The sandbox stays `workspace-write`. A command the model runs with
+    ///   `sandbox_permissions: "require_escalated"` (a `gh pr review` that
+    ///   needs network) becomes an approval request. The reviewer agent judges
+    ///   it against Codex's risk policy. Only an approved request runs outside
+    ///   the sandbox, which is how the verdict reaches GitHub. Never
+    ///   `--dangerously-bypass-approvals-and-sandbox` / `-s danger-full-access`.
+    /// - A denial goes back to the model as an instruction ("continue only with
+    ///   a materially safer alternative"). It is not a card that waits for a
+    ///   person, which is why Cursor's `--auto-review` was declined (CROW-1345).
+    /// - The circuit breaker aborts the turn with an interrupt. Crow maps
+    ///   Codex's `Interrupt` hook to `.waiting` (CROW-1177), so a tripped
+    ///   breaker can't look like a finished review.
+    ///
+    /// Root-level, so they reach `resume --last` the same way the gateway
+    /// overrides do. Per-launch `-c` outranks the user's and the project's
+    /// `config.toml`, so the user's global Codex config is never written. Only
+    /// managed requirements (an organization policy) outrank it.
+    public static let autoReviewConfigOverrides =
+        " -c approval_policy=on-request -c approvals_reviewer=auto_review -c sandbox_mode=workspace-write"
+
+    /// Whether the installed `codex` is new enough for
+    /// ``autoReviewConfigOverrides`` (`CodexVersionProbe.minimumAutoReviewVersion`).
+    /// Defaults to `false`; the daemon re-registers the agent with the probed
+    /// answer at boot, the same way it does for async hooks.
+    public let autoReviewSupported: Bool
+
     /// Last-resort search paths for the `codex` binary, used only when the
     /// configured `BinaryOverrides` and a PATH walk both miss. Most users will
     /// resolve through PATH (codex ships via `npm i -g @openai/codex` and
@@ -106,11 +140,13 @@ public struct OpenAICodexAgent: CodingAgent {
     public init(
         hookConfigWriter: any HookConfigWriter = CodexHookConfigWriter(),
         stateSignalSource: any StateSignalSource = CodexSignalSource(),
-        threadProviders: CodexThreadProviders = .live
+        threadProviders: CodexThreadProviders = .live,
+        autoReviewSupported: Bool = false
     ) {
         self.hookConfigWriter = hookConfigWriter
         self.stateSignalSource = stateSignalSource
         self.threadProviders = threadProviders
+        self.autoReviewSupported = autoReviewSupported
         self.launcher = CodexLauncher()
     }
 
@@ -214,8 +250,8 @@ public struct OpenAICodexAgent: CodingAgent {
             // auto-permission flags when they're on, so an unattended job
             // resumed after a crowd/app restart doesn't stall at Codex's default
             // approval policy (#843 review round 4 — `codex resume` accepts
-            // `-a`/`-s`). `.work`/`.review` resume without them (`.work` isn't
-            // auto-driven; `.review` is human-gated by design).
+            // `-a`/`-s`). `.work` resumes without them (it isn't auto-driven);
+            // `.review` carries its own reviewer keys instead (CROW-1406).
             if autoPermissionMode {
                 return "\(resumeLast) -a never -s workspace-write\n"
             }
@@ -233,19 +269,31 @@ public struct OpenAICodexAgent: CodingAgent {
             // Kept interactive (not the headless `exec -a never -s
             // workspace-write` path the `.job` branch could use): the inlined
             // skill's `gh pr review` posting step needs network, and the
-            // workspace-write sandbox blocks it — so the same TUI path Cursor
-            // uses is the one that actually lands a verdict. Consequence: an
-            // unattended review stalls at Codex's first approval prompt
-            // (human-gated, same as Cursor; documented in the matrix). First
-            // launch feeds the prompt; restarts resume the thread.
+            // workspace-write sandbox blocks it, so the command has to go
+            // through an approval. First launch feeds the prompt; restarts
+            // resume the thread.
+            //
+            // CROW-1406: with `reviewAutoPermissionMode` on and a Codex new
+            // enough (`autoReviewSupported`), that approval goes to Codex's
+            // Auto-review reviewer (`autoReviewConfigOverrides`) instead of a
+            // person, so the run doesn't stall mid-review at a `gh` approval.
+            // Off, or on an older Codex, the review stays human-gated there: it
+            // stalls at Codex's first approval prompt until someone approves the
+            // `gh` call. Either way two startup screens still need a person
+            // (documented in the matrix): folder trust, once per clone dir,
+            // because Crow never trust-seeds a review clone; and, once the clone
+            // is trusted, "Hooks need review" for Crow's own per-session
+            // `.codex/hooks.json`, whose hash is not seeded on `.review`.
+            let reviewer = autoPermissionMode && autoReviewSupported
+                ? Self.autoReviewConfigOverrides : ""
             if !session.reviewPromptDispatched {
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-review-prompt.md")
                 return ShellLaunchArgs.evalPromptLaunch(
-                    prefix: codex,
+                    prefix: "\(codexPath)\(reviewer) \(Self.inlineRenderingFlag)",
                     promptPath: promptPath)
             }
-            return "\(resumeLast)\n"
+            return "\(codexPath)\(reviewer) resume --last \(Self.inlineRenderingFlag)\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Matches `CursorAgent`'s `.manager` contract.

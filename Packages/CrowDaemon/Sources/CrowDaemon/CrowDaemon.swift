@@ -131,6 +131,11 @@ public enum CrowDaemon {
         if let codexBinary = AgentRegistry.shared.agent(for: .codex)?.findBinary() {
             codexAsyncHooks = await CodexVersionProbe.probe(binaryPath: codexBinary)
             log("Codex hooks: \(codexAsyncHooks.logLine)")
+            // The same banner gates the `.review` Auto-review keys (CROW-1406):
+            // fail-closed, so an unreadable or older Codex keeps the review's
+            // human-gated launch rather than risk a config error at startup.
+            let codexAutoReview = CodexVersionProbe.autoReviewSupported(codexAsyncHooks.detected)
+            log("Codex: \(CodexVersionProbe.autoReviewLogLine(codexAsyncHooks.detected))")
             // Re-register Codex with an async-aware per-worktree hook writer.
             // The initial `registerAgents` registration ran *before* the probe
             // (it needs the registered agent to resolve the binary), with the
@@ -142,7 +147,8 @@ public enum CrowDaemon {
             AgentRegistry.shared.registerKnown(
                 OpenAICodexAgent(
                     hookConfigWriter: CodexHookConfigWriter(
-                        asyncHooksSupported: codexAsyncHooks.supported)),
+                        asyncHooksSupported: codexAsyncHooks.supported),
+                    autoReviewSupported: codexAutoReview),
                 available: true)
         }
 

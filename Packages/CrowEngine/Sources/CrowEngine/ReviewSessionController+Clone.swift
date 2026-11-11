@@ -175,8 +175,12 @@ extension ReviewSessionController {
         // just hide from the reviewing agent the exact files a hostile PR ships
         // — the review surface should stay intact for the agents that don't act
         // on `.codex/`.
+        //
+        // Every launch path re-strips too (`shouldStripCodexReviewClone`,
+        // CROW-1406): once a person trusts the clone dir, a `.codex/` restored
+        // by `gh pr checkout` would otherwise load on the next resume.
         if reviewAgentKind == .codex {
-            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
+            Self.stripCodexConfigFromReviewClone(clonePath: clonePath)
         }
         // Defense-in-depth for Antigravity review clones (#862 review, #902): a
         // hostile PR head can commit `.agents/hooks.json` with arbitrary command
