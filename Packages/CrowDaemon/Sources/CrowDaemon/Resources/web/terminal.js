@@ -60,7 +60,21 @@ function reloadTerminalAction() {
   clearTimeout(terminalReloadSettleTimer);
   terminalReloadSettleTimer = setTimeout(clearTerminalReloadPending, TERMINAL_RELOAD_SETTLE_MS);
   paintTerminalReloadState();
-  reloadTerminal();
+  reloadTerminalWithFreshFlags();
+}
+
+// CROW-1403: when the surface's scrollback is capped to 0 (the alt-buffer
+// flag), re-read `list-terminals` before reloading. The window may have left
+// the alt buffer since the last read. Reloading on the stale flag replays the
+// history into a 0-line buffer, which is why Reload could not bring an earlier
+// conversation back. Uncapped surfaces reload synchronously, as before.
+function reloadTerminalWithFreshFlags() {
+  const capped = !!(term && term.options && term.options.scrollback === 0);
+  if (!capped || typeof refreshTerminals !== 'function') { reloadTerminal(); return; }
+  Promise.resolve()
+    .then(() => refreshTerminals())
+    .catch(() => {})
+    .then(() => reloadTerminal());
 }
 
 // Idempotent: `onopen` also fires for reconnects nobody asked for, and repainting
@@ -127,7 +141,8 @@ const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono N
 // single tmux client serves every tab, so there is no per-window client buffer
 // state to read. `uses_alternate_screen` is the sibling flag: true only for a
 // window that has ACTUALLY entered the alt buffer — detected per-window from
-// tmux's runtime `#{alternate_on}` and latched sticky (CROW-1023), not a
+// tmux's runtime `#{alternate_on}` as of the last read (CROW-1023; no longer
+// sticky since CROW-1403), not a
 // per-kind guess, so the two diverging Claude Code builds (alt vs inline) route
 // correctly. The buffer/mouse-mode checks below are kept as an additional
 // signal for surfaces that do legitimately enter the alt buffer.
@@ -147,11 +162,14 @@ function activeSurfaceUsesAltScreen() {
 // every tab bind — not just at construct time. A missing flag (older daemon)
 // keeps 50k rather than capping — taking scrollback away is what broke Cursor.
 const UNIFIED_SCROLLBACK = 50000;
+// Returns true when this call RAISED the cap from 0. xterm discards what a cap
+// cuts off, so the caller has to ask crowd for a replay to bring the history
+// back (CROW-1403).
 function applySurfaceScrollback() {
-  if (!term || !term.options) return;
+  if (!term || !term.options) return false;
   const wanted = (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen())
     ? 0 : UNIFIED_SCROLLBACK;
-  if (term.options.scrollback === wanted) return;
+  if (term.options.scrollback === wanted) return false;
   // CROW-1047: the alt-buffer latch caps xterm from 50k → 0. Truncating while
   // the user is mid-history in the transitional unlatched window resets ydisp to
   // 0 on the oldest surviving lines — session start — instead of a few lines up.
@@ -159,9 +177,11 @@ function applySurfaceScrollback() {
   // this on every refreshTerminals pass until the cap lands.
   if (wanted === 0) {
     const buf = term.buffer && term.buffer.active;
-    if (buf && buf.viewportY < buf.baseY) return;
+    if (buf && buf.viewportY < buf.baseY) return false;
   }
+  const raised = term.options.scrollback === 0;
   term.options.scrollback = wanted;
+  return raised;
 }
 
 // CROW-1023: `uses_alternate_screen` is detected per-window from tmux's RUNTIME
@@ -399,6 +419,8 @@ function ensureTerminal() {
   // Registered before open()/first write so no mode toggle slips past.
   term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode);
   term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode);
+  // CROW-1403: a replay's ED3 must not throw a scrolled-up reader to line 1.
+  term.parser.registerCsiHandler({ final: 'J' }, noteScrollbackClear);
 
   // #677: seed the skeleton before first open() so it covers the initial xterm
   // layout / first-fit reflow flash; connectTerminalWs() re-arms it below.
@@ -817,7 +839,7 @@ function showTerminalMenu(e) {
   items.push({ label: 'Paste', action: pasteIntoTerminal });
   items.push({ label: 'Select all', action: () => term.selectAll() });
   items.push({ label: 'Clear', action: () => term.clear() });
-  items.push({ label: 'Reload terminal', action: reloadTerminal });
+  items.push({ label: 'Reload terminal', action: reloadTerminalWithFreshFlags });
   if (typeof appendTuiMenuItems === 'function') appendTuiMenuItems(items);
   const menu = el('div', 'ctx-menu');
   for (const it of items) {
@@ -851,6 +873,60 @@ function clearTermReconnectTimer() {
   termReconnectTimer = null;
 }
 
+// CROW-1403: name the window this socket is about to select. crowd starts the
+// PTY at that window's current size, so attaching resizes nothing. Without a
+// size the PTY is 0×0, which tmux reads as 80×24. Under `window-size latest`
+// every attach squeezed the shared agent window to 80 columns on every surface
+// until applyTermFit sent the real grid. A reconnect while this tab is
+// unfocused never sends one (#667), so the window stayed squeezed until the
+// user came back.
+function terminalSocketPath() {
+  const win = activeTerminal && activeTerminal.window;
+  return Number.isInteger(win) && win >= 0 ? '/terminal?window=' + win : '/terminal';
+}
+
+// CROW-1403: keep the reader's place across a scrollback replay.
+//
+// Every replay crowd sends (CROW-606) opens with ESC[3J. That includes
+// connect, reload, a dropped-socket auto-reconnect, the CROW-1027 heal, CROW-934
+// shell hydrate, and an in-place agent switch. xterm's ED3 drops the
+// scrollback and sets ydisp to 0. While the user is scrolled up
+// (isUserScrolling), the rebuilt history then streams in below a viewport
+// pinned there, so they land on line 1 of the session. A reconnect or a hydrate
+// that fires mid-read turned ordinary incremental scrolling into a jump to the
+// top.
+//
+// tmux never forwards an app's ED3 to its client. It clears the pane's own
+// history instead (measured against tmux 3.x), so an ED3 on this socket is
+// always a crowd replay or our own clearTermBuffer. When one is parsed, record
+// how far above the live edge the reader is. Once the message that carried it
+// has been parsed, put them back at that distance. Use distance from the bottom,
+// not the absolute line: a hydrate can bring back older lines at the top, which
+// moves every absolute index while the tail stays put.
+let replayScrollAnchor = null; // { linesFromBottom } between an ED3 and the end of its message
+
+function noteScrollbackClear(params) {
+  const arr = params && params.params ? params.params : params; // same shapes swallowMouseMode takes
+  const first = arr && arr.length ? arr[0] : 0;
+  if ((Array.isArray(first) ? first[0] : first) !== 3) return false;
+  const buf = term && term.buffer && term.buffer.active;
+  if (replayScrollAnchor === null && buf && buf.viewportY < buf.baseY) {
+    replayScrollAnchor = { linesFromBottom: buf.baseY - buf.viewportY };
+  }
+  return false; // xterm still performs the clear
+}
+
+// Write callback for every socket message. A no-op unless that message carried
+// a replay that started while the reader was scrolled up.
+function restoreReplayScroll() {
+  const anchor = replayScrollAnchor;
+  replayScrollAnchor = null;
+  if (!anchor || !term || typeof term.scrollToLine !== 'function') return;
+  const buf = term.buffer && term.buffer.active;
+  if (!buf) return;
+  term.scrollToLine(Math.max(0, buf.baseY - anchor.linesFromBottom));
+}
+
 function connectTerminalWs() {
   if (sessionDead) { hideTerminalSkeleton(); return; } // don't loop after an expired remote cookie (review Yellow); clear any overlay so the #679 scrim owns the screen
   // CROW-1027: this attach supersedes any queued auto-reconnect — drop it so two
@@ -863,7 +939,7 @@ function connectTerminalWs() {
   // of THIS socket.
   showTerminalSkeleton();
   let painted = false;
-  termWs = new WebSocket(wsURL('/terminal'));
+  termWs = new WebSocket(wsURL(terminalSocketPath()));
   termWs.binaryType = 'arraybuffer';
   termWs.onopen = () => {
     // Connected — this is the brief attach case, not a reconnect loop. Drop the
@@ -898,7 +974,7 @@ function connectTerminalWs() {
     // select-window. Drop those frames while the empty state is up.
     if (terminalDetached) return;
     if (event.data instanceof ArrayBuffer) {
-      term.write(new Uint8Array(event.data));
+      term.write(new Uint8Array(event.data), restoreReplayScroll);
       noteTerminalFrame(); // CROW-934 scrollback re-sync bookkeeping
       // Fade the skeleton out once the first real content has landed — rAF so
       // the hide follows the paint, not precedes it.
@@ -1026,7 +1102,9 @@ const TERM_BUFFER_CLEAR = '\x1b[H\x1b[2J\x1b[3J';
 
 function clearTermBuffer() {
   if (!term) return;
-  try { term.write(TERM_BUFFER_CLEAR); } catch (_) {}
+  // Our own ED3, not a replay: whatever the reader was looking at belongs to
+  // the window being left, so drop the anchor noteScrollbackClear takes.
+  try { term.write(TERM_BUFFER_CLEAR, () => { replayScrollAnchor = null; }); } catch (_) {}
 }
 
 function selectWindow(win, opts) {
@@ -1313,14 +1391,13 @@ function maybeHydrateScrollback() {
 // surface had reshaped the window, and only Reload recovered it.
 //
 // Agent TUIs must NOT take that path (CROW-1035). The reload opens a new
-// PTY at tmux's default 24×80, SIGWINCHes it to the real size, then injects
-// a capture-pane replay that races the live attach redraw. On Claude (alt
-// buffer) the caret lands below the input box; on Cursor the footer chrome
-// stacks one extra copy. Switch those in place: clear the local buffer so
-// the previous window's cells don't leak (not `term.reset()` — that also
-// clears modes tmux won't re-send), then select-window with `replay: false`
-// on the live socket. No new PTY, no same-size SIGWINCH (#637), no
-// capture-pane dump racing the live attach (alt-buffer and inline alike).
+// PTY and re-sizes it, which SIGWINCHes the agent. Switch those in place:
+// clear the local buffer so the previous window's cells don't leak (not
+// `term.reset()` — that also clears modes tmux won't re-send), then
+// select-window on the live socket. No new PTY and no same-size SIGWINCH
+// (#637). The select replays the pane's history, so an inline agent keeps its
+// earlier conversation (CROW-1403); crowd skips that capture for a pane in the
+// alt buffer.
 //
 // Only act when the target window differs, so background refreshes /
 // re-clicking the active tab don't churn. When the socket isn't open yet,
@@ -1347,7 +1424,14 @@ function switchAgentWindow(win) {
   clearTermBuffer();
   applySurfaceScrollback();
   resetScrollbackSync();
-  selectWindow(win, { replay: false });
+  // CROW-1403: replay. Skipping it (CROW-1035/1048) cleared xterm and let tmux
+  // repaint only the visible screen, so an inline agent's earlier conversation
+  // was gone after every switch until a Reload. The stacking that made the
+  // replay look harmful was the replay frame painting the screen one row low
+  // (it trimmed the blank row under the agent's footer). The frame now keeps
+  // every row and restores tmux's cursor, so the replayed screen and the live
+  // redraw agree. crowd still skips the capture for a pane in the alt buffer.
+  selectWindow(win);
   // CROW-1091: run the SAME sizing step the reload/connect attach runs, which
   // this in-place path had skipped. `reloadTerminal`/onopen call `applyTermFit()`
   // on attach — and `fitAddon.fit()` re-syncs xterm's scroll area, which is what
@@ -1358,10 +1442,9 @@ function switchAgentWindow(win) {
   // refresh." Fit here too (deferred a frame via fitTerminal so it measures the
   // pane at its settled post-switch layout — the tab bar / header height differs
   // between session kinds), and re-check the pinned-visible class right away so it
-  // reflects the switched-in buffer instead of the previous window's. No replay
-  // and no new PTY, so this stays clear of the CROW-1035 caret jump and CROW-1048
-  // chrome stacking a full reload would reintroduce; a same-size switch fits to
-  // identical cols/rows, so applyTermFit sends no SIGWINCH (#637).
+  // reflects the switched-in buffer instead of the previous window's. No new
+  // PTY, so this stays clear of the CROW-1035 24×80 attach; a same-size switch
+  // fits to identical cols/rows, so applyTermFit sends no SIGWINCH (#637).
   //
   // CROW-1162: this is the same coalesced `fitTerminal` the container
   // ResizeObserver uses, so a post-switch layout settle does not double-fire a
@@ -1370,10 +1453,8 @@ function switchAgentWindow(win) {
   updateTerminalScrollbar();
   // Do not arm CROW-1027 here. In-place switch has no new PTY and no
   // SIGWINCH, so the mid-reflow one-screen capture that heal exists for
-  // cannot happen. A second select-window 250ms later (the fake-xterm
-  // baseY===0 case, or a slow 50k replay) re-injects the current chrome
-  // on top of the first replay — the CROW-1035 stack, back on the
-  // switch path (CROW-1048). Connect/reload still arm the heal: that
+  // cannot happen, and a second select-window 250ms later would only
+  // repeat the replay above. Connect/reload still arm the heal: that
   // attach really does resize first.
 }
 
@@ -1388,6 +1469,7 @@ function switchAgentWindow(win) {
 function reloadTerminal() {
   if (!term) return;
   try { term.reset(); } catch (_) {}
+  replayScrollAnchor = null; // the reset already sent the reader to the live edge
   lastTermCols = 0;
   lastTermRows = 0;
   // CROW-934: the reconnect re-selects the window, so crowd replays the pane

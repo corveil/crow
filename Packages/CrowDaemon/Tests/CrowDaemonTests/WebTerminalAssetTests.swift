@@ -256,8 +256,11 @@ import Testing
             "a plain shell must still take the #673 full reload")
         let inPlace = try Self.functionBody("switchAgentWindow", in: source)
         #expect(
-            inPlace.contains("clearTermBuffer()") && inPlace.contains("selectWindow(win, { replay: false })"),
-            "in-place switch clears the local buffer then select-windows without replay")
+            inPlace.contains("clearTermBuffer()") && inPlace.contains("selectWindow(win)"),
+            "in-place switch clears the local buffer then select-windows on the live socket")
+        #expect(
+            !inPlace.contains("replay: false"),
+            "CROW-1403: the in-place switch replays, or an inline agent's earlier conversation is gone after every switch")
         #expect(
             !inPlace.contains("term.reset()"),
             "in-place switch must not term.reset() — that clears modes tmux won't re-send")
@@ -266,7 +269,7 @@ import Testing
             "in-place switch must not tear down the PTY")
         #expect(
             !inPlace.contains("armScrollbackHeal()"),
-            "in-place switch must not CROW-1027 recapture — no PTY resize, and a second replay stacks Cursor chrome (CROW-1048)")
+            "in-place switch must not CROW-1027 recapture — no PTY resize, so a second select-window 250ms later would only repeat the replay")
     }
 
     /// CROW-1048: mid-session capture-pane replay onto an inline agent TUI

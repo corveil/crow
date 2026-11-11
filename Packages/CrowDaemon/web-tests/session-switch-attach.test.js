@@ -4,11 +4,12 @@ const { JSDOM } = require('jsdom');
 const { loadClientSource } = require('./load-client');
 
 // CROW-1035: switching to a Claude / Cursor session must NOT take the #673
-// full reload (new PTY at 24×80 → SIGWINCH → capture-pane replay). That path
-// parks Claude's caret below the input box and stacks Cursor's footer chrome.
-// Agent surfaces switch in place (clear buffer + select-window with replay:false
-// on the live socket); plain shells keep the reload so a surface another client
-// reshaped still self-heals.
+// full reload (a new PTY, re-sized, SIGWINCHes the agent). Agent surfaces
+// switch in place (clear buffer + select-window on the live socket); plain
+// shells keep the reload so a surface another client reshaped still self-heals.
+// CROW-1403: the in-place select now REPLAYS history (no `replay: false`), so an
+// inline agent keeps its earlier conversation after a switch. crowd still skips
+// the capture for a pane in the alt buffer, server-side.
 const epilogue = `
 ;globalThis.__t = {
   attachWindow(win){ return attachWindow(win); },
@@ -153,7 +154,8 @@ console.log('CROW-1035: switching to a Claude (alt-buffer) session is in-place:'
   check('live socket was not closed', sock.closed === false);
   check('xterm buffer was cleared, not reset', T.term.clears === clearsBefore + 1);
   check('select-window went out on the live socket', selectWindowCount(sock) === 1);
-  check('in-place agent switch skips scrollback replay', selectWindowPayloads(sock)[0].replay === false);
+  check('in-place agent switch asks for the replay (crowd skips it for an alt-buffer pane)',
+    selectWindowPayloads(sock)[0].replay === undefined);
   check('attachedWindow tracks the new window', T.attachedWindow === claude.window);
   fireTimersAt(T.SCROLLBACK_HEAL_MS);
   check('alt-buffer agent does not self-heal-recapture', selectWindowCount(sock) === 1);
@@ -167,7 +169,7 @@ console.log('\nCROW-1035: switching to a Cursor (inline agent) session is in-pla
   check('no new WebSocket', sockets.length === socketsBefore);
   check('live socket was not closed', sock.closed === false);
   check('select-window went out on the live socket', selectWindowCount(sock) === 1);
-  check('inline agent in-place switch skips replay', selectWindowPayloads(sock)[0].replay === false);
+  check('CROW-1403: inline agent in-place switch replays its history', selectWindowPayloads(sock)[0].replay === undefined);
   T.term.buffer.active.baseY = 0;
   fireTimersAt(T.SCROLLBACK_HEAL_MS);
   check('in-place switch does not CROW-1027 recapture (no PTY resize to heal)', selectWindowCount(sock) === 1);
@@ -212,7 +214,7 @@ console.log('\nno open socket: attachWindow only records the window (onopen will
 // so a switched-in surface kept the previous window's grid geometry and stale
 // scrollbar sizing until a manual reload. So the switch must now schedule a fit
 // (`fitTerminal`, deferred a frame for the settled layout) and re-check the
-// pinned-visible class — WITHOUT reintroducing the replay it deliberately skips.
+// pinned-visible class, still in place (no new PTY).
 const wrap = window.document.getElementById('terminal-wrap');
 console.log('\nCROW-1091: an in-place agent switch runs the same sizing step as a reload:');
 {
@@ -224,8 +226,8 @@ console.log('\nCROW-1091: an in-place agent switch runs the same sizing step as 
   check('the switch schedules a fit (parity with the reload attach)', T.fitScheduled === true);
   check('the history scrollbar is evaluated on switch, not left to a manual refresh',
     wrap.classList.contains('has-scrollback'));
-  check('and it still skips the replay (no CROW-1035/1048 regression)',
-    selectWindowPayloads(sock)[0].replay === false);
+  check('and it is still a single in-place select-window (no second CROW-1027 capture)',
+    selectWindowCount(sock) === 1);
 }
 
 console.log('\nCROW-1091: switching in a surface with no history leaves no stale bar:');

@@ -41,7 +41,7 @@ enum TerminalWebSocket {
                 configProvider: { ConfigStore.loadConfig(devRoot: devRoot) },
                 sessions: sessions)
             return (originOK && auth.isAuthorized) ? .upgrade() : .dontUpgrade
-        } onUpgrade: { inbound, outbound, _ in
+        } onUpgrade: { inbound, outbound, wsContext in
             // Bound concurrent PTY + tmux attaches.
             guard TerminalConnectionLimiter.shared.acquire() else {
                 try? await outbound.write(.text("[crow] terminal connection limit reached"))
@@ -54,6 +54,15 @@ enum TerminalWebSocket {
             let group = cockpit.openViewSession()
             defer { cockpit.closeViewSession(group) }
 
+            // CROW-1403: attach at the size the target window already has, so
+            // attaching never resizes it. `?window=` names the window the
+            // browser is about to select; an index tmux doesn't know is a
+            // harmless failed select-window.
+            let requestedWindow = wsContext.request.uri.queryParameters["window"]
+                .flatMap { Int(String($0)) }
+                .flatMap { $0 >= 0 ? $0 : nil }
+            let initialSize = cockpit.attachSize(group: group, window: requestedWindow)
+
             // deliverOnMainQueue: false — the daemon has no main run loop, so PTY
             // output is delivered synchronously on the PTY read queue and bridged
             // into this async task via an AsyncStream.
@@ -63,7 +72,10 @@ enum TerminalWebSocket {
             pty.onExit = { _ in continuation.finish() }
 
             do {
-                try pty.start(command: cockpit.attachCommand(group: group), workingDirectory: nil)
+                try pty.start(
+                    command: cockpit.attachCommand(group: group),
+                    workingDirectory: nil,
+                    initialSize: initialSize)
             } catch {
                 continuation.finish()
                 return
@@ -179,9 +191,10 @@ enum TerminalWebSocket {
                                 // frame, and injecting it races the live attach redraw.
                                 // Yield through the same stream the PTY writes to, so this
                                 // serializes with live output on the single `outputTask`
-                                // (no concurrent `outbound` writes). In-place agent switches
-                                // pass `replay: false` (CROW-1035): the live attach already
-                                // has the frame and a capture-pane dump stacks inline chrome.
+                                // (no concurrent `outbound` writes). `replay: false` still
+                                // skips it, though the web client no longer sends that:
+                                // in-place agent switches replay again since the frame
+                                // stopped painting the screen one row low (CROW-1403).
                                 if control.replay != false,
                                    let replay = cockpit.replayData(group: group, index: window) {
                                     continuation.yield(replay)
@@ -245,8 +258,9 @@ private struct TerminalControl: Decodable {
     let cols: Int?
     let window: Int?
     /// When `false`, skip the CROW-606 capture-pane replay. In-place agent tab
-    /// switches send this — the live attach already has the frame and replay
-    /// races it (CROW-1035). Omitted or `true` keeps connect/reload/heal behavior.
+    /// switches sent this from CROW-1035 until CROW-1403 fixed the frame's
+    /// one-row offset; the field stays for older clients. Omitted or `true`
+    /// replays.
     let replay: Bool?
     /// When `true`, skip the PTY ioctl if the tmux window is already this size
     /// so a tab-refocus can reclaim `window-size latest` without a same-size

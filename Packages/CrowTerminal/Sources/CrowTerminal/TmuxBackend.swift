@@ -98,14 +98,14 @@ public final class TmuxBackend {
     /// INLINE (`alt_on=0`) and must be treated like Cursor — unified 50k, local
     /// wheel, a visible bar. Only a runtime read tells them apart.
     ///
-    /// Sticky (union across reads) so a build that enters the alt screen once
-    /// keeps the capped-0 model through its transient main-buffer drops (a
-    /// shell-out, exit) instead of flip-flopping its scrollback every poll. Only
+    /// Replaced on each read with the windows in the alt buffer right then
+    /// (CROW-1403). It used to be sticky, which let a transient full-screen
+    /// program inside an inline agent (Claude Code's Ctrl+G editor) cap that
+    /// window's scrollback for good. See `updatedAltBufferLatch`. Only
     /// windows with `alternate-screen on` (agent surfaces) can ever land here —
     /// a plain shell keeps the global `off`, so even a full-screen app in it
-    /// stays `alt_on=0`. Pruned to live windows on each read, and cleared per
-    /// index at (re)registration, so a recycled tmux index never inherits a
-    /// stale observation.
+    /// stays `alt_on=0`. Also cleared per index at (re)registration, so a
+    /// recycled tmux index never inherits a stale observation.
     var observedAltBufferWindows: Set<Int> = []
 
     /// Terminal whose tmux window is currently selected, so `makeActive` can

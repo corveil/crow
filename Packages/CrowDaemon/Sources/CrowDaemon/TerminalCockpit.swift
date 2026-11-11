@@ -140,6 +140,24 @@ struct TerminalCockpit: Sendable {
         return Self.parseColsRows(raw)
     }
 
+    /// The size a view's PTY should start at, so attaching resizes nothing
+    /// (CROW-1403). With no size the PTY is 0×0, which tmux treats as 80×24.
+    /// Under `window-size latest` the new client counts as latest as soon as it
+    /// attaches, so every attach squeezed the shared agent window to 80×24 on
+    /// every surface until the browser sent its real size. A browser that
+    /// reconnects while unfocused never sends one (`applyTermFit` is gated on
+    /// focus, #667), so the window stayed at 80 columns until the user came
+    /// back.
+    ///
+    /// `window` is the window the browser is about to select. It is selected
+    /// first so the attach lands on it, and the PTY takes that window's current
+    /// size. Without it, the view's current window is used.
+    func attachSize(group: String, window: Int?) -> (rows: UInt16, cols: UInt16)? {
+        if let window { selectWindow(group: group, index: window) }
+        guard let size = windowSize(group: group) else { return nil }
+        return (UInt16(clamping: size.rows), UInt16(clamping: size.cols))
+    }
+
     /// Parse `"cols rows"` from `display-message`. Pure so the skip-ioctl gate
     /// is unit-testable without tmux.
     static func parseColsRows(_ raw: String) -> (cols: Int, rows: Int)? {
@@ -171,23 +189,48 @@ struct TerminalCockpit: Sendable {
     /// redraw and parks the TUI caret below the input box (CROW-1035). See
     /// `replayFrame` and `shouldReplayScrollback`.
     func replayData(group: String, index: Int) -> Data? {
-        if !Self.shouldReplayScrollback(alternateOn: paneIsOnAlternateScreen(group: group, index: index)) {
+        let probe = replayProbe(group: group, index: index)
+        if !Self.shouldReplayScrollback(alternateOn: probe.alternateOn) {
             return nil
         }
         guard let raw = try? controller.capturePane(
             target: "\(group):\(index)", linesBack: Self.replayLines, escapes: true)
         else { return nil }
-        return Self.replayFrame(from: raw)
+        return Self.replayFrame(from: raw, cursor: probe.cursor)
     }
 
-    /// `#{alternate_on}` for `group:index`. `false` when tmux doesn't answer
-    /// so a failed probe still takes the CROW-606 replay path (shells / inline
-    /// agents) rather than silently dropping history.
-    func paneIsOnAlternateScreen(group: String, index: Int) -> Bool {
+    /// Where tmux has the pane's cursor, so a replay can leave xterm's caret
+    /// where the live attach would (CROW-1403). Zero-based, pane-relative.
+    struct ReplayCursor: Equatable {
+        let x: Int
+        let y: Int
+        let visible: Bool
+    }
+
+    /// `#{alternate_on}` plus the cursor for `group:index`, in one tmux call.
+    /// A failed read reports `alternateOn: false` and no cursor, so it still
+    /// takes the CROW-606 replay path (shells / inline agents) rather than
+    /// silently dropping history.
+    func replayProbe(group: String, index: Int) -> (alternateOn: Bool, cursor: ReplayCursor?) {
         guard let raw = try? controller.displayMessage(
-            target: "\(group):\(index)", format: "#{alternate_on}")
-        else { return false }
-        return raw.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+            target: "\(group):\(index)",
+            format: "#{alternate_on} #{cursor_x} #{cursor_y} #{cursor_flag}")
+        else { return (false, nil) }
+        return Self.parseReplayProbe(raw)
+    }
+
+    /// Parse `"<alternate_on> <cursor_x> <cursor_y> <cursor_flag>"`. Pure, so the
+    /// shape is unit-testable without tmux. A short or malformed read keeps
+    /// whatever it could parse: a bad cursor never blocks the replay.
+    static func parseReplayProbe(_ raw: String) -> (alternateOn: Bool, cursor: ReplayCursor?) {
+        let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+        let alternateOn = parts.first == "1"
+        guard parts.count >= 4,
+              let x = Int(parts[1]), let y = Int(parts[2]),
+              x >= 0, y >= 0
+        else { return (alternateOn, nil) }
+        return (alternateOn, ReplayCursor(x: x, y: y, visible: parts[3] == "1"))
     }
 
     /// Whether `select-window` should follow up with a capture-pane replay.
@@ -291,23 +334,38 @@ struct TerminalCockpit: Sendable {
 
     /// Transform a `capture-pane -pe` blob into a self-contained replay frame for
     /// xterm.js. Pure (no tmux) so it's unit-testable. Steps:
-    ///   1. strip trailing newlines — `capture-pane` pads a trailing LF that would
-    ///      otherwise push the viewport down one row versus tmux's own redraw;
+    ///   1. drop capture-pane's final line terminator, and only that. Every
+    ///      screen row is printed, including the blank rows below the last
+    ///      output, and those blanks are real rows. Trimming all trailing
+    ///      newlines (as this did until CROW-1403) moved every replayed screen
+    ///      row down by the number of blank rows. Every Claude Code pane has one
+    ///      under its footer, so the replay painted the screen one row low.
+    ///      That is the "one-line stack" CROW-1035 and CROW-1048 reported, and
+    ///      the reason in-place agent switches stopped replaying;
     ///   2. convert bare LF → CRLF — `capture-pane` emits `\n` only, and xterm.js
     ///      treats `\n` as line-feed-without-carriage-return, so raw output would
     ///      stair-step down the screen;
     ///   3. prepend `ESC[H ESC[2J ESC[3J` (home + clear screen + clear scrollback)
     ///      so repeated selects/reconnects REBUILD the buffer rather than stack
-    ///      duplicate copies of the history.
-    /// The blob keeps the current screen at its tail, so tmux's live attach redraw
-    /// repaints those same viewport rows in place — the replayed history lands
-    /// above the live viewport regardless of which write wins the race.
-    static func replayFrame(from raw: String) -> Data {
-        let trimmed = raw.replacingOccurrences(of: "[\r\n]+$", with: "", options: .regularExpression)
-        let crlf = trimmed.replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\n", with: "\r\n")
+    ///      duplicate copies of the history;
+    ///   4. with a `cursor`, reset SGR and put the caret where tmux has it, with
+    ///      tmux's visibility. Without this the caret was left at the end of the
+    ///      last replayed row, below the agent's input box, until the agent next
+    ///      moved it.
+    /// History plus the full screen is `history_size + pane_height` rows, so the
+    /// last row lands on xterm's bottom row and every screen row sits where the
+    /// live attach paints it. Whichever write wins the race, the screen matches.
+    static func replayFrame(from raw: String, cursor: ReplayCursor? = nil) -> Data {
+        var lines = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        if lines.hasSuffix("\n") { lines.removeLast() }
+        let crlf = lines.replacingOccurrences(of: "\n", with: "\r\n")
         let clear = "\u{1b}[H\u{1b}[2J\u{1b}[3J"
-        return Data((clear + crlf).utf8)
+        var frame = clear + crlf
+        if let cursor {
+            frame += "\u{1b}[0m\u{1b}[\(cursor.y + 1);\(cursor.x + 1)H"
+            frame += cursor.visible ? "\u{1b}[?25h" : "\u{1b}[?25l"
+        }
+        return Data(frame.utf8)
     }
 
     /// The desktop app's stable tmux socket: `$TMPDIR/crow-tmux.sock` (#330).
