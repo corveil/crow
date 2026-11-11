@@ -8,8 +8,9 @@ import CrowCore
 ///
 /// Structurally a near-clone of `CursorAgent`: hooks are Claude-Code-style, so
 /// the `HookConfigWriter` / `StateSignalSource` pair does real work (not a
-/// `cwd`-scoped fallback); remote control is faked via `crow send` typing into
-/// the interactive TUI (no native RC protocol); `.review` dispatches the
+/// `cwd`-scoped fallback); remote control is `agy`'s native session-scoped
+/// `--remote-control` on interactive launches (CROW-1428), with `crow send`
+/// typing into the TUI as Crow's own drive path; `.review` dispatches the
 /// inlined `crow-review-pr` SKILL body via `-p` (like Cursor/Codex/OpenCode —
 /// #902). What Antigravity *can't* do is self-host — the CLI is closed-source
 /// and Google-Sign-In/GCP-authed, so it runs only against Google's cloud models
@@ -21,10 +22,16 @@ public struct AntigravityAgent: CodingAgent {
     /// Thematically "anti-gravity" (up), and visually distinct from Claude's
     /// `"sparkles"`, Cursor's `"cursorarrow.rays"`, and Codex's `"terminal.fill"`.
     public let iconSystemName: String = "arrow.up.circle"
-    /// `true`, but faked: Antigravity has no `--rc`/`--name` protocol, so remote
-    /// driving is `crow send` typing into the interactive TUI (the agent-agnostic
-    /// stdin path). The badge reflects that Crow *can* drive it, not a native RC
-    /// surface — same as Cursor/OpenCode.
+    /// `true`, backed by a native flag since CROW-1428. With the Remote Control
+    /// toggle on, interactive launches (`.work`, the `-c` resume of `.job` /
+    /// `.review`, and the Manager) append `--remote-control`
+    /// (`AntigravityLaunchArgs.remoteControlSuffix`). That flag opens a
+    /// per-process connection followable at `antigravity.google.com/r/<id>`.
+    /// `crow send` into the TUI still works alongside it (probed on `agy`
+    /// 1.4.6). Two gaps remain. There is no `--name` equivalent, so the
+    /// connection is labelled with an `agy`-generated hostname, not the Crow
+    /// session name. And ADC sign-in can't use Remote Control, so the shell
+    /// guard drops the flag and the badge then over-claims.
     public let supportsRemoteControl: Bool = true
     /// Antigravity's CLI binary is `agy` (not `antigravity`) — low collision risk.
     public let launchCommandToken: String = "agy"
@@ -88,13 +95,16 @@ public struct AntigravityAgent: CodingAgent {
         // `AntigravityLaunchArgs.autoPermissionSuffix`); kept for call-site
         // uniformity so a future bounded flag lands once for every path.
         let autoArgs = AntigravityLaunchArgs.autoPermissionSuffix(autoPermissionMode)
+        // Session-scoped native Remote Control (CROW-1428), interactive
+        // launches only — see `AntigravityLaunchArgs.remoteControlSuffix`.
+        let rcArgs = AntigravityLaunchArgs.remoteControlSuffix(remoteControlEnabled)
 
         switch session.kind {
         case .work:
             // Interactive TUI — the user types their prompt. No prompt injection,
-            // no resume flag (a fresh work TUI launching bare is deliberate), no
-            // RC flag (remote control is `crow send` into the TUI).
-            return "\(agentPath)\(autoArgs)\n"
+            // no resume flag (a fresh work TUI launching bare is deliberate).
+            // `--remote-control` when the toggle is on (CROW-1428).
+            return "\(agentPath)\(autoArgs)\(rcArgs)\n"
         case .job, .review:
             // Jobs and reviews share one dispatch shape (collapsed into a single
             // branch so the two can't drift, mirroring Cursor/Grok/OpenCode): feed
@@ -143,7 +153,9 @@ public struct AntigravityAgent: CodingAgent {
                     prefix: "\(agentPath)\(autoArgs) -p",
                     promptPath: promptPath)
             }
-            return "\(agentPath)\(autoArgs) -c\n"
+            // The `-c` resume is an interactive TUI, so it carries the RC flag;
+            // the first-launch `-p` print turn above does not.
+            return "\(agentPath)\(autoArgs) -c\(rcArgs)\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Returning nil is the contract, not a gap.
@@ -192,12 +204,15 @@ public struct AntigravityAgent: CodingAgent {
         // `-c` is machine-global most-recent (no per-run id, CROW-1281), so
         // `conversationID` is ignored: isolated extra-Manager cwd still
         // separates hook files, but relaunch cannot target a specific brain
-        // conversation. No `--rc`/`--name` equivalent. Terminal backend
+        // conversation. Native `--remote-control` when the toggle is on
+        // (CROW-1428); there is no `--name` equivalent. Terminal backend
         // appends the submitting Enter, so return the command without a
         // trailing newline (cross-agent convention).
         _ = conversationID
         let agentPath = AntigravityLaunchArgs.shellQuote(launchBinary() ?? "agy")
-        return agentPath + AntigravityLaunchArgs.autoPermissionSuffix(autoPermissionMode)
+        return agentPath
+            + AntigravityLaunchArgs.autoPermissionSuffix(autoPermissionMode)
+            + AntigravityLaunchArgs.remoteControlSuffix(remoteControlEnabled)
     }
 
     // `sessionRenameSlashCommand` is intentionally NOT overridden: `agy` v1.1.7's

@@ -33,16 +33,57 @@ struct AntigravityAgentTests {
 
     // MARK: - autoLaunchCommand
 
+    /// The exact ADC-guarded suffix (CROW-1428). Pinned verbatim so a drift in
+    /// the shell guard — the thing that keeps an ADC sign-in launching — fails.
+    private let rcSuffix = " $([ -n \"${AGY_ADC_AUTH-}\" ] || printf %s --remote-control)"
+
     @Test func workSessionLaunchesBareTUI() {
         let session = Session(name: "test", agentKind: .antigravity)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/tmp/wt",
-            remoteControlEnabled: true, autoPermissionMode: true, telemetryPort: 4318)
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: 4318)
         // Bare interactive TUI: no prompt, no resume flag, no OTEL prefix, no RC.
         #expect(cmd?.hasSuffix("agy'\n") == true)  // binary is shell-quoted
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
         #expect(cmd?.contains("OTEL_") == false)
         #expect(cmd?.contains("-p ") == false)
+        #expect(cmd?.contains("--remote-control") == false)
+    }
+
+    @Test func workSessionAppendsNativeRemoteControlWhenEnabled() {
+        // CROW-1428: session-scoped `--remote-control`, behind the ADC guard.
+        let session = Session(name: "test", agentKind: .antigravity)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: true, autoPermissionMode: false, telemetryPort: nil)
+        #expect(cmd?.hasSuffix("agy'\(rcSuffix)\n") == true)
+        // Never the machine-global OS service, and never Claude's flag spelling.
+        #expect(cmd?.contains("remote-control start") == false)
+        #expect(cmd?.contains(" --rc") == false)
+    }
+
+    @Test func remoteControlSuffixIsEmptyWhenDisabled() {
+        #expect(AntigravityLaunchArgs.remoteControlSuffix(false) == "")
+        #expect(AntigravityLaunchArgs.remoteControlSuffix(true) == rcSuffix)
+    }
+
+    @Test func remoteControlNeverRidesThePrintTurn() {
+        // `-p` is an unattended one-shot turn that prints no RC URL; only the
+        // interactive `-c` resume carries the flag.
+        for kind in [SessionKind.job, .review] {
+            let first = Session(name: "x", kind: kind, agentKind: .antigravity)
+            let firstCmd = agent.autoLaunchCommand(
+                session: first, worktreePath: "/tmp/wt",
+                remoteControlEnabled: true, autoPermissionMode: false, telemetryPort: nil)
+            #expect(firstCmd?.contains("--remote-control") == false)
+
+            var resumed = Session(name: "x", kind: kind, agentKind: .antigravity)
+            resumed.reviewPromptDispatched = true
+            let resumeCmd = agent.autoLaunchCommand(
+                session: resumed, worktreePath: "/tmp/wt",
+                remoteControlEnabled: true, autoPermissionMode: false, telemetryPort: nil)
+            #expect(resumeCmd?.hasSuffix(" -c\(rcSuffix)\n") == true)
+        }
     }
 
     @Test func jobFirstLaunchInjectsPromptViaDashP() {
@@ -141,10 +182,20 @@ struct AntigravityAgentTests {
 
     @Test func managerLaunchCommandBareNoRC() {
         let cmd = agent.managerLaunchCommand(
-            sessionName: "Manager", remoteControlEnabled: true,
+            sessionName: "Manager", remoteControlEnabled: false,
             autoPermissionMode: true, telemetryPort: 4318)
         #expect(cmd.hasSuffix("agy'"))  // binary is shell-quoted, no trailing newline
         #expect(cmd.contains("--dangerously-skip-permissions") == false)
+    }
+
+    @Test func managerLaunchCommandAppendsNativeRemoteControl() {
+        // CROW-1428. No `--name` equivalent exists, so the session name is not
+        // passed anywhere; no trailing newline (backend appends Enter).
+        let cmd = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: true,
+            autoPermissionMode: false, telemetryPort: nil)
+        #expect(cmd.hasSuffix("agy'\(rcSuffix)"))
+        #expect(cmd.contains("Manager") == false)
     }
 
     @Test func findBinaryDoesNotCrash() {

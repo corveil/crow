@@ -104,8 +104,10 @@ extension ReviewSessionController {
     /// review, Red; mirrors `shouldStripGrokReviewClone`). Only a `.review`
     /// session on Antigravity strips: `.work`/`.job` branch off a trusted base,
     /// and a `.review` on any other agent must not strip a surface that agent
-    /// doesn't load. Antigravity has no trust gate (`agy` runs `.agents/hooks.json`
-    /// unapproved and seeds no folder trust), so unlike Cursor — whose bespoke
+    /// doesn't load. Antigravity has no trust gate Crow can rely on. `agy` runs
+    /// `.agents/hooks.json` unapproved, Crow seeds no folder trust, and `agy`'s
+    /// own folder-trust prompt (1.4.6) never shows on the review's `-p` launch
+    /// (CROW-1428). So unlike Cursor — whose bespoke
     /// handoff strip is defense-in-depth behind its `.review` trust carve-out —
     /// the strip is Antigravity's *only* defense and must re-fire on every launch,
     /// which is why this routes through the shared gate rather than a handoff arm.
@@ -158,7 +160,8 @@ extension ReviewSessionController {
     /// commit `.agents/hooks.json` with arbitrary command hooks that `agy` runs
     /// with no approval gate, so once Antigravity loads the clone as its project
     /// root the hooks fire unsandboxed on the reviewer's machine. Because this is
-    /// Antigravity's **only** defense (no trust gate behind it), it strips the
+    /// Antigravity's **only** defense (no trust gate behind it on the `-p`
+    /// launch), it strips the
     /// whole plausibly-discovered surface rather than the native dir alone —
     /// mirroring `stripGrokConfigFromReviewClone`, which strips `.grok/` **plus**
     /// `.cursor/`/`.claude/`/`.mcp.json` for the same reason (#861 r12, Red):

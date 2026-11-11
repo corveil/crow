@@ -228,7 +228,9 @@ final class AgentLaunchController {
     ///     Gated to Grok + `.review` via `shouldStripGrokReviewClone`. Same for an
     ///     Antigravity `.review` clone's `.agents/` (`shouldStripAntigravityReviewClone`,
     ///     #902 review Red): `agy` runs committed `.agents/hooks.json` with **no**
-    ///     approval gate and Antigravity seeds no trust, so the strip is the *only*
+    ///     approval gate, Crow seeds no Antigravity trust, and `agy`'s own
+    ///     folder-trust prompt never shows on the review's `-p` launch
+    ///     (1.4.6, CROW-1428), so the strip is the *only*
     ///     defense — it MUST re-run here, not just at creation, because the review
     ///     skill's `gh pr checkout` (or a head-advancing re-review) restores the
     ///     attacker's hooks from the PR head. Same again for a Cursor `.review`
