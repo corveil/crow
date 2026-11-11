@@ -42,35 +42,60 @@ public enum AntigravityLaunchArgs {
         return " $([ -n \"${AGY_ADC_AUTH-}\" ] || printf %s \(remoteControlFlag))"
     }
 
-    /// Auto-permission flags for unattended `.job` launches. Returns a
-    /// leading-space suffix or `""`.
+    /// The session-only `settings.json` override that selects Antigravity's
+    /// **Auto** agent mode (CROW-1427). `--settings` takes "a JSON object of
+    /// settings.json keys, inline or as a file path" and is "never saved", so
+    /// the user's persisted `agentMode` is untouched.
+    public static let autoModeSettingsJSON = #"{"agentMode":"auto"}"#
+
+    /// Auto-permission flags. Returns a leading-space suffix or `""`.
     ///
-    /// **Deliberately empty on `agy` v1.1.7 — a documented Tier-2 gap, not an
-    /// oversight (#860).** Antigravity governs approval posture through
-    /// `settings.json` *modes* — `proceed-in-sandbox` (bounded auto-proceed),
-    /// `request-review` (the interactive default), and `strict` — plus the
-    /// full-danger escapes `always-proceed` / `--dangerously-skip-permissions`.
-    /// There is **no verified interactive launch flag** on this pinned version
-    /// that selects the bounded `proceed-in-sandbox` mode without escalating to
-    /// the full-danger bypass, and headless `-p` is separately known to ignore
-    /// `permissions.allow` (upstream issue #548). So rather than assert an
-    /// unverified flag or reach for `--dangerously-skip-permissions` (which we
-    /// **never** pass — it removes the sandbox entirely, the opposite of the
-    /// "bounded" posture the ticket asks for), an unattended `.job` runs under
-    /// whatever mode the user configured in `settings.json`. That means a job
-    /// can still stall at Antigravity's `request-review` gate — the same
-    /// honest, interactive-reliable-only property Codex's `.review` has.
+    /// When on, this selects Antigravity's **Auto** agent mode (`agy` ≥ 1.3.5).
+    /// Auto approves edits and safe commands, runs commands in the terminal
+    /// sandbox, and sends any command that would leave the sandbox to a separate
+    /// reviewer agent first. It is bounded: never `--dangerously-skip-permissions`,
+    /// which stays a full bypass even after 1.5.2 narrowed it.
     ///
-    /// The parameter is kept so every call site (`autoLaunchCommand`,
-    /// `managerLaunchCommand`) has the uniform cross-agent shape; wiring a real
-    /// bounded flag (or seeding `proceed-in-sandbox` into a per-worktree
-    /// `settings.json`) is a version-pinned follow-up if `agy` grows a stable
-    /// interactive selector.
+    /// **Why `--settings`, not `--mode auto` (probed on `agy` 1.5.5, CROW-1427).**
+    /// On an account where Auto *is* available (`/config` and Shift+Tab both
+    /// reach it), `--mode auto` is still a silent no-op:
+    ///
+    /// - **Interactive TUI:** the flag is applied before sign-in and the
+    ///   experiment flags load, so `cli.log` records `auto mode is unavailable,
+    ///   falling back to default`. The TUI shows no warning and comes up in
+    ///   `default`.
+    /// - **`-p`:** it prints `--mode auto is not available for this account;
+    ///   continuing in the default mode` (log: `rollout flag off`) for the same
+    ///   reason.
+    ///
+    /// `--settings '{"agentMode":"auto"}'` is applied after sign-in on both
+    /// paths, so the session really runs in Auto (footer `auto ·`,
+    /// `SetCycleMode called: auto`). It also beats a persisted `agentMode`: with
+    /// `"agentMode": "plan"` in `~/.gemini/antigravity-cli/settings.json`, the
+    /// flag still came up in Auto. That is the failure that sank Cursor's
+    /// `--auto-review` (CROW-1345).
+    ///
+    /// **What a block looks like.** Inside the sandbox nothing is reviewed. The
+    /// sandbox blocks network, `$HOME` and writes under `.git/`, so `gh`, the
+    /// `crow` socket and a sibling `git worktree add` fail there first. The agent
+    /// retries them outside the sandbox and the reviewer approved all three in
+    /// the probe. When the reviewer reaches no verdict (seen on a feature-branch
+    /// push):
+    ///
+    /// - `-p` soft-denies the command and the run continues (exit 0). Crow's
+    ///   first `.job` launch uses `-p`, so it never hangs.
+    /// - The interactive TUI shows a "Run this command?" card that waits until
+    ///   someone answers. That is acceptable for the attended Manager and `.work`
+    ///   TUI, and Antigravity's default `request-review` mode cards far more
+    ///   often.
+    ///
+    /// For contrast, the default mode under `-p` soft-denies **every** command,
+    /// so an Antigravity `.job` without this flag cannot even run `ls`.
+    ///
+    /// The caller decides which session kinds get it. `AntigravityAgent` keeps
+    /// `.review` off, because review clones are attacker-controlled.
     public static func autoPermissionSuffix(_ autoPermissionMode: Bool) -> String {
-        // Intentionally a no-op today — see the doc comment above. Kept as a
-        // function (not a dropped parameter) so a future bounded flag lands here
-        // and every caller inherits it at once.
-        _ = autoPermissionMode
-        return ""
+        guard autoPermissionMode else { return "" }
+        return " --settings " + shellQuote(autoModeSettingsJSON)
     }
 }

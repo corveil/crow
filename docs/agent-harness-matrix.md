@@ -34,7 +34,7 @@ capabilities, update this table in the same PR.
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
 | Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829); `agent persist` evaluated and **declined** (CROW-1175 — TTY-detach, no-ops in `$TMUX`) | ✅ `resume --last` (provider change → fresh TUI; 0.167+ via the startup-prompt watch, CROW-1425) | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste (`agent persist` is not native RC — CROW-1175) | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ✅ native session-scoped `--remote-control` on interactive launches (ADC-guarded, no `--name`; CROW-1428) | ⚠️ faked via `crow send` paste (no native RC) |
-| Auto-permission | ⚠️ `--permission-mode auto` (stalls on first extra-workdir Read ≥ 2.1.257; `--permission-prompts none` is print-mode only — declined CROW-1215; behind a gateway ≥ 2.1.319 needs the server-side check — Corveil forwards it, gateway launches export `CLAUDE_CODE_AUTO_MODE_SERVER=1`, CROW-1426) | ✅ `--force --approve-mcps` (Run Everything, #829; `--auto-review` declined — stalls on an approval card and loses to a persisted Run Everything, CROW-1345) | ✅ `-a never -s workspace-write` (`.job`, interactive); ⚠️ `.review` routes approvals to Auto-review (`approvals_reviewer=auto_review`, ≥ 0.166.0, CROW-1406), but the clone's folder-trust screen (once per PR) and Crow's unseeded hook-trust screen (per session, once trusted) still need a person | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
+| Auto-permission | ⚠️ `--permission-mode auto` (stalls on first extra-workdir Read ≥ 2.1.257; `--permission-prompts none` is print-mode only — declined CROW-1215; behind a gateway ≥ 2.1.319 needs the server-side check — Corveil forwards it, gateway launches export `CLAUDE_CODE_AUTO_MODE_SERVER=1`, CROW-1426) | ✅ `--force --approve-mcps` (Run Everything, #829; `--auto-review` declined — stalls on an approval card and loses to a persisted Run Everything, CROW-1345) | ✅ `-a never -s workspace-write` (`.job`, interactive); ⚠️ `.review` routes approvals to Auto-review (`approvals_reviewer=auto_review`, ≥ 0.166.0, CROW-1406), but the clone's folder-trust screen (once per PR) and Crow's unseeded hook-trust screen (per session, once trusted) still need a person | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ✅ Auto mode via `--settings '{"agentMode":"auto"}'` on `.work`/`.job`/Manager (CROW-1427; `--mode auto` is a silent no-op on 1.5.5); reviews keep the user's mode; never `--dangerously-skip-permissions` | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065); **`Interrupt` stays sync** (CROW-1177; mutates completion) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
@@ -584,6 +584,34 @@ describes what the UI claims, not what Crow can do.
   `rm -rf /` literals stay. Reviews stay human-gated. Auto off is still bare
   `grok`. The exit-2 fallback drops the flags if upstream renames
   `--always-approve`.
+- **Antigravity:** Auto agent mode (`agy` ≥ 1.3.5) via
+  `--settings '{"agentMode":"auto"}'` (`AntigravityLaunchArgs.autoPermissionSuffix`,
+  CROW-1427). Applies to `.work` (coder-view Auto), `.job` (jobs Auto) and the
+  Manager. Auto approves edits and safe commands and runs commands in the
+  terminal sandbox. Anything that would leave the sandbox goes to a separate
+  reviewer agent first. It is the same shape as Claude's classifier mode, not a
+  bypass. Probed on `agy` 1.5.5 in a private tmux server:
+  - **`--mode auto` is not used.** It is applied before sign-in loads, so it
+    silently falls back to `default`. `cli.log` records `auto mode is
+    unavailable`, and under `-p` it prints `not available for this account`.
+    Both happen on an account where `/config` and Shift+Tab reach Auto.
+    `--settings` is applied after sign-in, is never saved, and **beats a
+    persisted `agentMode`** (`plan` in `settings.json` still came up in Auto).
+  - **The sandbox blocks** network, `$HOME` and writes under `.git/`. So `gh`,
+    the `crow` socket and a sibling `git worktree add` fail inside it, and the
+    agent retries them outside. The reviewer approved all three.
+  - **An undecided review** (seen on a feature-branch push) soft-denies under
+    `-p` and the run continues with exit 0. In the interactive TUI it shows a
+    "Run this command?" card that waits until answered. The first `.job` launch
+    is `-p`, so it never hangs there. The attended TUIs (`.work`, Manager) can
+    answer a card. A `-c` relaunch of a job is an interactive TUI and can wait
+    on a card; the default `request-review` mode cards on every command.
+  - Hooks fire unchanged (`PreInvocation` / `PostInvocation` / `PostToolUse` /
+    `Stop`).
+  - **Reviews never get Auto.** The review clone is attacker-controlled, and the
+    sandbox-exit reviewer reads the PR's own text (the `session.kind != .review`
+    guard, like Codex). `--dangerously-skip-permissions` is never passed: it is
+    still a full bypass after 1.5.2 narrowed it to block denylisted commands.
 - **Muse:** `--disable-approval` (`MuseLaunchArgs.autoPermissionSuffix`) —
   skip approval prompts, **keep the OS sandbox** (Seatbelt on macOS, bubblewrap
   on Linux). Applied to `.job` / `.review` / Manager when the caller asks.
@@ -1307,11 +1335,14 @@ surface rather than the native dir alone — the same posture
 `stripGrokConfigFromReviewClone` takes.
 It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
 with honest, documented gaps (#860). **Review-approval posture is unverified**
-(#902 end-to-end pass pending): `agy` review inherits `.job`'s launch shape but
-has no bounded auto-permission flag (`autoPermissionSuffix` is `""` on v1.1.7)
-and no confirmed non-interactive posture, so — unlike `.job` — a review that
-stalls on an approval gate would leave the Reviews board waiting with no signal.
-Tracked in the auto-permission pinned-gaps row below; re-check on the manual pass.
+(#902 end-to-end pass pending). `agy` review inherits `.job`'s launch shape, but
+it deliberately does **not** get Auto mode (CROW-1427): the review clone is
+attacker-controlled, and Auto's sandbox-exit reviewer would read the PR's own
+text. So a review runs in the user's configured mode. Observed on `agy` 1.5.5:
+`-p` in the default mode soft-denies **every** command that needs approval (even
+`ls -la`) and exits 0. A first-launch review therefore does not stall, but it
+cannot run `gh pr review` unless the user's own config allows it. Tracked in the
+auto-permission pinned-gaps row below; re-check on the manual pass.
 **Review-on-Antigravity is opt-in and experimental**: it is never a default — it
 requires an explicit `crow agents set --review antigravity` (or Settings → Agents
 → Review = Antigravity) *and* `agy` on `PATH`. Two premises behind its only
@@ -1493,7 +1524,7 @@ against current upstream CLIs.
 | Antigravity structured-stdout / ACP (would promote toward first-class parity) | `--output-format json\|stream-json` + `--input-format stream-json` present on **1.4.6**; `finished_reason` **1.4.11**; `agy acp` **1.5.0** (fixes 1.5.1/1.5.4) — upstream FRs **#119/#597/#31** landed | `AntigravitySignalSource` | 2026-11-11 (CROW-1428) — evaluated, **not adopted**: a second, non-tmux drive path against ADR 0001 (Cursor's adapter likewise shipped without the stream-json #829 scoped). Revisit with an ADR if Crow adds a headless session kind |
 | Antigravity hook stdin `hookEventName` / `cwd` / `toolCall.id` | `agy` **1.5.4** (changelog); installed **1.4.6** — unverified | `AntigravitySignalSource` / `EngineHookRPCHandlers.hookToolName` | 2026-11-11 (CROW-1428) — not wired. `toolCall.id` pairs `PostToolUse`↔`PreToolUse`, but the tool *name* is still `PreToolUse`-only, which Crow doesn't register. Re-check on ≥ 1.5.4 whether `PostToolUse` carries `toolCall.name` |
 | Antigravity folder-trust prompt on interactive launch | `agy` **1.4.6** — `Do you trust the contents of this project?` per folder (stored in `~/.gemini/antigravity-cli/settings.json` `trustedWorkspaces`; a trusted dev root does **not** cover a worktree below it); `-p` runs in an untrusted folder without it | none — Crow seeds no Antigravity trust | 2026-11-11 (CROW-1428) — found on this pass, not fixed. A fresh `.work` pane and the `-c` resume of a `.job`/`.review` open on this prompt (attended: the operator answers; unattended `-c` resume: stalls). Seeding trust for review clones would be wrong (they are attacker-controlled); a work-worktree seed would need its own ticket |
-| Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548). **1.4.6** now has `--mode auto` | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 — `--mode auto` evaluation tracked separately in #1427 |
+| Antigravity bounded auto-permission: Auto agent mode via `--settings '{"agentMode":"auto"}'`, **not** `--mode auto`. `--mode` is applied before sign-in and silently falls back to `default` (log `auto mode is unavailable`; `-p`: `not available for this account`). `--settings` lands after sign-in and beats a persisted `agentMode`. An undecided sandbox-exit review soft-denies under `-p` (exit 0) and waits on a TUI card interactively. `.review` is excluded | **min: `agy` ≥ 1.3.5** (Auto mode); probed **1.5.5** in a private tmux server. Default mode under `-p` soft-denies every command | `AntigravityLaunchArgs.autoPermissionSuffix`, `AntigravityAgent.autoLaunchCommand` (`.review` guard) | 2026-11-11 (CROW-1427) — **wired**. Switch to `--mode auto` once it survives startup (`SetCycleMode called: auto` with no `unavailable` line). Re-check `.review` only if a sandbox-exit review can be kept from reading PR text |
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
 | Antigravity review-clone strip list exhaustiveness: is any project-scope config `agy` reads **outside** `.agents/` + `.gemini/` still uncovered? | `agy` **v1.1.7**; user-scope MCP is `<$GEMINI_CONFIG_HOME or ~/.gemini/config>/mcp_config.json` (`AntigravityMCPConfigWriter`, CROW-1207). `AntigravityLaunchArgs` notes approval posture is governed by `settings.json` modes | `stripAntigravityConfigFromReviewClone` | 2026-09-07 (CROW-1207) — the user-scope writer confirms official docs: global MCP is `mcp_config.json` under `GEMINI_CONFIG_HOME` (default `~/.gemini/config`), not a project file Crow writes. The strip still removes `.agents/` **and** `.gemini/` **defensively** (a project `.agents/mcp_config.json` or `.gemini/settings.json` could carry `mcpServers`/`always-proceed`). So the question remains "is the strip **list exhaustive**" — confirm no other project-scope surface on the manual pass before promoting out of Tier-2 |
 | Antigravity hook re-read timing: does `agy` read `.agents/hooks.json` **once at process start**, or per-event? | `agy` **v1.1.7** — unverified; assumed start-only | `prepareWorktreeForAgentLaunch` (launch-time strip) + `crow-review-pr` Step 1 re-strip (CROW-960) | 2026-08-28 (CROW-960) — the launch-time strip still mitigates a hook restored *between* launches. The review skill (and the re-review prompt) now re-strips immediately after `gh pr checkout`, which closes the mid-session restore for the current process **if the agent follows Step 1**. If `agy` re-reads per-event, the remaining window is checkout→`rm`, not checkout→session-end. Confirm re-read timing on the manual pass before promoting out of Tier-2 |

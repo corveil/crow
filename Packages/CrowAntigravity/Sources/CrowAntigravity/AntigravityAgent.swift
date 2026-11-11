@@ -91,10 +91,20 @@ public struct AntigravityAgent: CodingAgent {
         telemetryPort: UInt16?
     ) -> String? {
         let agentPath = AntigravityLaunchArgs.shellQuote(launchBinary() ?? "agy")
-        // Bounded auto-permission — a no-op suffix on the pinned version (see
-        // `AntigravityLaunchArgs.autoPermissionSuffix`); kept for call-site
-        // uniformity so a future bounded flag lands once for every path.
-        let autoArgs = AntigravityLaunchArgs.autoPermissionSuffix(autoPermissionMode)
+        // Bounded auto-permission: Antigravity's Auto agent mode, selected with
+        // `--settings '{"agentMode":"auto"}'` (CROW-1427; see
+        // `AntigravityLaunchArgs.autoPermissionSuffix` for why not `--mode auto`).
+        // On `.job`, and on `.work` when the coder-view toggle is on.
+        //
+        // SECURITY: never on `.review`. The review clone is an attacker-controlled
+        // PR head. In Auto, every sandbox-exit command (network, `gh`, writes
+        // outside the worktree) is approved by a reviewer agent whose context
+        // includes the PR's own text. That is an escalation driven by hostile
+        // input, so `.review` keeps the user's configured mode, as it did before.
+        // This is the same `session.kind != .review` guard as Codex and
+        // Cursor's trust seed.
+        let autoArgs = AntigravityLaunchArgs.autoPermissionSuffix(
+            autoPermissionMode && session.kind != .review)
         // Session-scoped native Remote Control (CROW-1428), interactive
         // launches only — see `AntigravityLaunchArgs.remoteControlSuffix`.
         let rcArgs = AntigravityLaunchArgs.remoteControlSuffix(remoteControlEnabled)
@@ -149,8 +159,12 @@ public struct AntigravityAgent: CodingAgent {
                     : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(promptFile)
+                // `evalPromptLaunch` wraps the prefix in `eval "…"`, and the Auto
+                // suffix carries JSON double quotes, so escape the prefix for that
+                // context. `eval` then reparses exactly the bare-shell text.
                 return ShellLaunchArgs.evalPromptLaunch(
-                    prefix: "\(agentPath)\(autoArgs) -p",
+                    prefix: ShellLaunchArgs.escapeForDoubleQuotes(
+                        "\(agentPath)\(autoArgs) -p"),
                     promptPath: promptPath)
             }
             // The `-c` resume is an interactive TUI, so it carries the RC flag;
@@ -208,6 +222,12 @@ public struct AntigravityAgent: CodingAgent {
         // (CROW-1428); there is no `--name` equivalent. Terminal backend
         // appends the submitting Enter, so return the command without a
         // trailing newline (cross-agent convention).
+        //
+        // `managerAutoPermissionMode` selects Auto here (CROW-1427). The
+        // Manager's out-of-worktree calls (the `crow` socket, `gh`, a sibling
+        // `git worktree add`) fail in the terminal sandbox first. The reviewer
+        // approved all three in the probe. An undecided one shows a TUI card,
+        // which the attended Manager can answer.
         _ = conversationID
         let agentPath = AntigravityLaunchArgs.shellQuote(launchBinary() ?? "agy")
         return agentPath

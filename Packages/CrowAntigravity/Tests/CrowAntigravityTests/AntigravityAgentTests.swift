@@ -41,7 +41,7 @@ struct AntigravityAgentTests {
         let session = Session(name: "test", agentKind: .antigravity)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/tmp/wt",
-            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: 4318)
+            remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: 4318)
         // Bare interactive TUI: no prompt, no resume flag, no OTEL prefix, no RC.
         #expect(cmd?.hasSuffix("agy'\n") == true)  // binary is shell-quoted
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
@@ -169,21 +169,110 @@ struct AntigravityAgentTests {
         #expect(cmd == nil)
     }
 
-    @Test func autoPermissionIsNoOpOnPinnedVersion() {
-        // Bounded auto-permission is a documented Tier-2 gap: no verified launch
-        // flag, and we never pass --dangerously-skip-permissions.
+    // MARK: - Auto-permission (CROW-1427)
+
+    /// The exact suffix that selects Auto mode, pasted raw.
+    private static let autoSuffix = #" --settings '{"agentMode":"auto"}'"#
+
+    @Test func autoPermissionSuffixOffIsEmpty() {
+        #expect(AntigravityLaunchArgs.autoPermissionSuffix(false) == "")
+    }
+
+    @Test func autoPermissionSuffixOnSelectsAutoModeViaSettings() {
+        let s = AntigravityLaunchArgs.autoPermissionSuffix(true)
+        #expect(s == Self.autoSuffix)
+        // `--mode auto` is a silent no-op on agy 1.5.5 (applied before sign-in),
+        // and the bypass flags are never acceptable.
+        #expect(!s.contains("--mode"))
+        #expect(!s.contains("--dangerously-skip-permissions"))
+        #expect(!s.contains("always-proceed"))
+    }
+
+    @Test func workSessionWithAutoPermissionSelectsAutoMode() {
+        let session = Session(name: "test", agentKind: .antigravity)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        #expect(cmd?.hasSuffix("agy'" + Self.autoSuffix + "\n") == true)
+    }
+
+    @Test func jobFirstLaunchWithAutoPermissionEscapesSettingsForEval() {
         let session = Session(name: "job", kind: .job, agentKind: .antigravity)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/tmp/wt",
             remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        // Inside `eval "…"` the JSON quotes are backslash-escaped, before `-p`.
+        #expect(cmd?.contains(#" --settings '{\"agentMode\":\"auto\"}' -p $(printf '%q'"#) == true)
+        #expect(cmd?.contains("--mode") == false)
         #expect(cmd?.contains("--dangerously-skip-permissions") == false)
-        #expect(cmd?.contains("always-proceed") == false)
+    }
+
+    /// Run the real `.job` first-launch command through bash with the binary
+    /// swapped for a stub. Auto mode must reach `agy` as one `--settings` argv
+    /// element before `-p` and the prompt.
+    @Test func jobFirstLaunchWithAutoPermissionRoundTripsThroughBash() throws {
+        let fm = FileManager.default
+        let wt = fm.temporaryDirectory.appendingPathComponent("agy-auto-\(UUID().uuidString)")
+        try fm.createDirectory(at: wt, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: wt) }
+        let prompt = "ship \"it\" $HOME"
+        try prompt.write(
+            to: wt.appendingPathComponent(".crow-job-prompt.md"), atomically: true, encoding: .utf8)
+
+        let session = Session(name: "job", kind: .job, agentKind: .antigravity)
+        let cmd = try #require(agent.autoLaunchCommand(
+            session: session, worktreePath: wt.path,
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil))
+        let quotedBinary = AntigravityLaunchArgs.shellQuote(agent.launchBinary() ?? "agy")
+        #expect(cmd.contains(quotedBinary))
+        let launch = cmd.replacingOccurrences(of: quotedBinary, with: "stub")
+            .trimmingCharacters(in: .newlines)
+        let script = "stub() { printf '%s|%s|%s|%s' \"$1\" \"$2\" \"$3\" \"$4\"; }; \(launch)"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-c", script]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let out = String(
+            decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        #expect(process.terminationStatus == 0)
+        #expect(out == #"--settings|{"agentMode":"auto"}|-p|"# + prompt)
+    }
+
+    @Test func jobResumeWithAutoPermissionKeepsAutoMode() {
+        var session = Session(name: "job", kind: .job, agentKind: .antigravity)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        // `-c` is pasted raw (no eval), so the suffix is unescaped.
+        #expect(cmd?.hasSuffix("agy'" + Self.autoSuffix + " -c\n") == true)
+    }
+
+    @Test func reviewNeverGetsAutoModeEvenWhenAutoPermissionIsOn() {
+        // SECURITY: review clones are attacker-controlled. Auto's sandbox-exit
+        // reviewer reads the PR's own text, so `.review` keeps the user's mode.
+        var session = Session(name: "review", kind: .review, agentKind: .antigravity)
+        let first = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        #expect(first?.contains("--settings") == false)
+        #expect(first?.contains("agentMode") == false)
+        #expect(first?.contains("--dangerously-skip-permissions") == false)
+        session.reviewPromptDispatched = true
+        let resume = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        #expect(resume?.hasSuffix("agy' -c\n") == true)
     }
 
     @Test func managerLaunchCommandBareNoRC() {
         let cmd = agent.managerLaunchCommand(
             sessionName: "Manager", remoteControlEnabled: false,
-            autoPermissionMode: true, telemetryPort: 4318)
+            autoPermissionMode: false, telemetryPort: 4318)
         #expect(cmd.hasSuffix("agy'"))  // binary is shell-quoted, no trailing newline
         #expect(cmd.contains("--dangerously-skip-permissions") == false)
     }
@@ -196,6 +285,40 @@ struct AntigravityAgentTests {
             autoPermissionMode: false, telemetryPort: nil)
         #expect(cmd.hasSuffix("agy'\(rcSuffix)"))
         #expect(cmd.contains("Manager") == false)
+    }
+
+    @Test func managerLaunchCommandWithAutoPermissionSelectsAutoMode() {
+        let cmd = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: true, telemetryPort: 4318)
+        #expect(cmd.hasSuffix("agy'" + Self.autoSuffix))  // no trailing newline
+        #expect(cmd.contains("--dangerously-skip-permissions") == false)
+    }
+
+    @Test func managerLaunchCommandWithAutoAndRemoteControlCarriesBoth() {
+        // CROW-1427 + CROW-1428: Auto first, then the ADC-guarded RC flag.
+        let cmd = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: true,
+            autoPermissionMode: true, telemetryPort: nil)
+        #expect(cmd.hasSuffix("agy'" + Self.autoSuffix + rcSuffix))
+    }
+
+    @Test func workSessionWithAutoAndRemoteControlCarriesBoth() {
+        let session = Session(name: "test", agentKind: .antigravity)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: true, autoPermissionMode: true, telemetryPort: nil)
+        #expect(cmd?.hasSuffix("agy'" + Self.autoSuffix + rcSuffix + "\n") == true)
+    }
+
+    @Test func jobFirstLaunchWithAutoAndRemoteControlHasNoRCOnPrintTurn() {
+        // RC is interactive-only (CROW-1428); Auto still applies to the `-p` turn.
+        let session = Session(name: "job", kind: .job, agentKind: .antigravity)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: true, autoPermissionMode: true, telemetryPort: nil)
+        #expect(cmd?.contains("--remote-control") == false)
+        #expect(cmd?.contains(#"--settings '{\"agentMode\":\"auto\"}' -p"#) == true)
     }
 
     @Test func findBinaryDoesNotCrash() {

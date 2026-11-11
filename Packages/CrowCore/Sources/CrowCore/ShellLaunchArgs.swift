@@ -8,6 +8,25 @@ public enum ShellLaunchArgs {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// Backslash-escape the four characters that stay special inside a
+    /// double-quoted shell string (`\`, `"`, `$`, backtick).
+    ///
+    /// Use it on an ``evalPromptLaunch(prefix:promptPath:endOfOptions:)``
+    /// `prefix` that must carry a literal `"` (Antigravity's
+    /// `--settings '{"agentMode":"auto"}'`, CROW-1427). That helper wraps the
+    /// prefix in `eval "…"`, so an unescaped `"` would end the string early.
+    /// After escaping, the double-quote pass hands `eval` exactly the
+    /// bare-shell text, so the prefix parses the same as when pasted directly.
+    public static func escapeForDoubleQuotes(_ s: String) -> String {
+        var out = ""
+        out.reserveCapacity(s.count)
+        for ch in s {
+            if ch == "\\" || ch == "\"" || ch == "$" || ch == "`" { out.append("\\") }
+            out.append(ch)
+        }
+        return out
+    }
+
     /// Bash statements that read `promptPath`, then `eval` a command built from
     /// `prefix` (the shell-quoted agent binary plus flags) with the prompt file
     /// contents as the final argv.

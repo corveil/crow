@@ -56,6 +56,48 @@ struct ShellLaunchArgsTests {
         #expect(out == expected)
     }
 
+    // MARK: - Double-quote escaping (CROW-1427)
+
+    @Test func escapeForDoubleQuotesEscapesTheFourSpecials() {
+        #expect(ShellLaunchArgs.escapeForDoubleQuotes("plain 'x'") == "plain 'x'")
+        #expect(ShellLaunchArgs.escapeForDoubleQuotes(#"a"b$c`d\e"#)
+            == #"a\"b\$c\`d\\e"#)
+    }
+
+    /// Antigravity's Auto suffix is `--settings '{"agentMode":"auto"}'`, which
+    /// carries JSON double quotes. Escaped, it must survive the `eval "…"`
+    /// wrapper as one argv element, flags before the prompt.
+    @Test func escapedPrefixSurvivesEvalWithJSONArgument() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent(
+            "shell-launch-\(UUID().uuidString)")
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
+        let promptFile = tmp.appendingPathComponent(".crow-job-prompt.md")
+        let prompt = "do \"it\" $HOME"
+        try prompt.write(to: promptFile, atomically: true, encoding: .utf8)
+
+        let launch = ShellLaunchArgs.evalPromptLaunch(
+            prefix: ShellLaunchArgs.escapeForDoubleQuotes(
+                #"'agent' --settings '{"agentMode":"auto"}' -p"#),
+            promptPath: promptFile.path).trimmingCharacters(in: .newlines)
+
+        let script = "agent() { printf '%s|%s|%s|%s' \"$1\" \"$2\" \"$3\" \"$4\"; }; \(launch)"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-c", script]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let out = String(
+            decoding: pipe.fileHandleForReading.readDataToEndOfFile(),
+            as: UTF8.self)
+        #expect(process.terminationStatus == 0)
+        #expect(out == #"--settings|{"agentMode":"auto"}|-p|"# + prompt)
+    }
+
     // MARK: - End-of-options separator (CROW-968)
 
     @Test func evalPromptLaunchEmitsSeparatorWhenAsked() {
