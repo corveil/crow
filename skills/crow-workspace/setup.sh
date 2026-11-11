@@ -352,16 +352,22 @@ resolve_session_env() {
 # newline and can't go on the line (a pasted newline would submit the command
 # early), so settings.local.json carries it; we still `unset ANTHROPIC_CUSTOM_HEADERS`
 # so the gateway's baseURL is never paired with a stale ~/.zshrc-inherited header.
+# Every gateway branch also sets CLAUDE_CODE_AUTO_MODE_SERVER=1 (CROW-1426): on
+# Claude Code >= 2.1.319 a call the server can't check is asked about or denied
+# behind a gateway, so keep the server-side check on even when the user's shell
+# sets CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS. Launch line only, never
+# settings.local.json, so the operator's own ~/.claude/settings.json `=0` wins.
 gateway_launch_prefix() {
   if [[ "$WS_HAS_GATEWAY" != true ]]; then
     printf 'unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && '
     return 0
   fi
   if [[ "$WS_CUSTOM_HEADERS" == *$'\n'* ]]; then
-    printf 'unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL=%s ' "$(posix_quote "$WS_BASE_URL")"
+    printf 'unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL=%s CLAUDE_CODE_AUTO_MODE_SERVER=1 ' \
+      "$(posix_quote "$WS_BASE_URL")"
     return 0
   fi
-  printf 'ANTHROPIC_BASE_URL=%s ANTHROPIC_CUSTOM_HEADERS=%s ' \
+  printf 'ANTHROPIC_BASE_URL=%s CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS=%s ' \
     "$(posix_quote "$WS_BASE_URL")" "$(posix_quote "$WS_CUSTOM_HEADERS")"
 }
 

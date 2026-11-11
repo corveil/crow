@@ -79,7 +79,7 @@ public enum ClaudeLaunchArgs {
     /// `VAR=val` prefix would bind only to that following `export` builtin, not to
     /// the eventual `claude` process.
     ///
-    /// - `resolved` present → `export ANTHROPIC_BASE_URL='…' ANTHROPIC_CUSTOM_HEADERS='…' && `
+    /// - `resolved` present → `export ANTHROPIC_BASE_URL='…' CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS='…' && `
     /// - `resolved` nil → `unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && `
     ///   so a no-gateway workspace doesn't inherit a sibling's or `~/.zshrc`'s gateway.
     /// - multi-header → the header value has an embedded newline and can't go on
@@ -87,14 +87,39 @@ public enum ClaudeLaunchArgs {
     ///   carried solely by `settings.local.json`. We still `unset ANTHROPIC_CUSTOM_HEADERS`
     ///   before exporting `ANTHROPIC_BASE_URL`, so the gateway's baseURL is never
     ///   paired with a stale `~/.zshrc`-inherited header value.
+    ///
+    /// Every gateway launch also exports ``autoModeServerAssignment``
+    /// (CROW-1426); see there for why it rides the launch line only.
     public static func gatewayEnvPrefix(_ resolved: GatewayResolver.Resolved?) -> String {
         guard let resolved else {
             return "unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && "
         }
-        let baseAssignment = "export ANTHROPIC_BASE_URL=\(shellQuote(resolved.baseURL))"
+        let baseAssignment = "export ANTHROPIC_BASE_URL=\(shellQuote(resolved.baseURL)) "
+            + autoModeServerAssignment
         if resolved.customHeaders.contains("\n") {
             return "unset ANTHROPIC_CUSTOM_HEADERS && " + baseAssignment + " && "
         }
         return baseAssignment + " ANTHROPIC_CUSTOM_HEADERS=\(shellQuote(resolved.customHeaders)) && "
     }
+
+    /// Keep auto mode on the **server-side** check behind an LLM gateway
+    /// (CROW-1426).
+    ///
+    /// Claude Code 2.1.319 dropped the local-classifier fallback behind a
+    /// gateway: a call the server can't check is asked about or denied. For an
+    /// unattended `.job` / `.review` an ask is a prompt nobody answers and a
+    /// deny is a silently failed `git push` / `gh pr review`. The Corveil
+    /// gateway forwards the check (probed on 2.1.322 — see the matrix's
+    /// Auto-permission row), so nothing breaks by default. But a user's shell
+    /// can set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, which turns the check
+    /// off and leaves only ask/deny; per the 2.1.319 changelog, `=1` keeps it
+    /// on regardless. It is classifier auto mode either way, never a bypass.
+    ///
+    /// **Launch line only**, deliberately not the `settings.local.json` `env`
+    /// block: Claude applies settings `env` over the inherited environment, so
+    /// an operator whose gateway drops the check can still choose the local
+    /// classifier with `CLAUDE_CODE_AUTO_MODE_SERVER=0` in their own
+    /// `~/.claude/settings.json`. A Crow-written local-settings value would
+    /// outrank theirs. Crow never writes the user's global settings.
+    public static let autoModeServerAssignment = "CLAUDE_CODE_AUTO_MODE_SERVER=1"
 }

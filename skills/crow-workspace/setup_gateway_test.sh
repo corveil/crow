@@ -95,6 +95,7 @@ contains "launch prefix sets baseURL" "$prefix" "ANTHROPIC_BASE_URL='https://cor
 contains "multi-header prefix unsets inherited headers" "$prefix" "unset ANTHROPIC_CUSTOM_HEADERS && "
 check "multi-header prefix omits headers assignment" "0" "$([[ "$prefix" == *"ANTHROPIC_CUSTOM_HEADERS='"* ]] && echo 1 || echo 0)"
 check "launch prefix has no embedded newline" "0" "$([[ "$prefix" == *$'\n'* ]] && echo 1 || echo 0)"
+contains "multi-header prefix keeps auto-mode server check on (CROW-1426)" "$prefix" "CLAUDE_CODE_AUTO_MODE_SERVER=1 "
 
 mkdir -p "$WORKTREE_PATH"
 # Not a git repo → the git-exclude step skips gracefully (rev-parse fails); the
@@ -104,6 +105,7 @@ settings="$WORKTREE_PATH/.claude/settings.local.json"
 check "settings.local.json written" "yes" "$([[ -f "$settings" ]] && echo yes || echo no)"
 contains "env.ANTHROPIC_BASE_URL present" "$(cat "$settings")" '"ANTHROPIC_BASE_URL": "https://corveil.io"'
 contains "attribution preserved alongside env" "$(cat "$settings")" '"attribution"'
+check "auto-mode server stays off settings.local.json (CROW-1426)" "0" "$(grep -c CLAUDE_CODE_AUTO_MODE_SERVER "$settings")"
 # Resolved secret must be present in the file (settings.local.json is the at-rest
 # store for re-runs) but the bearer reference scheme must be gone.
 contains "resolved secret in env" "$(cat "$settings")" "RESOLVED-SECRET-for-op://Vault/Citadel/api_key"
@@ -118,12 +120,13 @@ resolve_gateway_env
 check "WS_HAS_GATEWAY false" "false" "$WS_HAS_GATEWAY"
 prefix=$(gateway_launch_prefix)
 check "launch prefix unsets" "unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && " "$prefix"
+check "no-gateway prefix leaves auto-mode server alone" "0" "$([[ "$prefix" == *CLAUDE_CODE_AUTO_MODE_SERVER* ]] && echo 1 || echo 0)"
 
 echo "== single-header launch prefix =="
 WS_HAS_GATEWAY=true; WS_BASE_URL="https://corveil.io"; WS_CUSTOM_HEADERS="x-key: Bearer sk-1"
 prefix=$(gateway_launch_prefix)
 check "single header on launch line" \
-  "ANTHROPIC_BASE_URL='https://corveil.io' ANTHROPIC_CUSTOM_HEADERS='x-key: Bearer sk-1' " \
+  "ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS='x-key: Bearer sk-1' " \
   "$prefix"
 
 echo "== Codex gateway overrides (CROW-1407) =="

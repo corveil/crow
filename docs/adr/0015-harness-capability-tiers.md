@@ -418,6 +418,24 @@ deliberate, documented gaps (full grid in the
 > end as a TUI *denial* instead of an approval card **and** the flag overrides
 > a persisted `approvalMode`.
 
+> **Amendment (2026-11-11, CROW-1426):** Claude Code **≥ 2.1.319** dropped
+> auto mode's local-classifier fallback behind an LLM gateway. A call the
+> server-side check can't reach is now asked about or denied. For an
+> unattended `.job` / `.review` that is a stall or a silently failed
+> `git push` / `gh pr review`. A probe on **2.1.322** from inside a
+> Crow-launched tmux pane behind the Corveil gateway found the check
+> **forwarded**: every assistant turn carries a `serverClassifierRequest` id,
+> and every tool call was accepted by the classifier with no ask or deny.
+> Crow now exports `CLAUDE_CODE_AUTO_MODE_SERVER=1` on every gateway launch
+> line. That keeps the server check on even when the user's shell sets
+> `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`. It is classifier auto mode either
+> way, not a bypass. It rides the **launch line only**, never
+> `settings.local.json`, so an operator's own `~/.claude/settings.json`
+> `=0` (the local classifier, for a gateway that drops the check) still wins.
+> **Rejected:** `--dangerously-skip-permissions` / `bypassPermissions`
+> (brittle-reject, as in CROW-1176), and writing the var into the user's
+> global settings.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -585,7 +603,9 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
   Claude's recap subagent (**≥ 2.1.108**), Claude's extra-workdir auto-mode
   Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall; no silent bypass;
-  `--permission-prompts none` declined CROW-1215), Cursor `--auto-review`
+  `--permission-prompts none` declined CROW-1215), Claude's gateway auto-mode
+  server check (**≥ 2.1.319**, CROW-1426 — no local fallback; Corveil forwards
+  it; gateway launch lines pin `CLAUDE_CODE_AUTO_MODE_SERVER=1`), Cursor `--auto-review`
   (documented run mode; declined CROW-1345 — approval-card stall, loses to a
   persisted Run Everything),
   OpenCode's `session.status` done
