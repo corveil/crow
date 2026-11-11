@@ -186,6 +186,8 @@ parity:
 	@./scripts/check-cli-parity.sh
 	@echo "==> Checking for banned NSLog (CROW-874)..."
 	@./scripts/check-no-nslog.sh
+	@echo "==> Checking bundled skill text and template twins (#683 / CROW-1429)..."
+	@bash scripts/check-workspace-custom-instructions.sh
 	@echo "==> setup.sh set-ticket / worktree launch gate (CROW-1166 / CROW-1218)..."
 	@bash skills/crow-workspace/setup_session_test.sh
 	@echo "==> setup.sh worktree-path placement (CROW-1396)..."

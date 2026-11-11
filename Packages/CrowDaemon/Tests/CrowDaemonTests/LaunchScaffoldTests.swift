@@ -40,6 +40,7 @@ struct LaunchScaffoldTests {
         "skills/crow-release-review/release.sh",
         "skills/crow-diagnose/SKILL.md",
         "skills/crow-diagnose/diagnose.sh",
+        "skills/my-follow-ups/SKILL.md",
         "skills/crow-show-image/SKILL.md",
         "skills/crow-attribution/FOOTER.md",
     ]
@@ -89,6 +90,27 @@ struct LaunchScaffoldTests {
         let refreshed = try String(contentsOfFile: skillPath, encoding: .utf8)
         #expect(!refreshed.contains("stale from an older Crow"))
         #expect(refreshed.contains("crow-workspace"))
+    }
+
+    /// `/my-follow-ups` (CROW-1429) ships as a skill named for its slash
+    /// command, beside the `/crow-diagnose` its Triage hands items to. Holds for
+    /// the repo copy and for the fallback stub a build without the template
+    /// writes: both name it and keep its Corveil read and write rails.
+    @Test func myFollowUpsSkillLandsBesideCrowDiagnose() throws {
+        let devRoot = try Self.makeTempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        LaunchScaffold.run(devRoot: devRoot, configured: true)
+
+        let skills = (devRoot as NSString).appendingPathComponent(".claude/skills")
+        let body = try String(
+            contentsOfFile: (skills as NSString).appendingPathComponent("my-follow-ups/SKILL.md"),
+            encoding: .utf8)
+        #expect(body.hasPrefix("---\nname: my-follow-ups\n"))
+        #expect(body.contains("--no-capture"))
+        #expect(body.contains("ontology_update_entity"))
+        #expect(FileManager.default.fileExists(
+            atPath: (skills as NSString).appendingPathComponent("crow-diagnose/SKILL.md")))
     }
 
     /// The Manager runs each skill script directly as well as via `bash`

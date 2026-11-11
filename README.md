@@ -159,6 +159,7 @@ Working on the desktop shell or the web UI? See [docs/development.md](docs/devel
 - [**Configuration**](docs/configuration.md) — File locations, workspace config, directory layout, session lifecycle
 - [**Automation**](docs/automation.md) — Auto-create, auto-respond, auto-complete, and the Settings → Automation tab
 - [**Ticket standard**](docs/ticket-standard.md) — What a diagnosed ticket contains, and the outcomes that aren't tickets
+- [**My follow-ups**](docs/my-follow-ups.md) — `/my-follow-ups`: file, triage or check off your Corveil follow-ups from a Manager
 - [**Web UI skins**](docs/web-skins.md) — The built-in color skins and how to make your own
 - [**Web Chat view**](docs/web-chat-view.md) — Read and drive an agent session as chat messages instead of a terminal
 - [**MCP**](docs/mcp.md) — Crow's read-only MCP server: pointing Cowork or an off-box bot at the board
