@@ -34,7 +34,7 @@ capabilities, update this table in the same PR.
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
 | Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829); `agent persist` evaluated and **declined** (CROW-1175 — TTY-detach, no-ops in `$TMUX`) | ✅ `resume --last` (provider change → fresh TUI; 0.167+ via the startup-prompt watch, CROW-1425) | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste (`agent persist` is not native RC — CROW-1175) | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
-| Auto-permission | ⚠️ `--permission-mode auto` (stalls on first extra-workdir Read ≥ 2.1.257; `--permission-prompts none` is print-mode only — declined CROW-1215; behind a gateway ≥ 2.1.319 needs the server-side check — Corveil forwards it, gateway launches export `CLAUDE_CODE_AUTO_MODE_SERVER=1`, CROW-1426) | ✅ `--force --approve-mcps` (Run Everything, #829; `--auto-review` declined — stalls on an approval card and loses to a persisted Run Everything, CROW-1345) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
+| Auto-permission | ⚠️ `--permission-mode auto` (stalls on first extra-workdir Read ≥ 2.1.257; `--permission-prompts none` is print-mode only — declined CROW-1215; behind a gateway ≥ 2.1.319 needs the server-side check — Corveil forwards it, gateway launches export `CLAUDE_CODE_AUTO_MODE_SERVER=1`, CROW-1426) | ✅ `--force --approve-mcps` (Run Everything, #829; `--auto-review` declined — stalls on an approval card and loses to a persisted Run Everything, CROW-1345) | ✅ `-a never -s workspace-write` (`.job`, interactive); ⚠️ `.review` routes approvals to Auto-review (`approvals_reviewer=auto_review`, ≥ 0.166.0, CROW-1406), but the clone's folder-trust screen (once per PR) and Crow's unseeded hook-trust screen (per session, once trusted) still need a person | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | per-worktree `.opencode/plugins/crow-hooks.js` (CROW-831; global `~/.config/opencode/plugins/` fallback self-suppresses) | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ✅ per-session UUID (CROW-831) | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065); **`Interrupt` stays sync** (CROW-1177; mutates completion) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
@@ -473,15 +473,66 @@ describes what the UI claims, not what Crow can do.
   for a multi-prompt job it would exit after the first prompt and `JobScheduler`'s
   typed follow-up prompts would land at the shell (which executes prose). The TUI
   stays alive and consumes typed lines as prompts, like every other agent's job
-  path. `.work` doesn't take the knob. `.review` is **human-gated**: it runs the
-  inlined skill interactively, so an unattended review (`reviewAutoPermissionMode`
-  on) stalls at Codex's first approval prompt until someone approves the `gh`
-  call — the same property Cursor's review has. It is *not* wired to headless
-  `exec` because `workspace-write` blocks network, so `gh pr review` can't post
-  from inside the sandbox; enabling `[sandbox_workspace_write] network_access`
-  would lift that but is a **global** Codex setting (it would change the sandbox
-  for all of the user's Codex usage, not just Crow's), so it's left out pending
-  a per-project scoping story.
+  path. `.work` doesn't take the knob. `.review` runs the inlined skill
+  interactively. It is *not* wired to headless `exec`, because `workspace-write`
+  blocks network, so `gh pr review` can't post from inside the sandbox.
+  Enabling `[sandbox_workspace_write] network_access` would lift that, but it is
+  a **global** Codex setting (it would change the sandbox for all of the user's
+  Codex usage, not just Crow's), so it stays out.
+  **`.review` approvals go to Codex's Auto-review reviewer (CROW-1406).** With
+  `reviewAutoPermissionMode` on and Codex **≥ 0.166.0**, the review launch (fresh
+  and `resume --last`) carries root-level `-c approval_policy=on-request -c
+  approvals_reviewer=auto_review -c sandbox_mode=workspace-write`
+  (`OpenAICodexAgent.autoReviewConfigOverrides`). These are the same three keys
+  Codex's own `--approve-for-me` sets. The model asks to run a `gh` call that
+  needs network with `sandbox_permissions: "require_escalated"`, which is an
+  approval request. The reviewer agent judges it against Codex's risk policy, and only an
+  approved command runs outside the sandbox (`orchestrator.rs`
+  `BypassSandboxFirstAttempt`, rust-v0.166.0). The sandbox itself never widens.
+  A denial goes back to the model as an instruction, not a card that waits. If
+  it ends the turn, `Stop` marks the session `.done`, but a review only
+  completes on a posted GitHub verdict (`decideReviewCompletions`), so the
+  session stays open without a re-kick. The circuit breaker ends the turn with
+  an interrupt, which maps to `.waiting` (CROW-1177). Probed in a private tmux
+  server on 0.166.0: `/status` reads "Permissions: Workspace (Approve for me)"
+  on a fresh launch and on `resume --last`, and the per-launch keys beat a
+  persisted `approval_policy = "never"` / `approvals_reviewer = "user"` /
+  `sandbox_mode = "danger-full-access"` user config. So the #1345 failure mode
+  (a persisted mode silently overriding the flag) does not apply. In
+  thread-start terms, a `-c` reviewer is sent explicitly, so the server-default
+  changes in 0.165.0/0.166.0 (#56090, #56516) don't replace it. Only managed
+  requirements outrank it, and that is an organization policy. The user's
+  `~/.codex/config.toml` is never written. Older or unreadable builds get no
+  reviewer keys (`CodexVersionProbe.minimumAutoReviewVersion`, fail-closed), so
+  they keep the human-gated launch: the review stalls at Codex's first approval
+  prompt until someone approves the `gh` call.
+  **Two startup screens still need a person, so a Codex review is not yet
+  unattended end to end.** The reviewer removes the mid-run approval stalls,
+  not these:
+  1. *Folder trust.* A review clone is never trust-seeded (attacker-controlled
+     head, #843), and 0.166.0 shows "Trust this folder? 1. Trust and continue /
+     2. Quit" before the first turn. An explicit `trust_level = "untrusted"`
+     entry still shows a screen ("Open restricted / Quit"), a trusted parent dir
+     is not inherited by the nested clone, and no flag skips it. The answer is
+     saved per clone dir, and the dir is stable per PR (`{repo}-pr-{N}`), so this
+     one is asked once per PR.
+  2. *Hooks need review.* Once the clone is trusted, Crow's own
+     `.codex/hooks.json` (session UUID baked in) has no seeded `trusted_hash`,
+     because `CodexTrustSeeder` never runs on `.review`. So each new review
+     session in a trusted clone opens on "Hooks need review: 1. Review hooks /
+     2. Trust all and continue / 3. Continue without trusting" (probed on
+     0.166.0). Choosing 3 also drops `Stop`, so state detection stays off.
+     Seeding only Crow's own hook hashes on `.review`, without folder trust,
+     would remove this screen. It is not done here, because it changes the
+     review trust contract.
+  Because a trusted clone stays trusted, every launch path now strips a Codex
+  review clone's committed `.codex/` (`shouldStripCodexReviewClone`), not just
+  clone prep. Otherwise a `.codex/config.toml` restored by `gh pr checkout`
+  would load on the next resume, and its `[auto_review] policy` /
+  `extra_policy` / `experimental_policy_template` (keys Crow's `-c` doesn't
+  set) would rewrite the reviewer's instructions. `.work` coder-view Auto and
+  `.job` (still `-a never`, under which "there is nothing to review") are
+  unchanged.
 - **OpenCode:** `autoPermissionMode` is honored for `.job` sessions only, via
   **runtime-probed** flags. `OpenCodeLaunchArgs` runs two independently-cached
   probes: the interactive TUI's `--auto` (probed with `opencode --help`, **no**
@@ -586,8 +637,11 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   at the PR author's head (attacker-controlled), and trusting it would arm a
   committed `.codex/hooks.json`; they fall back to Codex's folder-trust prompt
   (the human-gated path), and `prepareReviewClone` strips any committed
-  `.codex/` as defense-in-depth (#843). One consequence: a review clone's
-  Crow-written `.codex/hooks.json` won't fire (the clone stays untrusted), so
+  `.codex/` as defense-in-depth (#843). Every launch path strips it again
+  (`shouldStripCodexReviewClone`, CROW-1406), because a person who answers the
+  trust screen trusts the clone dir for good. One consequence: a review clone's
+  Crow-written `.codex/hooks.json` won't fire while the clone is untrusted, and
+  once it is trusted it still waits on "Hooks need review" (no seeded hash), so
   Codex review state detection is human-gated — matching the review posture.
 - **OpenCode** — a **JS plugin** `crow-hooks.js` that subscribes to OpenCode's
   event bus (`session.status` for the busy/idle edges — see
@@ -938,7 +992,9 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
 - **Codex** inlines the skill body too (`buildReviewPrompt` `.codex` arm, #830):
   the native `codex review` subcommand only prints local findings and posts no
   GitHub verdict, so it can't satisfy `decideReviewCompletions`. Runs
-  interactively and is human-gated (see the auto-permission note).
+  interactively. Its approvals go to Codex's Auto-review reviewer when review
+  auto-permission is on (≥ 0.166.0, CROW-1406), but the startup screens still
+  need a person (see the auto-permission note).
 - **Grok** has no slash-command engine either, so `buildReviewPrompt` inlines
   the whole skill body for `.grok` (the same `cursorReviewPrompt` arm as
   Cursor/OpenCode/Codex, #861). A bare `/crow-review-pr <URL>` would never expand
@@ -1353,6 +1409,7 @@ against current upstream CLIs.
 |---|---|---|---|
 | Codex honors `async: true` (below the pin it *skips* the entry, breaking state detection) | Codex **≥ 0.148.0** (gate lives in `CodexVersionProbe.minimumAsyncHookVersion`) | `CodexVersionProbe` / `CodexHookConfigWriter.asyncEvents` | 2026-08-20 (CROW-1065) — **closed**. Upstream `discovery.rs` on `rust-v0.148.0` computes `runs_async = async && event != SessionEnd` (the "not supported yet" skip is gone). `0.148.0` shipped **stable** on 2026-08-18 (npm `latest` = `0.149.0` on 2026-08-20), so the gate now passes on real installs — earlier the reason held (2026-08-13, CROW-999) but `0.148.0` was still pre-release. Async **timing** is now resolved **by construction**: `PostToolUse` is the only async event and its sole mutation (`lastToolActivity`) is persistence-excluded + reader-less, while completion is owned by the sync `Stop` — so no straggler-after-`Stop` ordering is observable on the card (proof over all orderings; pinned by `lateAsyncPostToolUseAfterStopStaysDone`). A live 0.148.0+ TUI trace stays a nice-to-have human re-check. **CROW-1177 keeps this proof:** `Interrupt` is registered but **sync** (it mutates `activityState` → `.waiting`) |
 | Codex `Interrupt` hook (abort path; must not look like `Stop`) | Codex **≥ 0.150.0** (`#40511`); executor coverage **0.152.0** (`#41432`). Official hooks docs still omit it | `CodexHookConfigWriter.allEvents` / `CodexSignalSource` | 2026-09-02 (CROW-1177) — **wired**. `Stop` = natural completion → `.done`; `Interrupt` = `TurnAborted` → `.waiting` (jobs/reviews stay open). Timeout written 3s (upstream clamp). No `async: true` (would reopen CROW-1065). Pre-0.150 ignores the unknown key (`HookEventsToml` has no `deny_unknown_fields`). **Re-verified 2026-10-27 (CROW-1344) on codex 0.163.0, with `instant_interrupt` default-on since 0.162.0:** Esc gives `Interrupt` and no `Stop`. `crow send` while working is a **steer**, not abort-then-submit: `UserPromptSubmit` inside the same turn, no `Interrupt`, and one `Stop` at the real end (live TUI trace plus `turn.rs`; the same `!needs_follow_up` Stop gate is in the `rust-v0.164.0` source). No gate needed |
+| Codex Auto-review reviewer on `.review` (`-c approval_policy=on-request -c approvals_reviewer=auto_review -c sandbox_mode=workspace-write`) | codex-cli **0.166.0** (gate `CodexVersionProbe.minimumAutoReviewVersion`; `ApprovalsReviewer` in `protocol/src/config_types.rs` takes `auto_review` with `guardian_subagent` as an alias; `routes_approval_policy_to_guardian` needs `OnRequest`/`Granular`) | `OpenAICodexAgent.autoReviewConfigOverrides` / `shouldStripCodexReviewClone` | 2026-11-11 (CROW-1406) — **wired**. Source read at `rust-v0.166.0` plus a private-tmux probe (`/status` = "Workspace (Approve for me)", fresh and `resume --last`, over a persisted `never`/`user`/`danger-full-access` user config). Two startup screens remain on a review clone: folder trust (once per clone dir) and "Hooks need review" for Crow's own per-session `.codex/hooks.json` once the folder is trusted. Re-check whether a Codex release adds a way past folder trust that does not load project config. Re-check that `--approve-for-me` still expands to these three keys, and whether the minimum can drop below 0.166.0 |
 | Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
 | Codex startup prompts: `check_for_update_on_startup=false` hides the update screen; the model-migration screen has no key, so the pane watch answers *Use existing model* by its exact bottom rows | codex-cli **0.166.0** (`rust-v0.166.0`: `updates.rs`, `app/startup_prompts.rs`, `model_migration.rs`) | `CodexStartupNotices` / `CodexStartupPromptWatcher` / `setup.sh` `launch_codex` | 2026-11-05 (CROW-1410). Re-check on each bump: the option labels, the `enter/esc confirm` hint, and whether a generic `notice.*` hide key has appeared (then prefer it to the watch) |
 | Codex 0.167 cross-provider resume: `resume --last` (and by id) opens another provider's thread read-only behind a `🔒` notice; the pane watch answers `n` (start fresh) by the notice's footer + title | codex-cli **0.167.0** (openai/codex#58202, `chatwidget/provider_error.rs`); reproduced on **0.167.1** | `CodexStartupNotices` (`providerNoticeTitles`, footer) / `CodexStartupPromptWatcher` | 2026-11-11 (CROW-1425). Re-check on each bump: the three titles, the `c continue in new chat · n start fresh · esc other chats` hint and that `n` still starts fresh without Enter, and whether `resume --last` regains provider filtering (then the watch is only a backstop) |

@@ -9,10 +9,45 @@ import CrowCursor
 // Predicates (`shouldStrip*` / `shouldRefuseReviewHandoff`), the per-agent
 // `strip*ConfigFromReviewClone` wipes, the Grok-handoff compat-hook prune, and
 // `removeReviewCloneConfig`. Creation-time calls stay inside `prepareReviewClone`;
-// launch-path re-strips stay in `prepareWorktreeForAgentLaunch`. Codex's
-// `.codex` removal stays a `try? FileManager.removeItem` in the clone prep and
-// does not go through `removeReviewCloneConfig`.
+// launch-path re-strips stay in `prepareWorktreeForAgentLaunch`.
 extension ReviewSessionController {
+    /// Whether Codex is about to open a `.review` clone and must therefore strip
+    /// its committed `.codex/` first, on every launch path (CROW-1406).
+    ///
+    /// The creation-time strip in `prepareReviewClone` used to be the only one.
+    /// That was enough while the clone stayed untrusted, because Codex disables
+    /// an untrusted folder's project config. But a person who answers Codex's
+    /// folder-trust screen with "Trust and continue" persists trust for the
+    /// clone dir, and the dir is reused for every review of that PR. After that,
+    /// the review skill's `gh pr checkout` (or a head-advancing re-review)
+    /// restores the PR head's `.codex/config.toml`, and a warm `crowd` restart's
+    /// `resume --last` would load it. Crow's per-launch `-c` keys outrank the
+    /// project layer for the keys they set, but not for the ones they leave
+    /// alone. A hostile `[auto_review] policy` / `extra_policy` /
+    /// `experimental_policy_template` would rewrite the Auto-review reviewer's
+    /// instructions for the review Crow just handed to it. Same shape as
+    /// Cursor's launch-path strip (`shouldStripCursorReviewClone`).
+    ///
+    /// Only a `.review` session on Codex strips: `.work`/`.job` branch off a
+    /// trusted base, and a review on another agent must keep `.codex/` visible
+    /// as part of what the PR ships.
+    nonisolated static func shouldStripCodexReviewClone(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        agentKind == .codex && sessionKind == .review
+    }
+
+    /// Remove a review clone's committed `.codex/` (project `config.toml`,
+    /// `hooks.json`, exec-policy rules). Working-tree removal only: the index
+    /// entry survives, and `prepareReviewClone` restores it before its next
+    /// `git pull`. Shared by `prepareReviewClone` and
+    /// `prepareWorktreeForAgentLaunch`, which runs before Crow rewrites its own
+    /// `.codex/hooks.json`. Idempotent, and a real removal failure is audible.
+    nonisolated static func stripCodexConfigFromReviewClone(clonePath: String) {
+        removeReviewCloneConfig(
+            (clonePath as NSString).appendingPathComponent(".codex"),
+            label: ".codex/", clonePath: clonePath)
+    }
+
     /// Whether Cursor is about to open a `.review` clone and must therefore strip
     /// its committed `.cursor/` first — the launch-path gate, as opposed to the
     /// creation-time (`prepareReviewClone`) arm.

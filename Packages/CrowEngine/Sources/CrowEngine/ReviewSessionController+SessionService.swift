@@ -56,6 +56,16 @@ extension SessionService {
             agentKind: agentKind, sessionKind: sessionKind)
     }
 
+    nonisolated static func shouldStripCodexReviewClone(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        ReviewSessionController.shouldStripCodexReviewClone(
+            agentKind: agentKind, sessionKind: sessionKind)
+    }
+
+    nonisolated static func stripCodexConfigFromReviewClone(clonePath: String) {
+        ReviewSessionController.stripCodexConfigFromReviewClone(clonePath: clonePath)
+    }
+
     nonisolated static func shouldStripMuseReviewClone(
         agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
         ReviewSessionController.shouldStripMuseReviewClone(

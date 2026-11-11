@@ -417,6 +417,33 @@ deliberate, documented gaps (full grid in the
 > `--yolo` stays unused (it is an alias). Re-check only if a blocked call can
 > end as a TUI *denial* instead of an approval card **and** the flag overrides
 > a persisted `approvalMode`.
+>
+> **Amendment (2026-11-11, CROW-1406):** Codex's **Auto-review** approvals
+> reviewer passes the two tests Cursor's failed. Read at `rust-v0.166.0` and
+> probed in a private tmux server on `codex-cli 0.166.0`:
+>
+> 1. **A denial is a denial.** The reviewer's refusal goes back to the model
+>    as an instruction, and the circuit breaker ends the turn with an
+>    interrupt (`.waiting`, CROW-1177). Neither waits on a card. A review only
+>    completes on a posted GitHub verdict, so a denial-ended `Stop` can't fake
+>    one.
+> 2. **The flag wins.** Per-launch `-c approval_policy=on-request -c
+>    approvals_reviewer=auto_review -c sandbox_mode=workspace-write` beat a
+>    persisted `never` / `user` / `danger-full-access` user config, fresh and on
+>    `resume --last`. Only managed requirements outrank it. No global config is
+>    written.
+> 3. **The sandbox stays.** An approved `require_escalated` command runs
+>    outside the sandbox once, which is how `gh pr review` reaches GitHub. The
+>    sandbox policy itself never widens.
+>
+> **Wired for `.review`** when `reviewAutoPermissionMode` is on and Codex is
+> ≥ 0.166.0 (`CodexVersionProbe.minimumAutoReviewVersion`, fail-closed). Every
+> launch path now strips a Codex review clone's `.codex/`, so a restored
+> `[auto_review] policy` can't rewrite the reviewer once someone trusted the
+> clone. **The review gap is narrowed, not closed:** folder trust (once per
+> clone dir) and, in a trusted clone, "Hooks need review" for Crow's own
+> unseeded per-session hooks still need a person. `.job` (`-a never`) and
+> `.work` are unchanged.
 
 > **Amendment (2026-11-11, CROW-1426):** Claude Code **≥ 2.1.319** dropped
 > auto mode's local-classifier fallback behind an LLM gateway. A call the
