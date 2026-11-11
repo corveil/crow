@@ -112,13 +112,26 @@ struct ScrollbackHealthTests {
             liveWindows: [(4, true)], prior: []) == [4])
     }
 
-    @Test func altBufferLatchIsSticky() {
-        // THE core property: once observed in the alt buffer, a window stays
-        // latched even when a later read finds it back in the main buffer
-        // (an alt-buffer build shelling out / exiting). Without this the client
-        // would flip its scrollback to 50k and back every such transient.
+    @Test func altBufferSetFollowsTheLiveState() {
+        // CROW-1403: no longer sticky. A window back in the main buffer leaves
+        // the set, so the client gives its 50k scrollback back.
         #expect(TmuxBackend.updatedAltBufferLatch(
-            liveWindows: [(4, false)], prior: [4]) == [4])
+            liveWindows: [(4, false)], prior: [4]).isEmpty)
+    }
+
+    @Test func transientFullScreenProgramInAnInlineAgentDoesNotStrandIt() {
+        // The CROW-1403 report: an inline Claude Code opens its Ctrl+G prompt
+        // editor (alternate_on=1 while it is open). A read during that moment
+        // reports it, and the read after the editor closes must release it.
+        // Under the old sticky union the window stayed capped to 0 lines for
+        // good and Reload could not bring the conversation back.
+        var latch: Set<Int> = []
+        latch = TmuxBackend.updatedAltBufferLatch(liveWindows: [(4, false)], prior: latch)
+        #expect(latch.isEmpty)
+        latch = TmuxBackend.updatedAltBufferLatch(liveWindows: [(4, true)], prior: latch)
+        #expect(latch == [4])
+        latch = TmuxBackend.updatedAltBufferLatch(liveWindows: [(4, false)], prior: latch)
+        #expect(latch.isEmpty)
     }
 
     @Test func inlineWindowNeverLatches() {
@@ -143,10 +156,10 @@ struct ScrollbackHealthTests {
             liveWindows: [(5, true)], prior: [4]) == [5])
     }
 
-    @Test func altBufferLatchKeepsAStillLivingLatchedWindow() {
-        // A previously latched window that still exists — even in the main
-        // buffer now — is retained, while a new alt-buffer window is added.
+    @Test func altBufferSetReportsOnlyWindowsInTheAltBufferNow() {
+        // A previously reported window that is back in the main buffer drops
+        // out, while a window that just entered the alt buffer is added.
         #expect(TmuxBackend.updatedAltBufferLatch(
-            liveWindows: [(1, true), (2, false)], prior: [2]) == [1, 2])
+            liveWindows: [(1, true), (2, false)], prior: [2]) == [1])
     }
 }

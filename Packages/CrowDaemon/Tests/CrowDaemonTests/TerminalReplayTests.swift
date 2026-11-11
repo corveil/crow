@@ -16,11 +16,52 @@ import Testing
         #expect(s == Self.clearPrefix + "line1\r\nline2\r\nline3")
     }
 
-    @Test func stripsTrailingNewlinesToAvoidRowOffset() {
-        // capture-pane pads a trailing LF; keeping it would push the viewport
-        // one row below where tmux's live redraw repaints.
+    @Test func dropsOnlyTheFinalLineTerminator() {
+        // capture-pane ends its last row with an LF; keeping it would push the
+        // viewport one row below where tmux's live redraw repaints.
+        let data = TerminalCockpit.replayFrame(from: "a\nb\n")
+        #expect(String(decoding: data, as: UTF8.self) == Self.clearPrefix + "a\r\nb")
+    }
+
+    /// CROW-1403: a blank row below the last output is a real screen row.
+    /// Trimming it (the old `[\r\n]+$` strip) moved every replayed screen row
+    /// down by one. Claude Code always leaves one under its footer, so the
+    /// replay painted the agent one row low, which is the "one-line stack"
+    /// CROW-1035/1048 worked around by skipping the replay.
+    @Test func keepsBlankScreenRowsBelowTheLastOutput() {
         let data = TerminalCockpit.replayFrame(from: "only\n\n")
-        #expect(String(decoding: data, as: UTF8.self) == Self.clearPrefix + "only")
+        #expect(String(decoding: data, as: UTF8.self) == Self.clearPrefix + "only\r\n")
+        let threeBlank = TerminalCockpit.replayFrame(from: "footer\n\n\n\n")
+        #expect(String(decoding: threeBlank, as: UTF8.self)
+            == Self.clearPrefix + "footer\r\n\r\n\r\n")
+    }
+
+    /// CROW-1403: without a cursor restore the caret was left at the end of the
+    /// last replayed row, below the agent's input box, until the agent moved it.
+    @Test func restoresTmuxCursorPositionAndVisibility() {
+        let shown = TerminalCockpit.replayFrame(
+            from: "a\nb\n", cursor: .init(x: 2, y: 18, visible: true))
+        #expect(String(decoding: shown, as: UTF8.self)
+            == Self.clearPrefix + "a\r\nb" + "\u{1b}[0m\u{1b}[19;3H\u{1b}[?25h")
+        let hidden = TerminalCockpit.replayFrame(
+            from: "a\n", cursor: .init(x: 0, y: 0, visible: false))
+        #expect(String(decoding: hidden, as: UTF8.self)
+            == Self.clearPrefix + "a" + "\u{1b}[0m\u{1b}[1;1H\u{1b}[?25l")
+    }
+
+    @Test func parsesTheReplayProbe() {
+        let inline = TerminalCockpit.parseReplayProbe("0 2 55 1\n")
+        #expect(inline.alternateOn == false)
+        #expect(inline.cursor == .init(x: 2, y: 55, visible: true))
+        let alt = TerminalCockpit.parseReplayProbe("1 0 0 0")
+        #expect(alt.alternateOn == true)
+        #expect(alt.cursor == .init(x: 0, y: 0, visible: false))
+        // An old tmux or a short read keeps the alt-buffer answer and drops the
+        // cursor rather than inventing one; the replay still runs.
+        let short = TerminalCockpit.parseReplayProbe("0")
+        #expect(short.alternateOn == false && short.cursor == nil)
+        let junk = TerminalCockpit.parseReplayProbe("0 x y 1")
+        #expect(junk.cursor == nil)
     }
 
     @Test func preservesInteriorBlankLinesAndEscapes() {

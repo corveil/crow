@@ -60,12 +60,27 @@ public final class PTYProcess: @unchecked Sendable {
         }
     }
 
-    public func start(command: String, workingDirectory: String?) throws {
+    /// `initialSize` is the window size the child sees from its first read.
+    /// Without it `openpty` leaves the PTY at 0×0, which tmux treats as 80×24.
+    /// For a `tmux attach`, that size reaches the server before the caller can
+    /// send a resize (CROW-1403).
+    public func start(
+        command: String,
+        workingDirectory: String?,
+        initialSize: (rows: UInt16, cols: UInt16)? = nil
+    ) throws {
         guard masterFD < 0 else { return }
 
         var master: Int32 = 0
         var slave: Int32 = 0
-        guard openpty(&master, &slave, nil, nil, nil) == 0 else {
+        let opened: Int32
+        if let initialSize {
+            var win = winsize(ws_row: initialSize.rows, ws_col: initialSize.cols, ws_xpixel: 0, ws_ypixel: 0)
+            opened = openpty(&master, &slave, nil, nil, &win)
+        } else {
+            opened = openpty(&master, &slave, nil, nil, nil)
+        }
+        guard opened == 0 else {
             throw PTYProcessError.openptyFailed
         }
         masterFD = master

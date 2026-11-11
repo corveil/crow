@@ -281,8 +281,9 @@ func makeEngineTerminalHandlers(
                     // scroll.
                     //
                     // CROW-1023: detected per-window from the runtime
-                    // `#{alternate_on}` read, latched sticky
-                    // (`observedAltBufferWindows`) — NOT the static per-kind
+                    // `#{alternate_on}` read as of this call
+                    // (`observedAltBufferWindows`, not sticky since
+                    // CROW-1403) — NOT the static per-kind
                     // capability. Two Claude Code builds diverge: one enters
                     // the alt buffer (`alt_on=1`), one renders inline
                     // (`alt_on=0`), and only a runtime read separates them.

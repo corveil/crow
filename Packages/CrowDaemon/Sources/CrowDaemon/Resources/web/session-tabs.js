@@ -27,7 +27,8 @@ async function refreshTerminals() {
     || terminals.find((t) => t.id === (activeTerminal && activeTerminal.id))
     || terminals[0] || null;
   pendingTerminalId = null;
-  applySurfaceScrollback();
+  const wasAttached = attachedWindow;
+  const capRaised = applySurfaceScrollback();
   // CROW-1023: keep re-reading list-terminals while the attached surface is an
   // agent that hasn't latched into the alt buffer yet, so an alt-buffer build's
   // cap-to-0 isn't stranded behind the un-polled first snapshot (review).
@@ -66,6 +67,12 @@ async function refreshTerminals() {
   if (activeTerminal) {
     hideNoTerminalPane();
     attachWindow(activeTerminal.window);
+    // CROW-1403: the window left the alt buffer (an inline agent closed a
+    // full-screen program such as Claude Code's Ctrl+G editor), so its
+    // scrollback cap just came off. The cap discarded the history, so ask for
+    // a replay to bring it back. A window change already replayed in
+    // attachWindow.
+    if (capRaised && wasAttached === activeTerminal.window) selectWindow(activeTerminal.window);
   } else {
     showNoTerminalPane();
   }

@@ -1,11 +1,11 @@
 import CrowCore
 import Foundation
 
-/// Scrollback-health classification, sticky alt-buffer latch (CROW-1023),
+/// Scrollback-health classification, alt-buffer set (CROW-1023; live state since CROW-1403),
 /// and `enableAlternateScreen` (#822 / ADR 0013).
 ///
 /// Extracted from `TmuxBackend` (CROW-1222). `list-terminals` still reports
-/// `uses_alternate_screen` from the latch, not the static per-kind flag.
+/// `uses_alternate_screen` from the runtime alt-buffer read, not the static per-kind flag.
 
 extension TmuxBackend {
     // MARK: - Scrollback health (CROW-804)
@@ -47,33 +47,38 @@ extension TmuxBackend {
         return alternateScreenEnabled ? false : alternateOn
     }
 
-    /// Pure CROW-1023 alt-buffer latch update. Given the live windows (index +
-    /// current `#{alternate_on}`) and the prior latch, return the new latch:
-    /// every window ever observed in the alt buffer, minus windows that no
-    /// longer exist.
+    /// Pure CROW-1023 alt-buffer set update. Given the live windows (index +
+    /// current `#{alternate_on}`), return the windows in the alt buffer as of
+    /// this read. `prior` is accepted so callers keep one call shape. It no
+    /// longer decides anything.
     ///
-    /// STICKY (union) is the point — a Claude/agent build that enters the alt
-    /// screen once keeps the capped-0 scroll model through its transient
-    /// main-buffer drops (shell-out, exit) instead of flip-flopping xterm's
-    /// scrollback every poll. PRUNE (intersect with live indices) keeps a killed
-    /// window's observation from leaking to whatever tmux later assigns that
-    /// index. `nonisolated static` so the policy is unit-testable without tmux,
+    /// NOT sticky (CROW-1403). The set used to be the union of every window
+    /// ever seen at `alternate_on=1`, so an alt-buffer build that briefly fell
+    /// back to the main buffer would not flip xterm's scrollback. The cost ran
+    /// the other way and was much worse: an INLINE agent that opens a
+    /// full-screen program for a moment latched for good. Claude Code's Ctrl+G
+    /// prompt editor is one (`alternate_on` is 1 while it is open), as is any
+    /// pager. One `list-terminals` read during that moment capped the client's
+    /// xterm to 0 lines for the rest of the window's life. The earlier
+    /// conversation became unreachable, and Reload could not bring it back,
+    /// because the replay landed in a zero-line buffer. Reads only happen on a
+    /// tab bind, a session switch, or the bounded startup poll, so following
+    /// the live state costs no flip-flopping in practice. Killed windows drop
+    /// out because only live windows are reported.
+    /// `nonisolated static` so the policy is unit-testable without tmux,
     /// exactly like `isScrollbackDegraded`.
     nonisolated public static func updatedAltBufferLatch(
         liveWindows: [(index: Int, alternateOn: Bool)],
         prior: Set<Int>
     ) -> Set<Int> {
-        var latch = prior
-        for w in liveWindows where w.alternateOn { latch.insert(w.index) }
-        latch.formIntersection(liveWindows.map(\.index))
-        return latch
+        Set(liveWindows.filter(\.alternateOn).map(\.index))
     }
 
     /// The per-window classifications the web UI needs, from ONE `list-windows`
     /// read: which windows are scrollback-degraded (CROW-804 ⚠ Recreate), which
     /// run the agent-TUI scroll model (ADR-0013 wheel/mouse routing), and which
-    /// have actually entered the alternate buffer (CROW-1023, the sticky
-    /// `uses_alternate_screen` latch).
+    /// are in the alternate buffer as of this read (CROW-1023's
+    /// `uses_alternate_screen`; no longer sticky since CROW-1403).
     ///
     /// They ship together on every `list-terminals` RPC, and each is derived
     /// from the same three fields, so reading twice would fork a second `tmux`
@@ -106,7 +111,7 @@ extension TmuxBackend {
                     floor: floor)
             }
             let agents = windows.filter(\.alternateScreenEnabled)
-            // CROW-1023: update the sticky alt-buffer latch from this read (pure
+            // CROW-1023: update the alt-buffer set from this read (pure
             // policy in `updatedAltBufferLatch`), then report it as the third set.
             observedAltBufferWindows = Self.updatedAltBufferLatch(
                 liveWindows: windows.map { ($0.index, $0.alternateOn) },
@@ -138,8 +143,8 @@ extension TmuxBackend {
         windowScrollbackClassification()?.agentSurfaces ?? []
     }
 
-    /// Window indices that have entered the alternate buffer at least once and
-    /// are latched to the capped-0 scroll model (CROW-1023). This — not the
+    /// Window indices in the alternate buffer as of this read, which get the
+    /// capped-0 scroll model (CROW-1023, no longer sticky since CROW-1403). This — not the
     /// static per-kind capability — is what `list-terminals` forwards as
     /// `uses_alternate_screen`. Fails open (`[]`); a window not yet observed in
     /// the alt buffer is treated as inline (unified 50k), which is the safe
