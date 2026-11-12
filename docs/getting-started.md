@@ -124,7 +124,7 @@ Crow scaffolds the following under the dev root (see `Packages/CrowEngine/Source
 ├── {workspace}/                      # one directory per workspace
 ├── crow-reviews/                     # temporary clones for PR reviews and /crow-diagnose
 └── .claude/
-    ├── CLAUDE.md                     # manager-tab context (crow CLI reference)
+    ├── CLAUDE.md                     # Manager context, loaded by every session (kept under 12KB)
     ├── settings.local.json           # pre-approved permissions for crow/gh/git (settings.json is yours — untouched)
     ├── config.json                   # workspace config (workspaces + defaults)
     ├── prompts/                      # prompt files for crow-workspace sessions
@@ -138,7 +138,8 @@ Crow scaffolds the following under the dev root (see `Packages/CrowEngine/Source
         ├── crow-backlog-brief/       # /crow-backlog-brief skill + page.html + brief.sh
         ├── crow-release-review/      # /crow-release-review skill + page.html + release.sh
         ├── crow-diagnose/            # /crow-diagnose skill + diagnose.sh
-        └── my-follow-ups/            # /my-follow-ups skill (Corveil follow-ups)
+        ├── my-follow-ups/            # /my-follow-ups skill (Corveil follow-ups)
+        └── crow-cli/                 # crow-cli skill: the per-verb CLI reference, read on demand
 ```
 
 ## 6. Install (Optional)

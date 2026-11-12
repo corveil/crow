@@ -99,16 +99,22 @@ public struct Scaffolder {
         let showImageSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-show-image")
         try fm.createDirectory(atPath: showImageSkillsDir, withIntermediateDirectories: true)
 
+        let cliSkillsDir = (claudeDir as NSString)
+            .appendingPathComponent("skills/\(ManagerContext.cliSkillName)")
+        try fm.createDirectory(atPath: cliSkillsDir, withIntermediateDirectories: true)
+
         // Create crow-reviews directory for PR review clones
         let reviewsDir = DevRootLayout.reviewsDir(devRoot: devRoot)
         try fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
 
-        // Always update CLAUDE.md — but preserve the "Known Issues / Corrections" section
+        // Always update CLAUDE.md — but preserve the "Known Issues / Corrections" section.
+        // Every session under devRoot loads this file on every turn, so it is the
+        // slim Manager context, not the CLI reference (CROW-1443).
         let claudeMDPath = (claudeDir as NSString).appendingPathComponent("CLAUDE.md")
         let template = Self.bundledCLAUDEMD()
         if fm.fileExists(atPath: claudeMDPath),
            let existing = try? String(contentsOfFile: claudeMDPath, encoding: .utf8),
-           let range = existing.range(of: "## Known Issues / Corrections") {
+           let range = existing.range(of: ManagerContext.correctionsHeading) {
             // Preserve user corrections, replace everything above
             var userCorrections = String(existing[range.lowerBound...])
             // Sanitize stale references from pre-rename installations (case-insensitive)
@@ -119,7 +125,7 @@ public struct Scaffolder {
                 .replacingOccurrences(of: "/ride-workspace", with: "/crow-workspace", options: .caseInsensitive)
                 .replacingOccurrences(of: "rm-ai-ide", with: "Crow", options: .caseInsensitive)
             let templateBase: String
-            if let templateRange = template.range(of: "## Known Issues / Corrections") {
+            if let templateRange = template.range(of: ManagerContext.correctionsHeading) {
                 templateBase = String(template[..<templateRange.lowerBound])
             } else {
                 templateBase = template + "\n\n"
@@ -128,6 +134,15 @@ public struct Scaffolder {
         } else {
             try template.write(toFile: claudeMDPath, atomically: true, encoding: .utf8)
         }
+
+        // The per-verb CLI reference, read on demand instead of riding in
+        // CLAUDE.md (CROW-1443). Always overwritten, like every bundled skill.
+        try ManagerContext.cliSkill().write(
+            toFile: (cliSkillsDir as NSString).appendingPathComponent("SKILL.md"),
+            atomically: true, encoding: .utf8)
+        try ManagerContext.cliReference().write(
+            toFile: (cliSkillsDir as NSString).appendingPathComponent("reference.md"),
+            atomically: true, encoding: .utf8)
 
         // Always overwrite the skill with the latest version from the app
         let skillPath = (skillsDir as NSString).appendingPathComponent("SKILL.md")
@@ -660,27 +675,11 @@ public struct Scaffolder {
 
     // MARK: - Bundled Templates
 
-    /// The CLAUDE.md template bundled with the app.
+    /// The Manager context scaffolded to `{devRoot}/.claude/CLAUDE.md`. One
+    /// source for dev builds and the app — never the crow repo's own root
+    /// `CLAUDE.md`, which is repo documentation (CROW-1443).
     static func bundledCLAUDEMD() -> String {
-        // Try loading from the repo's CLAUDE.md (for development builds)
-        if let content = loadFromRepo("CLAUDE.md") {
-            return content
-        }
-        // Try Bundle.main (for .app bundles)
-        if let url = Bundle.main.url(forResource: "CLAUDE", withExtension: "md"),
-           let content = try? String(contentsOf: url) {
-            return content
-        }
-        // Minimal fallback
-        return """
-        # Crow — Manager Context
-
-        See crow --help for CLI reference.
-        All crow, gh, glab, and git worktree commands require dangerouslyDisableSandbox: true.
-        Write temp files to $TMPDIR, not /tmp.
-
-        ## Known Issues / Corrections
-        """
+        ManagerContext.markdown()
     }
 
     /// The crow-workspace SKILL.md template bundled with the app.
@@ -700,7 +699,7 @@ public struct Scaffolder {
 
         ## Important
         All `crow` CLI and `git worktree` commands require `dangerouslyDisableSandbox: true`.
-        See the CLAUDE.md in this directory for the full crow CLI reference.
+        See the crow-cli skill for the full crow CLI reference.
         """
     }
 
@@ -837,7 +836,7 @@ public struct Scaffolder {
 
         ## Important
         All `crow` CLI and `git worktree` commands require `dangerouslyDisableSandbox: true`.
-        See the CLAUDE.md in this directory for the full crow CLI reference.
+        See the crow-cli skill for the full crow CLI reference.
         """
     }
 

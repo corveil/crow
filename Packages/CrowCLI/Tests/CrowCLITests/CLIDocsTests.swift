@@ -248,19 +248,24 @@ private func section(_ invocation: String, in markdown: String) -> String? {
     }
 }
 
-/// `CLAUDE.md` doubles as the Manager tab's context, so a verb missing here is a
-/// verb the Manager agent does not know it can call. It is a curated cheat
-/// sheet rather than a full reference, so genuinely internal verbs are exempt —
-/// each with its reason, because an unexplained exemption is how drift returns.
-@Test func claudeMdDocumentsEveryUserFacingVerb() throws {
-    let claudeMD = try repoFile("CLAUDE.md")
-    let heading = "## crow CLI Reference"
-    let start = try #require(
-        claudeMD.range(of: heading), "CLAUDE.md no longer has a '\(heading)' section"
-    )
-    let rest = claudeMD[start.upperBound...]
-    let end = rest.range(of: "\n## ")?.lowerBound ?? rest.endIndex
-    let examples = codeBlocks(of: String(rest[..<end]))
+/// The Manager context and its on-demand CLI reference (CROW-1443). Both are a
+/// SwiftPM resource of CrowEngine, so dev builds and the app scaffold from the
+/// same files — never the repo-root `CLAUDE.md`, which is repo documentation.
+private let managerContextDir = "Packages/CrowEngine/Sources/CrowEngine/Resources/ManagerContext"
+private let managerContextPath = "\(managerContextDir)/manager-context.md"
+private let cliSkillReferencePath = "\(managerContextDir)/crow-cli/reference.md"
+
+/// Mirrors `ManagerContext.maxBytes` in CrowEngine. This package does not link
+/// CrowEngine (CI's Linux lane builds only CrowCLI), so the cap is restated.
+private let managerContextMaxBytes = 12 * 1024
+
+/// The `crow-cli` skill's reference is how an agent learns a verb the Manager
+/// context does not list, so a verb missing here is a verb no agent knows it
+/// can call. It is a curated cheat sheet rather than a full reference, so
+/// genuinely internal verbs are exempt — each with its reason, because an
+/// unexplained exemption is how drift returns.
+@Test func cliSkillReferenceDocumentsEveryUserFacingVerb() throws {
+    let examples = codeBlocks(of: try repoFile(cliSkillReferencePath))
 
     let exempt = [
         "crow setup": "first-run installer, not a control-plane verb",
@@ -273,30 +278,61 @@ private func section(_ invocation: String, in markdown: String) -> String? {
         let documented = mentionsCommand(invocation, in: examples)
         #expect(
             documented,
-            "`\(invocation)` is missing from CLAUDE.md's CLI Reference — the Manager agent reads it to learn what it can run"
+            "`\(invocation)` is missing from the crow-cli skill's reference.md — agents read it to learn what they can run"
         )
+    }
+}
+
+/// Every session under the dev root loads the Manager context on every turn
+/// (Claude Code walks `CLAUDE.md` files up from the working directory), so it
+/// has a hard size cap. Per-verb detail belongs in the crow-cli reference.
+@Test func managerContextStaysUnderSizeCap() throws {
+    let bytes = try repoFile(managerContextPath).utf8.count
+    #expect(
+        bytes <= managerContextMaxBytes,
+        "\(managerContextPath) is \(bytes) bytes, over the \(managerContextMaxBytes)-byte cap — move per-verb detail to the crow-cli reference (CROW-1443)"
+    )
+}
+
+/// The Manager context must point agents at the on-demand reference, or a
+/// verb it does not list is a verb they guess at.
+@Test func managerContextPointsAtTheCLISkill() throws {
+    let doc = try repoFile(managerContextPath)
+    #expect(doc.contains("`crow-cli` skill"), "\(managerContextPath) no longer points at the crow-cli skill")
+    #expect(doc.contains(".claude/skills/crow-cli/reference.md"), "\(managerContextPath) no longer names the reference file for agents without skills")
+    #expect(doc.contains("## Known Issues / Corrections"), "Scaffolder preserves the operator's corrections by splitting on this heading")
+}
+
+/// The Manager context lists the verbs most sessions need, outside the
+/// reference that `cliSkillReferenceDocumentsEveryUserFacingVerb` guards. A
+/// renamed or removed verb must not linger there, where every session reads it.
+@Test func managerContextNamesOnlyRealVerbs() throws {
+    let examples = codeBlocks(of: try repoFile(managerContextPath))
+    let verb = try NSRegularExpression(pattern: #"(?<![\w/-])crow ([a-z][a-z-]*)"#)
+    let range = NSRange(examples.startIndex..., in: examples)
+    let named = verb.matches(in: examples, range: range).compactMap {
+        Range($0.range(at: 1), in: examples).map { "crow \(examples[$0])" }
+    }
+    #expect(!named.isEmpty, "found no crow verbs in \(managerContextPath)'s code blocks")
+    for invocation in Set(named) {
+        #expect(invocations.contains(invocation), "\(managerContextPath) names `\(invocation)`, which is not a crow command")
     }
 }
 
 /// CROW-1079: an additional Manager self-renames from its first ask via
 /// `crow rename-session`. The instruction lives only in the Manager's
-/// scaffolded context, so if it falls out of either template source the
-/// behavior silently disappears — guard both. The shipped `.app` reads
-/// `Resources/CLAUDE.md.template`; dev builds read the repo `CLAUDE.md`
-/// (see `Scaffolder.bundledCLAUDEMD`), so the two must both carry it.
+/// scaffolded context, so if it falls out the behavior silently disappears.
 @Test func managerContextExplainsSelfRename() throws {
-    for source in ["CLAUDE.md", "Resources/CLAUDE.md.template"] {
-        let doc = try repoFile(source)
-        #expect(
-            doc.contains("crow rename-session --session \"$CROW_SESSION_ID\""),
-            "\(source) no longer tells additional Managers to self-rename via crow rename-session (CROW-1079)"
-        )
-        // The primary-Manager guard is what keeps the nav pill as "Manager".
-        #expect(
-            doc.contains("00000000-0000-0000-0000-000000000000"),
-            "\(source) dropped the primary-Manager guard for self-rename (CROW-1079)"
-        )
-    }
+    let doc = try repoFile(managerContextPath)
+    #expect(
+        doc.contains("crow rename-session --session \"$CROW_SESSION_ID\""),
+        "\(managerContextPath) no longer tells additional Managers to self-rename via crow rename-session (CROW-1079)"
+    )
+    // The primary-Manager guard is what keeps the nav pill as "Manager".
+    #expect(
+        doc.contains("00000000-0000-0000-0000-000000000000"),
+        "\(managerContextPath) dropped the primary-Manager guard for self-rename (CROW-1079)"
+    )
 }
 
 // MARK: - Independent view of the command tree

@@ -1,0 +1,448 @@
+# crow CLI — per-verb reference
+
+Loaded on demand by the `crow-cli` skill; it is deliberately **not** part of the always-loaded Manager context. Search it for the group or verb you need rather than reading it top to bottom. `crow <verb> --help` prints any verb's exact flags.
+
+The `crow` CLI communicates with the Crow app via Unix socket at `~/.local/share/crow/crow.sock`. The app must be running for commands to work. **All `crow`, `gh`, `glab`, and `git worktree` commands require `dangerouslyDisableSandbox: true`** and return JSON. When `crow.sock` is unreachable (Cursor sandbox), `crow` retries over loopback `POST /rpc` (`http://127.0.0.1:8787/rpc`; `CROW_HTTP_URL` / `CROW_HTTP_PORT`).
+
+## Session Commands
+```
+crow new-session --name "feature-name"          → {"session_id":"<uuid>","name":"..."}
+crow rename-session --session <uuid> "new-name" → {"session_id":"...","name":"..."}
+crow select-session --session <uuid>            → {"session_id":"..."}
+crow list-sessions                              → {"sessions":[...]}
+crow get-session --session <uuid>               → {id, name, status, ticket_url, ...}
+crow set-status --session <uuid> active|paused|inReview|completed|archived
+crow set-locked --session <uuid> true|false     → exempt a session from (or return it to) the retention reaper
+crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}
+crow delete-session --session <uuid>            → {"deleted":true}
+crow reorder-manager --session <uuid> (--before <uuid> | --after <uuid>) → {"session_id":"...","order":["..."]}
+```
+
+## Session Lifecycle
+
+The web session-menu actions, as CLI verbs. All take only `--session`. Preconditions are enforced server-side (the browser hides menu items instead); current status is **not** gated, so these are safe to re-run.
+
+```
+crow mark-in-review --session <uuid>            → {"session_id":"...","status":"inReview","warning":"…"}  moves the ticket to In Review on the provider's board, then the session; needs a linked ticket
+crow complete-session --session <uuid>          → {"session_id":"...","status":"completed"}
+crow set-session-active --session <uuid>        → {"session_id":"...","status":"active"}      reopen a completed session
+crow mark-issue-done --session <uuid>           → {"ok":true,"session_id":"..."}              closes the linked issue, then completes the session
+crow add-merge-label --session <uuid>           → {"ok":true,"session_id":"...","warning":"…"}  adds crow:merge to the session's PR; needs a linked PR. `warning` is present only when the label won't lead to a merge (watcher off, repo forbids auto-merge)
+```
+
+`complete-session` / `set-session-active` write Crow's session status only — to move the **provider's** board for those, use `crow transition-ticket --to ...`. `mark-in-review` moves the board itself: it transitions the ticket **first**, so a failed transition errors instead of leaving the session marked. When the provider has no In Review status to move to (GitLab, or a board whose column isn't named "In Review"), the session still moves and `warning` says the ticket did not. Manager sessions are rejected.
+
+## Daemon Autostart
+
+Runs locally, not over the socket — these work with `crowd` down (CROW-769). macOS (launchd) and Linux (systemd `--user`).
+
+```
+crow autostart install [--binary PATH] [--host H] [--port N] [--dev-root PATH] [--socket PATH]
+  → registers a login item so crowd starts at login (idempotent; re-points after an upgrade)
+crow autostart uninstall                        → removes the login item
+crow autostart status [--json]                  → {enabled, running, loaded, stale, plistPath, logPath, ...}
+```
+
+## Metadata Commands
+```
+crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]
+crow set-goal --session <uuid> --goal "..." | --clear                  → tag the session's org goal/KPI (feeds alignment weight; exactly one of --goal/--clear)
+crow add-link --session <uuid> --label "Issue #123" --url "..." --type ticket|pr|repo|custom
+crow list-links --session <uuid>
+crow remove-link --session <uuid> --id <link-uuid> | --url "..."       → detach a link by id (from list-links) or url; returns {"removed":N}
+crow edit-link --session <uuid> --id <link-uuid> | --url "..." [--label "..."] [--new-url "..."] [--type ...]   → update a link in place (only provided fields change; --url selects, --new-url sets); returns {"updated":N}
+crow transition-ticket --session <uuid> --to inProgress|inReview|done   → moves the linked ticket to a pipeline status (Jira honors jiraStatusMap)
+crow resync-jira                                                        → re-sync every Jira ticket's status from its Crow session state
+```
+
+## Settings Commands
+```
+crow telemetry get                                                      → {"telemetry":{"enabled":…,"port":…,"retention_days":…}}
+crow telemetry set [--enabled true|false] [--port N] [--retention-days N]  → patch; enabled/port need a crowd restart (returns "restart_required")
+crow cleanup get                                                        → {"cleanup":{"enabled":…,"retention_hours":…}}
+crow cleanup set [--enabled true|false] [--retention-hours N]           → patch; live within ~1 board poll. Deletes completed/archived sessions incl. worktree + branch
+crow ui get                                                             → {"ui":{"sidebar":{"hide_session_details":…}}}
+crow ui set --hide-session-details true|false                           → patch; connected browsers repaint within ~2s
+crow ui set --chat-view true|false                                      → show the experimental web Chat view toggle (default off); live in ~2s
+crow ui set --debug-mode true|false                                     → debug mode (Settings → About): diagnostic features, today the sidebar recording indicator (default off)
+crow terminal get                                                       → {"terminal":{"wheel_scroll_lines":…,"agent_wheel_notches":…}}
+crow terminal set [--wheel-scroll-lines N] [--agent-wheel-notches N]    → patch; wheel-scroll tuning (CROW-835, ADR 0013); both floor at 1; live on next scroll
+crow version                                                            → prints the stamped build version
+crow version --check                                                    → compare against corveil/crow main; human summary, exit 0/1/2
+crow version check                                                      → same as --check
+crow version get                                                        → {"version_update":{…},"status":{…}}
+crow version set [--enabled true|false] [--interval-hours N]            → patch; interval floored at 1h
+```
+
+## Defaults
+
+`AppConfig.defaults` — Settings → Workspaces (provider, branch prefix), → Automation (board filter lists), → General (corveil binary path).
+
+```
+crow defaults get                                                       → {"defaults":{…all 12 fields…},"config_readable":bool}
+crow defaults set [--provider github|gitlab] [--cli gh|glab] [--branch-prefix 'feat/']
+crow defaults set --binary NAME=PATH ...                                → merge; NAME= removes. LOCAL-ONLY; needs a crowd restart
+crow defaults set --corveil-auto-update true|false [--corveil-version latest|vX.Y.Z]
+ → download/link corveil from corveil/corveil-releases (CROW-1210); default on (CROW-1229). When on, Crow owns binaries["corveil"] (CROW-1247)
+crow defaults set --manager-workspace NAME|''                          → workspace new extra Managers are tagged with (CROW-1382); '' clears
+crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R | --clear-exclude-review-repos
+                  --add-exclude-ticket-repo R | --remove-exclude-ticket-repo R | --clear-exclude-ticket-repos
+                  --add-ignore-review-label L | --remove-ignore-review-label L | --clear-ignore-review-labels
+```
+
+Patch; at least one flag required. Lists are edited incrementally (add/remove compose, remove applied first; `--clear-X` is exclusive with add/remove **for that list only**) and matched case-insensitively, like the board filters. `--add-*-repo` takes one `*` wildcard; labels are exact.
+
+Everything is live except `--binary` (agent discovery + `.claude/bin` symlinks are set up at startup) — that returns `restart_required`, *including on removal*. A non-executable path is saved with a warning, not rejected; `crow` is rejected as a binary name. `--provider`/`--cli` are independent — setting one warns via `provider_cli_mismatch` if the pair ends up crossed. `get` echoes all 12 fields, including the two `set` doesn't write (`exclude_dirs`, `mirror_claude_mcp_to_codex`). `--corveil-auto-update` is **on by default** (CROW-1229): Crow downloads from public `corveil/corveil-releases`, checksum-verifies, and hot-swaps the symlink. When it is on, Crow owns `binaries["corveil"]` (a previous source-build path is adopted, not skipped — CROW-1247). Pass `false` to leave an operator path, including `out/`, alone.
+
+The review board filters on defaults ∪ every workspace's own `excludeReviewRepos`, so `--clear-exclude-review-repos` won't unhide a repo a workspace excludes.
+## Agent Commands
+
+Which coding harness Crow launches — `AppConfig.defaultAgentKind` + `agentsByKind`, the Settings → General Agent pickers. Resolution is `agentsByKind[<role>] ?? defaultAgentKind`; roles are `work|review|job|manager`.
+
+```
+crow agents list                                        → {"agents":{"known":[{kind,name,binary,available}],"default_agent_kind":…,"by_kind":{…},"effective":{work,review,job,manager},"config_readable":…}}
+crow agents set [--default <kind>] [--work|--review|--job|--manager <kind>] [--clear <role>]…
+                                                        → patch; echoes the same subtree plus {"saved":true}; live within ~1 board poll
+```
+
+- `known` lists **every** agent Crow ships, each with `available` — the same surface-but-disable roster the web pickers show (#879), so an off-PATH agent reads as "not installed" rather than vanishing. Availability is decided when `crowd` **starts**, so a newly installed agent needs a daemon restart.
+- Only `available: true` kinds are selectable. An unavailable one is **rejected and nothing is written** (stricter than `crow new-session --agent`, which falls back to the default); a known-but-uninstalled kind gets its own message naming the binary.
+- A role flag also rejects an agent that can't run that session kind — but **no agent is review-incapable today** (Antigravity's review dispatch landed in #902), so the gate refuses nothing right now; it's kept in lockstep with `crow handoff-agent` for a future harness. `--default` is not gated this way on purpose.
+- `--clear <role>` **removes** the override key, never writes a null — one null would make the whole `config.json` undecodable. Repeat per role; `--clear X` with `--X <kind>` is rejected.
+- If `effective` names a kind that isn't available, the CLI warns on stderr — that role's sessions will not launch.
+
+## Corveil CLI
+
+Settings → General → Corveil CLI's **Verify** and **Reinstall skill** buttons, as verbs (CROW-1011). Both act on `defaults.binaries["corveil"]`; `--path` overrides it for one call, which is how you check a binary before committing it to config.
+
+```
+crow corveil verify [--path PATH]              → {"ok":bool,"message":"corveil 1.4.0","path":"…"}
+crow corveil reinstall-skill [--path PATH]     → {"ok":bool,"message":"Skill reinstalled","path":"…","skill_path":"…"}
+```
+
+- **Branch on `ok`, not the exit code.** A corveil that is missing, non-executable, exits non-zero, or hangs past 5s is a successful *report* of a broken binary. A non-zero `crow` exit means the request never ran (no daemon, or no path configured anywhere).
+- `reinstall-skill` re-runs the launch-time `corveil skill install` for **every** embedded skill (enumerated via `corveil skill list`), writing each into `{devRoot}/.claude/commands/<name>.md` — the "I just rebuilt corveil, pick up its new embedded skills" loop, no `crowd` restart. `skill_path` names that directory. It is idempotent; one skill failing doesn't abort the rest (the warning names any that didn't install).
+- A reinstall also updates the launch-time corveil warning: succeeding clears it, failing replaces it.
+- Both are **local-only** on `/rpc` (they execute a path on the daemon host), like `gateway`/`web-password`/`mcp token`. The CLI is unaffected — it goes over the Unix socket.
+
+## Corveil connection
+
+The local-only write path for the **Corveil OAuth connection** (CROW-1120) — the source of truth an Integrations → Corveil setup writes, from which the AI gateway + log-shipping configs are generated. It is the "door" the browser Connect flow (corveil/crow#1119) and org provisioning (corveil/crow#1121) persist a `corveilConnection` through, never `set-config`, because it holds OAuth tokens.
+
+```
+crow corveil connect [--base-url URL] [--client-id ID] [--user-id ID] [--user-email E] [--user-name N] [--access-token T] [--refresh-token T] [--registration-access-token T] [--access-token-expires-at ISO8601]
+                                                → status payload + {"saved":true}
+crow corveil status                             → {connected, state, needs_reconnect, base_url, client_id, connected_user, org_count, has_*_token, access_token_expires_at, last_refresh_at, last_refresh_error}
+crow corveil disconnect                         → {"saved":true,"was_connected":bool}
+crow corveil orgs                               → {"orgs":[{org_id,org_name,key_id,key_prefix,created_at}],"count":N}   the LOCAL provisioned-key metadata
+crow corveil list-orgs [--refresh]              → {"orgs":[{org_id,org_name,role,is_active,provisioned}],"count":N}   the orgs you belong to, cached
+crow corveil select-org --org ID [--name N] [--rotate]  → {"saved":true,"reused":bool,"org":{org_id,org_name,key_id,key_prefix,created_at}}
+crow corveil deselect-org --org ID              → {"saved":true,"removed":bool}
+crow corveil detect-gateways                    → {"gateways":[{target,target_name,base_url,value_kind,key_prefix,classification,org_id?,org_name?,reason?}],"count":N,"connected":bool}
+crow corveil link-gateway (--workspace NAME | --manager) --org ID [--org-name N]  → {"saved":true,"linked":true,"target":"...","target_name":"...","org":{org_id,org_name,key_prefix,created_at}}
+```
+
+- All nine are **local-only** on `/rpc`, like `gateway`/`web-password`/`mcp token`: `connect` stores OAuth tokens and `disconnect` clears them, and the reads + the provisioning/migration verbs are gated alongside the writes so the whole connection is one local-only surface. The CLI is unaffected — it goes over the Unix socket.
+- `connect` is a **merge**: every field is optional, and a blank/omitted one keeps the stored value, so a token refresh can restate only `--access-token` + `--access-token-expires-at`. The merged result needs at least a client id and an access token; `orgKeys` + their per-org secrets (provisioned by corveil/crow#1121) are preserved.
+- `status`/`orgs`/`list-orgs`/`select-org`/`deselect-org`/`detect-gateways` never return a token or a key value — only presence booleans and non-secret metadata (a redacted `key_prefix`).
+- **Token health/refresh (CROW-1125):** a daemon-lifetime watcher renews the access token before it expires. `status.state` is the derived health — `connected` · `expired` (past expiry, refresh not keeping up) · `revoked` (a refresh was rejected `invalid_grant`/`invalid_client` — the grant is dead) · `disconnected` — and `needs_reconnect` is true for `expired`/`revoked`. `last_refresh_at`/`last_refresh_error` expose the watcher's most recent outcome. `revoked`/`disconnected` mean rerun Connect; `expired` self-heals once the daemon can reach Corveil again. The Integrations tab (corveil/crow#1122) keys its Reconnect affordance off the same `needs_reconnect`.
+- **Org provisioning (CROW-1121):** `list-orgs` lists the orgs you belong to (`GET /api/me/organizations`, cached; `--refresh` re-fetches) and flags which already have a key. `select-org` mints **one** `sk-citadel-…` gateway key per org via `POST /api/keys`, **reusing** the stored one if the org already has a key (`reused:true`, no re-mint — the backend rotates the key on each POST, so re-minting would break bound gateways); `--rotate` forces a fresh key. The key value is stored as a per-org secret in `corveilConnection`; only its metadata is ever printed. `deselect-org` revokes the key server-side and drops the local record (idempotent).
+- **Manual-gateway migration (CROW-1126):** `detect-gateways` reports every Manager/workspace gateway carrying an `x-citadel-api-key` header, classified against the connection — `managed` (already equals the connection's derived gateway for a provisioned org), `linkable` (a plaintext key on the connection's base URL), or `manual` (a `reason` says why it can't link yet: no connection, an `op://` value, or a mismatched base URL). `link-gateway` **adopts** a linkable gateway's existing plaintext key into the connection as `--org`'s key — offline (the backend has no key→org lookup, so you name the org), non-disruptive, and stored with no key id so a later `select-org` mints a real managed key. Only a gateway on the connection's own base URL is adopted (trailing slash ignored); `op://` values are refused; and an org that already has a provisioned key is refused rather than orphaned — `deselect-org` (which revokes) then link.
+- `disconnect` clears the local record; revoking the per-org gateway keys on the Corveil side is `deselect-org` (or a dashboard cascade on revoke).
+
+## Job Commands
+
+Scheduled prompt-sets scoped to one repo in a workspace (CROW-604) — the Jobs sidebar, as CLI verbs. Jobs are addressed by UUID; `crow job list` prints them. Mutations hit the app's live config, so the scheduler and Settings UI see them immediately.
+
+```
+crow job list                                   → {"jobs":[...]}
+crow job get --id <job-uuid>                    → {"job":{...}}
+crow job add --name "..." --workspace "..." --repo owner/repo --prompt "..." (--interval-seconds N | --daily-at HH:MM [--weekdays mon,tue])
+crow job edit --id <job-uuid> [--name ...] [--prompt ...] [--daily-at HH:MM] [--weekdays ...]
+crow job enable --id <job-uuid>                 → {"job":{...}}
+crow job disable --id <job-uuid>                → {"job":{...}}
+crow job run --id <job-uuid>                    → {"job_id":"...","session_id":"...","terminal_id":"..."}   needs tmux; ignores schedule + enabled
+crow job delete --id <job-uuid>                 → {"deleted":true,"job_id":"..."}
+crow job duplicate --id <job-uuid>              → {"job":{...}}   the copy starts disabled with a uniquified name
+```
+
+- `add` needs exactly one schedule (`--interval-seconds` **or** `--daily-at`) and at least one `--prompt`/`--prompt-file`. `--prompt` and `--prompt-file` are repeatable and sent in that order; `--prompt-file -` reads stdin (at most once).
+- On `edit`, any `--prompt` replaces the **whole** prompt list and any schedule flag replaces the **whole** schedule — so changing `--weekdays` means restating `--daily-at`. Use `enable`/`disable` instead of `edit` to toggle enabled.
+- `job run` can take a while on first run (it may clone the repo); the run continues in the app even if the CLI stops waiting.
+
+## Todo Commands
+
+Durable Scratch items (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. Lives in the shared `JSONStore` (not `config.json`) and is **not** reaped by session cleanup.
+
+```
+crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME] [--agent KIND]
+crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
+crow todo get --id <uuid>
+crow todo edit --id <uuid> [--text ...] [--note ...] [--append-note ...] [--priority ...] [--workspace NAME|""] [--agent KIND|""] [--add-tag ...] [--remove-tag ...]
+crow todo done --id <uuid>
+crow todo reopen --id <uuid>
+crow todo park --id <uuid>
+crow todo drop --id <uuid>
+crow todo delete --id <uuid>
+crow todo link --id <uuid> --type session|ticket|pr|custom [--url ...] [--session <uuid>] [--label "..."]
+crow todo explore --id <uuid> [--agent KIND] [--workspace NAME]  → create-manager, seed an explore brief, state → exploring
+crow todo ticket --id <uuid> [--agent KIND] [--workspace NAME]   → create-manager, seed a /crow-diagnose brief, state → exploring
+crow todo work --id <uuid>                            → /crow-workspace off the linked ticket, state → working
+crow todo talk --id <uuid> "..."                      → crow send to the item's linked Manager
+```
+
+- Items persist until acted on — unlike completed sessions, they are exempt from the 24h cleanup reaper.
+- Every item carries an **agent** and a **workspace** (CROW-1387), echoed as `agent_kind` / `workspace`. `todo add` resolves each from its flag, then the Manager running it when that Manager is tagged with a workspace (`$CROW_SESSION_ID`), then the defaults (`defaults.managerWorkspace`; `agentsByKind.manager ?? defaultAgentKind`). It fails only when no workspace resolves — it never guesses one. Items from before CROW-1387 have neither and launch with the default agent and `defaults.managerWorkspace` (refused when it doesn't resolve — CROW-1386).
+- `explore` and `ticket` both open a Manager and seed a brief. The brief is written to `$TMPDIR/crow-explore-<session>.md`: a fresh Manager launches with that file as its prompt (argv, nothing pasted), and a Manager that is already up is typed one line, `Read and follow the instructions in <path>` (CROW-1327). `seeded` is false only when the file could not be written or the pane never appeared; `todo talk` (or that same one-liner) can finish it. `explore` / `ticket` launch a Manager tagged with the item's workspace and running its agent; `--agent` / `--workspace` override them for that launch only. `ticket` tells the agent to run `/crow-diagnose <item-id> --yes --workspace <ws>` (CROW-1416) and finish the item by its outcome: a ticket or an epic links every issue it filed with `todo link --type ticket` (the first link moves the item to `ticketed`; an epic is linked last, so `todo work` starts it), a duplicate links the existing issue, a commitment or needs info is parked and a won't do dropped, each with the reason appended by `todo edit --append-note`. There is no repo picker. Re-linking a URL that is already on the item moves it to the end instead of adding it twice, and parking or dropping clears the pending Ticket dispatch. A Jira-tracked workspace files with the `jira` MCP, never `diagnose.sh file`. When the item's linked Manager is still up, the brief goes there instead; if that Manager's workspace differs, the response carries a `warning` and the Manager is never re-tagged. A second `todo ticket` within 15 minutes is a no-op until that URL is linked — do not call it again from the filing Manager.
+- `work` needs a linked ticket (`todo link --type ticket`).
+- Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
+
+## TUI recording Commands
+
+Opt-in capture of a TUI on the broken surface (desktop / browser / iPad / phone). Local-first, never uploaded. Watch is `log --since` or `#/tui-recordings/:id`, never a second tmux attach.
+
+```
+crow tui record start --session <uuid> [--terminal <uuid>] [--note "..."]
+crow tui record stop --id <recording-id>
+crow tui record mark --id <recording-id> [--note "..."]
+crow tui record list [--session <uuid>]
+crow tui record get --id <recording-id>
+crow tui record log --id <recording-id> [--since t]
+crow tui record delete --id <recording-id>
+crow tui record hud --session <uuid> on|off
+crow tui record export --id <recording-id> --dir PATH   # local copy; NO RPC
+```
+
+- Start/stop/mark/hud are reachable from the iPad (not local-only).
+- `export` copies from Application Support and does **not** call `rpc()`. `--fixture` is geometry + detector inputs only.
+
+## Worktree Commands
+```
+crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]
+crow list-worktrees --session <uuid>
+```
+
+## Terminal Commands
+```
+crow new-terminal --session <uuid> --cwd "/path" [--name "Claude Code"] [--command "claude ..."] [--managed]
+crow list-terminals --session <uuid>
+crow close-terminal --session <uuid> --terminal <uuid>
+crow rename-terminal --session <uuid> --terminal <uuid> "new name"
+crow recreate-terminal --session <uuid> --terminal <uuid>   → DESTRUCTIVE: rebuilds the pane to restore scrollback; relaunches the agent with --continue
+crow relaunch-agent --session <uuid>                   → open a managed terminal and resume the agent when the session has none (CROW-1295)
+crow send --session <uuid> --terminal <uuid> "text to send"
+```
+
+The `crow send` command writes text to the terminal. Newlines in the text are converted to Enter keypresses. To submit a command, include a newline at the end of the text. The text goes in as one bracketed paste, so a multi-line message reaches an agent TUI whole. If it can't be delivered (unknown terminal, tmux failure), `crow send` errors instead of printing `"sent": true`.
+
+## Maintenance Commands
+
+Need tmux on the daemon host; otherwise they error with "… requires tmux on the daemon host".
+
+```
+crow restart-manager                            → relaunch the Manager's agent in place (primary Manager only; new terminal UUID)
+crow restart-tmux-server                        → DESTRUCTIVE: kills every pane (all agents die), then rebuilds every terminal
+crow reload-tmux-config                         → `tmux source-file` the bundled config into the live server (non-destructive)
+crow launch-agent --terminal <uuid>             → launch the session's coding agent in a shell-ready terminal
+crow retry-readiness --terminal <uuid>          → re-arm the readiness watch for a terminal whose first attempt timed out
+crow open-in-vscode --session <uuid>            → open the session's worktree in VS Code on the host
+crow open-terminal --session <uuid>             → open a macOS Terminal.app window at the worktree (host GUI, NOT a Crow tab)
+```
+
+- `restart-tmux-server` returns as soon as the teardown is done — the rebuild continues in the background, so don't chain a `crow send` right after it.
+- `launch-agent` / `retry-readiness` take **only** `--terminal` (no `--session`), and their `{"ok": true}` means the request was accepted, not that it applied — the daemon no-ops them unless the terminal is in the right state.
+- `open-terminal` is macOS-only and is not `new-terminal`: it opens Terminal.app on the host rather than a tab inside Crow.
+
+## Inspection & Analytics
+```
+crow list-artifacts --session <uuid>  → {"images":[{name,size,mtime,url,path}],"dir":"..."} — images agents dropped in $CROW_ARTIFACTS_DIR (use path/dir, not url)
+crow get-scorecard                    → the efficiency scorecard itself (grade, weekly rollups, baseline, per-session rows); timestamps are epoch ms
+crow rebuild-scorecard                → backfill analytics snapshots; {"rebuilt":true}; errors when telemetry is off
+crow get-state                        → the daemon's ENTIRE state snapshot; large, capped at 1 MB — prefer list-sessions / get-session / list-links
+```
+
+## Board & Workflow Commands
+
+The CLI half of the web Ticket Board / Reviews board buttons — drive the board without a browser. The three read/refresh verbs need only a provider-configured daemon; the session-spawning verbs additionally need tmux on the daemon host.
+
+```
+crow list-tickets                               → {issues:[...], counts:{...}, done_last_24h:N, loading:bool}
+crow list-reviews                               → {reviews:[...], loading:bool, unseen:N, group_counts:{...}, group_order:[...], group_announces_new_request:{...}, hidden_by_filters:N}
+crow refresh-tickets                            → {"ok":true}   (awaits the poll; see note below)
+crow work-on-issue --url "..."                  → {"ok":true}   (types /crow-workspace <url> into the Manager)
+crow batch-work-on-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
+crow explore-issue --url "..."                  → {"ok":true}   (types /crow-workspace --explore <url> into the Manager)
+crow batch-explore-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
+crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
+crow create-manager [--agent claude-code|cursor|codex|opencode] [--workspace NAME]  → {"session_id":"<uuid>","name":"Manager N","workspace_id":…,"workspace_name":…}
+crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixChecks|mergePR|reReview
+                                                → {"dispatched":bool,"action":"...","reason":"..."}
+```
+
+- `list-tickets` / `list-reviews` print the board payload verbatim — filter with `jq`. A ticket with `linked_session_id: null` (or a review with `review_session_id: null`) is one nothing is working yet.
+- Each review carries a `group` — `in_review`, `not_approved_yet`, `waiting_on_author`, or `recently_completed` — matching the web board's four sections exactly (one payload, one rule). `group_order` is the display order, `group_counts` counts **every** group including empty ones, and `group_announces_new_request` says which groups may chime `reviewRequested` (the last two never do — they fill when work *leaves* your queue). Reviewing clears GitHub's pending request, so anything you have already answered is invisible to `review-requested:@me` and reaches the board through a separate `reviewed-by:@me` pair of searches: `waiting_on_author` is every open PR whose last word from you was CHANGES_REQUESTED or COMMENTED (no time limit — the ball is with the author, however long that takes), and `recently_completed` is a 24-hour tail of PRs that merged or closed, plus ones you approved that haven't merged yet. `recently_completed` includes PRs someone else approved and merged after your review, and its rows are never offered for review (`kickoff_action` is always `skip`). `waiting_on_author` rows are suppressed the same way — no Start Review button, not tickable in the board's batch mode — but only while the PR's `head_ref_oid` still matches `viewer_last_reviewed_head_sha`, the head your last verdict was submitted against. When the author pushes without re-requesting you the PR stays under that heading with something genuinely new in it, so the action flips back to `create`; an unfetched SHA on either side also keeps the button, since suppressing claims there is nothing to look at and a partial fetch cannot support that claim. Anything still in the requested queue is `not_approved_yet` no matter what you decided last round — a PR re-requested after your verdict is asking for something, so it never hides under a finished heading. `hidden_by_filters` counts requested reviews that `ignoreReviewLabels`/`excludeReviewRepos` hid — a non-zero value with an empty board means the filters, not GitHub.
+- `work-on-issue` URLs become terminal keystrokes, so they must be `http(s)` with no whitespace or control characters. `start-review` URLs go to `git clone` and are not checked that way.
+- `explore-issue` / `batch-explore-issues` are the Start Exploring siblings: same URL rules, same RPCs with `explore: true`, so the Manager runs `/crow-workspace --explore` (or the batch form). The session is still `kind=work`, tagged `isExplore`.
+- `batch-work-on-issues` sends `--url` values first, then the lines of `--urls-file`. Bad URLs come back in `rejected` instead of failing the batch.
+- `quick-action` returns `dispatched:false` + `reason` with a **zero** exit code when the session has no agent terminal or no linked PR — branch on `dispatched`, not the exit code.
+- `refresh-tickets` awaits the poll, so a following `list-tickets` sees the new data. It returns `{"ok":true}` without polling when a refresh is already in flight or the provider is rate-limited.
+- `create-manager --agent` is used as given — an unrecognized kind is not rejected, so a typo stamps the Manager with a kind no agent is registered for. Omit `--agent` to get the configured Manager default.
+- `create-manager --workspace` tags the extra Manager with a workspace for life (CROW-1382): it launches with that workspace's gateway (else `managerGateway`), ships its transcripts per harness conversation when the workspace has `--upload-session-logs` on, and starts with the workspace's provider, repos and custom instructions. Every extra Manager needs one (CROW-1386): omitted, it comes from the calling tagged Manager (`$CROW_SESSION_ID`), then `defaults.managerWorkspace`, and if neither resolves the command fails — Crow never guesses. There is no `none`, no re-tag verb, and the primary Manager is never tagged. Pre-existing untagged extra Managers keep running and show an **untagged** badge. Removing a workspace clears a `defaults.managerWorkspace` that names it (`manager_default_cleared`); renaming one rewrites it. `get-session` reports a tagged Manager as `workspace_match: "workspace"`.
+
+## Notification Commands
+
+Reads and writes `AppConfig.notifications` — the same settings as Settings → Notifications.
+
+```
+crow notifications get [--event <name>]                → {"notifications":{globals, events, available_sounds, custom_sounds, config_readable}}
+crow notifications set [--global-mute|--no-global-mute] [--sound-enabled|--no-sound-enabled]
+                       [--system-notifications-enabled|--no-system-notifications-enabled]
+crow notifications set --event <name> [--event-enabled|--no-event-enabled]
+                       [--event-sound-enabled|--no-event-sound-enabled]
+                       [--event-system-notification-enabled|--no-event-system-notification-enabled]
+                       [--event-sound-name <Sound>]     → {"notifications":{...},"saved":true}
+crow notifications add-sound <path> [--name NAME]      → {"sound":{name,file,url},"saved":true}
+crow notifications remove-sound <name>                 → {"removed":true,"name":"..."}
+```
+
+Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. Sounds: the 14 built-ins listed under `available_sounds`, plus any custom files in `~/Library/Application Support/crow/sounds/` (`.wav` / `.mp3` / `.aiff`, 2 MB cap). `--event-sound-name` accepts either, case-insensitively. `add-sound` is local-only (it copies a host path); Settings → Notifications uploads via HTTP instead. Removing a custom sound keeps the name in config; playback falls back to a default if the file is gone.
+
+Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
+
+## Skin Commands
+
+Web UI skins (CROW-1334). Built-ins ship with `crowd`; custom skins are JSON in `~/Library/Application Support/crow/skins/` (format + token list: `docs/web-skins.md`). Writes reach open browsers within ~10s — no restart.
+
+```
+crow skin list                                   → {"skins":[{id,name,builtin,modes:["dark","light"]}],"default":"corveil","store":"…"}
+crow skin get --id ID                            → {"skin":{...every token, resolved...},"builtin":bool,"warnings":[...]}
+crow skin create --from ID --name NAME [--id ID] [--set TOKEN=VALUE ...] [--set-light TOKEN=VALUE ...]
+                                                 → {"skin":{...},"path":"…","warnings":[...],"saved":true}
+crow skin add <file.json> [--id ID]              → validate + copy into the store (local-only, like `notifications add-sound`)
+crow skin export --id ID [--out FILE]            → the skin file, every token resolved (stdout unless --out)
+crow skin remove --id ID                         → {"removed":true,"id":"…","default_cleared":bool}
+crow skin default set ID                         → {"default":"…","saved":true}
+crow skin default clear                          → {"default":"corveil","saved":true}
+```
+
+- `TOKEN` may drop its dashes (`--set accent=#7AA2F7` sets `--accent`). `--id` defaults to the name slugged.
+- **Blocks:** an unknown token, a non-color where a color is required, `var()` in a `--term-*` token, an id that shadows a built-in (built-ins can't be removed either), or an existing custom id.
+- **Warns, doesn't block:** text on a background below 4.5:1, or the terminal scroll thumb below 3:1. Each warning reports the measured ratio; the CLI also echoes them to stderr.
+- The default applies to browsers that haven't picked a skin in Settings → General; a per-browser choice wins. Removing the default skin clears the default.
+
+## Workspace Commands
+
+Manage `AppConfig.workspaces` — the Settings → Workspaces tab as CLI verbs. `--workspace` takes a name (case-insensitive) or a workspace UUID.
+
+```
+crow workspace list                                      → {"workspaces":[...],"config_readable":bool}
+crow workspace get --workspace <name|uuid>               → {"workspace":{...}}
+crow workspace add --name NAME [field flags]             → {"workspace":{...},"saved":true}
+crow workspace edit --workspace <name|uuid> [flags]      → patch; {"saved":false} when nothing changed (no write)
+crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"gateway_discarded":bool,...}
+```
+
+Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--custom-instructions[-file]`, `--review-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, `--upload-session-logs true|false`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env,review-blocking-severities}`.
+
+- **Clearing:** optional scalars clear with an empty string (`--host ""`); lists/maps need their `--clear-*` flag. `--jira-status-ready ""` clears one entry.
+- **Repeatable flags replace the whole list**, they don't append — but `--jira-status-*` patches per key.
+- **`--review-instructions`** (CROW-1340) is standing guidance for this workspace's **review** sessions, kept separate from `--custom-instructions` (work sessions only) — neither reaches the other's prompts. It is resolved by repo slug at kickoff and rendered verbatim as a `### Workspace Review Instructions` section at the end of the `crow-review-pr` brief's Step 3 — for Claude through the copied `SKILL.md` its `/crow-review-pr` loads, for every other harness through the inlined brief — and restated on one line in `quick-action reReview` rounds. It adds to the review rubric; it never overrides the `--review-blocking-severity` verdict gate or the requirement to post `gh pr review`. Unset (or a repo no workspace claims) leaves the brief byte-identical. `""` clears.
+- **`--review-blocking-severity`** picks which review findings force `--request-changes` (CROW-963). Unset means Crow's default, `red` + `yellow`; `--clear-review-blocking-severities` returns to it by **removing** the key, never writing a null or an empty list. At least one severity must block — a workspace where nothing blocks would approve every review (and, with the auto-merge watcher on, merge it), so an empty set is rejected. Non-blocking findings are still reported in the review body; only the verdict changes. This is **advisory**: the review agent runs `gh pr review` itself, so Crow renders the policy into the skill it hands over but cannot validate the verdict actually posted. `workspace get` echoes the effective list plus `review_blocking_severities_explicit`, which distinguishes "inheriting the default" from "pinned".
+- **Renaming and removing are guarded.** Sessions are tied to a workspace only by their worktree path (`{devRoot}/{workspace}/...`) and jobs only by the name string, so both refuse while references exist; `--force` proceeds and reports `orphaned_sessions`/`orphaned_jobs`. Neither verb touches the filesystem — `remove` leaves the directory and returns `worktree_dir_kept`.
+- A field the workspace never reads is rejected (`--host` on GitHub, `--jira-*` on a non-Jira workspace) rather than silently stored. `cli` is always derived from `--provider`.
+- The per-workspace **AI gateway** is not settable here — it's local-only, so use `crow gateway` (below). Edits preserve it; `remove` discards it.
+
+## Gateways & Secrets
+
+Local-only (CROW-815) — these carry credentials, so the remote `/rpc` web path refuses them and only the local Unix socket works. Take exactly one target: `--manager` or `--workspace <name|uuid>`.
+
+```
+crow gateway get [--manager | --workspace <name|uuid>] [--reveal]        → {"gateway_set":true,"base_url":"...","headers":{...}}
+crow gateway set --manager --base-url URL --header "Name: Value" ...     → {"saved":true,"gateway_set":true}
+crow gateway clear --manager                                            → {"saved":true,"gateway_set":false}
+crow web-password status                                                → {"password_set":true,"iterations":210000}
+crow web-password set [--stdin]                                         → {"saved":true,"password_set":true}
+crow web-password clear                                                 → {"saved":true,"password_set":false}
+```
+
+`gateway set --codex-upstream auto|chatgpt_codex|openai_api|off` opts **Codex** launches into the same Corveil gateway (CROW-1407, ADR 0030; default off — omitted keeps the stored value); the key is exported into the pane at paste time, never argv. `gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. A header value must not be wrapped in literal quotes (`--header 'X-Api-Key: "Bearer sk-…"'`) — they'd be sent as part of the credential and the gateway would reject the request; quote the whole `Name: Value` pair in your shell, not inside it. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
+
+## Session-Log Sync
+
+The multi-harness session-log collector (CROW-1056). Uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts. **Default OFF**; best-effort — never blocks or fails a session. Since CROW-1070 the opt-in, destination and credential are all **per-workspace**: a workspace uploads iff its `--upload-session-logs` flag / Settings → Workspaces checkbox is on **and** it has an AI gateway, whose `baseURL` + `x-citadel-api-key` the upload reuses (no second key/host, no AWS creds on the laptop).
+
+`crow logsync` tunes only **global collector behavior** — no credential, so **not** local-only; it also backs the web Settings → General → Session logs section.
+
+```
+crow logsync get                                                        → {"logsync":{retention_days,quiet_period_minutes,max_upload_bytes,configured}}
+crow logsync set [--retention-days N] [--quiet-period-minutes N] [--max-upload-bytes N]   → {"logsync":{...},"saved":true}
+```
+
+- **Opt a workspace in elsewhere**: `crow workspace edit --workspace NAME --upload-session-logs true` (or the checkbox) + a gateway via `crow gateway set`. There is no `crow logsync` flag that opts a workspace in — CROW-1070 dropped the global master switch, base URL, API key and `enabledWorkspaces` list.
+- **Security invariant**: the upload destination + credential come only from the workspace's **local-only** gateway (`{gateway.baseURL}/api/crow-sessions/{id}/artifacts` + `x-citadel-api-key`), never `--corveil-host` or any browser-writable field. A workspace with no gateway uploads nothing.
+- `set` is a PATCH (only the flags you pass change; at least one required). Live within ~1 collector tick (~5 min); no restart.
+- **Compressed cap** (CROW-1394): transcripts are gzipped before upload, and `--max-upload-bytes` (default 8,388,608 — Corveil's limit) applies to the **compressed** body. A transcript is truncated (oldest lines kept, `truncated=true`) only when it is still over the cap after compression.
+- **Upload on delete** (CROW-1394): deleting a session (CLI, web UI, or the cleanup reaper) first uploads whatever it hasn't shipped — skipping the quiet period, before the worktree or Manager identity dir is removed. It is bounded at 10 s and never blocks the delete; a failure or timeout is recorded `failedTransient` and left for `crow backfill upload`. Every harness that wrote logs in a session's worktree uploads its own artifact, whatever the session's `agentKind` label says. The primary Manager is never uploaded.
+- **Migration**: a legacy `crow logsync set --add-workspace` opt-in is carried over to `--upload-session-logs` on first boot (only when the old master switch was on). Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code transcripts are collected today (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096 / CROW-1106); other harnesses are wired as their log paths are confirmed.
+
+## Session Backfill
+
+The historical session backfill (CROW-1075) — reconcile the coding-session transcripts already on disk (predating the live path, or reaped from Crow's store) and upload the ones you choose as real, fully-linked Corveil session artifacts. Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code for v1 (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096 / CROW-1106).
+
+```
+crow backfill scan                                                      → {"sessions":[{uid,harness,workspace,repo_name,owner_repo,ticket_number,confidence,upload_status,...}],"summary":{total,uploaded,linkable,repo_only,orphan}}
+crow backfill upload --workspace NAME (--session UID … | --all-high-confidence | --all) [--allow-orphans] [--allow-manager-transcripts]   → {"results":[{uid,result,linked,owner_repo,ticket_number,reason}],"summary":{...}}
+```
+
+- `scan` is disk- and git-only (no provider calls) — fast over hundreds of sessions. Reconstructs each session's workspace/repo/ticket from the transcript's own `cwd`/`gitBranch` (authoritative, not the lossy slug) plus live git remotes; `confidence` is `high` (repo + ticket) · `medium` (repo only) · `low` (orphan).
+- `upload` reuses the **live path** and is **idempotent** (local ledger + server write-once 409). `--workspace` names the workspace whose local-only gateway supplies the destination + credential (same security invariant as the live collector). Choose exactly one selection mode; `--all-high-confidence`/`--all` scope to that workspace's sessions. Orphans and Manager transcripts (workspace `.crow`) are refused — returned as `skipped` with a reason — unless `--allow-orphans` / `--allow-manager-transcripts` is passed (CROW-1382).
+- A reconstructed ticket becomes a **REFERENCE only when the provider (`gh`/`glab`) confirms it exists** — otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Never automatic or unbounded — the user always chooses.
+
+## MCP
+
+Crow's read-only MCP surface (CROW-1004) — eight tools over seven read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
+
+```
+crow mcp serve [--scope sessions:read] [--scope board:read] [--scope todos:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
+crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N}
+crow mcp token mint --name N --scope S [--expires-in 90d | --no-expiry]
+                                                              → {"saved":true,"token":"crow_mcp_…","warning":"…","record":{…}}
+crow mcp token revoke --id <uuid> | --name N                  → {"revoked":true,"id":"…","name":"…","remaining":N}
+```
+
+- **Two transports, two trust models.** `crow mcp serve` bridges stdio to the Unix socket with **no token** — a caller who can run it can already run every other `crow` verb. Off-box clients POST to `/mcp` with `Authorization: Bearer <token>`.
+- `mcp serve` is the one verb whose **stdout is not a single JSON object**: it streams framed JSON-RPC. Diagnostics go to stderr.
+- The three `token` verbs are **local-only** (like `gateway`/`web-password`) — a remote peer must not mint the credential that gates remote access. Settings → Web access has the same controls, local browser only.
+- Scopes are `sessions:read`, `board:read`, and `todos:read`. `tools/list` is filtered **by the token**, so a `board:read` client never learns the session tools exist.
+- Expiry defaults to **90 days**; `--no-expiry` must be typed. `--expires-in` needs a unit (`90d`, `12h`, `2w`) — a bare `90` is rejected as ambiguous.
+- The token is printed **once** and stored as a SHA-256 hash; there is no `--reveal`. A lost token is replaced, not recovered.
+
+## Automation Commands
+
+Settings → Automation as a CLI verb. Every `set` flag is a patch; passing none is an error.
+
+```
+crow automation get                                                     → {"automation":{toggles, auto_respond, defaults, config_readable}}
+crow automation set [--remote-control-enabled true|false]
+                    [--manager-auto-permission-mode true|false]         → needs `crow restart-manager`; returns "manager_restart_required"
+                    [--review-auto-permission-mode true|false]
+                    [--coder-view-auto-permission-mode true|false]
+                    [--jobs-auto-permission-mode true|false]
+                    [--attribution-trailers true|false]
+                    [--auto-create-watcher-enabled true|false]
+                    [--auto-merge-watcher-enabled true|false]
+                    [--review-in-progress-label true|false]            → crow:reviewing while a review runs
+                    [--respond-to-changes-requested true|false]
+                    [--respond-to-failed-checks true|false]
+                    [--auto-re-request-review true|false]
+                    [--auto-rebase-and-resolve-conflicts true|false]    → {"automation":{...},"restart_required":false,"manager_restart_required":bool}
+```
+
+Booleans take an explicit `true`/`false` — a bare flag can't express "leave alone", and six of these default to **on** (`manager`/`review`/`jobs` auto permission mode, `attribution-trailers`, `respond-to-changes-requested`, `auto-re-request-review`). `--jobs-auto-permission-mode` lives here even though the web UI puts it under the Jobs tab, so all five permission modes read and write as one group.
+
+`--auto-re-request-review` (CROW-921) is the one auto-respond toggle that types nothing into a terminal: when a changes-requested PR's fix has landed and no review request is pending, the daemon runs `gh pr edit --add-reviewer` itself. That's deliberate — the PRs it rescues are exactly the ones no prompt can reach.
+
+Everything applies within ~1 board poll (no `crowd` restart) — permission modes and `--remote-control-enabled` to newly launched sessions, `--attribution-trailers` to newly created worktrees. `--manager-auto-permission-mode` is the exception: it's baked into the Manager terminal's stored command, so a change returns `manager_restart_required: true` and needs `crow restart-manager`.
+
+The Automation tab's three board-filter lists are `AppConfig.defaults` fields, so **`crow defaults set` writes them** (above) — one writer, one set of list semantics. `crow automation get` echoes them read-only under `defaults`, including the derived `effective_exclude_review_repos` (the global list unioned with every workspace's own, which is what the review board actually filters on), so the tab still reads as a whole from one call.
+

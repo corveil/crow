@@ -48,7 +48,12 @@ let package = Package(
                 "CrowAntigravity",
                 "CrowMuse",
                 "CrowIPC",
-            ]
+            ],
+            // The Manager context and the on-demand `crow-cli` skill (CROW-1443).
+            // One source for dev builds and the shipped app: SwiftPM copies it
+            // into CrowEngine_CrowEngine.bundle, which the sidecar staging picks
+            // up with every other `*.bundle`.
+            resources: [.copy("Resources/ManagerContext")]
         ),
         .testTarget(
             name: "CrowEngineTests",

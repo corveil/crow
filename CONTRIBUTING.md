@@ -128,8 +128,9 @@ We may adopt [Conventional Commits](https://www.conventionalcommits.org/) and au
 
 Crow auto-generates certain files into `{devRoot}/.claude/` on launch (see `Scaffolder.swift`):
 
-- `CLAUDE.md` — scaffolded from the root `CLAUDE.md`
+- `CLAUDE.md` — the Manager context, scaffolded from `Packages/CrowEngine/Sources/CrowEngine/Resources/ManagerContext/manager-context.md` (not the repo-root `CLAUDE.md`, which is repo documentation)
+- `skills/crow-cli/` — the per-verb CLI reference, scaffolded from `…/Resources/ManagerContext/crow-cli/`
 - `skills/crow-workspace/SKILL.md` — scaffolded from `Resources/crow-workspace-SKILL.md.template`
 - `settings.local.json` — merged with pre-approved permissions on every launch; `settings.json` is the user's own file and Crow never writes it
 
-**Do not edit the scaffolded copies.** Instead, modify the source files in the repository root or `Resources/` directory.
+**Do not edit the scaffolded copies.** Instead, modify the source files in `skills/`, `Resources/` or `Packages/CrowEngine/Sources/CrowEngine/Resources/ManagerContext/`.

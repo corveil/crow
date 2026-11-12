@@ -82,4 +82,4 @@ Tests use the [Swift Testing](https://developer.apple.com/documentation/testing/
 make docs
 ```
 
-and update the hand-written [CLI guide](cli-reference.md) to match.
+and update the hand-written [CLI guide](cli-reference.md) to match. Agents learn verbs from the `crow-cli` skill's reference, `Packages/CrowEngine/Sources/CrowEngine/Resources/ManagerContext/crow-cli/reference.md`, so add the verb there too; `CLIDocsTests` fails until every user-facing verb is in both. Don't add it to the Manager context (`manager-context.md` beside it) unless nearly every session needs it: every session loads that file on every turn, and a test caps it at 12KB.
