@@ -1,7 +1,7 @@
 # 0016 — Every user-mutable capability has a CLI path
 
-- **Status:** Accepted
-- **Date:** 2026-07-27
+- **Status:** Accepted (the "Manager's context" row is superseded by [0032](./0032-slim-manager-context-on-demand-cli-reference.md))
+- **Date:** 2026-07-27 (amended 2026-11-11, CROW-1443)
 - **Deciders:** @dhilgaertner
 
 ## Context
@@ -93,7 +93,7 @@ since — board verbs (#866), agents (#886), automation (#884):
 | Tests | `*CommandParsingTests`, `*HandlerTests`, `*RPCSupportTests` | — |
 | Generated reference | `docs/cli.md`, via `make docs` | `CLIDocsTests` |
 | Worked example | `docs/cli-reference.md`, inside a fenced block | `CLIDocsTests` |
-| The Manager's context | `CLAUDE.md`, and `Resources/CLAUDE.md.template` | `CLIDocsTests` (`CLAUDE.md` only) |
+| The agents' CLI reference (was "The Manager's context"; see [ADR 0032](./0032-slim-manager-context-on-demand-cli-reference.md)) | `Packages/CrowEngine/Sources/CrowEngine/Resources/ManagerContext/crow-cli/reference.md` | `CLIDocsTests` |
 | Release note | `CHANGELOG.md` | — |
 
 Half the rows are machine-checked; the other half are convention — and

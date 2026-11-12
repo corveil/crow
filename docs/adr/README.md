@@ -52,7 +52,7 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0013 | [Terminal scroll model: per-surface hybrid](./0013-terminal-scroll-model.md) | Accepted | 2026-07-23 |
 | 0014 | [Pluggable `CodingAgent` adapter](./0014-pluggable-coding-agent-adapter.md) | Accepted | 2026-07-23 |
 | 0015 | [Harness capability tiers & phased parity](./0015-harness-capability-tiers.md) | Accepted | 2026-07-23 |
-| 0016 | [Every user-mutable capability has a CLI path](./0016-cli-control-plane-parity.md) | Accepted | 2026-07-27 |
+| 0016 | [Every user-mutable capability has a CLI path](./0016-cli-control-plane-parity.md) | Accepted (one row superseded by 0032) | 2026-07-27 |
 | 0017 | [No blocking I/O on the MainActor: logging goes through `CrowLog`](./0017-non-blocking-logging.md) | Accepted | 2026-07-27 |
 | 0018 | [The web client routes on the URL fragment (hash routing)](./0018-web-client-hash-routing.md) | Accepted | 2026-08-04 |
 | 0019 | [MCP is a third client, not a mirror of the RPC surface](./0019-read-only-mcp-server.md) | Accepted | 2026-08-13 |
@@ -68,3 +68,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0029 | [Scratch Ticket opens a Manager](./0029-scratch-ticket-opens-a-manager.md) | Accepted | 2026-09-22 |
 | 0030 | [Codex routes through the workspace gateway, opt-in per gateway](./0030-codex-through-the-workspace-gateway.md) | Accepted | 2026-11-04 |
 | 0031 | [Observations are diagnosed in Crow before they become tickets](./0031-observations-are-diagnosed-before-they-become-tickets.md) | Accepted | 2026-11-09 |
+| 0032 | [The Manager context is a slim core; the CLI reference loads on demand](./0032-slim-manager-context-on-demand-cli-reference.md) | Accepted | 2026-11-11 |

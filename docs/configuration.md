@@ -12,7 +12,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `~/Library/Application Support/crow/bin/corveil/<version>/corveil` | Managed `corveil` CLI downloads (CROW-1210; only when auto-update is on) |
 | `~/.local/share/crow/crow.sock`                                       | Unix socket for CLI ↔ server IPC (owned by `crowd` by default) |
 | `{devRoot}/.claude/config.json`                                       | Workspace configuration (see below)                          |
-| `{devRoot}/.claude/CLAUDE.md`                                         | Manager-tab context with the `crow` CLI reference             |
+| `{devRoot}/.claude/CLAUDE.md`                                         | Manager context, loaded by every session; ≤12KB, no per-verb CLI reference |
 | `{devRoot}/.claude/settings.local.json`                               | Crow-managed pre-approved permissions, merged on every launch  |
 | `{devRoot}/.claude/settings.json`                                     | The user's own file — Crow never reads or writes it            |
 | `{devRoot}/.claude/prompts/`                                          | Prompt files used by the `/crow-workspace` skill              |
@@ -42,6 +42,8 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-diagnose/diagnose.sh`                  | Source, repos, scratch clones, duplicates, standard check, file |
 | `{devRoot}/.claude/diagnose/`                                         | Per-observation source, plan, bodies, and `filed.json`        |
 | `{devRoot}/.claude/skills/my-follow-ups/SKILL.md`                     | Corveil follow-ups skill invoked via `/my-follow-ups` ([docs](my-follow-ups.md)) |
+| `{devRoot}/.claude/skills/crow-cli/SKILL.md`                          | `crow-cli` skill: tells agents how to look up a verb          |
+| `{devRoot}/.claude/skills/crow-cli/reference.md`                      | The per-verb `crow` reference, read on demand (CROW-1443)     |
 | `{devRoot}/crow-reviews/`                                             | Temporary clones for PR reviews and `/crow-diagnose` (reserved name) |
 
 ## Workspace Configuration
