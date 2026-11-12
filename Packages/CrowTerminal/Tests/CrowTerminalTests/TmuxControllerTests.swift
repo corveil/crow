@@ -61,6 +61,49 @@ struct TmuxControllerTests {
         // not a unit test. Here we just verify the calls don't throw.
     }
 
+    /// #1437, end to end: a pane whose application turned bracketed paste on
+    /// (`\e[?2004h`, as Claude Code does) receives a multi-line paste as one
+    /// `\e[200~…\e[201~` block, with the whole payload inside it.
+    @Test func pasteBufferBracketsMultiLinePayloadForBracketedPastePane() throws {
+        let ctrl = makeController()
+        let out = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crow-bp-\(UUID().uuidString).out")
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+            try? FileManager.default.removeItem(atPath: out)
+        }
+        // Raw mode so every byte lands in the file as tmux wrote it; the
+        // printf turns on bracketed-paste mode before the file is opened.
+        try ctrl.newSessionDetached(
+            command: "/bin/sh -c 'stty raw -echo; printf \"\\033[?2004h\"; exec cat > \(out)'")
+        let deadline = Date().addingTimeInterval(5)
+        while !FileManager.default.fileExists(atPath: out), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        // Settle so tmux has parsed the mode switch before the paste.
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let lines = (1...50).map { "line \($0) of the payload" }
+        let bufName = "crow-test-bp"
+        try ctrl.loadBufferFromStdin(name: bufName, data: Data(lines.joined(separator: "\n").utf8))
+        try ctrl.pasteBuffer(name: bufName, target: "\(ctrl.sessionName):0")
+        ctrl.deleteBuffer(name: bufName)
+
+        var received = ""
+        while Date() < deadline {
+            received = (try? String(contentsOfFile: out, encoding: .utf8)) ?? ""
+            if received.contains("\u{1B}[201~") { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let start = try #require(received.range(of: "\u{1B}[200~"), "no bracket start in \(received.debugDescription)")
+        let end = try #require(received.range(of: "\u{1B}[201~"), "no bracket end in \(received.debugDescription)")
+        let inside = String(received[start.upperBound..<end.lowerBound])
+        // tmux sends each LF as CR inside the bracket; the TUI reads the
+        // bracket as one paste, not as Enter keystrokes.
+        #expect(inside == lines.joined(separator: "\r"))
+    }
+
     @Test func cliFailureSurfacesError() throws {
         let ctrl = makeController()
         defer {
@@ -301,5 +344,19 @@ struct TmuxControllerTests {
         let anchor = try #require(windows.first(where: { $0.index == 0 }))
         #expect(anchor.historyLimit == TmuxBackend.scrollbackHistoryLimit,
                 "the sandwich must not resize windows that already existed")
+    }
+}
+
+/// Pure argv checks — no tmux server needed, so not gated on the binary.
+@Suite("TmuxController arguments")
+struct TmuxControllerArgumentTests {
+    /// #1437: without `-p`, tmux sends no bracketed-paste markers, so an
+    /// agent TUI gets a multi-line payload as typing with Enter keystrokes
+    /// in it and submits only part of it.
+    @Test func pasteBufferArgumentsRequestBracketedPaste() {
+        let args = TmuxController.pasteBufferArguments(name: "crow-buf", target: "crow:3")
+        #expect(args.first == "paste-buffer")
+        #expect(args.contains("-p"))
+        #expect(args == ["paste-buffer", "-p", "-b", "crow-buf", "-t", "crow:3"])
     }
 }

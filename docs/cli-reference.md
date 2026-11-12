@@ -1364,7 +1364,11 @@ Returns `{"session_id": "...", "terminal_id": "...", "name": "..."}`.
 
 ### `crow send`
 
-Write text to a terminal. Newlines in `TEXT` are converted to Enter keypresses; include a trailing newline to submit a command.
+Write text to a terminal. Newlines in `TEXT` are converted to Enter keypresses; include a trailing newline to submit a command. A literal `\n` or `\t` in `TEXT` is turned into a real newline or tab first, so `"yes\n"` submits from any shell.
+
+The text is pasted with tmux's bracketed-paste markers, so an agent TUI (or a shell with bracketed paste on) receives a multi-line `TEXT` as one paste, not line by line; the trailing newline is sent as a separate Enter after it. When the text does not reach the pane (unknown terminal, or tmux fails) the command exits non-zero with an error instead of printing `{"sent": true}`.
+
+The web Chat view uses the same `send` RPC with `raw: true`, which skips the `\n` / `\t` rewrite so pasted code arrives unchanged. The CLI has no flag for it.
 
 ```bash
 crow send --session <uuid> --terminal <uuid> "claude --continue"$'\n'

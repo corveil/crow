@@ -397,8 +397,24 @@ public struct TmuxController: Sendable {
         }
     }
 
+    /// `tmux paste-buffer -p -b <name> -t <target>`.
+    ///
+    /// `-p` is what makes tmux wrap the paste in `\e[200~…\e[201~` — and only
+    /// when the pane's application has turned bracketed-paste mode on
+    /// (`\e[?2004h`). Agent TUIs (Claude Code, Cursor, Codex) do, so they
+    /// receive a multi-line payload as one paste. Without `-p`, tmux sends no
+    /// markers and turns every LF into a CR, so the TUI sees typing with
+    /// Enter keystrokes in it: Claude Code submitted only the tail of a large
+    /// multi-line Chat view message and dropped the rest (#1437). A plain
+    /// shell that has bracketed paste on (zsh, bash ≥5.1) now takes a
+    /// multi-line paste as one edit buffer instead of running it line by line.
     public func pasteBuffer(name: String, target: String) throws {
-        try run(["paste-buffer", "-b", name, "-t", target])
+        try run(Self.pasteBufferArguments(name: name, target: target))
+    }
+
+    /// The argv `pasteBuffer` runs. Split out so a test can pin `-p` (#1437).
+    static func pasteBufferArguments(name: String, target: String) -> [String] {
+        ["paste-buffer", "-p", "-b", name, "-t", target]
     }
 
     /// `tmux send-keys -t <target> <keys...>`. Each entry in `keys` is passed

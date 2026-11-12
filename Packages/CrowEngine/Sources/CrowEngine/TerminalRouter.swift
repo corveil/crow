@@ -12,13 +12,21 @@ public enum TerminalRouter {
 
     /// Send text to a terminal via the load-buffer + paste-buffer route
     /// (PROD #3) — works for arbitrary payloads; `send-keys -l` would fail
-    /// on >10KB strings.
+    /// on >10KB strings. Fire-and-forget: a tmux failure is logged, not
+    /// thrown. Callers that report delivery to someone use `deliver`.
     public static func send(_ terminal: SessionTerminal, text: String) {
         do {
-            try TmuxBackend.shared.sendText(id: terminal.id, text: text)
+            try deliver(terminal, text: text)
         } catch {
             CrowLog.info("[TerminalRouter] tmux sendText failed for \(terminal.id): \(error)")
         }
+    }
+
+    /// `send`, but a tmux failure is thrown instead of logged. The `send`
+    /// RPC uses this so `crow send` and the web Chat view learn the text
+    /// never reached the pane, instead of being told `sent: true` (#1437).
+    public static func deliver(_ terminal: SessionTerminal, text: String) throws {
+        try TmuxBackend.shared.sendText(id: terminal.id, text: text)
     }
 
     /// Destroy the terminal's tmux window.

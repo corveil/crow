@@ -23,12 +23,19 @@ extension TmuxBackend {
     /// arbitrary-size payloads (Phase 3 §3 finding: send-keys -l fails
     /// on >10KB; load-buffer + paste-buffer scales to 50KB+ in 133ms).
     ///
-    /// Quirk: agent TUIs enable bracketed-paste mode, which wraps
-    /// `paste-buffer` output in `\e[200~…\e[201~`. A trailing `\n` inside the
-    /// bracket is treated as literal text, not as Enter — so prompts that
-    /// rely on `\n` to submit (quick actions, auto-respond) get pasted but
-    /// never submitted (#264). Strip the trailing newline before pasting and
-    /// deliver a separate `Enter` via `send-keys` afterwards.
+    /// Bracketed paste: `TmuxController.pasteBuffer` runs `paste-buffer -p`,
+    /// so tmux wraps the payload in `\e[200~…\e[201~` — but only when the
+    /// pane's application has enabled bracketed-paste mode (agent TUIs do;
+    /// a shell without it gets the bare text). The markers come from `-p`,
+    /// not from tmux by default: without it, a multi-line payload reached
+    /// Claude Code as typing with Enter keystrokes in it, and a large Chat
+    /// view message was submitted as only its last few lines (#1437).
+    ///
+    /// A trailing `\n` inside the bracket is treated as literal text, not as
+    /// Enter — so prompts that rely on `\n` to submit (quick actions,
+    /// auto-respond) would be pasted but never submitted (#264). Strip the
+    /// trailing newline before pasting and deliver a separate `Enter` via
+    /// `send-keys` afterwards, outside the bracket.
     ///
     /// `pasteEnterSettleDelay` between the paste and the Enter keystroke
     /// gives the TUI time to process the bracket-end sequence (`\e[201~`).

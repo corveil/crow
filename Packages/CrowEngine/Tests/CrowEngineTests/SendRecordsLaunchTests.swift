@@ -26,8 +26,11 @@ import CrowPersistence
         let terminal = SessionTerminal(sessionID: session.id, cwd: cwd.path, command: "claude", isManaged: true)
         appState.sessions = [session]
         appState.terminals[session.id] = [terminal]
+        // No tmux in tests: `send` now reports a failed delivery (#1437), so
+        // stand in for the pane with a sink that accepts everything.
         let handlers = makeEngineTerminalHandlers(
-            appState: appState, store: store, sessionService: service, telemetryPort: nil, devRoot: root.path)
+            appState: appState, store: store, sessionService: service, telemetryPort: nil, devRoot: root.path,
+            deliverText: { _, _ in })
         return (try #require(handlers["send"]), appState, session, terminal, root)
     }
 
