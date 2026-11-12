@@ -404,7 +404,7 @@ public enum EfficiencyGrading {
         case ...Tuning.costPerShippedHeavyThreshold: points = Tuning.costPerShippedMediumPoints
         default: points = Tuning.costPerShippedHeavyPoints
         }
-        let label = String(format: "$%.2f per shipped session", perShipped)
+        let label = String(format: "≈$%.2f est. cost per shipped session", perShipped)
         return Deduction(metric: .costPerShipped, points: points, label: label)
     }
 

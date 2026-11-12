@@ -12,6 +12,24 @@ function fmtCost(cost) {
   if (cost > 0 && cost < 0.01) return '<$0.01';
   return '$' + Number(cost).toFixed(2);
 }
+// Every cost figure in the web UI is Claude Code's own `claude_code.cost.usage`
+// OTEL metric — an estimate at API list prices, emitted however the session is
+// actually billed. A session on a Claude Pro/Max subscription (directly, or
+// through a Corveil gateway in passthrough) is not billed per token, so a bare
+// "Cost" overstated what anyone paid (CROW-1440). The label and the `≈` prefix
+// carry the meaning on their own, because the web UI is driven from a phone
+// where a `title` tooltip never shows; the tooltip is the desktop explanation.
+const COST_ESTIMATE_LABEL = 'Est. cost';
+const COST_ESTIMATE_TOOLTIP =
+  "Claude Code's estimate at API list prices. Sessions on a Claude subscription aren't billed per token.";
+// A bare cost figure (no chip label beside it) reads as an estimate via `≈`.
+function fmtEstCost(cost) { return '≈' + fmtCost(cost); }
+// A bare cost figure as its own element, tooltip attached.
+function estCostEl(cls, cost) {
+  const node = el('span', cls, fmtEstCost(cost));
+  node.title = COST_ESTIMATE_TOOLTIP;
+  return node;
+}
 function fmtCount(n) {
   n = Number(n);
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
@@ -42,7 +60,7 @@ const COACHING = {
   contextPressure: 'Heavy input per prompt suggests bloated context — reset more often or narrow what gets loaded.',
   cacheHitRatio: 'Low cache reuse means context is re-sent as fresh input — steadier sessions cache better.',
   apiErrorRate: 'Frequent API errors burn time and tokens — check connectivity, rate limits, or the agent setup.',
-  costPerShipped: 'High spend per shipped session — smaller scoped sessions that finish tend to cost less per outcome.',
+  costPerShipped: 'High estimated spend (API list price) per shipped session — smaller scoped sessions that finish tend to cost less per outcome.',
 };
 
 function scoreCard(children) {
@@ -197,7 +215,9 @@ function shippedCardEl(week) {
   const big = el('div', 'score-big-gold', String(week.sessionsShipped));
   body.push(big);
   if (week.costPerShipped != null) {
-    body.push(el('div', 'score-sub', fmtCost(week.costPerShipped) + ' per shipped session'));
+    const sub = el('div', 'score-sub', fmtEstCost(week.costPerShipped) + ' est. cost per shipped session');
+    sub.title = COST_ESTIMATE_TOOLTIP;
+    body.push(sub);
   } else {
     body.push(el('div', 'score-muted', 'Insufficient outcomes — nothing shipped this week.'));
   }
@@ -242,16 +262,18 @@ function baselineCardEl(data) {
   }
   const wk = data.currentWeek;
   const rows = el('div', 'score-comparisons');
-  const add = (name, current, baseline, higherIsBetter, fmt) => {
+  const add = (name, current, baseline, higherIsBetter, fmt, title) => {
     if (baseline == null || current == null) return;
-    rows.appendChild(comparisonRowEl(name, current, baseline, higherIsBetter, fmt));
+    const row = comparisonRowEl(name, current, baseline, higherIsBetter, fmt);
+    if (title) row.title = title;
+    rows.appendChild(row);
   };
   if (wk.grade.graded) add('Score', wk.grade.score, b.medianScore, true, (v) => v.toFixed(0));
   add('Compactions/active hr', wk.compactionsPerActiveHour, b.medianCompactionsPerActiveHour, false, (v) => v.toFixed(1));
   add('Input tokens/prompt', wk.inputTokensPerPrompt, b.medianInputTokensPerPrompt, false, (v) => fmtCount(Math.round(v)));
   add('Cache hit ratio', wk.cacheHitRatio, b.medianCacheHitRatio, true, (v) => (v * 100).toFixed(0) + '%');
   add('API error rate', wk.apiErrorRate, b.medianApiErrorRate, false, (v) => (v * 100).toFixed(1) + '%');
-  add('Cost/shipped', wk.costPerShipped, b.medianCostPerShipped, false, fmtCost);
+  add('Est. cost/shipped', wk.costPerShipped, b.medianCostPerShipped, false, fmtCost, COST_ESTIMATE_TOOLTIP);
   if (wk.combined.scored) add('Combined score', wk.combined.value, b.medianCombinedScore, true, (v) => v.toFixed(1));
   body.push(rows);
   return scoreCard(body);
@@ -274,16 +296,19 @@ function comparisonRowEl(name, current, baseline, higherIsBetter, fmt) {
 function displayedStatsEl(week) {
   const body = [scoreLabel('This Week (context only — not graded)')];
   const chips = el('div', 'score-chips');
-  chips.appendChild(statChipEl('Cost', fmtCost(week.totalCost)));
+  chips.appendChild(statChipEl(COST_ESTIMATE_LABEL, fmtCost(week.totalCost), COST_ESTIMATE_TOOLTIP));
   chips.appendChild(statChipEl('Active', fmtTime(week.activeTimeSeconds)));
   chips.appendChild(statChipEl('Commits', String(week.commitCount)));
   chips.appendChild(statChipEl('Churn', Number(week.churnHint).toFixed(2)));
   body.push(chips);
+  // Visible, not just a tooltip: a phone never shows `title`.
+  body.push(el('div', 'score-muted', COST_ESTIMATE_TOOLTIP));
   return scoreCard(body);
 }
 
-function statChipEl(label, value) {
+function statChipEl(label, value, title) {
   const chip = el('div', 'score-chip');
+  if (title) chip.title = title;
   chip.appendChild(el('span', 'score-chip-label', label));
   chip.appendChild(el('span', 'score-chip-value', value));
   return chip;
@@ -347,7 +372,7 @@ function managerWeekRowEl(w) {
   head.appendChild(gradeBadgeEl(w.grade));
   head.appendChild(el('span', 'score-manager-prompts',
     w.promptCount + ' prompt' + (w.promptCount === 1 ? '' : 's')));
-  head.appendChild(el('span', 'score-manager-stat', fmtCost(w.totalCost)));
+  head.appendChild(estCostEl('score-manager-stat', w.totalCost));
   row.appendChild(head);
 
   // Same chips as a graded week, plus the efficiency raws the grade cites.
@@ -380,7 +405,7 @@ function priorWeeksEl(weeks) {
     row.appendChild(el('span', 'score-prior-shipped', w.sessionsShipped + ' shipped'));
     row.appendChild(el('span', 'score-prior-combined',
       w.combined.scored ? Number(w.combined.value).toFixed(1) : '—'));
-    row.appendChild(el('span', 'score-prior-cost', fmtCost(w.totalCost)));
+    row.appendChild(estCostEl('score-prior-cost', w.totalCost));
     list.appendChild(row);
   }
   body.push(list);
@@ -403,7 +428,7 @@ function sessionRowEl(r) {
   if (r.shipped) line.appendChild(el('span', 'score-shipped-pill', 'Shipped'));
   const spacer = el('span', 'score-session-spacer');
   line.appendChild(spacer);
-  line.appendChild(el('span', 'score-session-stat', fmtCost(r.totalCost)));
+  line.appendChild(estCostEl('score-session-stat', r.totalCost));
   line.appendChild(el('span', 'score-session-stat', fmtTime(r.activeTimeSeconds)));
   if (r.wallClockDurationSeconds != null) {
     line.appendChild(el('span', 'score-session-stat muted', '(' + fmtTime(r.wallClockDurationSeconds) + ' wall)'));
