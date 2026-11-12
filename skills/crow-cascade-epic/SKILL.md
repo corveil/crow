@@ -231,13 +231,13 @@ Creating many sessions back to back hit a lost-update race: `crow add-worktree` 
 
 ### Phase 6: Arm the wave watcher
 
-Claude Code — a Bash call with `run_in_background: true`, `timeout: 7200000`, and `dangerouslyDisableSandbox: true`:
+Claude Code — a Bash call with `run_in_background: true`, `timeout: 3600000`, and `dangerouslyDisableSandbox: true`:
 
 ```bash
 bash .claude/skills/crow-cascade-epic/cascade.sh watch --plan-file {devRoot}/.claude/cascades/{slug}.json --wave {current_wave}
 ```
 
-It polls every 2 minutes, prints a line whenever a ticket's state or drift changes, and exits within 110 minutes. You're re-invoked when it exits:
+It polls every 2 minutes, prints a line whenever a ticket's state or drift changes, and exits within 50 minutes, so each re-arm finds the prompt cache still warm. You're re-invoked when it exits:
 
 | Exit | Last line | Do |
 |---|---|---|

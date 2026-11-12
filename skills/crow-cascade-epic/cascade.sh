@@ -25,7 +25,8 @@ CROW_BIN="${CROW_BIN:-crow}"
 PLAN_FILE=""
 WAVE=""
 INTERVAL=120
-TIMEOUT=6600
+# Keep under 3600: a re-arm must find the Claude Code prompt cache (~1h) still warm (CROW-1447).
+TIMEOUT=3000
 
 die() { # die <step> <message>
   jq -cn --arg step "$1" --arg msg "$2" '{status:"error", step:$step, message:$msg}'
