@@ -208,4 +208,37 @@ struct SessionServiceManagerUsageTests {
         #expect(provider.requested.isEmpty)
         #expect((store.data.managerUsageWeekly ?? [:]).isEmpty)
     }
+
+    /// CROW-1439: the Manager header strip reads the in-memory current-week
+    /// row, which `applyLiveManagerWeek` keeps ahead of the store between
+    /// refreshes. A compaction must bump that row's count without rolling its
+    /// analytics back to the last persisted refresh.
+    @Test @MainActor
+    func compactionKeepsTheLiveWeekAnalytics() async {
+        let manager = Session(id: AppState.managerSessionID, name: "Manager", kind: .manager)
+        let appState = AppState()
+        appState.sessions = [manager]
+        let provider = UsageProvider()
+        provider.perSession[manager.id] = Self.analytics(cost: 3, prompts: 20)
+        let store = Self.tempStore()
+        let svc = service(appState: appState, store: store, provider: provider)
+
+        await svc.refreshManagerUsage() // persists the current week at $3
+        let calendar = ManagerWeeklyUsage.weekCalendar()
+        let week = ManagerWeeklyUsage.week(containing: Date(), calendar: calendar)!
+        appState.applyLiveManagerWeek(
+            Self.analytics(cost: 5, prompts: 30), for: manager.id,
+            weekStart: week.start, calendar: calendar)
+
+        svc.noteManagerCompaction(sessionID: manager.id)
+
+        let current = appState.currentManagerWeek(for: manager.id)
+        #expect(current?.analytics.totalCost == 5)
+        #expect(current?.compactionCount == 1)
+        // The store still has its last refresh plus the counted compaction.
+        let key = ManagerWeeklyUsage.storeKey(
+            weekStart: week.start, sessionID: manager.id, calendar: calendar)
+        #expect(store.data.managerUsageWeekly?[key]?.analytics.totalCost == 3)
+        #expect(store.data.managerUsageWeekly?[key]?.compactionCount == 1)
+    }
 }

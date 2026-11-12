@@ -46,6 +46,35 @@ public struct ManagerWeeklyUsage: Codable, Equatable, Sendable {
         self.sessionID = sessionID
         self.compactionCount = compactionCount
     }
+
+    // MARK: - Week bucketing (one definition, shared by every reader)
+
+    /// ISO-8601 calendar in the current timezone — the same bucketing
+    /// `ScorecardModel.build` uses, so Manager weeks line up with graded weeks.
+    /// Built fresh per call so a mid-process timezone change is picked up by
+    /// the bucket boundaries and the key together.
+    public static func weekCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = .current
+        return calendar
+    }
+
+    /// The ISO week containing `now` (half-open `[start, end)`).
+    public static func week(containing now: Date, calendar: Calendar = weekCalendar()) -> DateInterval? {
+        calendar.dateInterval(of: .weekOfYear, for: now)
+    }
+
+    /// Composite key for a persisted rollup: `"yyyy-MM-dd|<uuid>"` (CROW-983).
+    /// Pre-CROW-983 rows use a bare `"yyyy-MM-dd"`, which still decodes and is
+    /// read as the primary Manager. The week component is formatted with the
+    /// caller's calendar rather than a static `DateFormatter`, so it can never
+    /// disagree with the bucket boundaries that calendar produced.
+    public static func storeKey(weekStart: Date, sessionID: UUID, calendar: Calendar) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: weekStart)
+        let day = String(
+            format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        return "\(day)|\(sessionID.uuidString)"
+    }
 }
 
 /// Live telemetry.db health probe backing the scorecard's capture-status

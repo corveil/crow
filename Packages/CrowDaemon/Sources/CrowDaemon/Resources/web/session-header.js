@@ -209,14 +209,22 @@ function renderHeader(s) {
 
 // Per-session analytics strip (CROW-722) — cost / tokens / tools / active time,
 // mirroring the desktop SessionAnalyticsStrip. Chips-only: appends nothing when
-// there's no analytics (telemetry off, or nothing recorded yet) or for the
-// Manager session, so absence is the empty state. Source (live hook aggregate vs.
-// end-of-session snapshot) is resolved server-side in list-sessions-live.
+// there's no analytics (telemetry off, or nothing recorded yet), so absence is
+// the empty state. Source (live hook aggregate vs. end-of-session snapshot vs. a
+// Manager's current-week rollup) is resolved server-side in list-sessions-live.
+// A Manager never ends, so its numbers are week-to-date — the same row as the
+// Scorecard's Manager Usage card — and carry `weekStartMillis`, which earns the
+// strip a `This week` label so it isn't read as a lifetime total (CROW-1439).
 function renderSessionAnalyticsStrip(s, root) {
-  if (s.kind === 'manager') return;
   const a = liveFor(s.id).analytics;
   if (!a) return;
   const strip = el('div', 'analytics-strip');
+  if (a.weekStartMillis != null) {
+    const label = el('span', 'analytics-window', 'This week');
+    label.title = 'Week of ' + new Date(a.weekStartMillis).toLocaleDateString()
+      + ' (ISO week, Monday start) — same as the Scorecard\'s Manager Usage card';
+    strip.appendChild(label);
+  }
   // An API-list-price estimate, not a bill (CROW-1440) — see COST_ESTIMATE_LABEL.
   strip.appendChild(statChipEl(COST_ESTIMATE_LABEL, fmtCost(a.totalCost), COST_ESTIMATE_TOOLTIP));
   strip.appendChild(statChipEl('Tokens', fmtCount(a.totalTokens)));
@@ -227,6 +235,9 @@ function renderSessionAnalyticsStrip(s, root) {
   }
   if (a.linesAdded || a.linesRemoved) {
     strip.appendChild(statChipEl('Lines', '+' + a.linesAdded + ' −' + a.linesRemoved));
+  }
+  if (a.compactionCount > 0) {
+    strip.appendChild(statChipEl('Compactions', String(a.compactionCount)));
   }
   if (a.apiErrorCount > 0) {
     const chip = statChipEl('Errors', String(a.apiErrorCount));

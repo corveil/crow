@@ -242,8 +242,22 @@ public enum CrowDaemon {
                     onDataReceived: { sessionID in
                         Task { @MainActor in
                             guard let service = telemetryHolder.service else { return }
-                            let analytics = await service.analytics(for: sessionID)
-                            appState.hookState(for: sessionID).analytics = analytics
+                            if appState.isManagerSession(sessionID) {
+                                // A Manager never ends, so its live aggregate is
+                                // the current ISO week, not lifetime — the same
+                                // row the Scorecard's Manager Usage card shows
+                                // (CROW-1439).
+                                let calendar = ManagerWeeklyUsage.weekCalendar()
+                                if let week = ManagerWeeklyUsage.week(containing: Date(), calendar: calendar) {
+                                    let analytics = await service.analytics(
+                                        for: sessionID, receivedBetween: week.start, end: week.end)
+                                    appState.applyLiveManagerWeek(
+                                        analytics, for: sessionID, weekStart: week.start, calendar: calendar)
+                                }
+                            } else {
+                                let analytics = await service.analytics(for: sessionID)
+                                appState.hookState(for: sessionID).analytics = analytics
+                            }
                             appState.telemetryCaptureStatus = TelemetryCaptureStatus(
                                 sessionCount: max(appState.telemetryCaptureStatus?.sessionCount ?? 0, 1),
                                 lastReceivedAt: Date())

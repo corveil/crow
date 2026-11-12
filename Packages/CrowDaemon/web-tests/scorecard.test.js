@@ -267,9 +267,17 @@ const stripCost = Array.from(stripRoot.querySelectorAll('.score-chip')).find((c)
 check('strip cost chip reads Est. cost', !!stripCost);
 check('strip cost chip carries the tooltip', stripCost && stripCost.title === TIP);
 check('strip cost chip value', stripCost && stripCost.querySelector('.score-chip-value').textContent === '$23.40');
+// CROW-1439: a Manager renders its current-week strip, with the same estimate
+// label; with no week data it renders nothing.
+T.liveById = { m1: { analytics: { totalCost: 4.5, totalTokens: 90000, toolCallCount: 12,
+  activeTimeSeconds: 900, linesAdded: 0, linesRemoved: 0, apiErrorCount: 0, weekStartMillis: Date.UTC(2026, 10, 9) } } };
 const managerRoot = window.document.createElement('div');
-T.renderSessionAnalyticsStrip({ id: 's1', kind: 'manager' }, managerRoot);
-check('Manager sessions still render no strip', managerRoot.children.length === 0);
+T.renderSessionAnalyticsStrip({ id: 'm1', kind: 'manager' }, managerRoot);
+const managerLabels = Array.from(managerRoot.querySelectorAll('.score-chip-label')).map((n) => n.textContent);
+check('Manager strip cost chip reads Est. cost', managerLabels.includes('Est. cost') && !managerLabels.includes('Cost'));
+const emptyManagerRoot = window.document.createElement('div');
+T.renderSessionAnalyticsStrip({ id: 'm2', kind: 'manager' }, emptyManagerRoot);
+check('Manager with no week data renders no strip', emptyManagerRoot.children.length === 0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

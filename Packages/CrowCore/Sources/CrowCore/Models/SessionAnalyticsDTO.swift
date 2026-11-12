@@ -12,8 +12,9 @@ import Foundation
 public struct SessionAnalyticsDTO: Codable, Sendable, Equatable {
     /// Which source produced these numbers: `"live"` = the in-memory hook
     /// aggregate for an open session; `"snapshot"` = the durable end-of-session
-    /// record. Lets the web distinguish live-updating vs. final without a second
-    /// lookup (currently informational — the strip renders both identically).
+    /// record; `"week"` = a Manager's current ISO-week rollup (CROW-1439). Lets
+    /// the web distinguish live-updating vs. final without a second lookup
+    /// (`live` and `snapshot` render identically; `week` adds a window label).
     public let source: String
     public let totalCost: Double
     public let inputTokens: Int
@@ -30,8 +31,20 @@ public struct SessionAnalyticsDTO: Codable, Sendable, Equatable {
     /// context beside "Active", never a grading input. `nil` hides the chip
     /// (open-ended session, or an agent that never sends `SessionEnd`).
     public let wallClockDurationSeconds: Double?
+    /// Manager sessions only (CROW-1439): start of the ISO week these numbers
+    /// cover, as epoch milliseconds. Its presence is what tells the web to label
+    /// the strip `This week` — a Manager never ends, so its numbers are a
+    /// week-to-date window, not a lifetime total. Nil (and so absent from the
+    /// wire) for work sessions, keeping their payload unchanged.
+    public let weekStartMillis: Double?
+    /// Manager sessions only (CROW-1439): completed compactions attributed to
+    /// the week. Nil for work sessions, and for a week that never counted one.
+    public let compactionCount: Int?
 
-    private init(source: String, analytics: SessionAnalytics, wallClockDurationSeconds: Double?) {
+    private init(
+        source: String, analytics: SessionAnalytics, wallClockDurationSeconds: Double?,
+        weekStartMillis: Double? = nil, compactionCount: Int? = nil
+    ) {
         self.source = source
         self.totalCost = analytics.totalCost
         self.inputTokens = analytics.inputTokens
@@ -45,6 +58,8 @@ public struct SessionAnalyticsDTO: Codable, Sendable, Equatable {
         self.linesRemoved = analytics.linesRemoved
         self.apiErrorCount = analytics.apiErrorCount
         self.wallClockDurationSeconds = wallClockDurationSeconds
+        self.weekStartMillis = weekStartMillis
+        self.compactionCount = compactionCount
     }
 
     /// Live in-memory hook aggregate for an open session. `wallClockDuration`
@@ -61,6 +76,19 @@ public struct SessionAnalyticsDTO: Codable, Sendable, Equatable {
             source: "snapshot",
             analytics: snapshot.analytics,
             wallClockDurationSeconds: snapshot.wallClockDurationSeconds
+        )
+    }
+
+    /// A Manager's current-week rollup (CROW-1439) — the same row the
+    /// Scorecard's Manager Usage card shows. No wall-clock duration: a
+    /// Manager's lifecycle stamps span its whole life, not the week.
+    public init(managerWeek week: ManagerWeeklyUsage) {
+        self.init(
+            source: "week",
+            analytics: week.analytics,
+            wallClockDurationSeconds: nil,
+            weekStartMillis: week.weekStart.timeIntervalSince1970 * 1000,
+            compactionCount: week.compactionCount
         )
     }
 }

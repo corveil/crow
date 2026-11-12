@@ -30,6 +30,15 @@ Also pins the framing that keeps a Manager legible as *outside* the graded
 aggregate: the "efficiency only" pill, the explainer naming the excluded
 outcome surfaces, and the absence of any shipped count on a Manager row.
 
+## `analytics-strip.test.js` — session-header analytics strip (CROW-1439)
+
+Drives the real `renderHeader` with a mock `list-sessions-live` analytics
+payload and asserts the strip's DOM. Coverage: a Manager renders the strip with
+the work-session chips plus a leading `This week` label (from
+`weekStartMillis`), its week's compactions when counted, and no lifetime
+Duration chip; an empty Manager week renders nothing; and a work session's
+strip is unchanged (no window label, same chip order).
+
 ## `touch-scroll.test.js` — mobile terminal scroll (#777)
 
 Drives `enableTouchScroll` against a fake xterm + PTY socket. Coverage: the

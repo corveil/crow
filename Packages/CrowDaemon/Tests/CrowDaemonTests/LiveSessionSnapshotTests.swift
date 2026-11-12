@@ -8,7 +8,8 @@ import CrowIPC
 /// CROW-1180: `list-sessions-live` copies on MainActor and encodes off it.
 /// Wire shape stays the existing suites' job; these pin the split itself —
 /// encode is callable without MainActor isolation, and the snapshot copy
-/// still skips Manager analytics.
+/// still ignores a Manager's snapshot (a Manager shows its current-week
+/// rollup instead, CROW-1439).
 @Suite("list-sessions-live snapshot encode off MainActor (CROW-1180)")
 struct LiveSessionSnapshotTests {
 
@@ -81,7 +82,7 @@ struct LiveSessionSnapshotTests {
         #expect(entry?["analytics"] == nil)
     }
 
-    @Test @MainActor func snapshotCopiesLiveFieldsAndSkipsManagerAnalytics() {
+    @Test @MainActor func snapshotCopiesLiveFieldsAndIgnoresManagerSnapshot() {
         AgentRegistry.shared.register(ClaudeCodeAgent())
         let work = Session(name: "__TEST__LiveSnapshotWork", kind: .work, agentKind: .claudeCode)
         let manager = Session(name: "__TEST__LiveSnapshotManager", kind: .manager, agentKind: .claudeCode)
