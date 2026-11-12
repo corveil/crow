@@ -17,7 +17,12 @@ func makeEngineTerminalHandlers(
     store: JSONStore,
     sessionService: SessionService,
     telemetryPort: UInt16?,
-    devRoot: String
+    devRoot: String,
+    // How `send` hands text to a pane. A seam for tests, which have no tmux
+    // server; production always goes through `TerminalRouter.deliver`.
+    deliverText: @escaping @MainActor @Sendable (SessionTerminal, String) throws -> Void = {
+        try TerminalRouter.deliver($0, text: $1)
+    }
 ) -> [String: CommandRouter.Handler] {
     let capturedAppState = appState
     let capturedStore = store
@@ -360,16 +365,21 @@ func makeEngineTerminalHandlers(
                   var text = params["text"]?.stringValue else {
                 throw RPCError.invalidParams("session_id, terminal_id, and text required")
             }
-            // Process escape sequences: literal \n in the text becomes a real newline
-            text = text.replacingOccurrences(of: "\\n", with: "\n")
-            text = text.replacingOccurrences(of: "\\t", with: "\t")
+            // `crow send` turns a literal `\n` / `\t` into a real newline / tab,
+            // so `crow send … "yes\n"` submits from any shell. `raw: true` skips
+            // that: the web Chat view sends what the operator typed, and a
+            // pasted `print("a\nb")` must reach the agent unchanged (#1437).
+            if params["raw"]?.boolValue != true {
+                text = text.replacingOccurrences(of: "\\n", with: "\n")
+                text = text.replacingOccurrences(of: "\\t", with: "\t")
+            }
             CrowLog.info("crow send: text length=\(text.count), ends_with_newline=\(text.hasSuffix("\n")), ends_with_cr=\(text.hasSuffix("\r"))")
             // Resolved OFF the MainActor: `resolveCrowBinary` stats and may
             // create the `.claude/bin/crow` symlink, and blocking I/O on the
             // MainActor is what wedged the daemon's RPC surface in #892.
             // It only needs `devRoot`, so hoisting costs nothing.
             let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot)
-            await MainActor.run {
+            try await MainActor.run {
                 let routedTerminal = capturedAppState.terminals[sessionID]?.first(where: { $0.id == terminalID })
                 // tmux-backed terminals already have their window from
                 // registerTerminal — no surface recovery needed before send.
@@ -428,17 +438,26 @@ func makeEngineTerminalHandlers(
                     }
                 }
 
-                if let routedTerminal {
-                    TerminalRouter.send(routedTerminal, text: text)
-                    if let launch {
-                        // Parsed for the base URL only; the text is never stored.
-                        capturedService.recordLaunchedGateway(
-                            sessionID: sessionID, agentKind: launch.kind,
-                            launchText: launch.command, cwd: launch.cwd)
-                    }
-                } else {
-                    // No SessionTerminal row known — nothing to route to.
-                    CrowLog.info("[Crow] crow send for unknown terminal \(terminalID); ignoring")
+                guard let routedTerminal else {
+                    // No SessionTerminal row known — nothing to route to. An
+                    // error, not `sent: true`: the Chat view keeps the text
+                    // only when the send fails (#1437).
+                    CrowLog.info("[Crow] crow send for unknown terminal \(terminalID)")
+                    throw RPCError.applicationError("Terminal not found")
+                }
+                do {
+                    try deliverText(routedTerminal, text)
+                } catch {
+                    // The tmux error names the command and target, never the
+                    // payload (that goes over stdin).
+                    CrowLog.info("[Crow] crow send to \(terminalID) failed: \(error)")
+                    throw RPCError.applicationError("The text did not reach the terminal: \(error)")
+                }
+                if let launch {
+                    // Parsed for the base URL only; the text is never stored.
+                    capturedService.recordLaunchedGateway(
+                        sessionID: sessionID, agentKind: launch.kind,
+                        launchText: launch.command, cwd: launch.cwd)
                 }
             }
             return ["sent": .bool(true)]

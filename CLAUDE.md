@@ -260,7 +260,7 @@ crow relaunch-agent --session <uuid>                   → open a managed termin
 crow send --session <uuid> --terminal <uuid> "text to send"
 ```
 
-The `crow send` command writes text to the terminal. Newlines in the text are converted to Enter keypresses. To submit a command, include a newline at the end of the text.
+The `crow send` command writes text to the terminal. Newlines in the text are converted to Enter keypresses. To submit a command, include a newline at the end of the text. The text goes in as one bracketed paste, so a multi-line message reaches an agent TUI whole. If it can't be delivered (unknown terminal, tmux failure), `crow send` errors instead of printing `"sent": true`.
 
 ### Maintenance Commands
 

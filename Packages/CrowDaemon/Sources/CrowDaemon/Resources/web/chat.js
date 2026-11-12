@@ -703,7 +703,10 @@ async function sendChatMessage() {
   renderChatStatus();
   try {
     // Trailing newline = Enter after the bracketed paste (TmuxInput.sendText).
-    await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n' });
+    // `raw`: send the text as typed. Without it, `send` rewrites a literal
+    // `\n` / `\t` (the `crow send` convention) and pasted code changes (#1437).
+    // A failed delivery rejects, so the text stays in the composer.
+    await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n', raw: true });
     input.value = '';
     autosizeChatInput(input);
     closeChatMenu();
