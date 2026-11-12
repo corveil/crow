@@ -91,3 +91,37 @@ import Testing
     #expect(object["toolCallCount"] as? Int == 3)
     #expect(object["wallClockDurationSeconds"] as? Double == 60)
 }
+
+// CROW-1439: a Manager's strip is its current-week rollup. It carries the week
+// start (the web's `This week` label) and the week's compactions, and no
+// lifetime wall-clock duration.
+@Test func managerWeekInitCarriesWindowAndCompactions() {
+    let weekStart = Date(timeIntervalSince1970: 1_794_182_400) // Mon 2026-11-09 UTC
+    let week = ManagerWeeklyUsage(
+        weekStart: weekStart,
+        analytics: SessionAnalytics(totalCost: 6.75, inputTokens: 120, outputTokens: 30, toolCallCount: 11),
+        sessionID: UUID(), compactionCount: 2)
+    let dto = SessionAnalyticsDTO(managerWeek: week)
+
+    #expect(dto.source == "week")
+    #expect(dto.totalCost == 6.75)
+    #expect(dto.totalTokens == 150)
+    #expect(dto.toolCallCount == 11)
+    #expect(dto.weekStartMillis == 1_794_182_400_000)
+    #expect(dto.compactionCount == 2)
+    #expect(dto.wallClockDurationSeconds == nil)
+}
+
+// Work-session payloads are unchanged: the Manager-only keys never reach the wire.
+@Test func workSessionDTOOmitsManagerOnlyKeys() throws {
+    let live = SessionAnalyticsDTO(live: SessionAnalytics(totalCost: 1), wallClockDuration: 60)
+    let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(live)) as? [String: Any]
+    let keys = Set(object?.keys.map { $0 } ?? [])
+    #expect(!keys.contains("weekStartMillis"))
+    #expect(!keys.contains("compactionCount"))
+    #expect(keys == [
+        "source", "totalCost", "inputTokens", "outputTokens", "cacheReadTokens",
+        "cacheCreationTokens", "totalTokens", "activeTimeSeconds", "toolCallCount",
+        "linesAdded", "linesRemoved", "apiErrorCount", "wallClockDurationSeconds",
+    ])
+}

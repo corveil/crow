@@ -316,7 +316,7 @@ import CrowPersistence
 /// CROW-722: `list-sessions-live` carries a per-session analytics strip resolved
 /// server-side (live hook aggregate → durable snapshot). These pin the resolution
 /// branch the DTO's own tests don't reach — the empty-state omission, the Manager
-/// exclusion, and that `CrowDaemon.reseed` mirrors persisted snapshots so a
+/// current-week window (CROW-1439), and that `CrowDaemon.reseed` mirrors persisted snapshots so a
 /// session that completed before this daemon process started still renders its
 /// strip (the snapshot half was dead before #736's reseed fix).
 @Suite struct SessionAnalyticsStripLiveTests {
@@ -446,12 +446,59 @@ import CrowPersistence
         #expect(entry?["analytics"] == nil) // absence IS the empty state
     }
 
-    @Test @MainActor func excludesManagerEvenWithSnapshot() async {
+    /// CROW-1439: a Manager's strip is its current ISO-week rollup — the
+    /// Scorecard's own row — labeled by `weekStartMillis`, never a lifetime
+    /// live aggregate or a snapshot.
+    @Test @MainActor func managerShowsItsCurrentWeekRollup() async {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let manager = Session(name: "m", kind: .manager, agentKind: .claudeCode)
+        let appState = AppState()
+        appState.sessions = [manager]
+        // Neither of these is a Manager's number: a stray snapshot, and a
+        // lifetime aggregate left in the hook state.
+        appState.analyticsSnapshots[manager.id.uuidString] = snapshot(for: manager.id, cost: 99)
+        appState.hookState(for: manager.id).analytics = SessionAnalytics(totalCost: 88)
+        let calendar = ManagerWeeklyUsage.weekCalendar()
+        let week = ManagerWeeklyUsage.week(containing: Date(), calendar: calendar)!
+        let key = ManagerWeeklyUsage.storeKey(weekStart: week.start, sessionID: manager.id, calendar: calendar)
+        appState.managerUsageWeekly[key] = ManagerWeeklyUsage(
+            weekStart: week.start,
+            analytics: SessionAnalytics(totalCost: 3.25, inputTokens: 70, outputTokens: 30, toolCallCount: 5),
+            sessionID: manager.id, compactionCount: 2)
+
+        let resp = await router(appState: appState, store: JSONStore.temporary())
+            .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
+        let a = resp.result?["sessions"]?.objectValue?[manager.id.uuidString]?.objectValue?["analytics"]?.objectValue
+        #expect(a?["source"]?.stringValue == "week")
+        #expect(num(a?["totalCost"]) == 3.25)
+        #expect(num(a?["totalTokens"]) == 100)
+        #expect(num(a?["weekStartMillis"]) == week.start.timeIntervalSince1970 * 1000)
+        #expect(num(a?["compactionCount"]) == 2)
+        #expect(a?["wallClockDurationSeconds"] == nil)
+
+        // …and it is the same row get-scorecard reports for this Manager.
+        let card = await router(appState: appState, store: JSONStore.temporary())
+            .handle(request: JSONRPCRequest(id: 2, method: "get-scorecard"))
+        let row = card.result?["managerWeeks"]?.arrayValue?.first?.objectValue
+        #expect(num(row?["totalCost"]) == num(a?["totalCost"]))
+    }
+
+    /// No current-week row (telemetry off, a fresh week, or last week's row
+    /// only) → no strip, even with a snapshot or a lifetime aggregate around.
+    @Test @MainActor func managerWithoutACurrentWeekHasNoStrip() async {
         AgentRegistry.shared.register(ClaudeCodeAgent())
         let manager = Session(name: "m", kind: .manager, agentKind: .claudeCode)
         let appState = AppState()
         appState.sessions = [manager]
         appState.analyticsSnapshots[manager.id.uuidString] = snapshot(for: manager.id)
+        appState.hookState(for: manager.id).analytics = SessionAnalytics(totalCost: 88)
+        let calendar = ManagerWeeklyUsage.weekCalendar()
+        let thisWeek = ManagerWeeklyUsage.week(containing: Date(), calendar: calendar)!
+        let lastWeek = calendar.date(byAdding: .weekOfYear, value: -1, to: thisWeek.start)!
+        let key = ManagerWeeklyUsage.storeKey(weekStart: lastWeek, sessionID: manager.id, calendar: calendar)
+        appState.managerUsageWeekly[key] = ManagerWeeklyUsage(
+            weekStart: lastWeek, analytics: SessionAnalytics(totalCost: 7), sessionID: manager.id)
+
         let resp = await router(appState: appState, store: JSONStore.temporary())
             .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
         let entry = resp.result?["sessions"]?.objectValue?[manager.id.uuidString]?.objectValue

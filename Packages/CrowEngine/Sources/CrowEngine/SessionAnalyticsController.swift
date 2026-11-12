@@ -142,31 +142,18 @@ final class SessionAnalyticsController {
         return written
     }
 
-    /// Composite key for a persisted Manager rollup: `"yyyy-MM-dd|<uuid>"`
-    /// (CROW-983). Pre-CROW-983 rows use a bare `"yyyy-MM-dd"`, which still
-    /// decodes and is read as the primary Manager — the only session #745
-    /// ever queried. Legacy keys are deliberately NOT rewritten: a rename
+    /// Composite key for a persisted Manager rollup — see
+    /// `ManagerWeeklyUsage.storeKey`, the one definition every reader shares
+    /// (the Manager header strip looks up the current week with it, CROW-1439).
+    /// Legacy bare `"yyyy-MM-dd"` keys are deliberately NOT rewritten: a rename
     /// would have to be transactional against a store that other writers
     /// share, and reading them is enough.
-    ///
-    /// The week component is formatted with the caller's calendar rather than
-    /// a `static` `DateFormatter`. The old static captured `.timeZone =
-    /// .current` at first access while `refreshManagerUsage` re-reads
-    /// `.current` on every call, so a mid-process timezone change could key a
-    /// week under a date its own bucket boundaries disagreed with.
     static func managerWeekKey(weekStart: Date, sessionID: UUID, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.year, .month, .day], from: weekStart)
-        let day = String(
-            format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
-        return "\(day)|\(sessionID.uuidString)"
+        ManagerWeeklyUsage.storeKey(weekStart: weekStart, sessionID: sessionID, calendar: calendar)
     }
 
-    /// ISO-8601 calendar in the current timezone — the same bucketing
-    /// `ScorecardModel.build` uses, so Manager weeks line up with graded weeks.
     private static func managerWeekCalendar() -> Calendar {
-        var calendar = Calendar(identifier: .iso8601)
-        calendar.timeZone = .current
-        return calendar
+        ManagerWeeklyUsage.weekCalendar()
     }
 
     /// Attribute one completed compaction to the week it happened in
@@ -195,7 +182,17 @@ final class SessionAnalyticsController {
             rollups[key] = rollup
             data.managerUsageWeekly = rollups
         }
-        appState.managerUsageWeekly = store.data.managerUsageWeekly ?? [:]
+        // Update only the compaction count in memory. Copying the whole store
+        // map back would roll this week's analytics back to the last persisted
+        // refresh, undoing the live per-datapoint aggregate
+        // (`AppState.applyLiveManagerWeek`, CROW-1439) until the next datapoint.
+        guard let stored = store.data.managerUsageWeekly?[key] else { return }
+        if var live = appState.managerUsageWeekly[key] {
+            live.compactionCount = stored.compactionCount
+            appState.managerUsageWeekly[key] = live
+        } else {
+            appState.managerUsageWeekly[key] = stored
+        }
     }
 
     /// Recompute every Manager session's weekly usage rollups from telemetry.db

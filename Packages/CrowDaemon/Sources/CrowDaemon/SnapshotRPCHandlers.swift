@@ -289,8 +289,9 @@ struct LiveSessionSnapshot: Sendable {
     let prLink: PRLink?
     let autoMerge: AutoMergeState?
     let autoRebase: AutoRebaseState?
-    /// Nil for Managers and for sessions with no live/snapshot aggregate —
-    /// absence of the wire key is the empty state (CROW-722).
+    /// Nil for sessions with no live/snapshot aggregate, and for a Manager
+    /// with no current-week usage — absence of the wire key is the empty state
+    /// (CROW-722, CROW-1439).
     let analytics: SessionAnalyticsDTO?
 }
 
@@ -298,27 +299,33 @@ struct LiveSessionSnapshot: Sendable {
 /// Must stay on MainActor: `SessionHookState` is actor-isolated, and readers
 /// need a consistent copy of RC / PR / watcher / analytics inputs.
 @MainActor
-func snapshotLiveSessions(from appState: AppState) -> [LiveSessionSnapshot] {
+func snapshotLiveSessions(from appState: AppState, now: Date = Date()) -> [LiveSessionSnapshot] {
     appState.sessions.map { session in
         let id = session.id
         let terminals = appState.terminals(for: id)
         let prLink = appState.links(for: id).first(where: { $0.linkType == .pr })
             .map { LiveSessionSnapshot.PRLink(label: $0.label, url: $0.url) }
 
-        // Per-session analytics strip (CROW-722). Prefer the live in-memory
-        // hook aggregate (open sessions); fall back to the durable end-of-session
-        // snapshot (terminal sessions). Mirrors `writeAnalyticsSnapshot`'s own
-        // source preference. Never for the Manager, and never an all-zeros
-        // aggregate — the web renders the strip only when this key is present.
+        // Per-session analytics strip (CROW-722). Work sessions prefer the live
+        // in-memory hook aggregate (open sessions) and fall back to the durable
+        // end-of-session snapshot (terminal sessions), mirroring
+        // `writeAnalyticsSnapshot`'s own source preference. A Manager never
+        // ends, so a lifetime total would grow without bound and shrink as rows
+        // age out of retention; it shows its current ISO-week rollup instead —
+        // the very row the Scorecard's Manager Usage card renders, so the two
+        // agree by construction (CROW-1439). Never an all-zeros aggregate — the
+        // web renders the strip only when this key is present.
         let analytics: SessionAnalyticsDTO?
-        if !appState.isManagerSession(id) {
-            if let live = appState.existingHookState(for: id)?.analytics, !live.isEmpty {
-                analytics = SessionAnalyticsDTO(live: live, wallClockDuration: session.wallClockDuration)
-            } else if let snapshot = appState.analyticsSnapshots[id.uuidString] {
-                analytics = SessionAnalyticsDTO(snapshot: snapshot)
+        if appState.isManagerSession(id) {
+            if let week = appState.currentManagerWeek(for: id, now: now), !week.analytics.isEmpty {
+                analytics = SessionAnalyticsDTO(managerWeek: week)
             } else {
                 analytics = nil
             }
+        } else if let live = appState.existingHookState(for: id)?.analytics, !live.isEmpty {
+            analytics = SessionAnalyticsDTO(live: live, wallClockDuration: session.wallClockDuration)
+        } else if let snapshot = appState.analyticsSnapshots[id.uuidString] {
+            analytics = SessionAnalyticsDTO(snapshot: snapshot)
         } else {
             analytics = nil
         }

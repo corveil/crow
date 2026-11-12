@@ -1824,6 +1824,9 @@ select.text-prompt-input { cursor: pointer; }
 }
 .analytics-strip .score-chip-value { font-size: 11px; }
 .analytics-strip .chip-error .score-chip-value { color: var(--red); }
+.analytics-strip .analytics-window {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+}
 
 .score-prior { display: flex; flex-direction: column; gap: 6px; }
 .score-prior-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }

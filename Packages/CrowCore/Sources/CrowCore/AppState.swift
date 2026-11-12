@@ -200,6 +200,47 @@ public final class AppState {
     /// store directly.
     public var managerUsageWeekly: [String: ManagerWeeklyUsage] = [:]
 
+    /// The current ISO week's rollup for one Manager (CROW-1439) — the row the
+    /// Scorecard's Manager Usage card renders for that week, and the source of
+    /// the Manager's header analytics strip, so the two can never disagree.
+    /// Nil until the week has a row (a fresh week before its first datapoint
+    /// or refresh, or telemetry off). Only the composite `"yyyy-MM-dd|<uuid>"`
+    /// key is consulted: `refreshManagerUsage` always writes that shape, and
+    /// bare legacy keys only ever describe weeks from before CROW-983.
+    public func currentManagerWeek(for sessionID: UUID, now: Date = Date()) -> ManagerWeeklyUsage? {
+        let calendar = ManagerWeeklyUsage.weekCalendar()
+        guard let week = ManagerWeeklyUsage.week(containing: now, calendar: calendar) else { return nil }
+        let key = ManagerWeeklyUsage.storeKey(
+            weekStart: week.start, sessionID: sessionID, calendar: calendar)
+        return managerUsageWeekly[key]
+    }
+
+    /// Apply a freshly recomputed current-week aggregate for a Manager
+    /// (CROW-1439), called on every OTLP datapoint. A Manager's live aggregate
+    /// is week-to-date, never lifetime: the un-windowed total for a permanent
+    /// session grows without bound and silently shrinks as rows age out of
+    /// telemetry retention.
+    ///
+    /// Writes the in-memory mirror only, not the store: the analytics half of
+    /// a rollup is recomputable from telemetry.db, and the hourly / launch
+    /// `refreshManagerUsage` persists it. `compactionCount` is carried over
+    /// from the existing row — it is accumulated at event time and cannot be
+    /// recomputed. An empty aggregate writes no row, so an all-zeros week stays
+    /// absent (the strip's empty state) rather than becoming a zero row on the
+    /// Scorecard.
+    public func applyLiveManagerWeek(
+        _ analytics: SessionAnalytics, for sessionID: UUID, weekStart: Date,
+        calendar: Calendar = ManagerWeeklyUsage.weekCalendar()
+    ) {
+        hookState(for: sessionID).analytics = analytics
+        guard !analytics.isEmpty else { return }
+        let key = ManagerWeeklyUsage.storeKey(
+            weekStart: weekStart, sessionID: sessionID, calendar: calendar)
+        managerUsageWeekly[key] = ManagerWeeklyUsage(
+            weekStart: weekStart, analytics: analytics, sessionID: sessionID,
+            compactionCount: managerUsageWeekly[key]?.compactionCount)
+    }
+
     /// Live telemetry capture health (#745): refreshed at launch and on
     /// manual rebuild, with `lastReceivedAt` bumped as data arrives. Nil when
     /// telemetry is disabled or hasn't started.
