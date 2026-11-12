@@ -217,7 +217,8 @@ function renderSessionAnalyticsStrip(s, root) {
   const a = liveFor(s.id).analytics;
   if (!a) return;
   const strip = el('div', 'analytics-strip');
-  strip.appendChild(statChipEl('Cost', fmtCost(a.totalCost)));
+  // An API-list-price estimate, not a bill (CROW-1440) — see COST_ESTIMATE_LABEL.
+  strip.appendChild(statChipEl(COST_ESTIMATE_LABEL, fmtCost(a.totalCost), COST_ESTIMATE_TOOLTIP));
   strip.appendChild(statChipEl('Tokens', fmtCount(a.totalTokens)));
   strip.appendChild(statChipEl('Tools', String(a.toolCallCount)));
   strip.appendChild(statChipEl('Active', fmtTime(a.activeTimeSeconds)));

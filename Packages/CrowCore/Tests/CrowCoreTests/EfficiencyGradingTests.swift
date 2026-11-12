@@ -160,7 +160,7 @@ private func score(_ result: EfficiencyGrading.GradeResult) -> Int? {
 
     let light = deduction(EfficiencyGrading.grade(input(totalCost: 10)), .costPerShipped)
     #expect(light?.points == 5)
-    #expect(light?.label == "$10.00 per shipped session")
+    #expect(light?.label == "≈$10.00 est. cost per shipped session")
 
     #expect(deduction(EfficiencyGrading.grade(input(totalCost: 20)), .costPerShipped)?.points == 10)
     #expect(deduction(EfficiencyGrading.grade(input(totalCost: 31)), .costPerShipped)?.points == 15)

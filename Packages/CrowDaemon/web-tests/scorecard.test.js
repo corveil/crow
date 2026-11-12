@@ -14,6 +14,9 @@ const epilogue = `
   renderBoard(){ return renderBoard(); },
   groupManagerWeeks(w){ return groupManagerWeeks(w); },
   gradeBadgeEl(g){ return gradeBadgeEl(g); },
+  set liveById(v){liveById=v;},
+  renderSessionAnalyticsStrip(s, root){ return renderSessionAnalyticsStrip(s, root); },
+  get COST_ESTIMATE_TOOLTIP(){return COST_ESTIMATE_TOOLTIP;},
 };
 `;
 const appjs = loadClientSource() + epilogue;
@@ -199,6 +202,74 @@ const badge = T.gradeBadgeEl(grade('B', 85));
 check('letter color is the grade token', badge.style.color === 'var(--grade-b)');
 check('wash is a color-mix, not a hex alpha glued onto the variable',
   badge.style.background === 'color-mix(in srgb, var(--grade-b) 15%, transparent)');
+
+console.log('\nCost reads as an API list-price estimate (CROW-1440):');
+// Claude Code's cost metric is an estimate at API list prices, emitted however
+// the session is billed — a subscription session pays nothing per token. No
+// surface may label it a plain "Cost", and every bare figure carries `≈`.
+const TIP = T.COST_ESTIMATE_TOOLTIP;
+check('tooltip names the list-price estimate and the subscription caveat',
+  /API list prices/.test(TIP) && /subscription/.test(TIP));
+{
+  const full = payload([managerWeek()]);
+  full.snapshotCount = 1;
+  full.currentWeek = Object.assign({}, week, {
+    totalCost: 42.5, sessionsShipped: 2, costPerShipped: 21.25,
+    grade: grade('C', 75, [{ metric: 'costPerShipped', points: 10, label: '≈$21.25 est. cost per shipped session' }]),
+  });
+  full.priorWeeks = [Object.assign({}, week, { weekStartMillis: MONDAY - WEEK, totalCost: 9 })];
+  full.baseline = Object.assign({}, baseline, { weeksAvailable: 4, medianCostPerShipped: 18 });
+  full.sessions = [{ grade: grade('A', 95), endedAtMillis: MONDAY, shipped: true,
+    totalCost: 7.25, activeTimeSeconds: 600, wallClockDurationSeconds: null }];
+  T.boardData.scorecard = full;
+  T.selectedBoard = 'scorecard';
+  T.renderBoard();
+}
+const allLabels = textOf('.score-chip-label');
+check('no chip is labeled a plain Cost', !allLabels.some((l) => /^cost$/i.test(l.trim())));
+const weekChip = Array.from(q('.score-chip')).find((c) =>
+  c.querySelector('.score-chip-label').textContent === 'Est. cost');
+check('this-week chip reads Est. cost', !!weekChip);
+check('this-week chip carries the tooltip', weekChip && weekChip.title === TIP);
+check('this-week chip value', weekChip && weekChip.querySelector('.score-chip-value').textContent === '$42.50');
+check('this-week card explains the estimate in visible text (no tooltip on a phone)',
+  Array.from(q('.score-muted')).some((n) => /API list prices/.test(n.textContent)));
+const managerStat = q('.score-manager-stat')[0];
+check('Manager week cost is prefixed ≈', managerStat && managerStat.textContent === '≈$12.40');
+check('Manager week cost carries the tooltip', managerStat && managerStat.title === TIP);
+const priorCost = q('.score-prior-cost')[0];
+check('prior week cost is prefixed ≈', priorCost && priorCost.textContent === '≈$9.00');
+check('prior week cost carries the tooltip', priorCost && priorCost.title === TIP);
+const sessionCost = Array.from(q('.score-session-stat')).find((n) => n.textContent.startsWith('≈$'));
+check('session row cost is prefixed ≈', sessionCost && sessionCost.textContent === '≈$7.25');
+check('session row cost carries the tooltip', sessionCost && sessionCost.title === TIP);
+const shippedSub = Array.from(q('.score-sub')).find((n) => /per shipped session/.test(n.textContent));
+check('shipped card reads as an estimate',
+  shippedSub && shippedSub.textContent === '≈$21.25 est. cost per shipped session');
+check('shipped card carries the tooltip', shippedSub && shippedSub.title === TIP);
+const cmp = Array.from(q('.score-comparison')).find((n) =>
+  /cost/i.test(n.querySelector('.score-comparison-name').textContent));
+check('baseline row is labeled Est. cost/shipped',
+  cmp && cmp.querySelector('.score-comparison-name').textContent === 'Est. cost/shipped');
+check('baseline row carries the tooltip', cmp && cmp.title === TIP);
+check('no comparison row is named a plain Cost/shipped',
+  !textOf('.score-comparison-name').includes('Cost/shipped'));
+
+console.log('\nSession header analytics strip (CROW-1440):');
+T.liveById = { s1: { analytics: { totalCost: 23.4, totalTokens: 1200000, toolCallCount: 170,
+  activeTimeSeconds: 2100, wallClockDurationSeconds: null, linesAdded: 0, linesRemoved: 0, apiErrorCount: 0 } } };
+const stripRoot = window.document.createElement('div');
+T.renderSessionAnalyticsStrip({ id: 's1', kind: 'work' }, stripRoot);
+const stripLabels = Array.from(stripRoot.querySelectorAll('.score-chip-label')).map((n) => n.textContent);
+check('strip has no plain Cost chip', !stripLabels.includes('Cost'));
+const stripCost = Array.from(stripRoot.querySelectorAll('.score-chip')).find((c) =>
+  c.querySelector('.score-chip-label').textContent === 'Est. cost');
+check('strip cost chip reads Est. cost', !!stripCost);
+check('strip cost chip carries the tooltip', stripCost && stripCost.title === TIP);
+check('strip cost chip value', stripCost && stripCost.querySelector('.score-chip-value').textContent === '$23.40');
+const managerRoot = window.document.createElement('div');
+T.renderSessionAnalyticsStrip({ id: 's1', kind: 'manager' }, managerRoot);
+check('Manager sessions still render no strip', managerRoot.children.length === 0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
