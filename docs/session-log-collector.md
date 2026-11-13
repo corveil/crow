@@ -166,9 +166,22 @@ SessionService.deleteSession (CLI, web UI, cleanup reaper)
 
 The server keys an artifact on `(session, harness, kind)` and rejects a second
 upload with 409. So the collector uploads a session's transcript **once, when it
-has gone quiescent** — terminal status (`completed`/`archived`) or no log-file
+has gone quiescent** — terminal status (`completed`/`archived`) or no agent
 activity within `quietPeriodMinutes` (default 30) — to avoid capturing a partial
-transcript it could never replace.
+transcript it could never replace. A Manager is never `completed`, so for it
+quiescence is the only gate (apart from a delete).
+
+"Activity" for an NDJSON transcript (Claude, Codex, Grok, Muse) is its **newest
+timestamped entry** — the largest top-level `timestamp` near the end of the file
+(`TranscriptActivity`), not the file's mtime (CROW-1449). A live Claude Code
+process re-touches its idle transcript about once an hour without changing it,
+and appends untimestamped metadata lines (`custom-title`, `permission-mode`, …)
+long after the last turn. Keyed on the mtime, a long-lived Manager never went
+quiet and never uploaded. The read is a bounded backward scan of the tail,
+cached by size and mtime. A file with no timestamped line falls back to its
+mtime. Cursor's SQLite store keeps the mtime of the store and its
+`-wal`/`-shm` siblings, and OpenCode keys on its own sessions' newest write
+time. The gateway verifier's "agent was active N ago" uses the same signal.
 
 ## Opt-in and controls (CROW-1070)
 

@@ -368,19 +368,10 @@ struct LogSyncCollector: Sendable {
 
         // Only upload a quiescent transcript: a session still being written
         // to can grow, and the server's write-once 409 forbids replacing it.
-        // File-per-session harnesses (Claude/Codex/Grok) use the newest file
-        // mtime. OpenCode's one shared WAL database is different: a WAL commit
-        // doesn't bump the main `.db` file's mtime, and that mtime reflects every
-        // worktree's activity — so key on the newest write time of *this*
-        // worktree's own top-level sessions instead (`OpenCodeStore.newestActivity`,
-        // which a SQLite read sees even from the WAL).
         let terminal = session.status == .completed || session.status == .archived
-        if !terminal, pass.quietPeriod > 0 {
-            let newest = format == .openCodeStore
-                ? OpenCodeStore.newestActivity(databaseFiles: files, cwd: openCodeCwd)
-                : Self.newestModification(files)
-            if let newest, pass.nowDate.timeIntervalSince(newest) < pass.quietPeriod { return true }
-        }
+        if !terminal, pass.quietPeriod > 0,
+           let newest = Self.lastActivity(files, format: format, openCodeCwd: openCodeCwd),
+           pass.nowDate.timeIntervalSince(newest) < pass.quietPeriod { return true }
 
         await pass.inFlight?.begin(ledgerKey)
         // Produce the NDJSON transcript. Claude and Grok sources are `.jsonl`;
@@ -490,7 +481,11 @@ struct LogSyncCollector: Sendable {
             // server's write-once 409 forbids replacing it. A Manager is never
             // `completed`, so quiescence is the only gate — except right
             // before a delete, when nothing more will be written.
-            if pass.quietPeriod > 0, let newest = Self.newestModification([file]),
+            // Keyed on the newest timestamped entry, not the mtime: a live
+            // agent re-touches its idle transcript hourly, which would hold
+            // the conversation forever (CROW-1449).
+            if pass.quietPeriod > 0,
+               let newest = Self.lastActivity([file], format: located.format, openCodeCwd: cwd),
                pass.nowDate.timeIntervalSince(newest) < pass.quietPeriod { continue }
 
             await pass.inFlight?.begin(ledgerKey)
@@ -788,6 +783,30 @@ struct LogSyncCollector: Sendable {
 
     static func modificationDate(_ url: URL) -> Date? {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    /// When the agent behind `files` was last active, for the quiet-period
+    /// gates.
+    ///
+    /// - NDJSON transcripts (`.jsonl` — Claude, Grok — and `.logDir` — Codex,
+    ///   Muse) use the newest timestamped entry (`TranscriptActivity`), not the
+    ///   mtime. A live Claude Code process re-touches its idle transcript
+    ///   hourly and appends untimestamped metadata lines, both of which bump the
+    ///   mtime; keyed on it, a long-lived Manager never went quiet (CROW-1449).
+    ///   A file with no timestamped line falls back to its mtime.
+    /// - Cursor's `.sqlite` store has no lines to read, so it keeps the newest
+    ///   mtime of the store and its `-wal`/`-shm` siblings.
+    /// - OpenCode's one shared WAL database is different again: a WAL commit
+    ///   doesn't bump the main `.db` file's mtime, and that mtime reflects every
+    ///   worktree's activity, so it keys on the newest write time of *this*
+    ///   worktree's own top-level sessions (`OpenCodeStore.newestActivity`,
+    ///   which a SQLite read sees even from the WAL).
+    static func lastActivity(_ files: [URL], format: AgentLogFormat, openCodeCwd: String) -> Date? {
+        switch format {
+        case .jsonl, .logDir: return TranscriptActivity.lastActivity(files)
+        case .sqlite: return newestModification(files)
+        case .openCodeStore: return OpenCodeStore.newestActivity(databaseFiles: files, cwd: openCodeCwd)
+        }
     }
 
     /// The newest mtime across `files` **and their SQLite `-wal`/`-shm`

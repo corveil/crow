@@ -125,6 +125,30 @@ import Testing
             [.init(id: "unknown-mtime", lastWrite: nil)], sessionCreatedAt: created).count == 1)
     }
 
+    /// CROW-1449: "active N ago" is the transcript's newest timestamped entry,
+    /// not its mtime, which a live agent re-touches hourly while idle.
+    @Test func managerActivityIsLastTimestampedEntryNotMtime() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let cwd = "/dev/root/.crow/managers/idle"
+        let verifier = GatewayTrafficVerifier(home: home)
+        let dir = verifier.projectDir(cwd: cwd)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("conv-idle.jsonl")
+        try Data((#"{"type":"assistant","timestamp":"2026-11-12T18:59:27.000Z"}"# + "\n"
+            + #"{"type":"custom-title","customTitle":"x"}"# + "\n").utf8).write(to: url)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_900_000_000)], ofItemAtPath: url.path)
+
+        var manager = Session(name: "idle", kind: .manager)
+        manager.harnessConversationID = "conv-idle"
+        let convs = verifier.conversations(
+            for: .init(session: manager, worktreePath: nil, prLinks: [], managerCwd: cwd))
+        #expect(convs.map(\.id) == ["conv-idle"])
+        #expect(convs.first?.lastWrite == TranscriptActivity.timestamp(
+            ofLine: #"{"timestamp":"2026-11-12T18:59:27.000Z"}"#))
+    }
+
     @Test func logsURLCarriesLimitAndCursor() {
         let url = GatewayTrafficVerifier.logsURL(base: "https://corveil.io/", cursor: "a+b")
         #expect(url?.absoluteString == "https://corveil.io/api/logs?limit=500&cursor=a%2Bb")
