@@ -244,7 +244,9 @@ public enum GatewayTraffic {
         }
     }
 
-    /// One of a session's conversations and when its transcript last changed.
+    /// One of a session's conversations and when its agent was last active:
+    /// the transcript's newest timestamped entry (`TranscriptActivity`), not
+    /// its mtime (CROW-1449).
     public struct Conversation: Sendable, Equatable {
         public var id: String
         public var lastWrite: Date?

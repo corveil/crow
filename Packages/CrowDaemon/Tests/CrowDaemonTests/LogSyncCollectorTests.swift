@@ -740,6 +740,103 @@ import CrowPersistence
         #expect(transport.requests.count == 1)
     }
 
+    // MARK: Quiescence keys on the newest timestamped entry (CROW-1449)
+
+    /// A transcript whose last real turn is `turnAge` old, followed by the
+    /// untimestamped metadata a live agent appends while idle, with a fresh
+    /// mtime (the hourly touch).
+    private func idleTranscript(lastTurnAgo turnAge: TimeInterval, at url: URL) throws {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let ts = f.string(from: Date().addingTimeInterval(-turnAge))
+        let lines = [
+            #"{"type":"user","timestamp":"\#(ts)"}"#,
+            #"{"type":"assistant","timestamp":"\#(ts)"}"#,
+            #"{"type":"custom-title","customTitle":"Manager"}"#,
+            #"{"type":"permission-mode","permissionMode":"auto"}"#,
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
+    /// The reported bug: a Manager idle for hours, its transcript touched just
+    /// now, ships on the next tick.
+    @Test @MainActor func managerIdleSinceLongAgoUploadsDespiteFreshMtime() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let transcript = f.root.appendingPathComponent("conv-a.jsonl")
+        try idleTranscript(lastTurnAgo: 18 * 3600, at: transcript)
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport, managerTranscript: transcript.path)
+
+        await collector.sweep(appState: f.appState(with: taggedManager(f)))
+
+        #expect(transport.requests.count == 1)
+        #expect(transport.requests.first?.url?.path == "/api/crow-sessions/conv-a/artifacts")
+    }
+
+    /// A Manager whose last timestamped turn is inside the quiet period is
+    /// still held.
+    @Test @MainActor func managerWithRecentTurnIsHeld() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let transcript = f.root.appendingPathComponent("conv-a.jsonl")
+        try idleTranscript(lastTurnAgo: 5 * 60, at: transcript)
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport, managerTranscript: transcript.path)
+
+        await collector.sweep(appState: f.appState(with: taggedManager(f)))
+
+        #expect(transport.requests.isEmpty)
+    }
+
+    /// No timestamped line at all: the gate falls back to the mtime, so a
+    /// freshly written file is held and an old one ships.
+    @Test @MainActor func managerWithoutTimestampsFallsBackToMtime() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let transcript = f.root.appendingPathComponent("conv-a.jsonl")
+        try "{\"type\":\"user\"}\n".write(to: transcript, atomically: true, encoding: .utf8)
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport, managerTranscript: transcript.path)
+        let state = f.appState(with: taggedManager(f))
+
+        await collector.sweep(appState: state)
+        #expect(transport.requests.isEmpty)
+
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-2 * 3600)], ofItemAtPath: transcript.path)
+        await collector.sweep(appState: state)
+        #expect(transport.requests.count == 1)
+    }
+
+    /// The session gate uses the same signal: an active work session whose
+    /// Claude transcript was touched just now but last turned hours ago ships.
+    @Test @MainActor func activeWorkSessionKeysOnLastTimestampedEntry() async throws {
+        let f = try Fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let dir = f.claudeDir(f.worktreePath)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try idleTranscript(lastTurnAgo: 3 * 3600, at: dir.appendingPathComponent("c1.jsonl"))
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport)
+        let session = Session(name: "thing", status: .active, kind: .work, agentKind: .claudeCode)
+
+        await collector.sweep(appState: f.appState(with: session))
+        #expect(transport.requests.count == 1)
+
+        // …and one whose last turn is recent is held.
+        let g = try Fixture()
+        defer { try? FileManager.default.removeItem(at: g.root) }
+        let gDir = g.claudeDir(g.worktreePath)
+        try FileManager.default.createDirectory(at: gDir, withIntermediateDirectories: true)
+        try idleTranscript(lastTurnAgo: 60, at: gDir.appendingPathComponent("c1.jsonl"))
+        let held = RecordingTransport()
+        let other = Session(name: "thing", status: .active, kind: .work, agentKind: .claudeCode)
+        await g.collector(transport: held).sweep(appState: g.appState(with: other))
+        #expect(held.requests.isEmpty)
+    }
+
     /// An active work session deleted before any tick reached it still ships,
     /// gzipped, with the ledger describing the body as sent.
     @Test @MainActor func deletingWorkSessionBeforeAnyCheckUploadsIt() async throws {

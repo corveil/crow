@@ -225,7 +225,10 @@ public struct GatewayTrafficVerifier: Sendable {
 
     // MARK: - Per session
 
-    /// The session's Claude Code conversations with their transcript mtimes.
+    /// The session's Claude Code conversations with when each was last active:
+    /// its transcript's newest timestamped entry, not the file mtime, which a
+    /// live agent re-touches hourly while idle (CROW-1449). The same signal
+    /// the log-sync quiet period uses.
     func conversations(for input: SessionInput) -> [GatewayTraffic.Conversation] {
         let s = input.session
         if s.isManager {
@@ -233,8 +236,10 @@ public struct GatewayTrafficVerifier: Sendable {
             return RecordingStatus.managerConversations(s)
                 .filter { $0.agentKind == .claudeCode }
                 .map { ref in
-                    let mtime = cwd.flatMap { Self.mtime(projectDir(cwd: $0).appendingPathComponent("\(ref.id).jsonl")) }
-                    return GatewayTraffic.Conversation(id: ref.id, lastWrite: mtime)
+                    let active = cwd.flatMap {
+                        TranscriptActivity.lastActivity(projectDir(cwd: $0).appendingPathComponent("\(ref.id).jsonl"))
+                    }
+                    return GatewayTraffic.Conversation(id: ref.id, lastWrite: active)
                 }
         }
         // A work, review or job session owns every Claude transcript in its
@@ -242,19 +247,20 @@ public struct GatewayTrafficVerifier: Sendable {
         // for it, and the only record that covers `/clear`, resumes and
         // relaunches (`harnessConversationID` holds just the latest). Worktree
         // paths are unique per session, but a path can be reused after a
-        // delete, so a transcript that last changed before this session
-        // existed is a previous tenant's and is left out.
+        // delete, so a transcript that was last active before this session existed is a previous tenant's
+        // and is left out.
         guard let wt = input.worktreePath else { return [] }
         let dir = projectDir(cwd: wt)
         let files = (try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         return Self.ownConversations(files.filter { $0.pathExtension == "jsonl" }.map {
-            GatewayTraffic.Conversation(id: $0.deletingPathExtension().lastPathComponent, lastWrite: Self.mtime($0))
+            GatewayTraffic.Conversation(
+                id: $0.deletingPathExtension().lastPathComponent, lastWrite: TranscriptActivity.lastActivity($0))
         }, sessionCreatedAt: s.createdAt)
     }
 
-    /// Drop transcripts whose last write predates the session (a previous
-    /// tenant of a reused worktree path). One with no readable mtime is kept.
+    /// Drop transcripts whose last activity predates the session (a previous
+    /// tenant of a reused worktree path). One that can't be read is kept.
     static func ownConversations(
         _ conversations: [GatewayTraffic.Conversation], sessionCreatedAt: Date
     ) -> [GatewayTraffic.Conversation] {
@@ -265,10 +271,6 @@ public struct GatewayTrafficVerifier: Sendable {
         URL(fileURLWithPath: home)
             .appendingPathComponent(".claude/projects", isDirectory: true)
             .appendingPathComponent(AgentLogSource.posixPathSlug(cwd), isDirectory: true)
-    }
-
-    static func mtime(_ url: URL) -> Date? {
-        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
     /// The gateway this session resolves to now: the same rule the launch
