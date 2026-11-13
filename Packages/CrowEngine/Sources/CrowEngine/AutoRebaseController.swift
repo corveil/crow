@@ -125,13 +125,17 @@ final class AutoRebaseController {
     enum AutoRebaseVerdict {
         case deferred(AutoRebaseDeferReason, count: Int)
         case gaveUp(attempts: Int, error: String)
+        /// The agent has had `maxConflictHandoffsPerHead` prompts for this head
+        /// and it still conflicts (CROW-1453).
+        case conflictsUnresolved(prompts: Int)
 
         /// Token identical to the one in `crowd-automation.log`. Only
-        /// `.gaveUp` needs a new one.
+        /// `.gaveUp` and `.conflictsUnresolved` need new ones.
         var reason: String {
             switch self {
             case .deferred(let reason, _): reason.rawValue
             case .gaveUp: "rebase-failed"
+            case .conflictsUnresolved: "conflicts-unresolved"
             }
         }
 
@@ -154,6 +158,14 @@ final class AutoRebaseController {
                     phase: .blocked, reason: reason,
                     message: "Crow's rebase failed \(attempts) times in a row and has stopped "
                         + "trying until the branch moves. Last error: \(detail)",
+                    permanent: true)
+            case .conflictsUnresolved(let prompts):
+                return AutoRebaseState(
+                    phase: .blocked, reason: reason,
+                    message: "Crow asked the agent to resolve this PR's merge conflicts "
+                        + "\(prompts) times and the branch still conflicts at the same commit. "
+                        + "Crow has stopped asking. Resolve them yourself, or click "
+                        + "Rebase & Fix Conflicts to ask the agent again.",
                     permanent: true)
             }
         }
@@ -205,6 +217,32 @@ final class AutoRebaseController {
     /// Max consecutive `.failed` auto-rebase attempts per head state before
     /// the watcher gives up until the head commit changes.
     nonisolated static let maxAutoRebaseFailureRetries = 3
+
+    /// Most merge-conflict prompts Crow types into a session for one PR head
+    /// before it stops prompting and tells a human instead (CROW-1453).
+    ///
+    /// The durable hand-off record already keeps a partial poll or a `crowd`
+    /// restart from re-dispatching a head it has handed off, so in practice
+    /// a head gets one prompt. The cap is the backstop for any path that still
+    /// re-arms the in-memory latch: an agent that can't resolve the conflict
+    /// (an approved PR, a failing `git fetch`) gets two prompts and then a
+    /// person, never the 637 one session received.
+    nonisolated static let maxConflictHandoffsPerHead = 2
+
+    /// What to do with a rebase that conflicted, given how many prompts this
+    /// head has already had.
+    enum ConflictHandoffDecision: Equatable {
+        /// Type the `.fixConflicts` prompt; `number` is this prompt's 1-based
+        /// count for the head.
+        case prompt(number: Int)
+        /// Don't prompt again; raise `autoRebaseStuck` instead.
+        case escalate(promptsSent: Int)
+    }
+
+    /// Pure so the cap is unit-testable without an `IssueTracker` or git.
+    nonisolated static func conflictHandoffDecision(promptsSentForHead sent: Int) -> ConflictHandoffDecision {
+        sent < maxConflictHandoffsPerHead ? .prompt(number: sent + 1) : .escalate(promptsSent: sent)
+    }
 
     /// Backoff bounds for deferred auto-rebase attempts. The base matches one
     /// board poll so the first retry is immediate-ish; the cap keeps a
@@ -288,6 +326,9 @@ final class AutoRebaseController {
             // masquerade as a toggle-off and wipe live chips.
             appState.autoRebaseState.removeAll()
             autoRebaseStuckNotified.removeAll()
+            // Turning the setting off also forgets every conflict hand-off
+            // (CROW-1453), so turning it back on starts each head's count again.
+            clearConflictHandoffs { _ in true }
             return
         }
         guard !viewerPRs.isEmpty else { return }
@@ -295,8 +336,11 @@ final class AutoRebaseController {
 
         // Drop per-head bookkeeping for heads no longer in the poll, so these
         // maps don't grow for the lifetime of the daemon. Guarded by the
-        // non-empty check above so a failed/empty poll can't wipe live state;
-        // a PR that briefly drops out and returns just gets re-dispatched once.
+        // non-empty check above so a failed/empty poll can't wipe live state.
+        // A PR that briefly drops out and returns is re-dispatched once, unless
+        // it is a head already handed off for conflicts: that record is on the
+        // PR link, not in these maps, so a partial poll can't forget it
+        // (CROW-1453).
         let liveHeadKeys = Set(viewerPRs.map { "\($0.url)\n\($0.headRefOid)" })
         autoRebaseAttempted.formIntersection(liveHeadKeys)
         autoRebaseFailureCounts = autoRebaseFailureCounts.filter { liveHeadKeys.contains($0.key) }
@@ -315,10 +359,20 @@ final class AutoRebaseController {
                 // never runs again for a non-candidate), so without the clear a
                 // `blocked` chip would outlive its cause forever.
                 publishAutoRebaseVerdict(nil, session: session, pr: pr)
+                // A merged or closed PR's conflict hand-off is finished.
+                if pr.state != "OPEN", prLink.autoRebaseConflictHandoff != nil {
+                    setConflictHandoff(nil, sessionID: session.id, linkID: prLink.id)
+                }
                 continue
             }
 
             let key = "\(prLink.url)\n\(pr.headRefOid)"
+
+            // A hand-off recorded for an older head means nothing now: the
+            // branch moved, so this head gets its own prompts (CROW-1453).
+            if let handoff = prLink.autoRebaseConflictHandoff, handoff.headRefOid != pr.headRefOid {
+                setConflictHandoff(nil, sessionID: session.id, linkID: prLink.id)
+            }
 
             // Precedence: when auto-merge is also enabled and this PR is a
             // crow:merge BEHIND candidate, let auto-merge's `gh pr update-branch`
@@ -340,6 +394,20 @@ final class AutoRebaseController {
                 // One piece of work, one chip: auto-merge owns this branch's
                 // verdict while it's the one acting on it.
                 publishAutoRebaseVerdict(nil, session: session, pr: pr)
+                continue
+            }
+
+            // This head's conflicts are already with the agent. The durable
+            // record outranks the in-memory latch, which a restart, a partial
+            // poll or the up-to-date re-check below can each clear; any of
+            // those used to rebase the same head again, conflict again, and
+            // type the same prompt again (CROW-1453). Re-latch instead.
+            if let handoff = prLink.autoRebaseConflictHandoff, handoff.headRefOid == pr.headRefOid {
+                if autoRebaseAttempted.insert(key).inserted {
+                    CrowLog.automation(
+                        "auto-rebase: #\(pr.number) skipped:conflicts-already-handed-off "
+                        + "(\(handoff.prompts)/\(Self.maxConflictHandoffsPerHead) prompts for this head)")
+                }
                 continue
             }
 
@@ -504,15 +572,7 @@ final class AutoRebaseController {
             // would announce a rebase that never happened.
             recordRebaseNoOp(headKey: headKey, session: session, pr: pr, source: "post-fetch")
         case .conflicts:
-            autoRebaseFailureCounts[headKey] = nil
-            autoRebaseDeferrals[headKey] = nil
-            // No chip: the conflict is already on screen three ways (the PR
-            // pill's conflict glyph, the activity badge once the agent picks
-            // it up, and the Rebase & Fix Conflicts button).
-            publishAutoRebaseVerdict(nil, session: session, pr: pr)
-            CrowLog.automation(
-                "auto-rebase: #\(pr.number) conflicts — delegating to agent (session \(session.id))")
-            owner.onAutoRebaseConflicts?(session.id, pr.url, pr.number)
+            handleRebaseConflicts(headKey: headKey, session: session, pr: pr)
         case .dirtyWorktree:
             // Transient (a Claude session is mid-edit). Re-arm so a later poll
             // retries once the tree is clean.
@@ -547,6 +607,100 @@ final class AutoRebaseController {
                 + "\(Self.maxAutoRebaseFailureRetries), "
                 + "\(willRetry ? "will retry" : "giving up until head changes")): \(msg)")
         }
+    }
+
+    /// A rebase that stopped on conflicts: hand them to the agent, at most
+    /// `maxConflictHandoffsPerHead` times per head, then escalate to a human
+    /// (CROW-1453). Internal (not private) so `@testable` tests can drive the
+    /// outcome without a real conflicting rebase.
+    func handleRebaseConflicts(headKey: String, session: Session, pr: ViewerPR) {
+        autoRebaseFailureCounts[headKey] = nil
+        autoRebaseDeferrals[headKey] = nil
+        // Without this, a head first latched as "already on base" re-armed
+        // itself every `autoRebaseUpToDateRecheckInterval` and re-sent the
+        // prompt every 15 minutes (CROW-1453).
+        autoRebaseUpToDateHeads[headKey] = nil
+
+        let link = appState.links(for: session.id).first { $0.linkType == .pr && $0.url == pr.url }
+        let sent = link?.autoRebaseConflictHandoff?.prompts(forHead: pr.headRefOid) ?? 0
+        switch Self.conflictHandoffDecision(promptsSentForHead: sent) {
+        case .prompt(let number):
+            // Record before dispatching, so a crash between the two can't
+            // leave a prompt sent with no record of it.
+            if let link {
+                setConflictHandoff(
+                    AutoRebaseConflictHandoff(headRefOid: pr.headRefOid, prompts: number),
+                    sessionID: session.id, linkID: link.id)
+            }
+            // No chip: the conflict is already on screen three ways (the PR
+            // pill's conflict glyph, the activity badge once the agent picks
+            // it up, and the Rebase & Fix Conflicts button).
+            publishAutoRebaseVerdict(nil, session: session, pr: pr)
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) conflicts — delegating to agent "
+                + "(prompt \(number)/\(Self.maxConflictHandoffsPerHead) for this head, session \(session.id))")
+            owner.onAutoRebaseConflicts?(session.id, pr.url, pr.number)
+        case .escalate(let promptsSent):
+            // `.blocked` fires `onAutoRebaseStuck` once per PR and reason.
+            publishAutoRebaseVerdict(.conflictsUnresolved(prompts: promptsSent), session: session, pr: pr)
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) conflicts-unresolved — \(promptsSent) prompts already sent "
+                + "for this head, escalating instead of prompting (session \(session.id))")
+        }
+    }
+
+    // MARK: - Durable conflict hand-off record (CROW-1453)
+
+    /// Forget the conflict hand-off on `sessionID`'s PR link: the operator
+    /// clicked **Rebase & Fix Conflicts**, so whatever the watcher counted is
+    /// superseded by a person asking directly.
+    func clearConflictHandoff(sessionID: UUID) {
+        clearConflictHandoffs { $0.sessionID == sessionID }
+    }
+
+    /// Clear every recorded hand-off on a link matching `predicate`. Writes the
+    /// store only when something was actually set, since the toggle-off path
+    /// calls this on every poll.
+    func clearConflictHandoffs(where predicate: (SessionLink) -> Bool) {
+        var cleared: Set<UUID> = []
+        for (sessionID, links) in appState.links {
+            var updated = links
+            var changed = false
+            for i in updated.indices
+            where updated[i].autoRebaseConflictHandoff != nil && predicate(updated[i]) {
+                updated[i].autoRebaseConflictHandoff = nil
+                cleared.insert(updated[i].id)
+                changed = true
+            }
+            if changed { appState.links[sessionID] = updated }
+        }
+        guard !cleared.isEmpty else { return }
+        persistConflictHandoffs { data in
+            for i in data.links.indices where cleared.contains(data.links[i].id) {
+                data.links[i].autoRebaseConflictHandoff = nil
+            }
+        }
+    }
+
+    /// Set or clear one link's hand-off record in `appState` and `store.json`.
+    func setConflictHandoff(_ handoff: AutoRebaseConflictHandoff?, sessionID: UUID, linkID: UUID) {
+        guard var links = appState.links[sessionID],
+              let i = links.firstIndex(where: { $0.id == linkID }) else { return }
+        guard links[i].autoRebaseConflictHandoff != handoff else { return }
+        links[i].autoRebaseConflictHandoff = handoff
+        appState.links[sessionID] = links
+        persistConflictHandoffs { data in
+            for j in data.links.indices where data.links[j].id == linkID {
+                data.links[j].autoRebaseConflictHandoff = handoff
+            }
+        }
+    }
+
+    /// Route through the shared, injected `store`, never a throwaway
+    /// `JSONStore()`, whose full-store write could clobber another writer's
+    /// record (#728).
+    private func persistConflictHandoffs(_ body: (inout StoreData) -> Void) {
+        owner.store.mutate(body)
     }
 
     /// A rebase attempt that provably had nothing to do. Never fires
@@ -697,5 +851,14 @@ extension IssueTracker {
     }
     var autoRebaseFailureCounts: [String: Int] {
         get { autoRebase.autoRebaseFailureCounts } set { autoRebase.autoRebaseFailureCounts = newValue }
+    }
+
+    /// The operator asked the agent to fix conflicts by hand (the **Rebase &
+    /// Fix Conflicts** quick action), so forget what auto-rebase counted for
+    /// this session's PR (CROW-1453). The daemon's `quick-action` handler calls
+    /// this; it is not part of the auto hand-off, which also dispatches
+    /// `.fixConflicts`.
+    public func clearAutoRebaseConflictHandoff(sessionID: UUID) {
+        autoRebase.clearConflictHandoff(sessionID: sessionID)
     }
 }
