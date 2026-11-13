@@ -249,11 +249,11 @@ public struct GitHubCodeBackend: CodeBackend {
                   }
                   statusCheckRollup {
                     state
-                    contexts(first: 25) {
+                    contexts(first: 100) {
                       nodes {
                         __typename
-                        ... on CheckRun { name conclusion status }
-                        ... on StatusContext { context state }
+                        ... on CheckRun { name conclusion status startedAt completedAt checkSuite { workflowRun { workflow { name } } } }
+                        ... on StatusContext { context state createdAt }
                       }
                     }
                   }\(reviewsSelection)

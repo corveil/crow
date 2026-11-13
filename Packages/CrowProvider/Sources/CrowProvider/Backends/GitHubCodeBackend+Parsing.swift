@@ -143,11 +143,11 @@ extension GitHubCodeBackend {
             closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } }
             statusCheckRollup {
               state
-              contexts(first: 25) {
+              contexts(first: 100) {
                 nodes {
                   __typename
-                  ... on CheckRun { name conclusion status }
-                  ... on StatusContext { context state }
+                  ... on CheckRun { name conclusion status startedAt completedAt checkSuite { workflowRun { workflow { name } } } }
+                  ... on StatusContext { context state createdAt }
                 }
               }
             }
@@ -409,6 +409,55 @@ extension GitHubCodeBackend {
         LenientJSON.nodes(viewerObj, "pullRequests").compactMap { parsePRNode($0) }
     }
 
+    /// Reduce `statusCheckRollup.contexts` to the latest run of each check
+    /// (CROW-1454).
+    ///
+    /// GitHub lists every check run on the head commit, including the runs of
+    /// workflow runs that a re-run or a later trigger (a `ci:full` label event,
+    /// say) superseded. Branch protection only counts the latest run per
+    /// check, and Crow has to as well: on a `CI Gate` convention PR the old
+    /// runs' `CI Gate` reds and cancelled jobs otherwise read as a real,
+    /// corroborated failure after the latest run passed.
+    ///
+    /// - A `CheckRun` is keyed by its workflow name and its own name, so two
+    ///   workflows that each have a `Lint` job stay separate. Its time is
+    ///   `startedAt`, falling back to `completedAt`. A run with neither hasn't
+    ///   started yet, so it counts as the newest: a queued re-run must not lose
+    ///   to the completed run it replaces.
+    /// - A `StatusContext` is keyed by its context name and timed by `createdAt`.
+    /// - On a tie, or with no timestamps at all, the later node wins.
+    ///
+    /// The kept nodes stay in rollup order.
+    static func latestRunPerCheck(_ nodes: [[String: Any]]) -> [[String: Any]] {
+        func key(_ ctx: [String: Any], index: Int) -> String {
+            if let name = ctx["name"] as? String {
+                let suite = ctx["checkSuite"] as? [String: Any]
+                let run = suite?["workflowRun"] as? [String: Any]
+                let workflow = (run?["workflow"] as? [String: Any])?["name"] as? String ?? ""
+                return "check\u{1F}\(workflow)\u{1F}\(name)"
+            }
+            if let context = ctx["context"] as? String {
+                return "status\u{1F}\(context)"
+            }
+            return "node\u{1F}\(index)"
+        }
+        func time(_ ctx: [String: Any]) -> Date {
+            let raw = (ctx["startedAt"] as? String)
+                ?? (ctx["completedAt"] as? String)
+                ?? (ctx["createdAt"] as? String)
+            return IssueDate.parse(raw) ?? .distantFuture
+        }
+        var latest: [String: (index: Int, time: Date)] = [:]
+        for (index, ctx) in nodes.enumerated() {
+            let k = key(ctx, index: index)
+            let t = time(ctx)
+            if let kept = latest[k], kept.time > t { continue }
+            latest[k] = (index, t)
+        }
+        let keep = Set(latest.values.map(\.index))
+        return nodes.indices.filter(keep.contains).map { nodes[$0] }
+    }
+
     static func parsePRNode(_ node: [String: Any]) -> PRRecord? {
         guard let number = node["number"] as? Int,
               let url = node["url"] as? String,
@@ -442,7 +491,12 @@ extension GitHubCodeBackend {
         }
         let rollup = node["statusCheckRollup"] as? [String: Any]
         let checksState = (rollup?["state"] as? String) ?? ""
-        let contextNodes = LenientJSON.nodes(rollup, "contexts")
+        // The rollup lists every run on the head, superseded ones included, so
+        // classify only the latest run of each check (CROW-1454). Otherwise a
+        // stale `CI Gate` red and the cancelled jobs of the run it superseded
+        // satisfy the CI Gate convention's "real failure" test on a PR whose
+        // latest run of everything passed.
+        let contextNodes = latestRunPerCheck(LenientJSON.nodes(rollup, "contexts"))
         let failedCheckNames: [String] = contextNodes.compactMap { ctx in
             if let conclusion = ctx["conclusion"] as? String, conclusion == "FAILURE" {
                 return ctx["name"] as? String

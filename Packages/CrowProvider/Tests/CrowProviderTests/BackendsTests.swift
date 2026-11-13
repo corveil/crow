@@ -766,7 +766,11 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(states[ref]?.labels.map(\.name), ["crow:merge"])
         // The batched query actually asks for it.
         XCTAssertTrue(fake.calls.first?.args.contains { $0.contains("statusCheckRollup") } ?? false)
-        XCTAssertTrue(fake.calls.first?.args.contains { $0.contains("contexts(first: 25)") } ?? false)
+        // CROW-1454: wide enough to hold superseded runs, with what
+        // `latestRunPerCheck` needs to keep only the newest run of each check.
+        XCTAssertTrue(fake.calls.first?.args.contains { $0.contains("contexts(first: 100)") } ?? false)
+        XCTAssertTrue(fake.calls.first?.args.contains { $0.contains("startedAt completedAt checkSuite { workflowRun { workflow { name } } }") } ?? false)
+        XCTAssertTrue(fake.calls.first?.args.contains { $0.contains("... on StatusContext { context state createdAt }") } ?? false)
     }
 
     /// #894: `prStates` batches every stale ref into one aliased query, so a

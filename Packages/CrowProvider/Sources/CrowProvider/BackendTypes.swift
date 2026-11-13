@@ -56,6 +56,11 @@ public struct PRRecord: Sendable {
     public let labels: [LabelInfo]
     public let linkedIssueReferences: [LinkedIssueRef]
     public let checksState: String        // SUCCESS / FAILURE / PENDING / EXPECTED / ERROR / ""
+    /// Checks whose **latest** run on the head failed. This, `ciGatePresent`,
+    /// `anyCheckPending` and `hasNonGateTerminalNonSuccess` are all computed
+    /// over the latest run per check, so a run that a later one superseded
+    /// can't report a failure (CROW-1454). `checksState` is GitHub's own
+    /// aggregate and isn't recomputed.
     public let failedCheckNames: [String]
     public let latestReviewStates: [String]
     /// Max `submittedAt` across CHANGES_REQUESTED reviews currently visible
