@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
-import CrowProvider
+@testable import CrowProvider
 @testable import CrowEngine
 
 /// CROW-3716 / ADR 0082 — Crow must understand corveil/corveil's fail-closed
@@ -227,5 +227,58 @@ struct IssueTrackerCIGateTests {
             labels: [Self.crowMergeLabel, Self.ciFullLabel],
             anyCheckPending: true)
         #expect(IssueTracker.shouldAttemptAutoMerge(pr: pr, session: makeSession()))
+    }
+
+    // MARK: - CROW-1454: superseded runs on the same head
+
+    /// A `ci:full` PR's rollup as GitHub returns it: `CI Gate` reds and
+    /// cancelled jobs from superseded runs, and the latest run of every check
+    /// green. GitHub's aggregate `state` is still FAILURE.
+    private func parsedRollup(_ runs: [(String, String, String)]) throws -> IssueTracker.ViewerPR {
+        let contexts: [[String: Any]] = runs.map { name, conclusion, startedAt in
+            ["__typename": "CheckRun", "name": name, "conclusion": conclusion,
+             "status": "COMPLETED", "startedAt": startedAt,
+             "checkSuite": ["workflowRun": ["workflow": ["name": "Tests"]]]]
+        }
+        let node: [String: Any] = [
+            "number": 1, "url": "https://github.com/corveil/corveil/pull/1", "state": "OPEN",
+            "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED",
+            "repository": ["nameWithOwner": "corveil/corveil"],
+            "labels": ["nodes": [["name": "ci:full", "color": "0E8A16"]]],
+            "statusCheckRollup": ["state": "FAILURE", "contexts": ["nodes": contexts]],
+        ]
+        return try #require(GitHubCodeBackend.parsePRNode(node))
+    }
+
+    @Test func supersededCIGateRedsDoNotReadAsFailing() throws {
+        let pr = try parsedRollup([
+            ("CI Gate", "FAILURE", "2026-11-13T02:33:18Z"),
+            ("CI Gate", "FAILURE", "2026-11-13T02:35:39Z"),
+            ("CI Gate", "SUCCESS", "2026-11-13T02:45:00Z"),
+            ("CI Gate", "SUCCESS", "2026-11-13T05:30:39Z"),
+            ("Lint", "CANCELLED", "2026-11-13T02:31:51Z"),
+            ("Quick checks", "CANCELLED", "2026-11-13T02:31:51Z"),
+            ("Test (PostgreSQL)", "CANCELLED", "2026-11-13T02:32:01Z"),
+            ("Test (PostgreSQL)", "CANCELLED", "2026-11-13T02:33:23Z"),
+            ("Lint", "SUCCESS", "2026-11-13T05:20:02Z"),
+            ("Quick checks", "SUCCESS", "2026-11-13T05:20:02Z"),
+            ("Test (PostgreSQL)", "SUCCESS", "2026-11-13T05:20:11Z"),
+        ])
+        let status = IssueTracker.buildPRStatus(from: pr)
+        // `.failing` is what fires respond-to-failed-checks.
+        #expect(status.checksPass != .failing)
+        #expect(status.failedCheckNames.isEmpty)
+    }
+
+    @Test func latestCIGateAndGatedJobRedStillReadAsFailing() throws {
+        let pr = try parsedRollup([
+            ("CI Gate", "SUCCESS", "2026-11-13T02:45:00Z"),
+            ("Test (PostgreSQL)", "SUCCESS", "2026-11-13T02:40:00Z"),
+            ("CI Gate", "FAILURE", "2026-11-13T05:30:39Z"),
+            ("Test (PostgreSQL)", "FAILURE", "2026-11-13T05:20:11Z"),
+        ])
+        let status = IssueTracker.buildPRStatus(from: pr)
+        #expect(status.checksPass == .failing)
+        #expect(status.failedCheckNames == ["CI Gate", "Test (PostgreSQL)"])
     }
 }
