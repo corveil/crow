@@ -83,7 +83,10 @@ extension CrowDaemon {
         // step: a dirty worktree, or a branch holding commits `origin` doesn't.
         // Deliberately no `dispatchManual` — there are no conflicts to resolve,
         // and an agent told to "fix" a diverged branch reaches for a reset that
-        // would destroy the very commits blocking the rebase (#944).
+        // would destroy the very commits blocking the rebase (#944). It also
+        // carries `conflicts-unresolved`: a head whose conflicts the agent has
+        // been asked to fix twice already, where a third prompt is the loop
+        // CROW-1453 removed.
         // `state.message` is the daemon's own sentence, rendered verbatim —
         // same contract as `onAutoMergeBlocked` below.
         tracker.onAutoRebaseStuck = { sessionID, _, number, state in

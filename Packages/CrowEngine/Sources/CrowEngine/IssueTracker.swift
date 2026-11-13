@@ -137,13 +137,17 @@ public final class IssueTracker {
 
     /// Fires when an auto-rebase has deferred often enough that only a human
     /// can unwedge it (#944) — a dirty worktree, or a branch holding commits
-    /// `origin` doesn't. The twin of `onAutoMergeBlocked`, and it takes the
-    /// state for the same reason: the daemon renders `state.message` verbatim
-    /// rather than re-deriving a sentence from the reason token.
+    /// `origin` doesn't — or when one PR head has already had
+    /// `maxConflictHandoffsPerHead` conflict prompts and still conflicts
+    /// (`conflicts-unresolved`, CROW-1453). The twin of `onAutoMergeBlocked`,
+    /// and it takes the state for the same reason: the daemon renders
+    /// `state.message` verbatim rather than re-deriving a sentence from the
+    /// reason token.
     ///
     /// Unlike `onAutoRebaseConflicts` this must **not** hand off to the agent.
-    /// There are no conflicts to resolve, and a diverged branch by definition
-    /// holds work a `git reset --hard` would destroy.
+    /// For a wedged branch there are no conflicts to resolve, and a diverged
+    /// branch by definition holds work a `git reset --hard` would destroy; for
+    /// `conflicts-unresolved` the agent has already been asked and couldn't.
     public var onAutoRebaseStuck: ((UUID, String, Int, AutoRebaseState) -> Void)?
 
     /// Runs `git rebase` / force-push for the auto-rebase watcher. Owns its

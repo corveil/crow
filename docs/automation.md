@@ -165,6 +165,36 @@ self-heal a diverged worktree — by definition it holds commits `origin` doesn'
 automated reset would destroy them — and, unlike the conflict path, it does not hand off to
 the agent, for the same reason.
 
+#### One conflict hand-off per head (CROW-1453)
+
+When a rebase stops on conflicts, Crow types the **Rebase & Fix Conflicts** prompt into the
+session once for that PR head. The record of that hand-off is saved beside the session's PR
+link in `store.json`, not just in the daemon's memory. Before this change, three things could
+make Crow forget it and re-send the same prompt for a head that hadn't moved:
+
+- **A `crowd` restart.** The record lived only in memory.
+- **A board poll that omitted the PR.** Each poll pruned the record to the PRs in *that*
+  poll, so a partial fetch dropped it and the next full poll prompted again.
+- **The 15-minute "already on base" re-check.** A head that was first seen up to date and
+  later conflicted was re-armed by the re-check every 15 minutes.
+
+An agent that couldn't resolve the conflict (an approved PR, or a `git fetch` that kept
+failing) then answered "nothing has changed" to the same prompt hundreds of times, each reply
+a full turn on a long conversation.
+
+Crow now sends **at most two** conflict prompts per head. If a third conflict hand-off comes
+up for the same head, it doesn't prompt. Instead the session card gets the red **⟲** chip
+(`conflicts-unresolved`) and the **Rebase Stuck** notification fires once. The record is
+cleared, and the count starts again, when:
+
+- the PR's head commit changes;
+- the PR merges or closes;
+- you click **Rebase & Fix Conflicts** (or run `crow quick-action --action fixConflicts`);
+- you turn **Rebase and resolve conflicts** off.
+
+`crowd-automation.log` shows `skipped:conflicts-already-handed-off` when a poll would have
+re-sent a known conflict, and the conflict line now carries `prompt N/2 for this head`.
+
 ### Auto-launch workspaces
 
 PR #312 gated the existing `crow:auto` label automation behind a single opt-in toggle. Off by default — typing `/crow-workspace` into the Manager terminal without an explicit opt-in is intrusive, and matches the precedent set by `crow:merge` auto-merge (#299).

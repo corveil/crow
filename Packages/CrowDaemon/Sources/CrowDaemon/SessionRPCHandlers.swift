@@ -520,7 +520,12 @@ func makeSessionHandlers(
             // ready / no PR link); report that faithfully as `dispatched:false`
             // + a reason instead of a false success, so the web UI can surface an
             // actionable message rather than echoing "dispatched" (#730).
-            let result = await MainActor.run { autoRespond.dispatchManual(action: action, sessionID: id) }
+            let result = await MainActor.run {
+                // The operator asking directly supersedes auto-rebase's
+                // per-head hand-off count (CROW-1453).
+                if action == .fixConflicts { tracker?.clearAutoRebaseConflictHandoff(sessionID: id) }
+                return autoRespond.dispatchManual(action: action, sessionID: id)
+            }
             if let reason = result.skipReason {
                 return ["dispatched": .bool(false), "action": .string(action.rawValue), "reason": .string(reason)]
             }

@@ -293,7 +293,8 @@ struct IssueTrackerAutoRebaseTests {
     /// `phase == .blocked`, so a verdict that disagreed with itself would
     /// either chime for a transient wait or stay silent on a real wedge.
     @Test func permanentAgreesWithBlockedForEveryVerdict() {
-        var verdicts: [IssueTracker.AutoRebaseVerdict] = [.gaveUp(attempts: 3, error: "boom")]
+        var verdicts: [IssueTracker.AutoRebaseVerdict] = [
+            .gaveUp(attempts: 3, error: "boom"), .conflictsUnresolved(prompts: 2)]
         for reason in [IssueTracker.AutoRebaseDeferReason.dirtyWorktree,
                        .outOfSyncAhead, .outOfSyncDiverged] {
             verdicts.append(.deferred(reason, count: 1))
