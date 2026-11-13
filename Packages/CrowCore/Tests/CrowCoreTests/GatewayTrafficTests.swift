@@ -155,6 +155,116 @@ import Testing
             == GatewayTraffic.State.none)
     }
 
+    // MARK: body capture skipped (CROW-1450)
+
+    static func skipped(_ id: String, ago: TimeInterval, reason: String = "org_daily_budget") -> GatewayTraffic.Entry {
+        var e = entry(id, conv: nil, ago: ago)
+        e.bodyCaptureSkipped = reason
+        return e
+    }
+
+    @Test func decodesTheBodyCaptureSkipReason() throws {
+        let json = """
+        {"logs":[
+          {"id":"1","created_at":"2026-11-12T21:07:20Z","organization_id":"o",
+           "metadata":{"body_capture_skipped":"org_daily_budget","upstream_auth_source":"passthrough_oauth"}},
+          {"id":"2","created_at":"2026-11-12T21:07:19Z","metadata":{"body_capture_skipped":""}}
+        ]}
+        """
+        let page = try #require(GatewayTraffic.decodePage(Data(json.utf8)))
+        #expect(page.entries[0].bodyCaptureSkipped == "org_daily_budget")
+        #expect(page.entries[0].conversationID == nil)
+        #expect(page.entries[1].bodyCaptureSkipped == nil)
+    }
+
+    @Test func windowCountsUncapturedEntriesAndTheirSpans() throws {
+        let index = GatewayTraffic.index(entries: [
+            Self.skipped("s1", ago: 5000), Self.skipped("s2", ago: 4000, reason: "upload_failed"),
+            Self.entry("c1", conv: "x", ago: 3000),          // captured: ends the first run
+            Self.entry("n1", conv: nil, ago: 2500),          // captured non-Claude-Code row: ends nothing new
+            Self.skipped("s3", ago: 2000), Self.skipped("s4", ago: 1000),
+        ], readOrgs: [Self.corveil])
+        let w = try #require(index.windows[Self.corveil])
+        #expect(w.count == 6)
+        #expect(w.uncaptured == 4)
+        #expect(w.uncapturedSpans.count == 2)
+        #expect(w.uncapturedSpans[0].start == Self.now.addingTimeInterval(-5000))
+        #expect(w.uncapturedSpans[0].end == Self.now.addingTimeInterval(-4000))
+        #expect(w.uncapturedSpans[0].reasons == ["org_daily_budget": 1, "upload_failed": 1])
+        #expect(w.uncapturedSpans[1].count == 2)
+        #expect(w.uncapturedSpans[1].end == Self.now.addingTimeInterval(-1000))
+    }
+
+    /// The reported case: every row around the agent's last burst was stored
+    /// without a body, so none could carry its conversation id.
+    @Test func unavailableWhenTheRowsAroundTheActivityHaveNoBodies() {
+        let index = GatewayTraffic.index(entries: [
+            Self.entry("old", conv: "someone-else", ago: 20_000),
+            Self.skipped("s1", ago: 9000), Self.skipped("s2", ago: 7300), Self.skipped("s3", ago: 120),
+        ], readOrgs: [Self.corveil])
+        let ev = Self.evidence([.init(id: "c1", lastWrite: Self.now.addingTimeInterval(-7200))], index,
+                               expected: Self.expectCorveil)
+        #expect(ev.state == .unavailable)
+        #expect(ev.detail.contains("Corveil, Inc. stored 3 requests without bodies since "))
+        #expect(ev.detail.contains("(org daily body budget)"))
+        #expect(ev.detail.contains("carry no conversation id"))
+    }
+
+    @Test func silentWhenTheRowsAroundTheActivityWereCapturedAndUnmatched() {
+        let index = GatewayTraffic.index(entries: [
+            Self.entry("c1", conv: "someone-else", ago: 7400), Self.entry("c2", conv: "someone-else", ago: 7100),
+            Self.entry("n1", conv: nil, ago: 7000),
+        ], readOrgs: [Self.corveil])
+        let ev = Self.evidence([.init(id: "c1", lastWrite: Self.now.addingTimeInterval(-7200))], index,
+                               expected: Self.expectCorveil)
+        #expect(ev.state == .silent)
+    }
+
+    /// Bodies were dropped earlier in the window and again later, but the
+    /// rows around the agent's last activity were captured: still silent.
+    /// Move the activity into either skipped span and it can't be verified.
+    @Test func aMixedWindowKeysOnTheSpanAroundTheLastActivity() {
+        let index = GatewayTraffic.index(entries: [
+            Self.skipped("s1", ago: 30_000), Self.skipped("s2", ago: 25_000),
+            Self.entry("c1", conv: "someone-else", ago: 20_000),
+            Self.entry("c2", conv: "someone-else", ago: 10_000),
+            Self.skipped("s3", ago: 5000, reason: "upload_backlog"), Self.skipped("s4", ago: 4000, reason: "upload_backlog"),
+            Self.entry("c3", conv: "someone-else", ago: 60),
+        ], readOrgs: [Self.corveil])
+        func state(activityAgo: TimeInterval) -> GatewayTraffic.Evidence {
+            Self.evidence([.init(id: "c1", lastWrite: Self.now.addingTimeInterval(-activityAgo))], index,
+                          expected: Self.expectCorveil)
+        }
+        #expect(state(activityAgo: 15_000).state == .silent)
+        #expect(state(activityAgo: 2000).state == .silent)
+        let early = state(activityAgo: 27_000)
+        #expect(early.state == .unavailable)
+        #expect(early.detail.contains("stored 2 requests without bodies from "))
+        let late = state(activityAgo: 4500)
+        #expect(late.state == .unavailable)
+        #expect(late.detail.contains("(body upload backlog)"))
+        // The request is logged before the transcript write that follows it.
+        #expect(state(activityAgo: 4000 - GatewayTraffic.activityLookback + 30).state == .unavailable)
+        #expect(state(activityAgo: 4000 - GatewayTraffic.activityLookback - 30).state == .silent)
+    }
+
+    @Test func spanTextNamesUTCTimesAndCrossesDays() {
+        let iso = { (s: String) in GatewayTraffic.parseDate(s)! }
+        let window = GatewayTraffic.Window(organizationID: "o", oldest: iso("2026-11-12T10:00:00Z"),
+                                           newest: iso("2026-11-13T14:00:00Z"), count: 9)
+        let sameDay = GatewayTraffic.UncapturedSpan(start: iso("2026-11-12T20:31:10Z"), end: iso("2026-11-12T23:59:58Z"),
+                                                     count: 3, reasons: [:])
+        #expect(GatewayTraffic.spanText(sameDay, in: window) == "from 20:31 to 23:59")
+        let crossing = GatewayTraffic.UncapturedSpan(start: iso("2026-11-12T20:31:00Z"), end: iso("2026-11-13T01:00:00Z"),
+                                                      count: 3, reasons: [:])
+        #expect(GatewayTraffic.spanText(crossing, in: window) == "from Nov 12 20:31 to Nov 13 01:00")
+        let ongoing = GatewayTraffic.UncapturedSpan(start: iso("2026-11-13T12:00:00Z"), end: iso("2026-11-13T14:00:00Z"),
+                                                     count: 3, reasons: [:])
+        #expect(GatewayTraffic.spanText(ongoing, in: window) == "since 12:00")
+        #expect(GatewayTraffic.reasonText(["upload_failed": 1, "org_daily_budget": 5, "new_reason": 1])
+            == "org daily body budget, new reason, body upload failed")
+    }
+
     // MARK: glyph state
 
     @Test func evidenceUpgradesTheGatewayGlyph() {
