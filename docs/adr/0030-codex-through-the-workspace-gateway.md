@@ -51,6 +51,9 @@ provider, `crow-corveil`. It never edits `~/.codex/config.toml`:
 - `env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY` names the env var
   that holds the gateway's `x-citadel-api-key`. The key itself is not in the
   overrides.
+- `env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION` (CROW-1458) sends
+  the Crow build. The paste-time export below sets that variable too, so a
+  stored Manager command reports the current build after an upgrade.
 - A gateway with no Corveil key header (`x-citadel-api-key` / `X-Corveil-Key`) is
   not a Corveil gateway, so it never routes Codex.
 

@@ -208,6 +208,18 @@ agent_display_name() {
   esac
 }
 
+# The `X-Crow-Version` value the running daemon sends to gateways (CROW-1458),
+# read from `crow version get`. Prints nothing when the daemon reports none (an
+# older crowd) or the value has a character outside [A-Za-z0-9._+-]; the caller
+# then adds no header.
+crow_version_header() {
+  [[ -n "$CROW_BIN" ]] || return 0
+  local v
+  v=$("$CROW_BIN" version get 2>/dev/null | jq -r '.crow_version_header // empty' 2>/dev/null) || return 0
+  if [[ "$v" =~ ^[A-Za-z0-9._+-]+$ ]]; then printf '%s' "$v"; fi
+  return 0
+}
+
 # Resolve this workspace's AI gateway from {devRoot}/.claude/config.json (CROW-402).
 # Populates WS_BASE_URL / WS_CUSTOM_HEADERS and sets WS_HAS_GATEWAY=true when a
 # gateway is configured. Header values prefixed `op://` are resolved via the
@@ -246,6 +258,18 @@ resolve_gateway_env() {
     [[ -n "$headers" ]] && headers+=$'\n'
     headers+="$name: $value"
   done < <(jq -r '.customHeaders | keys[]' <<< "$gateway" 2>/dev/null)
+
+  # CROW-1458: tell the gateway which Crow build this is — mirrors
+  # GatewayResolver.resolve in Swift. Appended after the sorted gateway headers,
+  # and skipped when the gateway names X-Crow-Version itself (the user's value
+  # wins; never sent twice).
+  local crow_version
+  crow_version=$(crow_version_header)
+  if [[ -n "$crow_version" ]] && ! jq -e '[(.customHeaders // {}) | keys[] | ascii_downcase
+      | select(. == "x-crow-version")] | length > 0' <<< "$gateway" >/dev/null 2>&1; then
+    [[ -n "$headers" ]] && headers+=$'\n'
+    headers+="X-Crow-Version: $crow_version"
+  fi
 
   WS_BASE_URL="$base_url"
   WS_CUSTOM_HEADERS="$headers"
@@ -397,6 +421,8 @@ codex_auth_upstream() {
 # (`env_http_headers`), and the daemon types `export CROW_CORVEIL_GATEWAY_KEY=… &&`
 # into the pane when it pastes this command — so the key never rides in
 # `crow new-terminal --command`'s argv. That is also why this needs no `op read`.
+# X-Crow-Version (CROW-1458) is read from an env var the same way, exported in
+# that same paste-time statement, so the build is current at every relaunch.
 # No `"` anywhere: the result sits inside eval_prompt_launch's `eval "…"`.
 codex_gateway_overrides() {
   local config_path="$DEV_ROOT/.claude/config.json"
@@ -441,8 +467,8 @@ codex_gateway_overrides() {
   esac
 
   local p="model_providers.crow-corveil"
-  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY' \
-    "$p" "$p" "$(posix_quote "$base")" "$p" "$p" "$p" "$upstream" "$p"
+  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY -c %s.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION' \
+    "$p" "$p" "$(posix_quote "$base")" "$p" "$p" "$p" "$upstream" "$p" "$p"
   log "Codex gateway: routing through $base (X-Corveil-Upstream: $upstream)"
 }
 

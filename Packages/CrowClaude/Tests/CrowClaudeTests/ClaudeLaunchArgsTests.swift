@@ -153,3 +153,32 @@ import CrowCore
     #expect(written.contains("ANTHROPIC_BASE_URL"))
     #expect(!written.contains("CLAUDE_CODE_AUTO_MODE_SERVER"))
 }
+
+// MARK: - X-Crow-Version (CROW-1458)
+
+@Test func crowVersionReachesSettingsEnvAndKeepsTheLaunchLineSingleLine() throws {
+    // The gateway's credential plus Crow's version header make two header
+    // lines. settings.local.json carries both (Claude Code's settings `env`
+    // outranks the inherited env); the launch line can't hold a newline, so it
+    // unsets any inherited value and leaves the headers to the file.
+    let gateway = WorkspaceGateway(
+        baseURL: "https://corveil.io", customHeaders: ["x-citadel-api-key": "sk-1"])
+    let resolved = try #require(
+        GatewayResolver.resolve(gateway, crowVersion: "0.2.0+8e32cc67") { _ in nil })
+
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("crow-1458-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    ClaudeHookConfigWriter.writeGatewayEnv(dirPath: dir.path, resolved: resolved)
+    let data = try Data(contentsOf: dir.appendingPathComponent(".claude/settings.local.json"))
+    let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let headers = try #require((json["env"] as? [String: Any])?["ANTHROPIC_CUSTOM_HEADERS"] as? String)
+    #expect(headers.split(separator: "\n").map(String.init)
+        == ["x-citadel-api-key: sk-1", "X-Crow-Version: 0.2.0+8e32cc67"])
+
+    let prefix = ClaudeLaunchArgs.gatewayEnvPrefix(resolved)
+    #expect(prefix.hasPrefix("unset ANTHROPIC_CUSTOM_HEADERS && "))
+    #expect(prefix.contains("ANTHROPIC_BASE_URL='https://corveil.io'"))
+    #expect(!prefix.contains("\n"))
+}
