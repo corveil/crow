@@ -38,6 +38,11 @@ public enum GatewayResolver {
     /// serialize them for launch. Returns `nil` for an empty gateway (caller
     /// should then *unset* the env vars rather than set them).
     ///
+    /// - Parameter crowVersion: The `X-Crow-Version` value (CROW-1458), appended
+    ///   as a last header line after the sorted gateway headers. Defaults to the
+    ///   build `crowd` installed (``CrowVersionHeader/current``). Skipped when nil,
+    ///   or when the gateway configures a header with that name itself, so the
+    ///   user's value wins and the header is never sent twice.
     /// - Parameter resolveSecret: Injected for testability; defaults to `op read`.
     ///   When a reference fails to resolve, the header is dropped and a redacted
     ///   warning is logged — the `baseURL` is still applied, so requests reach the
@@ -45,6 +50,7 @@ public enum GatewayResolver {
     ///   to the vanilla Anthropic API with the user's default key.
     public static func resolve(
         _ gateway: WorkspaceGateway,
+        crowVersion: String? = CrowVersionHeader.current,
         resolveSecret: (String) -> String? = Self.opRead
     ) -> Resolved? {
         guard !gateway.isEmpty else { return nil }
@@ -80,10 +86,15 @@ public enum GatewayResolver {
             }
         }
 
-        return Resolved(
-            baseURL: gateway.baseURL,
-            customHeaders: serializeHeaders(resolvedHeaders)
-        )
+        var lines = serializeHeaders(resolvedHeaders)
+        // Checked against the CONFIGURED names, not the resolved ones: a user
+        // header whose `op://` reference failed is still the user's choice, and
+        // Crow must not substitute its own value for it.
+        if let crowVersion, !CrowVersionHeader.isConfigured(in: gateway.customHeaders.keys) {
+            if !lines.isEmpty { lines += "\n" }
+            lines += "\(CrowVersionHeader.name): \(crowVersion)"
+        }
+        return Resolved(baseURL: gateway.baseURL, customHeaders: lines)
     }
 
     /// Resolve a single `op://…` reference via the 1Password CLI (`op read`).

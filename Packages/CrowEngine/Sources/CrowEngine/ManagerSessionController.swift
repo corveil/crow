@@ -484,7 +484,7 @@ final class ManagerSessionController {
     /// There is no `managerGateway` fallback — the Manager's gateway is the
     /// Manager's alone.
     ///
-    /// ⚠️ Calls ``GatewayResolver/resolve(_:resolveSecret:)``, which shells out to
+    /// ⚠️ Calls ``GatewayResolver/resolve(_:crowVersion:resolveSecret:)``, which shells out to
     /// `op read` with a **15-second timeout per header**. This is a launch-path
     /// method only. A read RPC wanting the same information must call
     /// ``workspaceGatewayMatch(for:)`` instead, which touches no subprocess.

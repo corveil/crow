@@ -70,7 +70,7 @@ crow terminal set [--wheel-scroll-lines N] [--agent-wheel-notches N]    → patc
 crow version                                                            → prints the stamped build version
 crow version --check                                                    → compare against corveil/crow main; human summary, exit 0/1/2
 crow version check                                                      → same as --check
-crow version get                                                        → {"version_update":{…},"status":{…}}
+crow version get                                                        → {"version_update":{…},"status":{…},"crow_version_header":"0.2.0+8e32cc67"}
 crow version set [--enabled true|false] [--interval-hours N]            → patch; interval floored at 1h
 ```
 

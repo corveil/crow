@@ -89,3 +89,82 @@ import Testing
     }
     #expect(resolved?.customHeaders == "x-citadel-api-key: \"op://Vault/Item/field\"")
 }
+
+// MARK: - X-Crow-Version (CROW-1458)
+//
+// These pass `crowVersion:` explicitly and never call `CrowVersionHeader.install`:
+// the installed value is process-wide, and the suites around them run in
+// parallel and expect no header.
+
+@Test func gatewayResolverAppendsCrowVersionAfterTheGatewayHeaders() throws {
+    let gateway = WorkspaceGateway(
+        baseURL: "https://corveil.io",
+        customHeaders: ["x-citadel-api-key": "sk-plain"]
+    )
+    let resolved = GatewayResolver.resolve(gateway, crowVersion: "0.2.0+8e32cc67") { _ in nil }
+    #expect(resolved?.customHeaders == "x-citadel-api-key: sk-plain\nX-Crow-Version: 0.2.0+8e32cc67")
+}
+
+@Test func gatewayResolverSendsNoCrowVersionWithoutAGateway() throws {
+    let empty = WorkspaceGateway(baseURL: "", customHeaders: [:])
+    #expect(GatewayResolver.resolve(empty, crowVersion: "0.2.0+8e32cc67") { _ in nil } == nil)
+}
+
+@Test func gatewayResolverOmitsCrowVersionWhenNoneInstalled() throws {
+    let gateway = WorkspaceGateway(baseURL: "https://corveil.io", customHeaders: ["x-k": "v"])
+    #expect(GatewayResolver.resolve(gateway, crowVersion: nil) { _ in nil }?.customHeaders == "x-k: v")
+}
+
+@Test func gatewayResolverKeepsAUserConfiguredCrowVersion() throws {
+    // Any casing counts as the same header; the user's value wins and Crow
+    // doesn't add a second one.
+    for name in ["X-Crow-Version", "x-crow-version", "X-CROW-VERSION"] {
+        let gateway = WorkspaceGateway(
+            baseURL: "https://corveil.io",
+            customHeaders: ["x-k": "v", name: "pinned"]
+        )
+        let lines = GatewayResolver.resolve(gateway, crowVersion: "0.2.0+8e32cc67") { _ in nil }?
+            .customHeaders.split(separator: "\n").map(String.init) ?? []
+        #expect(lines.sorted() == ["\(name): pinned", "x-k: v"].sorted(), "\(name)")
+    }
+}
+
+@Test func gatewayResolverDoesNotReplaceAFailedUserCrowVersionReference() throws {
+    // The user's header is an `op://` reference that fails to resolve. It's
+    // dropped like any failed header, and Crow does not substitute its own.
+    let gateway = WorkspaceGateway(
+        baseURL: "https://corveil.io",
+        customHeaders: ["x-k": "v", "X-Crow-Version": "op://V/I/f"]
+    )
+    let resolved = GatewayResolver.resolve(gateway, crowVersion: "0.2.0+8e32cc67") { _ in nil }
+    #expect(resolved?.customHeaders == "x-k: v")
+}
+
+@Test func crowVersionHeaderValueComesFromBuildInfo() throws {
+    #expect(CrowVersionHeader.value(for: BuildInfo(version: "0.2.0", gitSha: "8e32cc67", buildDate: "2026-11-16"))
+        == "0.2.0+8e32cc67")
+    // The daemon's fallback for an unstamped build.
+    #expect(CrowVersionHeader.value(for: BuildInfo(version: "?", gitSha: "dev", buildDate: "")) == "unknown+dev")
+    #expect(CrowVersionHeader.value(for: BuildInfo(version: "0.2.0", gitSha: "dev", buildDate: "")) == "0.2.0+dev")
+}
+
+@Test func crowVersionHeaderValueHoldsOnlyTheAllowedCharacters() throws {
+    let hostile = BuildInfo(
+        version: "0.2.0\r\nX-Evil: 1 /Users/someone",
+        gitSha: "abc$(id)'\"",
+        buildDate: "")
+    let value = CrowVersionHeader.value(for: hostile)
+    #expect(value == "0.2.0X-Evil1Userssomeone+abcid")
+    let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-")
+    #expect(value.unicodeScalars.allSatisfy { allowed.contains($0) })
+    // Bounded, whatever version.json says.
+    let long = CrowVersionHeader.value(for: BuildInfo(
+        version: String(repeating: "9", count: 500), gitSha: "a", buildDate: ""))
+    #expect(long.count == CrowVersionHeader.maxComponentLength + 2)
+}
+
+@Test func crowVersionHeaderMatchesNamesCaseInsensitively() throws {
+    #expect(CrowVersionHeader.isConfigured(in: ["x-crow-version"]))
+    #expect(CrowVersionHeader.isConfigured(in: ["Other", "X-CROW-VERSION"]))
+    #expect(!CrowVersionHeader.isConfigured(in: ["x-crow-versions", "x-citadel-api-key"]))
+}

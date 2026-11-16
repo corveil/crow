@@ -129,6 +129,47 @@ check "single header on launch line" \
   "ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS='x-key: Bearer sk-1' " \
   "$prefix"
 
+echo "== X-Crow-Version header (CROW-1458) =="
+# A fake `crow` that answers `version get` with $FAKE_CROW_VERSION_JSON.
+cat > "$TMP/bin/fake-crow" <<'CROW'
+#!/usr/bin/env bash
+[[ "$1 $2" == "version get" ]] || exit 1
+printf '%s\n' "$FAKE_CROW_VERSION_JSON"
+CROW
+chmod +x "$TMP/bin/fake-crow"
+cat > "$DEV_ROOT/.claude/config.json" <<'JSON'
+{
+  "workspaces": [
+    { "name": "Gw", "gateway": { "baseURL": "https://corveil.io",
+        "customHeaders": { "x-citadel-api-key": "sk-citadel-plain" } } },
+    { "name": "OwnVersion", "gateway": { "baseURL": "https://corveil.io",
+        "customHeaders": { "x-citadel-api-key": "sk-citadel-plain", "x-crow-version": "mine" } } },
+    { "name": "Personal" }
+  ]
+}
+JSON
+resolve_ws() { # resolve_ws <workspace> — fresh resolve_gateway_env, prints WS_CUSTOM_HEADERS
+  WORKSPACE="$1"
+  WS_GATEWAY_RESOLVED=false; WS_HAS_GATEWAY=false; WS_BASE_URL=""; WS_CUSTOM_HEADERS=""
+  resolve_gateway_env >/dev/null 2>&1
+  printf '%s' "$WS_CUSTOM_HEADERS"
+}
+CROW_BIN="$TMP/bin/fake-crow"
+export FAKE_CROW_VERSION_JSON='{"status":null,"crow_version_header":"0.2.0+8e32cc67"}'
+check "gateway: version appended after the gateway headers" \
+  "x-citadel-api-key: sk-citadel-plain"$'\n'"X-Crow-Version: 0.2.0+8e32cc67" "$(resolve_ws Gw)"
+check "no gateway: no header" "" "$(resolve_ws Personal)"
+out=$(resolve_ws OwnVersion)
+contains "user-configured x-crow-version kept" "$out" "x-crow-version: mine"
+check "user-configured x-crow-version: Crow adds no second one" "1" "$(grep -ci '^x-crow-version:' <<< "$out")"
+export FAKE_CROW_VERSION_JSON='{"status":null,"crow_version_header":null}'
+check "older daemon (no value): no header" "x-citadel-api-key: sk-citadel-plain" "$(resolve_ws Gw)"
+export FAKE_CROW_VERSION_JSON='{"crow_version_header":"0.2.0+x;rm -rf ~"}'
+check "value outside the allowed charset: no header" "x-citadel-api-key: sk-citadel-plain" "$(resolve_ws Gw)"
+CROW_BIN=""
+check "no crow binary: no header" "x-citadel-api-key: sk-citadel-plain" "$(resolve_ws Gw)"
+unset FAKE_CROW_VERSION_JSON
+
 echo "== Codex gateway overrides (CROW-1407) =="
 # Rewrite config.json with Codex-specific workspaces. The key never appears in
 # the overrides, so no `op read` is needed for any of these.
@@ -156,8 +197,8 @@ cat > "$DEV_ROOT/.claude/config.json" <<'JSON'
 JSON
 expected_overrides() { # expected_overrides <base> <upstream>
   local p="model_providers.crow-corveil"
-  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY' \
-    "$p" "$p" "'$1'" "$p" "$p" "$p" "$2" "$p"
+  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY -c %s.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION' \
+    "$p" "$p" "'$1'" "$p" "$p" "$p" "$2" "$p" "$p"
 }
 WORKSPACE="OptedIn"
 out=$(codex_gateway_overrides 2>/dev/null)

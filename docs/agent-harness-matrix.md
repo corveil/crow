@@ -1261,7 +1261,9 @@ exhaustive, including the two Manager gateway writes noted below):
   per-run `-c` overrides defining a `crow-corveil` model provider: `base_url`
   = gateway + `/v1`, `wire_api=responses`, `requires_openai_auth=true`,
   `X-Corveil-Upstream` (`auto` reads `$CODEX_HOME/auth.json`), and
-  `env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY`. Codex keeps its own
+  `env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY`, plus
+  `env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION` (CROW-1458), whose
+  value is exported with the key. Codex keeps its own
   sign-in in `Authorization`. The overrides carry no secret — they are built by
   `CodexGatewayArgs.configOverrides` (Swift: `launchAgent`, `handoffAgent`,
   `managerCommand` / hydrate) and `codex_gateway_overrides` (`setup.sh`) — and

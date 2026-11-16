@@ -185,6 +185,16 @@ When a session resolves to a workspace with a `gateway`, Crow injects these vars
 
 When no workspace claims the session — or the one that does has **no** `gateway` — Crow instead prefixes the launch with `unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS` so a global shell export, or a sibling workspace's gateway, can't bleed into it. Edit a workspace's gateway in **Settings → Workspaces**.
 
+#### Crow version header
+
+Whenever a gateway applies, Crow also sends `X-Crow-Version: <version>+<short sha>` (for example `0.2.0+8e32cc67`, or `0.2.0+dev` for an unstamped build) with every request, so a team behind one gateway can see which Crow build each person runs (CROW-1458). For Claude Code it is one more line of `ANTHROPIC_CUSTOM_HEADERS`, after the gateway's own headers. That makes every gateway multi-header, so the headers are carried by `settings.local.json`, as described above. For [Codex](#codex-sessions-opt-in) it is an `env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION` override, with the value exported next to the key at paste time. The value comes from the daemon's build info (`crow version get` → `crow_version_header`) and holds only `[A-Za-z0-9._+-]`: no path, hostname or user data. A gateway that configures its own `X-Crow-Version` header (any case) keeps it, and Crow adds none. No gateway, no header. Settings are rewritten at every launch, so a relaunched agent reports a new build.
+
+To check a worktree, without printing the credential:
+
+```bash
+jq -r '.env.ANTHROPIC_CUSTOM_HEADERS' <worktree>/.claude/settings.local.json | grep -i '^x-crow-version:'
+```
+
 > **Precedence note:** Claude Code applies its `settings.local.json` `env` block on top of the environment it inherited, so a value in that block wins over the launch line and over a `~/.zshrc` export (checked against Claude Code 2.1.322: a variable set in both reads the settings value inside the agent). Crow writes the same gateway to both places, so they agree on a normal launch; the launch line still matters for a variable the block doesn't set, such as an inherited `ANTHROPIC_CUSTOM_HEADERS` it `unset`s. The intended end state is still to delete the global `~/.zshrc` exports once per-workspace gateways are configured, leaving `config.json` the single source of truth. The debug-mode recording indicator ([Telemetry, Cleanup & UI](#telemetry-cleanup--ui)) records the launch by the same rule.
 
 > **Applied at launch:** the gateway env is resolved and written when the agent **starts** (or is handed off to another agent). A session that was already running when you edited a gateway keeps the environment it launched with — relaunch it, or hand it off, to pick up the change.

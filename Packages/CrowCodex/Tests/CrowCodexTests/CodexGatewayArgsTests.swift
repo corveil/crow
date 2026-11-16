@@ -72,7 +72,8 @@ struct CodexGatewayArgsTests {
             + " -c model_providers.crow-corveil.wire_api=responses"
             + " -c model_providers.crow-corveil.requires_openai_auth=true"
             + " -c model_providers.crow-corveil.http_headers.X-Corveil-Upstream=chatgpt_codex"
-            + " -c model_providers.crow-corveil.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY")
+            + " -c model_providers.crow-corveil.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY"
+            + " -c model_providers.crow-corveil.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION")
         #expect(!overrides.contains(Self.key))
         // Sits inside `eval "…"` on prompt-seeded launches.
         #expect(!overrides.contains("\""))
@@ -102,7 +103,41 @@ struct CodexGatewayArgsTests {
         let argv = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         #expect(argv.contains("model_providers.crow-corveil.base_url=https://corveil.io/v1\n"))
         #expect(argv.contains("model_providers.crow-corveil.http_headers.X-Corveil-Upstream=chatgpt_codex\n"))
+        #expect(argv.contains("model_providers.crow-corveil.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION\n"))
         #expect(argv.hasSuffix("--no-alt-screen\nhello\n"))
+    }
+
+    // MARK: - X-Crow-Version (CROW-1458)
+
+    @Test func crowVersionIsExportedBesideTheKey() {
+        #expect(CodexGatewayArgs.keyExportPrefix("sk-1", crowVersion: "0.2.0+8e32cc67")
+            == "export CROW_CORVEIL_GATEWAY_KEY='sk-1' CROW_GATEWAY_CROW_VERSION='0.2.0+8e32cc67' && ")
+        // The version still rides when the key couldn't be resolved, so the
+        // gateway's 401 is logged against the right build.
+        #expect(CodexGatewayArgs.keyExportPrefix("", crowVersion: "0.2.0+dev")
+            == "export CROW_CORVEIL_GATEWAY_KEY='' CROW_GATEWAY_CROW_VERSION='0.2.0+dev' && ")
+        // No installed build: the prefix is exactly what it was before CROW-1458.
+        #expect(CodexGatewayArgs.keyExportPrefix("sk-1", crowVersion: nil)
+            == "export CROW_CORVEIL_GATEWAY_KEY='sk-1' && ")
+    }
+
+    @Test func crowVersionReachesCodexAsAHeaderEnvVar() throws {
+        // Export, then run the routed command with `env` in place of codex: the
+        // variable the override names must hold the build.
+        let r = try route(gateway()).get()
+        let script = CodexGatewayArgs.keyExportPrefix("sk-1", crowVersion: "0.2.0+8e32cc67")
+            + "env" + " # " + CodexGatewayArgs.configOverrides(r)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-c", script]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let env = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        #expect(env.split(separator: "\n").contains("\(CodexGatewayArgs.crowVersionEnvVar)=0.2.0+8e32cc67"))
+        #expect(CodexGatewayArgs.configOverrides(r)
+            .contains("env_http_headers.\(CrowVersionHeader.name)=\(CodexGatewayArgs.crowVersionEnvVar)"))
     }
 
     // MARK: - key

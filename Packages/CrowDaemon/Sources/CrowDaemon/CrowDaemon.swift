@@ -64,6 +64,14 @@ public enum CrowDaemon {
     public static func run(arguments: [String] = CommandLine.arguments) async throws {
         let options = DaemonOptions.parse(arguments)
 
+        // CROW-1458: every gateway request a Crow-launched agent makes carries
+        // `X-Crow-Version` from this build, so a team can see which Crow build
+        // each person runs. Installed first, before the board poll's terminal
+        // takeover can relaunch an agent.
+        let buildInfo = BuildInfoLoader.load(webDir: options.webDir)
+            ?? BuildInfo(version: "?", gitSha: "dev", buildDate: "")
+        CrowVersionHeader.install(buildInfo)
+
         // The WS endpoints are unauthenticated; the Origin guard blocks
         // cross-site browser hijacking but not same-origin/native clients on the
         // network. Binding beyond loopback exposes git + a shell — warn loudly
@@ -507,9 +515,8 @@ public enum CrowDaemon {
 
         // Upstream version check (CROW-938): compare the stamped build SHA against
         // corveil/crow main. Runs on a long interval and caches the result in
-        // memory — failures are silent and never block startup.
-        let buildInfo = BuildInfoLoader.load(webDir: options.webDir)
-            ?? BuildInfo(version: "?", gitSha: "dev", buildDate: "")
+        // memory — failures are silent and never block startup. `buildInfo` is
+        // loaded at the top of `run` (CROW-1458).
         let versionUpdateService = await MainActor.run {
             VersionUpdateService(buildInfo: buildInfo)
         }

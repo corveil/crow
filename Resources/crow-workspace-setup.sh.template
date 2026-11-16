@@ -208,6 +208,18 @@ agent_display_name() {
   esac
 }
 
+# The `X-Crow-Version` value the running daemon sends to gateways (CROW-1458),
+# read from `crow version get`. Prints nothing when the daemon reports none (an
+# older crowd) or the value has a character outside [A-Za-z0-9._+-]; the caller
+# then adds no header.
+crow_version_header() {
+  [[ -n "$CROW_BIN" ]] || return 0
+  local v
+  v=$("$CROW_BIN" version get 2>/dev/null | jq -r '.crow_version_header // empty' 2>/dev/null) || return 0
+  if [[ "$v" =~ ^[A-Za-z0-9._+-]+$ ]]; then printf '%s' "$v"; fi
+  return 0
+}
+
 # Resolve this workspace's AI gateway from {devRoot}/.claude/config.json (CROW-402).
 # Populates WS_BASE_URL / WS_CUSTOM_HEADERS and sets WS_HAS_GATEWAY=true when a
 # gateway is configured. Header values prefixed `op://` are resolved via the
@@ -246,6 +258,18 @@ resolve_gateway_env() {
     [[ -n "$headers" ]] && headers+=$'\n'
     headers+="$name: $value"
   done < <(jq -r '.customHeaders | keys[]' <<< "$gateway" 2>/dev/null)
+
+  # CROW-1458: tell the gateway which Crow build this is — mirrors
+  # GatewayResolver.resolve in Swift. Appended after the sorted gateway headers,
+  # and skipped when the gateway names X-Crow-Version itself (the user's value
+  # wins; never sent twice).
+  local crow_version
+  crow_version=$(crow_version_header)
+  if [[ -n "$crow_version" ]] && ! jq -e '[(.customHeaders // {}) | keys[] | ascii_downcase
+      | select(. == "x-crow-version")] | length > 0' <<< "$gateway" >/dev/null 2>&1; then
+    [[ -n "$headers" ]] && headers+=$'\n'
+    headers+="X-Crow-Version: $crow_version"
+  fi
 
   WS_BASE_URL="$base_url"
   WS_CUSTOM_HEADERS="$headers"

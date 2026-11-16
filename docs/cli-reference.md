@@ -495,7 +495,7 @@ crow version set --interval-hours 12
 | `set --enabled`   | Opt out of periodic checks (`true` or `false`) |
 | `set --interval-hours` | Hours between automatic checks (minimum 1, default 1) |
 
-`get` returns `{"version_update":{"enabled":…,"interval_hours":…},"status":{…}}` where `status.state` is `up_to_date`, `behind`, or `unknown`. A `dev` build SHA or an unrecognized commit reports `unknown` — never a false up-to-date.
+`get` returns `{"version_update":{"enabled":…,"interval_hours":…},"status":{…},"crow_version_header":"0.2.0+8e32cc67"}` where `status.state` is `up_to_date`, `behind`, or `unknown`. A `dev` build SHA or an unrecognized commit reports `unknown` — never a false up-to-date. `status` is `null` until a check has run (or when checks are off); `crow_version_header` is always the running build, `<version>+<short sha>`, and is the `X-Crow-Version` value Crow sends to AI gateways ([configuration.md](configuration.md#crow-version-header)).
 
 ### `crow defaults get | set`
 

@@ -156,6 +156,10 @@ func makeSettingsHandlers(
             return [
                 "version_update": VersionUpdateRPC.configJSON(config.versionUpdate),
                 "status": VersionUpdateRPC.statusJSON(status),
+                // CROW-1458: the `X-Crow-Version` value this daemon sends to
+                // gateways. Present even when the update check is off or hasn't
+                // run, which is when `status` is null; `setup.sh` reads it.
+                "crow_version_header": CrowVersionHeader.current.map { .string($0) } ?? .null,
             ]
         },
         "version-update-set": { params in
