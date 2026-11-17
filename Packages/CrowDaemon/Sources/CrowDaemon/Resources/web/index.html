@@ -82,11 +82,20 @@
       </div>
     </main>
   </div>
+  <!-- Disconnected cover (CROW-1460): once /rpc has been down past a short
+       grace, an opaque card hides the whole app (and any open modal) until it
+       reconnects. #statusbar is lifted above it so the state stays readable. -->
+  <div id="conn-cover" class="app-cover" hidden>
+    <div class="scrim-card" role="status" aria-live="polite">
+      <div class="scrim-title">Disconnected</div>
+      <div class="scrim-msg">Reconnecting to Crow…</div>
+    </div>
+  </div>
   <!-- Session-expired scrim (#679): on a confirmed 401 (sessionDead) this blocks
-       all interaction with #app until re-login. Sits below #statusbar so the
-       statusbar Log in stays reachable; only shown on sessionDead, never on a
-       transient reconnect. -->
-  <div id="session-scrim" hidden>
+       all interaction with #app until re-login. Opaque (CROW-1460) so nothing
+       behind it can be read; #statusbar is lifted above it so its Log in stays
+       reachable. -->
+  <div id="session-scrim" class="app-cover" hidden>
     <div class="scrim-card" role="alertdialog" aria-label="Session expired">
       <div class="scrim-title">Session expired</div>
       <div class="scrim-msg">Your web session ended. Log in again to continue.</div>

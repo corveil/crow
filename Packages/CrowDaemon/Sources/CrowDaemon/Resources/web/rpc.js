@@ -88,10 +88,24 @@ let wsConnected = false;
 // disconnect + /auth/check probe confirms 401 (a crowd restart wiped its in-memory
 // sessions). Stops the reconnect loop and flips the status bar to "Log in" (CROW-593).
 let sessionDead = false;
+// True once any /rpc socket has closed — a drop, or a boot connect that failed
+// while crowd was down — so the next open must re-fetch. A first connect that
+// simply succeeds needs nothing: boot already queued its own fetches.
+let rpcResyncOnOpen = false;
 function setWsConnected(v) {
+  if (!v) rpcResyncOnOpen = true;
   if (wsConnected === v) return;
   wsConnected = v;
   renderStatusBar();
+  // CROW-1460: the disconnected cover hid stale content; once /rpc is back,
+  // repaint from live data at once instead of waiting out the 10s/20s polls.
+  // Deferred a tick: onopen runs inside rpcConnect(), before its promise has been
+  // stored as rpcState.ready, so an rpc() issued synchronously here would open a
+  // second socket.
+  if (v && rpcResyncOnOpen) {
+    rpcResyncOnOpen = false;
+    setTimeout(() => { onServerChanged(); refreshBoard('scratch'); }, 0);
+  }
 }
 
 function rpcConnect() {

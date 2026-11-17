@@ -86,6 +86,39 @@ async function sessionExpired() {
   }
 }
 
+// Disconnected cover (CROW-1460). While /rpc is down the page's content is
+// stale and nobody may be watching it — a laptop left open, a shared browser
+// whose gateway dropped — so after a short grace an opaque card covers the
+// whole app. The grace keeps a brief blip from flashing the screen (the #687
+// lesson). Boot counts too: until the first connect lands, wsConnected is false,
+// so a CROW-613 cache paint stays readable for at most the grace period.
+const DISCONNECT_COVER_GRACE_MS = 3000;
+let disconnectCoverTimer = null;
+let disconnectCoverShown = false;
+function syncDisconnectCover() {
+  if (wsConnected || sessionDead) {
+    // Connected, or the #679 expired scrim owns the screen instead.
+    if (disconnectCoverTimer) { clearTimeout(disconnectCoverTimer); disconnectCoverTimer = null; }
+    disconnectCoverShown = false;
+  } else if (!disconnectCoverShown && !disconnectCoverTimer) {
+    disconnectCoverTimer = setTimeout(() => {
+      disconnectCoverTimer = null;
+      if (wsConnected || sessionDead) return;
+      disconnectCoverShown = true;
+      renderStatusBar(); // re-runs this sync, and drops the logout button
+    }, DISCONNECT_COVER_GRACE_MS);
+  }
+  const cover = document.getElementById('conn-cover');
+  if (cover) cover.hidden = !disconnectCoverShown;
+  const covered = disconnectCoverShown || sessionDead;
+  // inert: no focus, typing or clicks reach the hidden content (a focused
+  // composer or xterm textarea would otherwise still take keystrokes).
+  const app = document.getElementById('app');
+  if (app) app.inert = covered;
+  // Lifts #statusbar above the cover so the connection state stays readable.
+  if (document.body) document.body.classList.toggle('app-covered', covered);
+}
+
 let authProbeInFlight = false;
 // On a /rpc disconnect, check once whether the session cookie is still valid; if it's
 // gone, mark the session dead so the status bar shows "Log in" and reconnects stop.
@@ -99,6 +132,9 @@ async function handleAuthOnDisconnect() {
       // notification history when the remote web cookie dies (crowd restart) so
       // they don't linger in a shared browser (CROW-613 review / CROW-909).
       purgeSharedBrowserCaches();
+      // CROW-1460: the in-page copies too — the scrim hides them, but the data
+      // has no business staying in memory once the session is gone.
+      clearPageDataOnExpiry();
       renderStatusBar();
     }
   } finally {
@@ -116,10 +152,10 @@ function renderStatusBar() {
   bar.classList.toggle('disconnected', !wsConnected && !sessionDead);
   bar.classList.toggle('session-expired', sessionDead);
   // Full-app scrim (#679): block interaction with #app once the session is
-  // definitively dead. Keyed on sessionDead only — never on a transient
-  // !wsConnected reconnect ("Connecting…"), which self-heals.
+  // definitively dead. Opaque since CROW-1460, so nothing behind it is readable.
   const scrim = document.getElementById('session-scrim');
   if (scrim) scrim.hidden = !sessionDead;
+  syncDisconnectCover();
   const label = bar.querySelector('.conn-label');
   if (label) label.textContent = sessionDead ? 'Session expired' : (wsConnected ? 'Connected' : 'Connecting…');
   const actions = document.getElementById('statusbar-actions');
@@ -137,7 +173,9 @@ function renderStatusBar() {
     actions.appendChild(login);
     return;
   }
-  if (signedInOverWeb()) {
+  // Not while the disconnected cover is up: /logout is unreachable then, and its
+  // confirm modal would open underneath the cover (CROW-1460).
+  if (signedInOverWeb() && !disconnectCoverShown) {
     const out = el('button', 'sb-logout');
     out.type = 'button';
     out.title = 'Log out';

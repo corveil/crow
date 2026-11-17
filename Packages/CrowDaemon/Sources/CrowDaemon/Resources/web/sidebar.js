@@ -70,6 +70,27 @@ function purgeSharedBrowserCaches() {
   try { localStorage.removeItem(GRID_PINS_KEY); } catch (_) {}
   gridPinnedIds = [];
 }
+// The in-page counterpart of purgeSharedBrowserCaches, for session expiry only
+// (CROW-1460). The opaque #679 scrim already hides the workspace, but the data
+// itself — session list, boards, terminal scrollback — must not sit in memory
+// on a shared browser after the session is gone. Nothing repaints it: rpc()
+// fails fast once sessionDead is set, and the only way back is the login page,
+// whose reload starts the client from scratch.
+function clearPageDataOnExpiry() {
+  sessions = [];
+  sessionsLoaded = false;
+  liveById = {};
+  terminals = [];
+  activeTerminal = null;
+  Object.keys(boardData).forEach((k) => { boardData[k] = null; });
+  try { if (term) term.reset(); } catch (_) {}
+  if (typeof stopGridPolling === 'function') stopGridPolling();
+  if (typeof disposeGridTerm === 'function') [...gridTerms.keys()].forEach(disposeGridTerm);
+  if (typeof stopChatPoll === 'function') stopChatPoll();
+  if (typeof chatState !== 'undefined') chatState = null;
+  ['sidebar', 'board', 'detail-header', 'detail-artifacts', 'detail-recordings', 'tabbar', 'chat-view']
+    .forEach((id) => { const n = document.getElementById(id); if (n) n.textContent = ''; });
+}
 function restoreSidebarCache() {
   try {
     const raw = localStorage.getItem(SIDEBAR_CACHE_KEY);
