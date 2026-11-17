@@ -1300,22 +1300,28 @@ button.scratch-link:hover { border-color: var(--blue); }
 }
 .artifact-thumb:hover { border-color: var(--blue); }
 
-/* Session-expired scrim (#679): a dimming overlay that blocks all interaction with
-   #app once the web session is confirmed dead (sessionDead). z-index sits between
-   #app content (max ~50) and #statusbar (60) so the statusbar Log in stays above
-   and clickable; the scrim itself also offers a centered Log in. */
-#session-scrim {
+/* Full-app covers (CROW-1460): #conn-cover while /rpc is down past its grace,
+   #session-scrim (#679) once the web session is confirmed dead. Both are opaque
+   so nothing behind them can be read, and sit above every modal, menu, the
+   switcher and Settings (z ≤ 2200), all of which can show workspace data. The
+   setup wizard (3000) stays on top: its run-setup re-exec drops /rpc on purpose
+   and it shows its own "reconnecting shortly". While either cover is up,
+   body.app-covered lifts #statusbar above it so the connection state, and the
+   expired session's Log in, stay visible. */
+.app-cover {
   position: fixed;
   inset: 0;
-  z-index: 55;
+  z-index: 2500;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: var(--overlay);
-  /* fixed + inset:0 captures every click/keypress aimed at #app beneath it */
+  background: var(--bg-deep);
+  /* fixed + inset:0 captures every click aimed at the app beneath it */
 }
-#session-scrim[hidden] { display: none; }
+.app-cover[hidden] { display: none; }
+body.app-covered #statusbar { z-index: 2600; }
+#conn-cover .scrim-title { color: var(--text-primary); }
 .scrim-card {
   width: min(360px, 92vw);
   text-align: center;

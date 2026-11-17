@@ -171,6 +171,22 @@ which is the subject under test. The other suites' fakes call `onclose` with no
 argument at all, which is exactly why `app.js` guards on `!!event` before reading
 `event.code`.
 
+## `disconnect-cover.test.js` — disconnected cover and session-expiry clearing (CROW-1460)
+
+Loads the client into a jsdom built from the real `index.html` body, with a
+fake `/rpc` socket the test opens and closes by hand, a controllable timer
+queue for the 3s grace, and a stubbed `/auth/check`.
+
+Coverage: the opaque `.app-cover` rule shared by `#conn-cover` and
+`#session-scrim` (app background, not `--overlay`; above modals and Settings,
+below the setup wizard; `body.app-covered` lifting `#statusbar`); boot treating
+"not yet connected" as disconnected; a drop shorter than the grace never
+showing the cover; a sustained drop covering the app (`#app` inert) and the
+reconnect clearing it and re-fetching sessions and boards; a plain disconnect
+leaving localStorage alone; and session expiry showing the scrim, not the
+cover, and emptying `sessions`, `boardData`, the session xterm, the grid
+xterms and the content DOM.
+
 ## `router.test.js` — hash URL routing (CROW-936)
 
 Drives `parseRoute` / `routeToHash` / `navigate` / `applyRoute` / `onHashChange`
