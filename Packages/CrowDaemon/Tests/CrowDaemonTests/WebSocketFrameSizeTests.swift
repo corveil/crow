@@ -48,7 +48,12 @@ struct WebSocketFrameSizeTests {
         let commandRouter = CommandRouter(handlers: [
             "echo-length": { @Sendable params in
                 ["length": .int(params["payload"]?.stringValue?.utf8.count ?? -1)]
-            }
+            },
+            // Replies with `bytes` bytes — stands in for a `backfill-scan` whose
+            // row list outgrew 1 MiB (CROW-1462).
+            "big-reply": { @Sendable params in
+                ["blob": .string(String(repeating: "r", count: params["bytes"]?.intValue ?? 0))]
+            },
         ])
 
         let wsRouter = Router(context: CrowWSContext.self)
@@ -144,6 +149,38 @@ struct WebSocketFrameSizeTests {
         let response = try JSONDecoder().decode(JSONRPCResponse.self, from: Data(text.utf8))
         #expect(response.error == nil)
         #expect(response.result?["length"]?.intValue == Self.payloadBytes)
+    }
+
+    /// CROW-1462: the Settings "Backfill history…" dialog reads every scan row
+    /// in one `/rpc` reply. The frame ceiling above is *inbound* only — NIO's
+    /// encoder doesn't size-check what the server sends — so a reply past 1 MiB
+    /// must still arrive whole. If this ever fails, the dialog has to read the
+    /// rows file instead (the CLI's `output_path`).
+    @Test("a reply past 1 MiB reaches the client whole on /rpc")
+    func replyPastOneMebibyteArrivesWhole() async throws {
+        let bytes = 2 * CrowDaemon.maxWebSocketFrameSize
+        let request = JSONRPCRequest(id: 1, method: "big-reply", params: ["bytes": .int(bytes)])
+        let frame = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+        // A browser has no inbound ceiling; give the test client one well past the reply.
+        let ceiling = 8 << 20
+        let bigClient = WebSocketClientConfiguration(maxFrameSize: ceiling, closeTimeout: .seconds(5))
+        let box = Recorder()
+
+        try await makeApp().test(.live) { client in
+            let close = try await client.ws("/rpc", configuration: bigClient) { inbound, outbound, _ in
+                try await outbound.write(.text(frame))
+                for try await message in inbound.messages(maxSize: ceiling) {
+                    if case .text(let text) = message { await box.set(text) }
+                    break
+                }
+            }
+            await box.recordClose(close)
+        }
+
+        let text = try #require(await box.text, "no reply — the server dropped a >1 MiB reply")
+        let response = try JSONDecoder().decode(JSONRPCResponse.self, from: Data(text.utf8))
+        #expect(response.error == nil)
+        #expect(response.result?["blob"]?.stringValue?.utf8.count == bytes)
     }
 
     /// `/rpc` decodes binary frames too (`RPCWebSocketHandler`), and binary is

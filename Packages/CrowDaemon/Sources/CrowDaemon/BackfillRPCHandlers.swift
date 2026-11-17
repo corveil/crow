@@ -12,6 +12,8 @@ import Foundation
 /// - `backfill-scan` (read): reconcile the on-disk Claude transcripts against
 ///   the upload ledger and return the reconstructed rows + a summary. Disk- and
 ///   git-only; no provider calls, so it stays fast over hundreds of sessions.
+///   With `output_path`, the rows go to that file instead and the reply carries
+///   only the summary (CROW-1462) — see `backfillScanReply`.
 /// - `backfill-upload` (write): upload a user-selected set through the live path,
 ///   idempotently, using the named workspace's gateway for destination +
 ///   credential (the same security invariant as the live collector — the
@@ -23,13 +25,13 @@ import Foundation
 /// Settings panel.
 func makeBackfillHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
     [
-        "backfill-scan": { _ in
-            let service = BackfillService(devRoot: devRoot)
-            let sessions = await service.scan()
-            return [
-                "sessions": .array(sessions.map { backfillSessionJSON($0) }),
-                "summary": backfillSummaryJSON(BackfillSummary(sessions: sessions)),
-            ]
+        "backfill-scan": { params in
+            try await mapRPCError {
+                // Validate before the scan, which can take minutes on a large history.
+                let outputPath = try backfillScanOutputPath(params)
+                let sessions = await BackfillService(devRoot: devRoot).scan()
+                return try backfillScanReply(sessions, outputPath: outputPath)
+            }
         },
         "backfill-upload": { params in
             try await mapRPCError {
@@ -118,6 +120,73 @@ func makeBackfillHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
             }
         },
     ]
+}
+
+// MARK: - backfill-scan rows file (CROW-1462)
+
+/// The scan's `output_path` param: `nil` when absent, else an absolute path
+/// whose directory exists and is writable. Checked up front so a bad path fails
+/// in milliseconds rather than after the scan.
+///
+/// `/rpc` refuses this param from a remote peer
+/// (`RPCWebSocketHandler.localOnlyDenial`): it makes the daemon write a file.
+func backfillScanOutputPath(_ params: [String: JSONValue]) throws -> String? {
+    guard let raw = params["output_path"] else { return nil }
+    guard let path = raw.stringValue, !path.isEmpty else {
+        throw RPCError.invalidParams("output_path must be a non-empty string.")
+    }
+    guard path.hasPrefix("/") else {
+        throw RPCError.invalidParams("output_path must be absolute: \(path)")
+    }
+    var isDir: ObjCBool = false
+    if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+        throw RPCError.invalidParams("output_path is a directory: \(path)")
+    }
+    let parent = (path as NSString).deletingLastPathComponent
+    guard FileManager.default.isWritableFile(atPath: parent) else {
+        throw RPCError.invalidParams("Cannot write output_path \(path): \(parent) is missing or not writable.")
+    }
+    return path
+}
+
+/// The `backfill-scan` reply. Without `outputPath` it is every row plus the
+/// summary, as it always was — the Settings dialog reads that over `/rpc`,
+/// where replies aren't capped. With `outputPath` the same JSON goes to that
+/// file (mode 0600) and the reply carries only the summary, the path and the
+/// row count, so it stays far under the Unix socket's 1 MiB reply cap no matter
+/// how much history there is (#1378).
+func backfillScanReply(_ sessions: [BackfillSession], outputPath: String?) throws -> [String: JSONValue] {
+    let summary = backfillSummaryJSON(BackfillSummary(sessions: sessions))
+    let full: [String: JSONValue] = [
+        "sessions": .array(sessions.map { backfillSessionJSON($0) }),
+        "summary": summary,
+    ]
+    guard let outputPath else { return full }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    try writePrivateFile(try encoder.encode(full), to: outputPath)
+    return [
+        "summary": summary,
+        "rows_file": .string(outputPath),
+        "row_count": .int(sessions.count),
+    ]
+}
+
+/// Write `data` to `path` with mode 0600 from the first byte: the file is
+/// created 0600, and an existing file is truncated and re-moded, so the rows
+/// (paths, branches, repos) are never briefly readable by other users.
+private func writePrivateFile(_ data: Data, to path: String) throws {
+    let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+    guard fd >= 0 else {
+        throw RPCError.applicationError(
+            "Cannot write output_path \(path): \(String(cString: strerror(errno)))")
+    }
+    let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    guard fchmod(fd, 0o600) == 0 else {
+        throw RPCError.applicationError(
+            "Cannot set mode 0600 on output_path \(path): \(String(cString: strerror(errno)))")
+    }
+    try handle.write(contentsOf: data)
 }
 
 /// Serialize one reconstructed session for the Settings table (snake_case keys,

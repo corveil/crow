@@ -404,6 +404,13 @@ enum RPCWebSocketHandler {
             // the same reason as `notifications-add-sound`. `skin-create` and the
             // other skin verbs carry values, not paths, and stay un-gated.
             return "skin-add is local-only"
+        case "backfill-scan":
+            // `output_path` makes the daemon write the scan's rows to a host path
+            // (CROW-1462), so a remote peer must not pass it. Gated on presence,
+            // like `defaults-set` below. A plain scan, which the web Settings
+            // dialog sends, still returns every row inline and stays un-gated.
+            guard request.params?["output_path"] != nil else { return nil }
+            return "backfill-scan output_path is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

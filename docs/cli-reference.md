@@ -2263,9 +2263,11 @@ It reuses the live upload path, so it inherits its guarantees: the destination +
 
 ```bash
 crow backfill scan
+crow backfill scan --output ~/backfill-rows.json
+jq '.sessions[] | select(.confidence == "high" and .upload_status == "new") | .uid' "$(crow backfill scan | jq -r .rows_file)"
 ```
 
-Reconciles every on-disk Claude transcript (`~/.claude/projects/**/*.jsonl`), Codex rollout (`~/.codex/sessions/**/rollout-*.jsonl`), and Cursor store (`~/.cursor/chats/**/store.db`) against the upload ledger and returns the reconstructed rows plus a `summary`. Disk- and git-only (no provider calls), so it stays fast over hundreds of sessions. Each row carries its `harness` (`claude`/`codex`/`cursor`), the recovered `workspace` / `repo_name` / `owner_repo` / `ticket_number`, a `confidence` tier, and its ledger `upload_status`:
+Reconciles every on-disk Claude transcript (`~/.claude/projects/**/*.jsonl`), Codex rollout (`~/.codex/sessions/**/rollout-*.jsonl`), and Cursor store (`~/.cursor/chats/**/store.db`) against the upload ledger and writes the reconstructed rows plus a `summary` to a **rows file** — `{"sessions":[…],"summary":{…}}`, mode `0600` — at `--output <path>`, or by default a new `crow-backfill-scan-<timestamp>.json` under `$TMPDIR`. Stdout is only `{"summary":{…},"rows_file":"<path>","row_count":N}`, and stderr names the file, so a large history can't overflow the 1 MiB socket reply (CROW-1462, #1378). Filter the rows with `jq`. Disk- and git-only (no provider calls), so it stays fast over hundreds of sessions. Each row carries its `harness` (`claude`/`codex`/`cursor`), the recovered `workspace` / `repo_name` / `owner_repo` / `ticket_number`, a `confidence` tier, and its ledger `upload_status`:
 
 | Confidence | Meaning |
 | --- | --- |

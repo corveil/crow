@@ -95,9 +95,22 @@ unbounded.
   confidence) with filters, multi-select, select-all-by-filter, and a counted
   "Backfill (N)" action that reports per-session outcomes. Gated on the workspace
   having a gateway (the upload reuses it), like the opt-in checkbox beside it.
-- **CLI** — `crow backfill scan` and
+- **CLI** — `crow backfill scan [--output PATH]` and
   `crow backfill upload --workspace NAME (--session UID… | --all-high-confidence | --all)`.
   See [cli-reference.md](cli-reference.md#session-backfill-commands).
+
+The scan's row list grows with history, and the CLI talks to the daemon over a
+Unix socket that caps a reply at 1 MiB (#1378). So `crow backfill scan` passes an
+`output_path`: the daemon writes the full scan — `{"sessions":[…],"summary":{…}}`,
+the shape the RPC always returned — to that file with mode `0600`, and replies
+with only `summary`, `rows_file` and `row_count` (CROW-1462). The file is
+`--output`, or a new `crow-backfill-scan-<timestamp>.json` under `$TMPDIR`; filter
+it with `jq`. `upload` is unaffected: it re-scans and selects inside the daemon.
+
+The Settings dialog calls `backfill-scan` without `output_path` and gets every row
+inline over `/rpc`, whose replies aren't size-capped. A remote `/rpc` peer may
+not pass `output_path` (it makes the daemon write a host file); a local one,
+including the CLI's loopback fallback, may.
 
 Orphans (`low` confidence) and Manager transcripts (workspace `.crow`) are
 refused by `upload` unless the caller passes `--allow-orphans` /
