@@ -56,15 +56,53 @@ public struct BackfillScan: ParsableCommand {
         sessions. Each row carries the recovered workspace/repo/ticket, a \
         confidence tier (high = repo + ticket, medium = repo only, low = orphan), \
         and its ledger upload status. Ticket links are validated at upload, not here.
+
+        The rows go to a JSON file ({"sessions":[...],"summary":{...}}, mode \
+        0600): --output <path>, or by default a new \
+        crow-backfill-scan-<timestamp>.json under $TMPDIR. Stdout carries only \
+        {summary, rows_file, row_count}, so a large history can't overflow the \
+        reply. Filter the rows with jq, e.g. \
+        jq '.sessions[] | select(.confidence == "high") | .uid' <rows_file>.
         """
     )
+
+    @Option(name: .customLong("output"), help: ArgumentHelp(
+        "Write the scan's rows to this file (default: a new crow-backfill-scan-<timestamp>.json under $TMPDIR)",
+        valueName: "path"))
+    var output: String?
 
     public init() {}
 
     public func run() throws {
+        let path = Self.outputPath(
+            output, cwd: FileManager.default.currentDirectoryPath,
+            tmpDir: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory(),
+            now: Date())
         // A scan reads every transcript's head and resolves git remotes — allow
         // well past the 30s default on a large history.
-        printJSON(try rpc("backfill-scan", params: [:], timeoutSeconds: 180))
+        let reply = try rpc("backfill-scan", params: ["output_path": .string(path)], timeoutSeconds: 180)
+        if let file = reply["rows_file"]?.stringValue {
+            FileHandle.standardError.write(Data(
+                "crow: scan rows written to \(file) (e.g. jq '.sessions | length' \(file))\n".utf8))
+        }
+        printJSON(reply)
+    }
+
+    /// The absolute path the daemon writes the rows to (CROW-1462). The daemon
+    /// runs in another directory, so a relative `--output` is resolved here.
+    static func outputPath(_ output: String?, cwd: String, tmpDir: String, now: Date) -> String {
+        if let output, !output.isEmpty {
+            let expanded = (output as NSString).expandingTildeInPath
+            let absolute = expanded.hasPrefix("/")
+                ? expanded : (cwd as NSString).appendingPathComponent(expanded)
+            return (absolute as NSString).standardizingPath
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return (tmpDir as NSString).appendingPathComponent(
+            "crow-backfill-scan-\(formatter.string(from: now)).json")
     }
 }
 

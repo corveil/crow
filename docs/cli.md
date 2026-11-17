@@ -452,10 +452,16 @@ Subcommands: [`scan`](#crow-backfill-scan), [`upload`](#crow-backfill-upload).
 List on-disk sessions with reconstructed metadata and upload status.
 
 ```
-crow backfill scan
+crow backfill scan [--output <path>]
 ```
 
 Disk- and git-only (no provider calls), so it's fast over hundreds of sessions. Each row carries the recovered workspace/repo/ticket, a confidence tier (high = repo + ticket, medium = repo only, low = orphan), and its ledger upload status. Ticket links are validated at upload, not here.
+
+The rows go to a JSON file ({"sessions":[...],"summary":{...}}, mode 0600): --output <path>, or by default a new crow-backfill-scan-<timestamp>.json under $TMPDIR. Stdout carries only {summary, rows_file, row_count}, so a large history can't overflow the reply. Filter the rows with jq, e.g. jq '.sessions[] | select(.confidence == "high") | .uid' <rows_file>.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--output` | `<path>` | no | Write the scan's rows to this file (default: a new crow-backfill-scan-<timestamp>.json under $TMPDIR) |
 
 ---
 

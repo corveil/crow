@@ -390,10 +390,11 @@ crow logsync set [--retention-days N] [--quiet-period-minutes N] [--max-upload-b
 The historical session backfill (CROW-1075) — reconcile the coding-session transcripts already on disk (predating the live path, or reaped from Crow's store) and upload the ones you choose as real, fully-linked Corveil session artifacts. Claude Code, Codex, Grok Build, Cursor, OpenCode, and Muse Code for v1 (CROW-1089 / CROW-1098 / CROW-1095 / CROW-1096 / CROW-1106).
 
 ```
-crow backfill scan                                                      → {"sessions":[{uid,harness,workspace,repo_name,owner_repo,ticket_number,confidence,upload_status,...}],"summary":{total,uploaded,linkable,repo_only,orphan}}
+crow backfill scan [--output PATH]                                       → {"summary":{total,uploaded,linkable,repo_only,orphan},"rows_file":"<path>","row_count":N}
 crow backfill upload --workspace NAME (--session UID … | --all-high-confidence | --all) [--allow-orphans] [--allow-manager-transcripts]   → {"results":[{uid,result,linked,owner_repo,ticket_number,reason}],"summary":{...}}
 ```
 
+- `scan` writes the rows to a 0600 file — `{"sessions":[{uid,harness,workspace,repo_name,owner_repo,ticket_number,confidence,upload_status,...}],"summary":{...}}` — at `--output`, else `$TMPDIR/crow-backfill-scan-<timestamp>.json`; stdout is the summary only (CROW-1462). Filter with `jq '.sessions[] | …' <rows_file>`.
 - `scan` is disk- and git-only (no provider calls) — fast over hundreds of sessions. Reconstructs each session's workspace/repo/ticket from the transcript's own `cwd`/`gitBranch` (authoritative, not the lossy slug) plus live git remotes; `confidence` is `high` (repo + ticket) · `medium` (repo only) · `low` (orphan).
 - `upload` reuses the **live path** and is **idempotent** (local ledger + server write-once 409). `--workspace` names the workspace whose local-only gateway supplies the destination + credential (same security invariant as the live collector). Choose exactly one selection mode; `--all-high-confidence`/`--all` scope to that workspace's sessions. Orphans and Manager transcripts (workspace `.crow`) are refused — returned as `skipped` with a reason — unless `--allow-orphans` / `--allow-manager-transcripts` is passed (CROW-1382).
 - A reconstructed ticket becomes a **REFERENCE only when the provider (`gh`/`glab`) confirms it exists** — otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Never automatic or unbounded — the user always chooses.

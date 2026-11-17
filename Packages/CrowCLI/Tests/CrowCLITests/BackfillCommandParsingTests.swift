@@ -47,3 +47,31 @@ import ArgumentParser
         _ = try BackfillUpload.parse(["--workspace", "   ", "--all"])
     }
 }
+
+// MARK: - `crow backfill scan --output` (CROW-1462)
+
+@Test func backfillScanParsesOutput() throws {
+    #expect(try BackfillScan.parse([]).output == nil)
+    #expect(try BackfillScan.parse(["--output", "rows.json"]).output == "rows.json")
+}
+
+@Test func backfillScanResolvesOutputToAnAbsolutePath() {
+    let now = Date(timeIntervalSince1970: 1_763_400_000) // 2025-11-17T17:20:00Z
+    // The daemon runs elsewhere, so a relative path is resolved against the CLI's cwd.
+    #expect(BackfillScan.outputPath("rows.json", cwd: "/work/dir", tmpDir: "/t", now: now)
+            == "/work/dir/rows.json")
+    #expect(BackfillScan.outputPath("../out/rows.json", cwd: "/work/dir", tmpDir: "/t", now: now)
+            == "/work/out/rows.json")
+    #expect(BackfillScan.outputPath("/abs/rows.json", cwd: "/work/dir", tmpDir: "/t", now: now)
+            == "/abs/rows.json")
+    #expect(BackfillScan.outputPath("~/rows.json", cwd: "/work/dir", tmpDir: "/t", now: now)
+            == (NSHomeDirectory() as NSString).appendingPathComponent("rows.json"))
+}
+
+@Test func backfillScanDefaultsToATimestampedFileUnderTmpDir() {
+    let now = Date(timeIntervalSince1970: 1_763_400_000)
+    #expect(BackfillScan.outputPath(nil, cwd: "/work", tmpDir: "/var/tmp/x/", now: now)
+            == "/var/tmp/x/crow-backfill-scan-20251117T172000Z.json")
+    #expect(BackfillScan.outputPath("", cwd: "/work", tmpDir: "/t", now: now)
+            == "/t/crow-backfill-scan-20251117T172000Z.json")
+}
