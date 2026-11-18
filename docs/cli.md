@@ -93,9 +93,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow mcp`](#crow-mcp) | Serve Crow over MCP, and manage the tokens remote clients use |
 | [`crow mcp serve`](#crow-mcp-serve) | Serve the read-only MCP surface over stdio (for a local client) |
 | [`crow mcp token`](#crow-mcp-token) | Mint, list and revoke MCP bearer tokens (local-only) |
-| [`crow mcp token list`](#crow-mcp-token-list) | List MCP bearer tokens (never the tokens themselves) |
+| [`crow mcp token list`](#crow-mcp-token-list) | List MCP bearer tokens and OAuth grants (never the secrets themselves) |
 | [`crow mcp token mint`](#crow-mcp-token-mint) | Mint a scoped MCP bearer token |
-| [`crow mcp token revoke`](#crow-mcp-token-revoke) | Revoke an MCP bearer token |
+| [`crow mcp token revoke`](#crow-mcp-token-revoke) | Revoke an MCP bearer token or an OAuth grant |
 | [`crow new-session`](#crow-new-session) | Create a new session |
 | [`crow new-terminal`](#crow-new-terminal) | Create a terminal tab inside Crow (tmux) |
 | [`crow notifications`](#crow-notifications) | Read and write notification settings |
@@ -1506,11 +1506,13 @@ Subcommands: [`list`](#crow-mcp-token-list), [`mint`](#crow-mcp-token-mint), [`r
 
 ## `crow mcp token list`
 
-List MCP bearer tokens (never the tokens themselves).
+List MCP bearer tokens and OAuth grants (never the secrets themselves).
 
 ```
 crow mcp token list
 ```
+
+`tokens` are the ones minted here. `grants` are apps connected with OAuth, such as Claude's connectors (web, Desktop, mobile), each approved on the consent page with the web password. A grant's access tokens rotate hourly and are counted on the grant rather than listed.
 
 ---
 
@@ -1541,18 +1543,18 @@ Expiry defaults to 90 days. Pass --expires-in to choose another, or --no-expiry 
 
 ## `crow mcp token revoke`
 
-Revoke an MCP bearer token.
+Revoke an MCP bearer token or an OAuth grant.
 
 ```
 crow mcp token revoke [--id <id>] [--name <name>]
 ```
 
-Revoke by --id (from `crow mcp token list`), or by --name when only one token carries that name. An ambiguous name is refused rather than guessed.
+Revoke by --id (from `crow mcp token list`), or by --name when only one token or grant carries that name (a grant's name is its client name). An ambiguous name is refused rather than guessed. Revoking a grant also revokes every access token issued under it.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| `--id` | `<id>` | no | Token UUID, from `crow mcp token list` |
-| `--name` | `<name>` | no | Token name, when it is unambiguous |
+| `--id` | `<id>` | no | Token or grant UUID, from `crow mcp token list` |
+| `--name` | `<name>` | no | Token name or grant client name, when it is unambiguous |
 
 ---
 

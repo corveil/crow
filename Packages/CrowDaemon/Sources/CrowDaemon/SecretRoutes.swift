@@ -1,4 +1,5 @@
 import CrowCore
+import CrowIPC
 import CrowPersistence
 import Foundation
 import HTTPTypes
@@ -188,15 +189,20 @@ enum SecretRoutes {
                     ])
 
                 case "revoke":
-                    let removed = try ConfigStore.withConfigLock { () -> MCPTokenRecord in
+                    // A minted token or an OAuth grant (CROW-1465) — same decision
+                    // as `mcp-token-revoke`.
+                    let removed = try ConfigStore.withConfigLock { () -> [String: JSONValue] in
                         var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-                        let token = try MCPTokenRPC.tokenToRevoke(
-                            id: body.id, name: body.name, in: c.mcpTokens)
-                        c.mcpTokens.removeAll { $0.id == token.id }
+                        let result = try MCPTokenRPC.revoke(id: body.id, name: body.name, in: &c)
                         try ConfigStore.saveConfig(c, devRoot: devRoot)
-                        return token
+                        return result
                     }
-                    return json(["revoked": true, "id": removed.id.uuidString, "name": removed.name])
+                    return json([
+                        "revoked": true,
+                        "kind": removed["kind"]?.stringValue ?? "token",
+                        "id": removed["id"]?.stringValue ?? "",
+                        "name": removed["name"]?.stringValue ?? "",
+                    ])
 
                 default:
                     return json(["error": "action must be \"mint\" or \"revoke\""], status: .badRequest)

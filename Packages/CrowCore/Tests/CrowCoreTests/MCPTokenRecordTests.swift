@@ -138,3 +138,68 @@ struct AppConfigMCPTokenTests {
         #expect(decoded.mcpTokens[0].scopes == [.boardRead])
     }
 }
+
+@Suite("MCP OAuth grant storage (CROW-1465)")
+struct MCPOAuthGrantStorageTests {
+
+    private func grant(expiresIn seconds: TimeInterval = 3600, hash: String = "aGFzaA==") -> MCPOAuthGrant {
+        MCPOAuthGrant(
+            clientID: "crow_mcpc_x", clientName: "Claude",
+            redirectURIs: ["https://claude.ai/api/mcp/auth_callback"],
+            scopes: [.sessionsRead], resource: "https://crow.example.ts.net/mcp",
+            refreshTokenHashB64: hash, refreshExpiresAt: Date().addingTimeInterval(seconds))
+    }
+
+    @Test("A config with no grants key decodes to an empty list")
+    func absentKeyDecodes() throws {
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(decoded.mcpOAuthGrants.isEmpty)
+    }
+
+    @Test("Grants and an access token's grant link survive a round trip")
+    func roundTrip() throws {
+        var config = AppConfig()
+        let g = grant()
+        config.mcpOAuthGrants = [g]
+        config.mcpTokens = [
+            MCPTokenRecord(name: "Claude", prefix: "AbCdEfGh", hashB64: "aGFzaA==",
+                           scopes: [.sessionsRead], expiresAt: Date(), grantID: g.id),
+        ]
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(decoded.mcpOAuthGrants.first?.clientName == "Claude")
+        #expect(decoded.mcpOAuthGrants.first?.scopes == [.sessionsRead])
+        #expect(decoded.mcpTokens.first?.grantID == g.id)
+    }
+
+    @Test("A minted token decodes with no grant link")
+    func mintedHasNoGrant() throws {
+        let json = #"{"name":"bot","prefix":"x","hashB64":"aA==","scopes":["board:read"]}"#
+        let record = try JSONDecoder().decode(MCPTokenRecord.self, from: Data(json.utf8))
+        #expect(record.grantID == nil)
+    }
+
+    @Test("A grant missing its expiry is lapsed, never permanent")
+    func missingExpiryIsLapsed() throws {
+        let json = #"{"clientID":"c","clientName":"Claude","scopes":["sessions:read"],"refreshTokenHashB64":"aA=="}"#
+        let decoded = try JSONDecoder().decode(MCPOAuthGrant.self, from: Data(json.utf8))
+        #expect(decoded.isRefreshExpired())
+        #expect(!decoded.isRefreshable())
+    }
+
+    @Test("Only a present, unexpired, scope-bearing refresh token refreshes")
+    func refreshable() {
+        #expect(grant().isRefreshable())
+        #expect(!grant(expiresIn: -1).isRefreshable())
+        #expect(!grant(hash: "").isRefreshable())
+        var noScopes = grant()
+        noScopes.scopes = []
+        #expect(!noScopes.isRefreshable())
+    }
+
+    @Test("An unknown scope in a stored grant is dropped, not fatal")
+    func unknownScopeDropped() throws {
+        let json = #"{"clientID":"c","scopes":["sessions:read","sessions:write"],"refreshExpiresAt":0}"#
+        let decoded = try JSONDecoder().decode(MCPOAuthGrant.self, from: Data(json.utf8))
+        #expect(decoded.scopes == [.sessionsRead])
+    }
+}

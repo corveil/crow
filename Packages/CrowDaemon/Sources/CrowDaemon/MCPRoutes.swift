@@ -10,8 +10,10 @@ import NIOCore
 ///
 /// This is the **off-box** door. Local clients get `crow mcp serve`, which bridges
 /// stdio to the daemon's 0600 Unix socket and is trusted by machine locality; a
-/// caller arriving here has to present a scoped bearer token minted by
-/// `crow mcp token mint`.
+/// caller arriving here has to present a scoped bearer token: one minted by
+/// `crow mcp token mint`, or an OAuth access token issued to a client the operator
+/// approved on the consent page (`MCPOAuthRoutes`, CROW-1465). Both are
+/// `MCPTokenRecord`s and are checked by the same code.
 ///
 /// ### Why this route is exempt from `WebAuthMiddleware`
 ///
@@ -70,17 +72,22 @@ enum MCPRoutes {
 
             // 2. Bearer token → scopes. Deliberately before the body is read: an
             //    unauthenticated caller should not be able to make us parse JSON.
+            //    The 401 names the protected-resource metadata (RFC 9728 §5.1), which
+            //    is how an OAuth client such as a Claude connector finds Crow's
+            //    authorization server (CROW-1465).
+            let origin = MCPOAuthRoutes.publicOrigin(request, context)
             guard let presented = MCPTokenStore.bearerToken(
                 fromAuthorization: request.headers[.authorization])
             else {
-                return unauthorized("An Authorization: Bearer <token> header is required")
+                return unauthorized("An Authorization: Bearer <token> header is required", origin: origin)
             }
             let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
             let scopes = MCPTokenStore.scopes(for: presented, in: config.mcpTokens)
             guard !scopes.isEmpty else {
                 // One message for unknown, expired, and revoked. Distinguishing them
                 // would tell a probing caller whether a token was ever real.
-                return unauthorized("Invalid, expired, or revoked MCP token")
+                return unauthorized(
+                    "Invalid, expired, or revoked MCP token", origin: origin, invalidToken: true)
             }
 
             // 3. Body.
@@ -164,10 +171,19 @@ enum MCPRoutes {
     }
 
     /// 401 with a `WWW-Authenticate` challenge, so a client knows *how* to
-    /// authenticate rather than only that it failed.
-    private static func unauthorized(_ message: String) -> Response {
+    /// authenticate rather than only that it failed. With a public origin the
+    /// challenge carries `resource_metadata`; `error="invalid_token"` marks a
+    /// presented-but-rejected token (RFC 6750 §3.1), which is what tells an OAuth
+    /// client to refresh.
+    static func unauthorized(
+        _ message: String,
+        origin: MCPOAuthOrigin?,
+        invalidToken: Bool = false
+    ) -> Response {
         var headers: HTTPFields = [.contentType: "application/json; charset=utf-8"]
-        headers[.wwwAuthenticate] = #"Bearer realm="crow-mcp""#
+        var challenge = origin?.bearerChallenge ?? #"Bearer realm="crow-mcp""#
+        if invalidToken { challenge += #", error="invalid_token""# }
+        headers[.wwwAuthenticate] = challenge
         let body = MCPResponse.error(
             id: .null, code: MCPProtocol.ErrorCode.invalidRequest, message: message)
         return Response(

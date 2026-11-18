@@ -405,10 +405,11 @@ Crow's read-only MCP surface (CROW-1004) — eight tools over seven read RPCs, s
 
 ```
 crow mcp serve [--scope sessions:read] [--scope board:read] [--scope todos:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
-crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N}
+crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N,
+                                                                 "grants":[{id,kind:"oauth",client_name,client_id,redirect_uris,scopes,created_at,last_refreshed_at,refresh_expires_at,expired,active_access_tokens}],"grant_count":N}
 crow mcp token mint --name N --scope S [--expires-in 90d | --no-expiry]
                                                               → {"saved":true,"token":"crow_mcp_…","warning":"…","record":{…}}
-crow mcp token revoke --id <uuid> | --name N                  → {"revoked":true,"id":"…","name":"…","remaining":N}
+crow mcp token revoke --id <uuid> | --name N                  → {"revoked":true,"kind":"token|oauth","id":"…","name":"…","remaining":N,"remaining_grants":N}
 ```
 
 - **Two transports, two trust models.** `crow mcp serve` bridges stdio to the Unix socket with **no token** — a caller who can run it can already run every other `crow` verb. Off-box clients POST to `/mcp` with `Authorization: Bearer <token>`.
@@ -417,6 +418,7 @@ crow mcp token revoke --id <uuid> | --name N                  → {"revoked":tru
 - Scopes are `sessions:read`, `board:read`, and `todos:read`. `tools/list` is filtered **by the token**, so a `board:read` client never learns the session tools exist.
 - Expiry defaults to **90 days**; `--no-expiry` must be typed. `--expires-in` needs a unit (`90d`, `12h`, `2w`) — a bare `90` is rejected as ambiguous.
 - The token is printed **once** and stored as a SHA-256 hash; there is no `--reveal`. A lost token is replaced, not recovered.
+- **OAuth grants** (CROW-1465) are the third credential: Claude's connectors (web, Desktop, mobile) register at `/oauth/register` and the operator approves them on `/oauth/authorize`, which **always requires the web password** and refuses when none is set. No verb creates a grant. `token list` shows grants under `grants`; `token revoke --id <grant id>` (or `--name <client name>`) removes the grant and its access tokens.
 
 ## Automation Commands
 

@@ -69,6 +69,10 @@ default. The endpoint is exempt from `WebAuthMiddleware` and authenticates itsel
 which is *stricter* than the middleware — that gate is opt-in and inert when no web
 password is set, while `/mcp` never has a tokenless path.
 
+*Amended by CROW-1465:* `POST /mcp` also accepts OAuth access tokens, a third
+credential path for clients that cannot send a fixed header. See
+[the amendment below](#amendment-oauth-for-claude-connectors-crow-1465).
+
 **4. Dual-era protocol.** Revision `2026-07-28` replaced the `initialize` handshake
 with per-request metadata and a mandatory `server/discover`. It is weeks old;
 shipping clients still open with the handshake. The spec blesses serving both on one
@@ -122,6 +126,52 @@ and it is verified on *every request* rather than once per login, where 210,000
 iterations would be a self-inflicted denial of service. SHA-256, constant-time
 compared, no salt. Same reasoning as a GitHub personal access token. This will look
 like an inconsistency to anyone reading the two files side by side; it is not.
+
+## Amendment: OAuth for Claude connectors (CROW-1465)
+
+**Context.** Claude's custom connectors (claude.ai, Claude Desktop and the mobile
+apps) call MCP servers from Anthropic's cloud and authenticate with OAuth as the MCP
+authorization spec describes it, or not at all. They cannot send
+`Authorization: Bearer crow_mcp_…`, so no Claude connector could reach `/mcp`.
+
+**Decision.** Crow is its own OAuth 2.1 authorization server for `/mcp`. That is a
+third credential path beside stdio (locality) and minted tokens:
+
+- **Discovery.** A `401` from `/mcp` carries `resource_metadata` (RFC 9728), and
+  Crow serves protected-resource metadata and authorization-server metadata
+  (RFC 8414). Every URL is derived from `X-Forwarded-Host` / `-Proto`, trusted only
+  from a loopback peer, the same assumption `WebAuthGuard` makes.
+- **Registration.** Dynamic registration (RFC 7591) registers public clients only:
+  `token_endpoint_auth_method: none`, `https` or loopback redirect URIs. Fresh
+  registrations live in memory until approved, so an unauthenticated caller can
+  never grow `config.json`. Client ID Metadata Documents are not supported, because
+  they would have the daemon fetch an arbitrary URL on an unauthenticated request.
+- **Consent is the gate, and it requires the web password.** Once the OAuth paths
+  are public, consent is the only check between a stranger and a token. Web auth is
+  opt-in, so a consent that leaned on `WebAuthMiddleware` would approve anyone on a
+  daemon with no password. The consent POST therefore always verifies the web
+  password, from loopback too, and with none configured it refuses and issues
+  nothing. It has its own rate limit, separate from `/login`'s, so a stranger
+  hammering the public consent page cannot lock the operator out of the web UI.
+- **Tokens.** Authorization code with mandatory PKCE `S256`. Codes are single-use,
+  expire after five minutes, and a replay revokes the grant they produced. Access
+  tokens are ordinary `MCPTokenRecord`s with a one-hour expiry and a `grantID`, so
+  `MCPRoutes` validates them with the code it already had, and they reach only
+  `MCPToolCatalog`. Refresh tokens are SHA-256-hashed on the grant
+  (`AppConfig.mcpOAuthGrants`) and rotate on every use.
+- **Management.** No verb creates a grant; approving one is a browser action that
+  shows which client is being approved. `crow mcp token list` and Settings → Web
+  access list grants, and `crow mcp token revoke` removes a grant with all of its
+  access tokens. These stay local-only.
+
+**Not changed.** The tool catalog, the scopes, and `exportedMethodsAreReadOnly`.
+OAuth is another way to *hold* a read-only token, not a way to widen one. Write
+tools over MCP remain a separate decision.
+
+**Consequence.** Publishing `/mcp` is the operator's step. The documented setup
+funnels only `/mcp`, `/.well-known/oauth-*` and `/oauth/*` on a dedicated port,
+because Tailscale Funnel is enabled per port, so funneling the web UI's port would
+make the whole UI public.
 
 ## Alternatives considered
 

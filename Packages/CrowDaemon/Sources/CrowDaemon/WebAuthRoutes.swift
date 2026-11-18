@@ -1,4 +1,5 @@
 import CrowCore
+import CrowIPC
 import CrowPersistence
 import Foundation
 import HTTPTypes
@@ -95,6 +96,13 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
     /// `/mcp` here would 401 every legitimate token client while waving anyone
     /// through on a passwordless daemon. `MCPRoutesTests` pins the stricter behavior.
     ///
+    /// The OAuth surface for `/mcp` (CROW-1465 — every path `MCPOAuth.isOAuthPath`
+    /// accepts: the `.well-known` metadata and `/oauth/register|authorize|token`) is
+    /// exempt on the same argument. A Claude connector has no cookie, and on a
+    /// passwordless daemon this middleware would wave a consent through. Instead the
+    /// consent POST always demands the web password, and refuses outright when none
+    /// is set.
+    ///
     /// `/fonts/<face>` is only a single safe component that is a font or the OFL
     /// text. A traversal or a script under that prefix stays gated.
     static func isBundledFont(path: String) -> Bool {
@@ -123,6 +131,7 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
             || path == "/manifest.webmanifest" || path == "/icon-192.png"
             || path == "/icon-512.png" || path == "/apple-touch-icon.png"
             || path == "/mcp"
+            || MCPOAuth.isOAuthPath(path)
     }
 
     /// For an unauthorized request, whether to answer with the login page (200)

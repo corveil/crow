@@ -2311,6 +2311,9 @@ There are two transports, with two different trust models:
 | --- | --- | --- | --- |
 | stdio | `crow mcp serve` | none — the 0600 Unix socket is the boundary | a local client on this machine |
 | HTTP | `POST /mcp` | `Authorization: Bearer <token>` | an off-box client |
+| HTTP + OAuth | `POST /mcp` | an OAuth access token from `/oauth/token` | Claude's connectors (web, Desktop, mobile) |
+
+OAuth clients are approved on a consent page that requires the web password, not through a verb; see [MCP → Claude connectors](mcp.md#claude-connectors-desktop-mobile-web). The `token list` and `token revoke` verbs below cover their grants too.
 
 ### `crow mcp serve`
 
@@ -2354,29 +2357,32 @@ Returns `{"saved": true, "token": "crow_mcp_…", "warning": "...", "record": {.
 
 ### `crow mcp token list`
 
-List tokens — names, prefixes, scopes and expiry, never the tokens themselves.
+List minted tokens and OAuth grants — names, prefixes, scopes and expiry, never the tokens themselves.
 
 ```bash
 crow mcp token list
 ```
 
-Returns `{"tokens": [{"id": "...", "name": "...", "prefix": "...", "scopes": [...], "created_at": "...", "expires_at": "...", "expired": false}], "count": 1}`.
+Returns `{"tokens": [{"id": "...", "name": "...", "prefix": "...", "scopes": [...], "created_at": "...", "expires_at": "...", "expired": false}], "count": 1, "grants": [...], "grant_count": 1}`.
+
+Each grant is an app connected with OAuth, such as Claude: `{"id": "...", "kind": "oauth", "client_name": "Claude", "client_id": "crow_mcpc_…", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"], "scopes": [...], "created_at": "...", "last_refreshed_at": "...", "refresh_expires_at": "...", "expired": false, "active_access_tokens": 1}`. A grant's access tokens rotate hourly, so they are counted rather than listed.
 
 ### `crow mcp token revoke`
 
-Revoke a token. Takes exactly one of `--id` or `--name`; an ambiguous name is refused rather than guessed, since deleting the wrong credential is not something to be helpful about.
+Revoke a token or an OAuth grant. Takes exactly one of `--id` or `--name`; an ambiguous name is refused rather than guessed, since deleting the wrong credential is not something to be helpful about. Revoking a grant removes its refresh token and every access token issued under it, so the app is refused on its next request.
 
 ```bash
 crow mcp token revoke --name grok-bot
 crow mcp token revoke --id 7F3A1C22-0B4E-4E51-9E2A-2C9F4E6D1A80
+crow mcp token revoke --name Claude          # an OAuth grant, by client name
 ```
 
-| Flag     | Required | Description                                       |
-| -------- | -------- | ------------------------------------------------- |
-| `--id`   | one of   | Token UUID, from `crow mcp token list`            |
-| `--name` | one of   | Token name, when only one token carries it        |
+| Flag     | Required | Description                                                     |
+| -------- | -------- | --------------------------------------------------------------- |
+| `--id`   | one of   | Token or grant UUID, from `crow mcp token list`                 |
+| `--name` | one of   | Token name or grant client name, when only one carries it       |
 
-Returns `{"revoked": true, "id": "...", "name": "...", "remaining": 0}`.
+Returns `{"revoked": true, "kind": "token", "id": "...", "name": "...", "remaining": 0, "remaining_grants": 0}` (`kind` is `oauth` for a grant).
 
 ---
 

@@ -83,6 +83,12 @@ public struct MCPTokenRecord: Codable, Sendable, Equatable, Identifiable {
     /// `--no-expiry`, since the ticket's position is that an off-box token should
     /// expire and a default of "never" makes that rest on the operator remembering.
     public var expiresAt: Date?
+    /// The OAuth grant this token was issued under (CROW-1465), or `nil` for a
+    /// token minted by `crow mcp token mint`. An OAuth access token is an ordinary
+    /// record in every other respect — hashed, scoped, expiring (about an hour) —
+    /// so `/mcp` validates both kinds with the same code. Revoking the grant
+    /// removes every record that carries its id.
+    public var grantID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -91,7 +97,8 @@ public struct MCPTokenRecord: Codable, Sendable, Equatable, Identifiable {
         hashB64: String,
         scopes: [MCPScope],
         createdAt: Date = Date(),
-        expiresAt: Date?
+        expiresAt: Date?,
+        grantID: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -100,6 +107,7 @@ public struct MCPTokenRecord: Codable, Sendable, Equatable, Identifiable {
         self.scopes = scopes
         self.createdAt = createdAt
         self.expiresAt = expiresAt
+        self.grantID = grantID
     }
 
     /// Tolerant decode, matching `WebAuthConfig`: a partially-written record must
@@ -117,10 +125,11 @@ public struct MCPTokenRecord: Codable, Sendable, Equatable, Identifiable {
         scopes = rawScopes.compactMap(MCPScope.parse)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         expiresAt = try c.decodeIfPresent(Date.self, forKey: .expiresAt)
+        grantID = try c.decodeIfPresent(UUID.self, forKey: .grantID)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, prefix, hashB64, scopes, createdAt, expiresAt
+        case id, name, prefix, hashB64, scopes, createdAt, expiresAt, grantID
     }
 
     /// Whether this record has passed its expiry. A `nil` expiry never does.

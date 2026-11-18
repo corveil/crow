@@ -21,13 +21,9 @@ import Foundation
 /// set and `ParityLedger.localOnlyRPCMethods` are disjoint.
 func makeMCPTokenHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
     [
+        // Minted tokens and OAuth grants (CROW-1465), both redacted.
         "mcp-token-list": { _ in
-            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-            let now = Date()
-            return [
-                "tokens": .array(config.mcpTokens.map { .object($0.publicJSON(now: now)) }),
-                "count": .int(config.mcpTokens.count),
-            ]
+            MCPTokenRPC.listJSON(ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
         },
         // Mint a token. The plaintext is in the response and nowhere else — not in
         // config.json, not in the daemon log. A caller that loses it mints another.
@@ -49,24 +45,17 @@ func makeMCPTokenHandlers(devRoot: String) -> [String: CommandRouter.Handler] {
                 return MCPTokenRPC.mintedJSON(minted)
             }
         },
-        // Revoke by id, or by name when the name is unambiguous.
+        // Revoke a minted token or an OAuth grant, by id, or by name when the name
+        // is unambiguous. A grant takes its access tokens with it.
         "mcp-token-revoke": { params in
             let id = params["id"]?.stringValue
             let name = params["name"]?.stringValue
             return try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
-                let removed: MCPTokenRecord
                 do {
-                    removed = try MCPTokenRPC.tokenToRevoke(id: id, name: name, in: config.mcpTokens)
+                    return try MCPTokenRPC.revoke(id: id, name: name, in: &config)
                 } catch let error as MCPTokenRPC.Invalid {
                     throw RPCError.invalidParams(error.message)
                 }
-                config.mcpTokens.removeAll { $0.id == removed.id }
-                return [
-                    "revoked": .bool(true),
-                    "id": .string(removed.id.uuidString),
-                    "name": .string(removed.name),
-                    "remaining": .int(config.mcpTokens.count),
-                ]
             }
         },
     ]

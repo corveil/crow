@@ -681,6 +681,27 @@ public enum CrowDaemon {
             boundHost: options.host,
             devRoot: options.devRoot,
             serverVersion: buildInfo.version)
+        // OAuth for `/mcp` (CROW-1465), so Claude's connectors (web, Desktop,
+        // mobile) can connect. Exempt from `WebAuthMiddleware` like `/mcp`; the
+        // consent step always requires the web password. Registrations, consents
+        // and codes are in memory only, pruned here.
+        let mcpOAuthState = MCPOAuthState()
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(300))
+                mcpOAuthState.prune()
+            }
+        }
+        MCPOAuthRoutes.mount(
+            on: httpRouter,
+            boundHost: options.host,
+            devRoot: options.devRoot,
+            state: mcpOAuthState,
+            // Its own budget, not `/login`'s: the consent page is public behind a
+            // Funnel, and a stranger hammering it must not lock the operator out
+            // of the web UI.
+            consentLimiter: LoginRateLimiter(),
+            registrationLimiter: LoginRateLimiter(max: 20, window: 60))
         StaticAssets.mount(on: httpRouter, webDir: options.webDir, skins: skinSources)
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).

@@ -120,6 +120,15 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// one. Minted/revoked via the local-only `mcp-token-*` RPCs.
     public var mcpTokens: [MCPTokenRecord]
 
+    /// OAuth grants issued to MCP clients through `/oauth/authorize` (CROW-1465) —
+    /// the third credential path, used by Claude's connectors (web, Desktop,
+    /// mobile). Each grant holds a SHA-256 hash of its current refresh token; its
+    /// short-lived access tokens are ordinary `mcpTokens` records carrying the
+    /// grant's id. Created only by the consent page (which requires the web
+    /// password), revoked via `mcp-token-revoke`, and stripped / restored by
+    /// `SettingsSecrets` exactly like `mcpTokens`.
+    public var mcpOAuthGrants: [MCPOAuthGrant]
+
     /// Session-log collector behavior tuning (CROW-1056; slimmed in CROW-1070).
     /// Holds only the three global knobs — ledger retention, quiet period, upload
     /// cap. The opt-in and the upload destination + credential are per-workspace
@@ -211,6 +220,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         jiraCredential: JiraCredential? = nil,
         webAuth: WebAuthConfig? = nil,
         mcpTokens: [MCPTokenRecord] = [],
+        mcpOAuthGrants: [MCPOAuthGrant] = [],
         logSync: LogSyncConfig? = nil,
         corveilConnection: CorveilConnection? = nil,
         webDefaultSkin: String? = nil
@@ -243,6 +253,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.jiraCredential = jiraCredential
         self.webAuth = webAuth
         self.mcpTokens = mcpTokens
+        self.mcpOAuthGrants = mcpOAuthGrants
         self.logSync = logSync
         self.corveilConnection = corveilConnection
         self.webDefaultSkin = webDefaultSkin
@@ -302,6 +313,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         }
         webAuth = try container.decodeIfPresent(WebAuthConfig.self, forKey: .webAuth)
         mcpTokens = try container.decodeIfPresent([MCPTokenRecord].self, forKey: .mcpTokens) ?? []
+        mcpOAuthGrants = try container.decodeIfPresent([MCPOAuthGrant].self, forKey: .mcpOAuthGrants) ?? []
         logSync = try container.decodeIfPresent(LogSyncConfig.self, forKey: .logSync)
         corveilConnection = try container.decodeIfPresent(CorveilConnection.self, forKey: .corveilConnection)
         webDefaultSkin = try container.decodeIfPresent(String.self, forKey: .webDefaultSkin)
@@ -328,7 +340,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, chatView, debugMode, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync, corveilConnection, webDefaultSkin
+        case workspaces, defaults, notifications, sidebar, switcher, chatView, debugMode, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, mcpOAuthGrants, logSync, corveilConnection, webDefaultSkin
     }
 
     /// Resolve the agent that should drive a newly-created session of the
