@@ -65,6 +65,7 @@
     body.appendChild(S.field('Session', outBtn, 'Ends this browser’s login session on this device.'));
 
     renderMCPTokens(body);
+    renderMCPGrants(body);
 
     body.appendChild(S.group('Remote access'));
     body.appendChild(el('div', 'st-perm-status',
@@ -83,8 +84,12 @@
       'Read-only MCP for off-box clients at POST /mcp. Local clients need no token — '
       + 'point them at `crow mcp serve` instead.'));
 
-    if (!S.cfg.mcpTokens.length) body.appendChild(el('div', 'st-empty', 'No MCP tokens.'));
-    for (const token of S.cfg.mcpTokens) {
+    // OAuth access tokens (CROW-1465) are listed through their grant below, not
+    // one by one: they rotate hourly and revoking one alone would not stop the
+    // refresh token minting the next.
+    const minted = S.cfg.mcpTokens.filter((t) => !t.grantID);
+    if (!minted.length) body.appendChild(el('div', 'st-empty', 'No MCP tokens.'));
+    for (const token of minted) {
       const scopes = (token.scopes || []).join(', ') || 'no scopes';
       const expired = token.expiresAt && new Date(token.expiresAt) <= new Date();
       const expiry = token.expiresAt
@@ -203,6 +208,52 @@
     row.appendChild(mintBtn);
     body.appendChild(S.field('New token', row, 'Shown once. Applies immediately — no Save needed.'));
     body.appendChild(msg);
+  }
+
+  // OAuth grants (CROW-1465): apps such as Claude's connectors (web, Desktop,
+  // mobile) that the operator approved on the consent page with the web password.
+  // Revoking one removes its refresh token and every access token issued under it.
+  function renderMCPGrants(body) {
+    const grants = S.cfg.mcpOAuthGrants || [];
+    body.appendChild(S.group('Connected apps (OAuth)'));
+    body.appendChild(el('div', 'st-perm-status',
+      'Apps like Claude (web, Desktop, mobile) connect to /mcp with OAuth. Each one '
+      + 'is approved on a consent page that asks for the web password, so a web '
+      + 'password must be set first.'));
+    if (!grants.length) body.appendChild(el('div', 'st-empty', 'No connected apps.'));
+    for (const grant of grants) {
+      const scopes = (grant.scopes || []).join(', ') || 'no scopes';
+      let host = '';
+      try { host = new URL((grant.redirectURIs || [])[0]).host; } catch (_) {}
+      const connected = grant.createdAt ? 'connected ' + new Date(grant.createdAt).toLocaleDateString() : '';
+      const sub = [scopes, host, connected].filter(Boolean).join(' · ');
+
+      const row = el('div', 'st-row');
+      const main = el('div', 'st-row-main');
+      main.appendChild(el('div', 'st-row-title', grant.clientName || '(unnamed app)'));
+      main.appendChild(el('div', 'st-row-sub', sub));
+      row.appendChild(main);
+      if (S.isLocal) {
+        const actions = el('div', 'st-row-actions');
+        const del = S.iconBtn('trash', 'Revoke', 'danger');
+        del.onclick = async () => {
+          if (!await confirmModal(
+            'Disconnect “' + (grant.clientName || 'this app') + '”? It loses access immediately '
+            + 'and has to be approved again to reconnect.',
+            { title: 'Disconnect app', okLabel: 'Disconnect', danger: true })) return;
+          del.disabled = true;
+          try {
+            await S.postConfig('/config/mcp-tokens', { action: 'revoke', id: grant.id });
+            S.cfg.mcpOAuthGrants = grants.filter((g) => g.id !== grant.id);
+            S.cfg.mcpTokens = (S.cfg.mcpTokens || []).filter((t) => t.grantID !== grant.id);
+            S.render();
+          } catch (e) { del.disabled = false; alertModal('Disconnect failed: ' + (e.message || e)); }
+        };
+        actions.appendChild(del);
+        row.appendChild(actions);
+      }
+      body.appendChild(row);
+    }
   }
 
   T.webaccess = renderWebAccess;

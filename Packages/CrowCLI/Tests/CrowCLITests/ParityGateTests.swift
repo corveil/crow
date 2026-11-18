@@ -199,7 +199,19 @@ struct ParityGateTests {
                     prefix: "AbCdEfGh",
                     hashB64: "aGFzaA==",
                     scopes: [.sessionsRead, .boardRead],
-                    expiresAt: Date())
+                    expiresAt: Date(),
+                    grantID: UUID())
+            ],
+            mcpOAuthGrants: [
+                MCPOAuthGrant(
+                    clientID: "probe-client",
+                    clientName: "Claude",
+                    redirectURIs: ["https://claude.ai/api/mcp/auth_callback"],
+                    scopes: [.sessionsRead],
+                    resource: "https://crow.example.ts.net/mcp",
+                    refreshTokenHashB64: "aGFzaA==",
+                    refreshExpiresAt: Date(),
+                    lastRefreshedAt: Date())
             ],
             logSync: LogSyncConfig(
                 retentionDays: 30,

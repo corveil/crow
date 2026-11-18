@@ -665,6 +665,92 @@ public enum ParityLedger {
                 rather than the token.
                 """,
             write: "mcp token mint"),
+        .field(
+            "mcpTokens[].grantID",
+            read: "mcp token list",
+            writeNoCLI: """
+                Set only when the OAuth token endpoint issues an access token under a \
+                grant (CROW-1465). A minted token has none; a user-settable link would \
+                let one token borrow another grant's revocation.
+                """),
+
+        // MARK: Covered — MCP OAuth grants (CROW-1465)
+
+        // Created only by the `/oauth/authorize` consent page, which requires the
+        // web password, and removed only by `mcp token revoke`. Listed (redacted)
+        // by `mcp token list`. No CLI writes a grant, because a grant is the
+        // operator approving a specific client in a browser; a CLI that minted one
+        // would skip the step that shows which client is being approved.
+        .field(
+            "mcpOAuthGrants[].id",
+            read: "mcp token list",
+            writeNoCLI: """
+                Server-assigned UUID, created when the operator approves a client on \
+                the consent page; thereafter the handle `mcp token revoke --id` takes.
+                """),
+        .field(
+            "mcpOAuthGrants[].clientID",
+            read: "mcp token list",
+            writeNoCLI: """
+                Issued by dynamic client registration at `/oauth/register` and bound to \
+                the grant at consent. Changing it would hand the grant to another client.
+                """),
+        .field(
+            "mcpOAuthGrants[].clientName",
+            read: "mcp token list",
+            writeNoCLI: """
+                The name the client registered with, shown on the consent page and in \
+                listings. Self-asserted by the client at registration, not a setting.
+                """),
+        .field(
+            "mcpOAuthGrants[].redirectURIs",
+            read: "mcp token list",
+            writeNoCLI: """
+                Registered by the client and approved by the operator on the consent \
+                page. Editing it would redirect authorization codes somewhere unapproved.
+                """),
+        .field(
+            "mcpOAuthGrants[].scopes",
+            read: "mcp token list",
+            writeNoCLI: """
+                The scopes ticked on the consent page. Widening them outside consent \
+                would grant access the operator never approved; revoke and reconnect.
+                """),
+        .field(
+            "mcpOAuthGrants[].resource",
+            read: "mcp token list",
+            writeNoCLI: """
+                The public /mcp URL the client named in its RFC 8707 resource \
+                parameter at authorization. Protocol state, not a setting.
+                """),
+        .field(
+            "mcpOAuthGrants[].createdAt",
+            read: "mcp token list",
+            writeNoCLI: """
+                Server-assigned consent timestamp. Not user-settable, for the same \
+                audit reason as `mcpTokens[].createdAt`.
+                """),
+        .field(
+            "mcpOAuthGrants[].refreshTokenHashB64",
+            noCLI: """
+                SHA-256 of the current refresh token, written by the token endpoint and \
+                never read back by any surface. Exposing or setting it would defeat \
+                storing a hash rather than the token.
+                """),
+        .field(
+            "mcpOAuthGrants[].refreshExpiresAt",
+            read: "mcp token list",
+            writeNoCLI: """
+                Moved forward by the token endpoint on every refresh-token rotation. \
+                Revoke is the control for cutting a grant short.
+                """),
+        .field(
+            "mcpOAuthGrants[].lastRefreshedAt",
+            read: "mcp token list",
+            writeNoCLI: """
+                Stamped by the token endpoint when the refresh token rotates. Runtime \
+                bookkeeping for the listing, not a setting.
+                """),
 
         // MARK: Covered — jobs
 

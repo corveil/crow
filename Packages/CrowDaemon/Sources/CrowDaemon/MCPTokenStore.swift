@@ -68,6 +68,14 @@ enum MCPTokenStore {
             plaintext: plaintext)
     }
 
+    /// A fresh `prefix` + 32 CSPRNG bytes in base64url — the shape of every OAuth
+    /// secret the daemon issues (CROW-1465): authorization codes, refresh tokens
+    /// and client ids. Same entropy as a minted token, so the same fast hash and
+    /// no-salt reasoning above applies to storing them.
+    static func randomToken(prefix: String = "") -> String {
+        prefix + base64URL(PasswordHash.randomBytes(tokenBytes))
+    }
+
     /// Base64 SHA-256 of the whole token string, prefix included.
     static func hash(_ token: String) -> String {
         Data(SHA256.hash(data: Data(token.utf8))).base64EncodedString()

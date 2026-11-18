@@ -46,6 +46,14 @@ public enum SettingsSecrets {
             t.hashB64 = ""
             return t
         }
+        // OAuth grants (CROW-1465): blank the refresh-token hash for the same
+        // reason. The client name, scopes and dates still reach Settings so a grant
+        // can be identified and revoked.
+        c.mcpOAuthGrants = c.mcpOAuthGrants.map { grant in
+            var g = grant
+            g.refreshTokenHashB64 = ""
+            return g
+        }
         if let gateway = c.managerGateway { c.managerGateway = stripHeaderValues(gateway) }
         c.workspaces = c.workspaces.map { workspace in
             var w = workspace
@@ -112,6 +120,11 @@ public enum SettingsSecrets {
         // credential for the very MCP surface the token gates. Restoring from
         // `current` means a round-trip is a no-op regardless of what came back.
         result.mcpTokens = current?.mcpTokens ?? []
+        // OAuth grants (CROW-1465) are load-bearing in the same way: a trusted
+        // incoming grant would let a remote peer plant a refresh-token hash it
+        // chose. Grants are created only by the consent page and removed only by
+        // `mcp-token-revoke`, so a round-trip restores them verbatim.
+        result.mcpOAuthGrants = current?.mcpOAuthGrants ?? []
         result.managerGateway = current?.managerGateway
         // Corveil connection (CROW-1118): authored only through the local-only
         // Connect (OAuth) flow and its CLI verbs (corveil/crow#1120) plus the

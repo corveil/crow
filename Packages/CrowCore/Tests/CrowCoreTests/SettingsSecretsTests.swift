@@ -174,6 +174,52 @@ import CrowCore
         #expect(merged.workspaces.first?.gateway == nil)
     }
 
+    // MARK: - MCP OAuth grants (CROW-1465)
+
+    private func configWithGrant() -> AppConfig {
+        var c = configWithSecrets()
+        c.mcpOAuthGrants = [
+            MCPOAuthGrant(
+                clientID: "crow_mcpc_x", clientName: "Claude",
+                redirectURIs: ["https://claude.ai/api/mcp/auth_callback"],
+                scopes: [.sessionsRead], resource: "https://crow.example.ts.net/mcp",
+                refreshTokenHashB64: "UkVGUkVTSC1IQVNI",
+                refreshExpiresAt: Date(timeIntervalSince1970: 1_900_000_000)),
+        ]
+        return c
+    }
+
+    @Test func strippedBlanksRefreshHashButKeepsGrant() throws {
+        let stripped = SettingsSecrets.strippedForTransport(configWithGrant())
+        #expect(stripped.mcpOAuthGrants.first?.clientName == "Claude")
+        #expect(stripped.mcpOAuthGrants.first?.refreshTokenHashB64 == "")
+        let text = try #require(String(data: JSONEncoder().encode(stripped), encoding: .utf8))
+        #expect(!text.contains("UkVGUkVTSC1IQVNI"))
+    }
+
+    @Test func preserveIgnoresBrowserPlantedGrants() {
+        // A remote peer that could post back a grant with a refresh-token hash it
+        // chose would hold a working refresh token for /mcp.
+        let current = configWithGrant()
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        incoming.mcpOAuthGrants = [
+            MCPOAuthGrant(
+                clientID: "evil", clientName: "attacker", redirectURIs: ["https://evil.example/cb"],
+                scopes: MCPScope.allCases, resource: "x", refreshTokenHashB64: "RVZJTA==",
+                refreshExpiresAt: .distantFuture),
+        ]
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.mcpOAuthGrants == current.mcpOAuthGrants)
+    }
+
+    @Test func preserveIgnoresBrowserRemovalOfGrants() {
+        let current = configWithGrant()
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        incoming.mcpOAuthGrants = []
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.mcpOAuthGrants == current.mcpOAuthGrants)
+    }
+
     // MARK: - MCP bearer tokens (CROW-1004)
 
     @Test func strippedBlanksMCPTokenHashesButKeepsRecords() {

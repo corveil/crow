@@ -154,7 +154,13 @@ public struct MCPToken: ParsableCommand {
 public struct MCPTokenList: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "list",
-        abstract: "List MCP bearer tokens (never the tokens themselves)"
+        abstract: "List MCP bearer tokens and OAuth grants (never the secrets themselves)",
+        discussion: """
+        `tokens` are the ones minted here. `grants` are apps connected with OAuth, \
+        such as Claude's connectors (web, Desktop, mobile), each approved on the \
+        consent page with the web password. A grant's access tokens rotate hourly \
+        and are counted on the grant rather than listed.
+        """
     )
 
     public init() {}
@@ -233,17 +239,19 @@ public struct MCPTokenMint: ParsableCommand {
 public struct MCPTokenRevoke: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "revoke",
-        abstract: "Revoke an MCP bearer token",
+        abstract: "Revoke an MCP bearer token or an OAuth grant",
         discussion: """
         Revoke by --id (from `crow mcp token list`), or by --name when only one \
-        token carries that name. An ambiguous name is refused rather than guessed.
+        token or grant carries that name (a grant's name is its client name). An \
+        ambiguous name is refused rather than guessed. Revoking a grant also \
+        revokes every access token issued under it.
         """
     )
 
-    @Option(name: .long, help: "Token UUID, from `crow mcp token list`")
+    @Option(name: .long, help: "Token or grant UUID, from `crow mcp token list`")
     public var id: String?
 
-    @Option(name: .long, help: "Token name, when it is unambiguous")
+    @Option(name: .long, help: "Token name or grant client name, when it is unambiguous")
     public var name: String?
 
     public init() {}
