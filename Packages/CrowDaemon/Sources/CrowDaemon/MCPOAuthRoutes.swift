@@ -235,20 +235,22 @@ enum MCPOAuthRoutes {
                 .init("invalid_request", "code, code_verifier and redirect_uri are required"), status: .badRequest)
         }
         let invalid = MCPOAuth.Failure("invalid_grant", "the authorization code is invalid or expired")
+        let replayed = MCPOAuth.Failure(
+            "invalid_grant", "the authorization code was already used; the access it granted is revoked")
 
         let issued: MCPOAuthState.IssuedCode
+        let grantID: UUID
         switch state.redeem(code) {
         case .invalid:
             return oauthError(invalid, status: .badRequest)
         case .replayed(let grantID):
             // RFC 6749 §4.1.2: a code used twice means someone else has it, so the
             // tokens it already produced are no longer trustworthy either.
-            if let grantID { _ = try? MCPOAuthGrants.revoke(devRoot: devRoot, grantID: grantID) }
-            return oauthError(
-                .init("invalid_grant", "the authorization code was already used; the access it granted is revoked"),
-                status: .badRequest)
-        case .valid(let value):
+            _ = try? MCPOAuthGrants.revoke(devRoot: devRoot, grantID: grantID)
+            return oauthError(replayed, status: .badRequest)
+        case .valid(let value, let reserved):
             issued = value
+            grantID = reserved
         }
 
         guard issued.request.client.clientID == clientID,
@@ -268,8 +270,14 @@ enum MCPOAuthRoutes {
         }
 
         do {
-            let result = try MCPOAuthGrants.create(devRoot: devRoot, request: issued.request, scopes: issued.scopes)
-            state.recordGrant(result.grant.id, forCode: code)
+            let result = try MCPOAuthGrants.create(
+                devRoot: devRoot, request: issued.request, scopes: issued.scopes, grantID: grantID)
+            // A replay that raced this exchange revoked a grant that might not
+            // have been on disk yet; it flagged the code first, so check now.
+            if state.finishRedemption(code) {
+                _ = try? MCPOAuthGrants.revoke(devRoot: devRoot, grantID: grantID)
+                return oauthError(replayed, status: .badRequest)
+            }
             return tokens(result)
         } catch let failure as MCPOAuth.Failure {
             return oauthError(failure, status: .badRequest)

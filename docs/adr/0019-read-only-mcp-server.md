@@ -169,9 +169,9 @@ OAuth is another way to *hold* a read-only token, not a way to widen one. Write
 tools over MCP remain a separate decision.
 
 **Consequence.** Publishing `/mcp` is the operator's step. The documented setup
-funnels only `/mcp`, `/.well-known/oauth-*` and `/oauth/*` on a dedicated port,
-because Tailscale Funnel is enabled per port, so funneling the web UI's port would
-make the whole UI public.
+funnels only `/mcp`, the `.well-known` metadata paths and the three `/oauth/`
+endpoints, each as an exact-path mount, on a dedicated port. Funnel is enabled per
+port, so funneling the web UI's port would make the whole UI public.
 
 ## Alternatives considered
 

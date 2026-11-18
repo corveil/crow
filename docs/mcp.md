@@ -201,15 +201,19 @@ tailnet-only. Funnel is switched on per port, not per path, so funneling the por
 your web UI uses would make the whole UI public.
 
 Keep `crowd` bound to loopback (the default, `127.0.0.1:8787`), then publish only
-these paths on port `8443`:
+these paths on port `8443`. Each one is mounted on its own: a `--set-path` mount
+point without a trailing slash matches that exact path only, like Go's `ServeMux`,
+so mounting `/oauth` alone would not reach `/oauth/token`. Exact mounts also keep
+anything else under those prefixes off the Funnel.
 
 ```bash
-tailscale funnel --bg --https=8443 --set-path=/mcp http://127.0.0.1:8787/mcp
-tailscale funnel --bg --https=8443 --set-path=/.well-known/oauth-protected-resource \
-  http://127.0.0.1:8787/.well-known/oauth-protected-resource
-tailscale funnel --bg --https=8443 --set-path=/.well-known/oauth-authorization-server \
-  http://127.0.0.1:8787/.well-known/oauth-authorization-server
-tailscale funnel --bg --https=8443 --set-path=/oauth http://127.0.0.1:8787/oauth
+for path in /mcp \
+    /.well-known/oauth-protected-resource \
+    /.well-known/oauth-protected-resource/mcp \
+    /.well-known/oauth-authorization-server \
+    /oauth/register /oauth/authorize /oauth/token; do
+  tailscale funnel --bg --https=8443 --set-path="$path" "http://127.0.0.1:8787$path"
+done
 tailscale funnel status
 ```
 
@@ -219,11 +223,17 @@ Then check that only those paths are public. From a machine **off** your tailnet
 curl -s https://<machine>.<tailnet>.ts.net:8443/.well-known/oauth-protected-resource/mcp | jq .
 # → "resource": "https://<machine>.<tailnet>.ts.net:8443/mcp"
 
+curl -s https://<machine>.<tailnet>.ts.net:8443/.well-known/oauth-authorization-server | jq .token_endpoint
+# → "https://<machine>.<tailnet>.ts.net:8443/oauth/token"
+
+curl -s -X POST https://<machine>.<tailnet>.ts.net:8443/oauth/token | jq .error
+# → "invalid_client" — the token endpoint is reachable (a 404 means a mount is missing)
+
 curl -s -o /dev/null -w '%{http_code}\n' https://<machine>.<tailnet>.ts.net:8443/
 # → 404 — the web UI is not on the Funnel port
 ```
 
-Any tunnel that forwards those four path prefixes over HTTPS and sets
+Any tunnel that forwards exactly those paths, with their query strings, over HTTPS and sets
 `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` (cloudflared and ngrok
 can) works the same way. Crow derives every URL in the metadata from those headers,
 and trusts them only from a loopback peer.

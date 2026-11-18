@@ -569,11 +569,34 @@ struct MCPOAuthStateTests {
     func singleUse() {
         let state = MCPOAuthState()
         let code = state.issueCode(for: request, scopes: [.boardRead])
-        guard case .valid = state.redeem(code) else { Issue.record("first redeem"); return }
-        let grant = UUID()
-        state.recordGrant(grant, forCode: code)
+        guard case .valid(_, let reserved) = state.redeem(code) else { Issue.record("first redeem"); return }
+        #expect(!state.finishRedemption(code))
         guard case .replayed(let id) = state.redeem(code) else { Issue.record("second redeem"); return }
-        #expect(id == grant)
+        #expect(id == reserved)
+        #expect(state.finishRedemption(code))
+    }
+
+    @Test("A replay that races the first exchange still revokes the grant")
+    func concurrentReplayRevokes() throws {
+        // The window the review found: the replay arrives after the first redeem
+        // but before the grant is on disk, so its own revoke finds nothing. The
+        // first exchange must notice the flag after saving and revoke itself.
+        let devRoot = (NSTemporaryDirectory() as NSString).appendingPathComponent("crowd-oauth-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(atPath: devRoot, withIntermediateDirectories: true)
+        let state = MCPOAuthState()
+        let code = state.issueCode(for: request, scopes: [.boardRead])
+        guard case .valid(_, let grantID) = state.redeem(code) else { Issue.record("first redeem"); return }
+
+        guard case .replayed(let replayedID) = state.redeem(code) else { Issue.record("replay"); return }
+        #expect(replayedID == grantID)
+        #expect(try MCPOAuthGrants.revoke(devRoot: devRoot, grantID: replayedID) == false)  // nothing yet
+
+        _ = try MCPOAuthGrants.create(devRoot: devRoot, request: request, scopes: [.boardRead], grantID: grantID)
+        #expect(state.finishRedemption(code))
+        try MCPOAuthGrants.revoke(devRoot: devRoot, grantID: grantID)
+        let config = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(config.mcpOAuthGrants.isEmpty)
+        #expect(config.mcpTokens.isEmpty)
     }
 
     @Test("Codes expire within minutes")

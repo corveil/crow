@@ -28,16 +28,21 @@ final class MCPOAuthState: @unchecked Sendable {
     }
 
     enum Redemption: Sendable {
-        case valid(IssuedCode)
-        /// Presented before. Carries the grant it produced, if one was created.
-        case replayed(grantID: UUID?)
+        /// First use. `grantID` is reserved now, under the lock, and the token
+        /// endpoint must create the grant with exactly this id.
+        case valid(IssuedCode, grantID: UUID)
+        /// Presented before. Carries the grant id reserved at the first use, which
+        /// may not exist yet (a concurrent exchange still creating it) or ever
+        /// (the first exchange failed PKCE); revoking it is then a no-op, and
+        /// `finishRedemption` catches the first case.
+        case replayed(grantID: UUID)
         /// Unknown or expired.
         case invalid
     }
 
     private struct PendingClient { let client: MCPOAuth.Client; let registeredAt: Date }
     private struct PendingConsent { let request: MCPOAuth.AuthorizationRequest; let openedAt: Date }
-    private struct Redeemed { var grantID: UUID?; let forgetAt: Date }
+    private struct Redeemed { let grantID: UUID; var replayed: Bool; let forgetAt: Date }
 
     private let lock = NSLock()
     private var clients: [String: PendingClient] = [:]
@@ -134,22 +139,30 @@ final class MCPOAuthState: @unchecked Sendable {
         if let issued = codes.removeValue(forKey: key) {
             // Remember it for as long as it would have been valid, plus the same
             // again, so a replay inside that window is caught.
+            let grantID = UUID()
             redeemed[key] = Redeemed(
-                grantID: nil,
+                grantID: grantID, replayed: false,
                 forgetAt: issued.expiresAt.addingTimeInterval(MCPOAuth.authorizationCodeLifetime))
-            return issued.expiresAt > now ? .valid(issued) : .invalid
+            return issued.expiresAt > now ? .valid(issued, grantID: grantID) : .invalid
         }
-        if let previous = redeemed[key], previous.forgetAt > now {
+        if var previous = redeemed[key], previous.forgetAt > now {
+            previous.replayed = true
+            redeemed[key] = previous
             return .replayed(grantID: previous.grantID)
         }
         return .invalid
     }
 
-    /// Link a redeemed code to the grant it produced, so a replay can revoke it.
-    func recordGrant(_ grantID: UUID, forCode code: String) {
+    /// Whether the code was replayed while its first exchange was in flight.
+    ///
+    /// The token endpoint calls this **after** persisting the grant. A replay sets
+    /// the flag before it revokes, so the two orderings are both covered: a replay
+    /// that lands before this check is seen here and the caller revokes; one that
+    /// lands after it revokes a grant that is already on disk.
+    func finishRedemption(_ code: String) -> Bool {
         let key = MCPTokenStore.hash(code)
         lock.lock(); defer { lock.unlock() }
-        redeemed[key]?.grantID = grantID
+        return redeemed[key]?.replayed ?? false
     }
 
     // MARK: Housekeeping
@@ -194,6 +207,7 @@ enum MCPOAuthGrants {
         devRoot: String,
         request: MCPOAuth.AuthorizationRequest,
         scopes: [MCPScope],
+        grantID: UUID = UUID(),
         now: Date = Date()
     ) throws -> Issued {
         try mutateConfig(devRoot: devRoot) { config -> Issued in
@@ -211,6 +225,7 @@ enum MCPOAuthGrants {
             }
             let refresh = MCPTokenStore.randomToken(prefix: MCPOAuth.refreshTokenPrefix)
             let grant = MCPOAuthGrant(
+                id: grantID,
                 clientID: request.client.clientID,
                 clientName: request.client.clientName,
                 redirectURIs: request.client.redirectURIs,
