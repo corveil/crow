@@ -46,7 +46,11 @@ function recorder(log, label) {
 
 function boot({ webgl = true, reducedMotion = false, emptyState = true } = {}) {
   const dom = new JSDOM(
-    `<!doctype html><html><head><link rel="icon" type="image/svg+xml" href="/brand.svg"></head><body>
+    `<!doctype html><html><head>
+       <link rel="icon" type="image/svg+xml" href="/brand.svg">
+       <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+       <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+     </head><body>
        <div id="sidebar"></div><div id="board"></div><div id="header"></div>
        ${emptyState ? '<div id="detail-empty"><div class="empty-brand brand-mark" id="empty-brand"><img src="/brand.svg" alt=""></div></div>' : ''}
      </body></html>`,
@@ -63,7 +67,10 @@ function boot({ webgl = true, reducedMotion = false, emptyState = true } = {}) {
   // The client wires handlers onto index.html nodes this fixture doesn't carry.
   const realGet = window.document.getElementById.bind(window.document);
   window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
-  window.matchMedia = (q) => ({ matches: reducedMotion && /reduce/.test(q), addEventListener() {} });
+  // A live media query: setReduced() flips it and fires 'change' like the OS toggle.
+  const mq = { matches: reducedMotion, listeners: [], addEventListener(_, fn) { this.listeners.push(fn); } };
+  window.matchMedia = () => mq;
+  const setReduced = (v) => { mq.matches = v; for (const fn of mq.listeners) fn({ matches: v }); };
   // jsdom does no layout: give every element a size so marks can size their canvas.
   Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', { get() { return 120; } });
   Object.defineProperty(window.HTMLElement.prototype, 'clientHeight', { get() { return 120; } });
@@ -87,7 +94,7 @@ function boot({ webgl = true, reducedMotion = false, emptyState = true } = {}) {
   const T = ctx.__t;
   if (!T) { console.log('FATAL: epilogue did not run'); process.exit(2); }
   const runFrames = (now) => { const fs = frames.splice(0); for (const f of fs) f(now); return fs.length; };
-  return { window, T, gl, contexts, frames, runFrames, brand: window.crowBrand };
+  return { window, T, gl, contexts, frames, runFrames, setReduced, brand: window.crowBrand };
 }
 
 const morphValues = (gl) => gl
@@ -99,13 +106,20 @@ console.log('\nSidebar re-render keeps one WebGL context per mark:');
 {
   const b = boot();
   check('crowBrand is exposed', !!b.brand && typeof b.brand.mount === 'function');
-  check('empty state mounted and live at load',
-    b.window.document.getElementById('empty-brand').classList.contains('live'));
+  const emptyHost = b.window.document.getElementById('empty-brand');
+  check('empty state mounted at load (canvas added)', !!emptyHost.querySelector('canvas'));
   b.T.renderSidebar();
   const first = b.window.document.getElementById('brand-img');
   check('sidebar mark rendered as a .brand-mark host', !!first && first.classList.contains('brand-mark'));
-  check('sidebar host went live (canvas shown, img kept as fallback)',
-    first.classList.contains('live') && !!first.querySelector('canvas') && !!first.querySelector('img'));
+  check('not live before the first frame: the /brand.svg img stays up',
+    !first.classList.contains('live') && !emptyHost.classList.contains('live')
+    && !!first.querySelector('canvas') && !!first.querySelector('img'));
+  b.runFrames(1000);
+  check('still not live while the color is unknown', !first.classList.contains('live'));
+  b.brand.setColor('gold');
+  b.runFrames(1000);
+  check('live after the first drawn frame (canvas shown, img kept as fallback)',
+    first.classList.contains('live') && emptyHost.classList.contains('live'));
   for (let i = 0; i < 50; i++) b.T.renderSidebar();
   const after = b.window.document.getElementById('brand-img');
   check('50 re-renders: still 2 contexts total (sidebar + empty state)', b.contexts.webgl === 2);
@@ -141,9 +155,10 @@ console.log('\nsetColor() recolors in place:');
   b.brand.setColor('gold');
   const doc = b.window.document;
   const sideImg = doc.querySelector('#brand-img img');
-  const icon = doc.querySelector('link[rel="icon"]');
+  const icon = doc.querySelector('link[rel="icon"][type="image/svg+xml"]');
   check('boot color gold keeps the plain /brand.svg (no refetch)',
-    sideImg.getAttribute('src') === '/brand.svg' && icon.getAttribute('href') === '/brand.svg');
+    sideImg.getAttribute('src') === '/brand.svg' && icon.getAttribute('href') === '/brand.svg'
+    && doc.querySelector('link[rel="icon"][type="image/png"]').getAttribute('href') === '/icon-192.png');
   b.gl.length = 0;
   b.brand.setColor('pink');
   check('color() reports pink', b.brand.color() === 'pink');
@@ -152,6 +167,9 @@ console.log('\nsetColor() recolors in place:');
     sideImg.getAttribute('src') === '/brand.svg?color=pink'
     && doc.querySelector('#empty-brand img').getAttribute('src') === '/brand.svg?color=pink');
   check('favicon follows', icon.getAttribute('href') === '/brand.svg?color=pink');
+  check('raster icons untouched (PNG icon, apple-touch-icon)',
+    doc.querySelector('link[rel="icon"][type="image/png"]').getAttribute('href') === '/icon-192.png'
+    && doc.querySelector('link[rel="apple-touch-icon"]').getAttribute('href') === '/apple-touch-icon.png');
   check('src() for new imgs (About) follows', b.brand.src() === '/brand.svg?color=pink');
   b.gl.length = 0;
   b.brand.setColor('pink');
@@ -188,6 +206,23 @@ function finish() {
     check('loop does not re-arm', b.frames.length === 0);
     b.brand.setColor('pink');
     check('a recolor paints one more frame', b.runFrames(2000) === 1 && b.frames.length === 0);
+  }
+
+  console.log('\nReduced motion turned on mid-formation settles on the formed crow:');
+  {
+    const b = boot();
+    b.T.renderSidebar();
+    b.brand.setColor('gold');
+    b.runFrames(1000);
+    b.gl.length = 0;
+    b.runFrames(1000 + 300 + 1200);
+    check('formation in flight', morphValues(b.gl).some((v) => v > 0 && v < 1));
+    b.setReduced(true);
+    b.gl.length = 0;
+    b.runFrames(2600);
+    const after = morphValues(b.gl);
+    check('next frame draws morph 1, not a half-formed crow', after.length > 0 && after.every((v) => v === 1));
+    check('and the loop stops', b.frames.length === 0);
   }
 
   console.log('\nNo WebGL: the static mark stays:');

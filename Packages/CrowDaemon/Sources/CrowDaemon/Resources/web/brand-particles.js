@@ -19,7 +19,7 @@
 //   mark is on screen (IntersectionObserver) and stops itself otherwise.
 // - prefers-reduced-motion: the formed crow, drawn once, no loop.
 // - setColor('gold'|'pink') recolors in place: the WebGL palette, the fallback
-//   imgs, the favicon and any other `img[data-brand-static]`.
+//   imgs, the SVG favicon and any other `img[data-brand-static]`.
 (function () {
   // Crow's accent (app.css --gold-dark #B38E46 → --gold #DDC482) and Corveil's
   // pink ramp (#E60073 → #FF4AA2, from particles.js). Bottom → top of the bird.
@@ -48,7 +48,9 @@
   const motionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   function motionOK() { return !(motionQuery && motionQuery.matches); }
   if (motionQuery && motionQuery.addEventListener) {
-    motionQuery.addEventListener('change', () => { for (const m of marks) m.anim = null; kick(); });
+    // Settle any formation in flight: turning reduced motion on mid-intro must
+    // land on the formed crow, not freeze a half-formed one.
+    motionQuery.addEventListener('change', () => { for (const m of marks) { m.anim = null; m.morph = 1; } kick(); });
   }
 
   function hash(i, salt, k) { const x = Math.sin((i + 1) * 12.9898 + salt * 78.233 + k * 37.719) * 43758.5453; return x - Math.floor(x); }
@@ -166,8 +168,9 @@
       this.visible = !('IntersectionObserver' in window); // assume on screen without IO
       this.sized = false;
       cv.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lose(); });
+      // `.live` (canvas shown, img hidden) waits for the first drawn frame, so
+      // the correct /brand.svg stays up while the mark holds for its color.
       host.appendChild(cv);
-      host.classList.add('live');
       if ('IntersectionObserver' in window) {
         this.io = new IntersectionObserver((entries) => {
           this.visible = entries[entries.length - 1].isIntersecting;
@@ -242,6 +245,7 @@
       gl.uniform1f(this.loc.uMorph, this.morph);
       gl.uniform1f(this.loc.uAmp, motion ? OPTS.amp : 0);
       gl.drawArrays(gl.POINTS, 0, this.n);
+      if (!this.host.classList.contains('live')) this.host.classList.add('live');
     }
   }
 
@@ -288,7 +292,9 @@
     for (const im of document.querySelectorAll('img[data-brand-static]')) {
       if (im.getAttribute('src') !== src) im.setAttribute('src', src);
     }
-    for (const link of document.querySelectorAll('link[rel="icon"]')) {
+    // The SVG favicon only: the PNG icon (and apple-touch-icon) are raster
+    // install icons that stay gold.
+    for (const link of document.querySelectorAll('link[rel="icon"][type="image/svg+xml"]')) {
       if (link.getAttribute('href') !== src) link.setAttribute('href', src);
     }
     kick();
