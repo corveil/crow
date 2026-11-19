@@ -305,6 +305,23 @@ struct OpenCodeHookConfigWriterTests {
         #expect(js.contains("ctx.tool.hook(\"execute.after\""))
     }
 
+    @Test func v2PluginGatesStopOnBackgroundWork() {
+        // CROW-1464: from OpenCode 2.3.0 subagents run in the background, so a
+        // root ending is only Stop once nothing it waits on is running.
+        let js = OpenCodeHookConfigWriter.pluginSource(crowPath: "/bin/crow", generation: .v2)
+        // Primary: the experimental idle hook, feature-detected.
+        #expect(js.contains("typeof ctx.session.hook === \"function\""))
+        #expect(js.contains("ctx.session.hook(\"experimental.idle\""))
+        // Fallback: children tracked from stable events.
+        #expect(js.contains("runningChildren"))
+        // Every root ending goes through the gate; no bare Stop on an ending.
+        #expect(js.components(separatedBy: "emit(cwd, \"Stop\")").count == 2)
+        #expect(js.contains("await rootEnded(data.sessionID"))
+        // The V1 body is untouched.
+        let v1 = OpenCodeHookConfigWriter.pluginSource(crowPath: "/bin/crow", generation: .v1)
+        #expect(!v1.contains("experimental.idle"))
+    }
+
     @Test func v2PluginFailsClosedWithoutStop() {
         let js = OpenCodeHookConfigWriter.pluginSource(crowPath: "/bin/crow", generation: .v2)
         #expect(js.contains("\"BridgeUnavailable\""))

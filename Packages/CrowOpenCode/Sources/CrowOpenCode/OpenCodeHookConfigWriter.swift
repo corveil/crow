@@ -475,6 +475,9 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
     ///   session.execution.succeeded       → Stop
     ///   session.execution.failed          → Stop
     ///   session.execution.interrupted     → Stop  (reason `user` / `inactivity`)
+    ///                                       — each only for the root, and only
+    ///                                       when no background work is still
+    ///                                       running (CROW-1464, below)
     ///   session.execution.interrupted     → (none) reason `superseded` — a new
     ///                                       execution replaces it, so a `.done`
     ///                                       here would complete a job mid-turn;
@@ -498,8 +501,40 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
     /// every launch — so the in-memory set can miss a child created before the
     /// reload. An execution event for an id the plugin has never seen is
     /// therefore resolved with `ctx.session.get({ sessionID })` before it may
-    /// move the card. Whether a parent's execution always spans its children's
-    /// on V2 is still needs-eval (the PR lists it).
+    /// move the card.
+    ///
+    /// **Background subagents (CROW-1464).** From OpenCode **2.3.0** every
+    /// subagent runs in the background (anomalyco/opencode#63382): the tool
+    /// returns a child `sessionID` at once, the root's execution ends while the
+    /// child is still working, and each child report wakes the root for a new
+    /// execution. So a root `session.execution.succeeded` is no longer "done".
+    /// The plugin decides a root ending in two layers, and never emits `Stop`
+    /// while either says work is outstanding:
+    ///
+    ///  1. **`experimental.idle` (primary, ≥ 2.2.1, #59437).** Registered via
+    ///     `ctx.session.hook`, it runs inside the drain just before a session
+    ///     goes idle — before `succeeded` is published — with `background`: the
+    ///     work still running for the session or its descendants. The report is
+    ///     cleared on every `execution.started`, so only a report from *this*
+    ///     execution counts. A fresh report decides a `succeeded`: any entry
+    ///     other than `kind: "shell"` holds `Stop` (an unknown future kind holds
+    ///     too). Shells are excluded on purpose, like upstream's own TUI "done"
+    ///     (`feature-plugins/system/notifications.ts`): a dev server or watcher
+    ///     never finishes, so counting it would hold the card on working forever.
+    ///  2. **Tracked children (fallback, stable events only).** A child counts
+    ///     as running from its `session.created` (or any `execution.started`)
+    ///     until it ends an execution. This decides every ending the hook does
+    ///     not report — `failed` and `interrupted` (the hook skips both; on
+    ///     2.3.0 Escape no longer cancels children), a `succeeded` with no fresh
+    ///     report (hook missing, renamed, or the plugin reloaded mid-turn) — and
+    ///     holds `Stop` while any tracked child is running.
+    ///
+    /// A held ending emits nothing: the card stays where the turn left it
+    /// (working, or `.waiting` on a child's permission prompt). The child's
+    /// report wakes the root, whose next execution ends with an empty
+    /// `background` and emits the `Stop`. Below 2.3.0 a parent's execution spans
+    /// its foreground children, so both layers report nothing outstanding at the
+    /// root's end and behaviour is unchanged.
     ///
     /// **Ids differ per scope.** V2 registers plugins by `id` and keeps only
     /// the first occurrence — later ones fail as `Duplicate plugin ID`
@@ -609,12 +644,69 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
               }
             }
 
+            // Background work (CROW-1464). From OpenCode 2.3.0 subagents always
+            // run in the background: the root's execution ends while its
+            // children work, and each child's report wakes it again. So a root
+            // ending is only `Stop` when nothing it waits on is still running.
+            //
+            // Children counted as running: from `session.created` (or any
+            // `execution.started`) until they end an execution. Stable events
+            // only, so this still works when the hook below is missing.
+            const runningChildren = new Set();
+            // sessionID -> true when this execution's `experimental.idle`
+            // listed work that will wake the session again. Cleared on every
+            // `execution.started`, so only a report from the current execution
+            // is trusted.
+            const idleReports = new Map();
+            // Shells never finish when they are a dev server or a watcher, so
+            // they don't hold the card (upstream's own TUI "done" skips them
+            // too). Every other kind — subagent, codemode, image, or one added
+            // later — reports back and wakes the session.
+            const holdsDone = (work) => !work || work.kind !== "shell";
+
+            // `experimental.idle` runs inside the drain just before a session
+            // goes idle, before `session.execution.succeeded` is published. It
+            // is experimental (OpenCode >= 2.2.1), so it is feature-detected;
+            // without it, the tracked children above decide alone. Never
+            // throws: a failing session hook fails the execution.
+            if (ctx.session && typeof ctx.session.hook === "function") {
+              try {
+                await ctx.session.hook("experimental.idle", (input) => {
+                  try {
+                    const id = input && input.sessionID;
+                    if (!id || !Array.isArray(input.background)) return;
+                    idleReports.set(id, input.background.some(holdsDone));
+                  } catch (_) {
+                    // A malformed report is no report: the fallback decides.
+                  }
+                });
+              } catch (_) {
+                // Hook unavailable or renamed: the fallback decides.
+              }
+            }
+
+            // A root execution ended. Emit Stop only when nothing it waits on
+            // is still running; otherwise emit nothing and let the report that
+            // wakes the root end a later execution. Never Stop on doubt.
+            async function rootEnded(id, outcome) {
+              // The hook does not run after a failure or an interruption, so a
+              // report only speaks for a `succeeded`.
+              const holding = outcome === "succeeded" ? idleReports.get(id) : undefined;
+              idleReports.delete(id);
+              if (holding === true) return;
+              if (holding === undefined && runningChildren.size > 0) return;
+              await emit(cwd, "Stop");
+            }
+
             async function handle(event) {
               const data = (event && event.data) || {};
               switch (event && event.type) {
                 case "session.created": {
                   if (data.parentID) {
                     roots.set(data.sessionID, false);
+                    // A background subagent is working from creation: its own
+                    // `execution.started` can trail the parent's ending.
+                    if (data.sessionID) runningChildren.add(data.sessionID);
                     break;
                   }
                   roots.set(data.sessionID, true);
@@ -622,18 +714,34 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
                   break;
                 }
                 case "session.execution.started":
-                  if (await isRoot(data.sessionID)) await emit(cwd, "UserPromptSubmit");
+                  // Before any await: a slow `isRoot` lookup must not let this
+                  // execution's idle report land first and then be cleared.
+                  idleReports.delete(data.sessionID);
+                  if (await isRoot(data.sessionID)) {
+                    await emit(cwd, "UserPromptSubmit");
+                  } else if (data.sessionID) {
+                    runningChildren.add(data.sessionID);
+                  }
                   break;
                 case "session.execution.succeeded":
                 case "session.execution.failed":
-                  if (await isRoot(data.sessionID)) await emit(cwd, "Stop");
+                  if (await isRoot(data.sessionID)) {
+                    await rootEnded(data.sessionID, event.type.slice("session.execution.".length));
+                  } else {
+                    runningChildren.delete(data.sessionID);
+                  }
                   break;
                 case "session.execution.interrupted":
                   // `superseded`: a new execution replaces this one, so the turn
-                  // is still running. `shutdown`: the server is stopping, not
-                  // the turn finishing.
-                  if (data.reason === "superseded" || data.reason === "shutdown") break;
-                  if (await isRoot(data.sessionID)) await emit(cwd, "Stop");
+                  // is still running.
+                  if (data.reason === "superseded") break;
+                  if (!(await isRoot(data.sessionID))) {
+                    runningChildren.delete(data.sessionID);
+                    break;
+                  }
+                  // `shutdown`: the server is stopping, not the turn finishing.
+                  if (data.reason === "shutdown") break;
+                  await rootEnded(data.sessionID, "interrupted");
                   break;
                 case "permission.asked":
                   // The agent is blocked on a user decision. Observe only.
