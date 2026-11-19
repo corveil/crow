@@ -15,6 +15,8 @@
 // - mount(host) is idempotent per host. The sidebar is rebuilt wholesale by
 //   renderSidebar(), so sidebar.js keeps one host node and re-appends it rather
 //   than mounting a new canvas (and a new WebGL context) on every render.
+// - replay(host) re-runs a mounted mark's formation in place; the Disconnected
+//   cover (CROW-1471) mounts at boot and replays on every appearance.
 // - One requestAnimationFrame loop drives every mark. It only runs while some
 //   mark is on screen (IntersectionObserver) and stops itself otherwise.
 // - prefers-reduced-motion: the formed crow, drawn once, no loop.
@@ -280,6 +282,20 @@
     return live;
   }
 
+  // Start the sphere → crow formation over on `host`'s existing mark: same
+  // canvas, same WebGL context. The Disconnected cover (CROW-1471) calls it
+  // each time it appears. Call it once the host is displayed: it paints the
+  // opening frame at once, so the first composite can't flash the formed crow
+  // the canvas still held from when it was hidden. Reduced motion paints the
+  // formed crow instead (draw() skips the intro).
+  function replay(host) {
+    const m = host ? byHost.get(host) : null;
+    if (!m || !m.gl) return;
+    m.anim = null; m.morph = 1; m.introPending = true; m.sized = false;
+    if (colorKnown && m.host.isConnected) m.draw(performance.now(), motionOK());
+    kick();
+  }
+
   function setColor(name) {
     const next = name === 'pink' ? 'pink' : 'gold';
     if (pageColor === null) pageColor = next;
@@ -302,13 +318,16 @@
 
   window.crowBrand = {
     mount,
+    replay,
     setColor,
     color: () => color,
     // The /brand.svg URL for the current color, for imgs made after boot.
     src: () => srcFor(color),
   };
 
-  // The empty-state mark ships in index.html; the sidebar's is built by sidebar.js.
-  const empty = document.getElementById('empty-brand');
-  if (empty) mount(empty);
+  // The empty-state and Disconnected-cover marks ship in index.html; the
+  // sidebar's is built by sidebar.js. The cover's mounts now, while crowd is
+  // reachable: its WebGL context exists from boot, and while the cover is
+  // hidden the IntersectionObserver keeps it out of the loop.
+  for (const host of document.querySelectorAll('#empty-brand, #conn-cover-brand')) mount(host);
 })();

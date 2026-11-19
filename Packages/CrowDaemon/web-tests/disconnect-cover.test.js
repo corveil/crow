@@ -111,6 +111,15 @@ const GRACE = T.DISCONNECT_COVER_GRACE_MS;
   const lifted = Number((rule('body.app-covered #statusbar').match(/z-index:\s*(\d+)/) || [])[1]);
   check('body.app-covered lifts #statusbar above the cover', lifted > z);
   check('#session-scrim no longer has its own see-through rule', !/#session-scrim\s*\{/.test(css));
+  // CROW-1471: the particle crow sits in the shipped markup (crowd is down
+  // while the cover shows, so nothing can be fetched then), above the title.
+  const brand = $('conn-cover-brand');
+  check('#conn-cover carries a .brand-mark host with the /brand.svg fallback',
+    !!brand && brand.classList.contains('brand-mark') && $('conn-cover').contains(brand)
+    && brand.querySelector('img') && brand.querySelector('img').getAttribute('src') === '/brand.svg');
+  check('the crow sits above the "Disconnected" title',
+    !!brand && brand.nextElementSibling && brand.nextElementSibling.classList.contains('scrim-title'));
+  check('the session-expired scrim has no brand mark', !$('session-scrim').querySelector('.brand-mark'));
 
   console.log('\nBoot: not yet connected counts as disconnected:');
   await flush();

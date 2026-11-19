@@ -109,7 +109,12 @@ function syncDisconnectCover() {
     }, DISCONNECT_COVER_GRACE_MS);
   }
   const cover = document.getElementById('conn-cover');
-  if (cover) cover.hidden = !disconnectCoverShown;
+  if (cover) {
+    const appearing = cover.hidden && disconnectCoverShown;
+    cover.hidden = !disconnectCoverShown;
+    // CROW-1471: each appearance re-forms the particle crow from the sphere.
+    if (appearing && window.crowBrand) window.crowBrand.replay(document.getElementById('conn-cover-brand'));
+  }
   const covered = disconnectCoverShown || sessionDead;
   // inert: no focus, typing or clicks reach the hidden content (a focused
   // composer or xterm textarea would otherwise still take keystrokes).

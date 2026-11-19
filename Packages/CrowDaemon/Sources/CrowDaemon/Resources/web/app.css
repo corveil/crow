@@ -1330,6 +1330,8 @@ button.scratch-link:hover { border-color: var(--blue); }
 .app-cover[hidden] { display: none; }
 body.app-covered #statusbar { z-index: 2600; }
 #conn-cover .scrim-title { color: var(--text-primary); }
+/* The particle crow above "Disconnected" (CROW-1471). */
+.conn-cover-brand { width: 96px; height: 96px; margin: 0 auto 14px; }
 .scrim-card {
   width: min(360px, 92vw);
   text-align: center;
