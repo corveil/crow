@@ -735,7 +735,12 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   so a shared id would let the self-suppressing global body win and leave the
   session dark. It **fails closed**: a missing or dead event stream emits
   `BridgeUnavailable` → `.waiting` + a notification — never `Stop`, which would
-  complete a job.
+  complete a job. From **2.3.0** a root's ending is `Stop` only when no
+  background subagent is still running: the body also registers the
+  experimental `ctx.session.hook("experimental.idle")` (feature-detected) and
+  tracks child sessions from stable events
+  ([CROW-1464](https://github.com/corveil/crow/issues/1464); see
+  [Hook async delivery](#hook-async-delivery)).
 - **Grok** — per-worktree `.grok/hooks/crow.json`, written per session with
   `hook-event --session <UUID>`, resolved by **UUID** (#859,
   `GrokHookConfigWriter`). Grok's hook schema is byte-compatible with Claude's
@@ -915,7 +920,9 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   **root** session (no `parentID`) drives the card, and a child no longer
   re-announces via `SessionStart`. Scoped to the premature-`.done` failure: a
   child's tool hooks still map to working state, which is correct because the
-  parent *is* working.
+  parent *is* working. On **OpenCode 2 ≥ 2.3.0** the order is inverted: the
+  *parent* finishes first and the child reports later (next bullet), so
+  dropping child events alone is no longer enough.
 - **OpenCode 2 done signal is `session.execution.*`** (CROW-1332). Read from the
   `v2.0.32` source, not measured against a running binary: nothing in V2 core
   publishes `session.status` or `session.idle` (the schemas survive only in the
@@ -927,9 +934,40 @@ CROW-1060. See [ADR 0015](adr/0015-harness-capability-tiers.md).
   is still running) or `shutdown` (the server stopping). V2 payloads are
   `{ type, data }`; `session.created`'s `data.parentID` marks children, and an
   unseen id is resolved via `ctx.session.get` because V2 reloads the plugin
-  whenever Crow rewrites it. ⚠️ **needs-eval:** whether a parent's execution
-  always spans its children's on V2, and the whole mapping against a live
-  2.x TUI.
+  whenever Crow rewrites it. ⚠️ **needs-eval:** the whole mapping against a
+  live 2.x TUI.
+- **OpenCode ≥ 2.3.0: a root's ending is not done while a subagent runs**
+  ([CROW-1464](https://github.com/corveil/crow/issues/1464)). The earlier
+  open question (does a parent's execution span its children's on V2?) is
+  answered by upstream: **no**, from **2.3.0** (anomalyco/opencode#63382).
+  Every subagent runs in the background, the tool returns the child's
+  `sessionID` at once, the root's execution ends while the child works, and
+  each child report wakes the root for a new execution. Mapping the root's
+  `succeeded` straight to `Stop` would park the card on `.done` (and complete a
+  job, ADR 0015) before the work exists. The V2 body now decides a root ending
+  in two layers and emits `Stop` only when both find nothing outstanding:
+  **(1)** the experimental `experimental.idle` session hook (first shipped
+  **2.2.1**, #59437; read from the `v2.3.2` source). It runs inside the drain
+  just before the session goes idle, before `succeeded` is published, and lists
+  the `background` work still running. A report from the current execution
+  decides a `succeeded`: any entry other than `kind: "shell"` holds `Stop`
+  (`subagent`, `codemode`, `image`, or an unknown future kind). Shells are
+  excluded on purpose, as upstream's own TUI "Session done" excludes them
+  (`notifications.ts`), because a dev server never finishes.
+  **(2)** Children tracked from stable events (from `session.created` with
+  `parentID` until they end an execution) decide every ending the hook does not
+  report: `failed` and `interrupted` (the hook skips both, and on 2.3.0 Escape
+  no longer cancels children), and a `succeeded` with no report from the
+  current execution (hook missing, renamed or rejected, or the plugin reloaded
+  mid-turn). A held ending emits nothing, so the card stays working (or
+  `.waiting` on a child's permission prompt). The root's next ending emits the
+  `Stop`. Below 2.3.0 both layers find nothing outstanding at the root's end,
+  so behaviour is unchanged. Known edges: a background shell does not hold, so
+  a finite one can end a turn early and its report then reopens it. A user
+  interrupt with children left running stays working until a report wakes the
+  root. ⚠️ **needs-eval:** the event order (root `succeeded` vs child end vs
+  the report-woken root turn) is read from the source and pinned by
+  `OpenCodeV2PluginRuntimeTests`, not yet measured on a live 2.3.x TUI.
 
 > **Apply-order caveat (#903).** Since `crow hook-event` became fire-and-forget,
 > `PreToolUse` being non-async only guarantees the daemon *accepts* it ahead of
@@ -1523,7 +1561,8 @@ against current upstream CLIs.
 | Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` | 2026-07-24 |
 | Cursor interactive `--trust` (workspace-trust seed) — reverses the earlier headless-only omission; now emitted on **every** kind incl. `.review` | **min: Cursor CLI ≥ 2026.07.20** (changelog: interactive); verified `agent 2026.08.04` (`--help` drops "headless mode only"; pty run with no `--print` writes `.workspace-trusted` / `"trustMethod": "cli-flag"`) | `CursorLaunchArgs.trustSuffix` | 2026-08-10 (CROW-954) — emitted on every path. The `.review` carve-out is **removed**: `--force` was observed NOT to suppress the trust dialog (the CROW-890 "unverified" note, now settled), so the carve-out stranded unattended reviews on a prompt that gated nothing — review already runs `--force --approve-mcps`. Review clones are now defended by the launch-path `.cursor/` strip (`shouldStripCursorReviewClone`) instead. Pre-2026.07.20 CLI out of support; probed 2026.07.23 that the parser ignores a mode-gated flag (`--output-format json --version` exits 0), so older builds no-op `--trust` rather than reject. Re-probe if `--help` ever restores the headless-only qualifier |
 | OpenCode "done" signal is `session.status {idle}`, not the deprecated `session.idle` | opencode **1.18.5** (probed; `session.status` present) | `OpenCodeHookConfigWriter` | 2026-08-13 (CROW-1000) — upstream publishes **both** at turn end (`session/status.ts` `set` → Status then Idle, 246 µs apart), so the plugin latches on the first `session.status` and drops the compat event; older builds keep the `session.idle` fallback. `session.status` fires on every status write, not only on changes, so transitions are deduped per `sessionID`. ⚠️ Probed via headless `opencode run`, **not** the interactive TUI — the TUI pass is the open human re-check, as is a build ≥ **1.18.16** (the version the ticket cites for the deprecation docs). Re-probe if upstream stops emitting `session.idle` (fallback becomes dead code) or adds a fourth `SessionStatus` type |
-| OpenCode subagent child sessions carry no parent link on `session.status`/`session.idle` — only `session.created`'s `info.parentID` does | opencode **1.18.5** (child idle measured 1.9 s before parent finish) | `OpenCodeHookConfigWriter` | 2026-08-20 (CROW-1082) — plugin records every child id from `session.created` and drops that id's status/idle so only the **root** session moves the card; a child no longer emits `SessionStart` either. Scoped to premature `.done`; child tool hooks still map to working (parent is working). Re-probe if upstream stops populating `info.parentID` on `session.created`, or starts stamping a parent id onto `session.status`/`session.idle` (the guard could then key off that directly) |
+| OpenCode subagent child sessions carry no parent link on `session.status`/`session.idle` — only `session.created`'s `info.parentID` does | opencode **1.18.5** (child idle measured 1.9 s before parent finish) | `OpenCodeHookConfigWriter` | 2026-08-20 (CROW-1082) — plugin records every child id from `session.created` and drops that id's status/idle so only the **root** session moves the card; a child no longer emits `SessionStart` either. Scoped to premature `.done`; child tool hooks still map to working (parent is working). Re-probe if upstream stops populating `info.parentID` on `session.created`, or starts stamping a parent id onto `session.status`/`session.idle` (the guard could then key off that directly). **Inverted on OpenCode 2 ≥ 2.3.0:** the parent now finishes *before* its background children, which the next row covers |
+| OpenCode 2 background subagents: a root's `session.execution.succeeded` is not done while a subagent runs; `experimental.idle` lists the outstanding work | opencode **2.3.0** (#63382, behaviour change); `experimental.idle` since **2.2.1** (#59437), `codemode` kind **2.3.1**; source read at **v2.3.2** | `OpenCodeHookConfigWriter.pluginSourceV2` | 2026-11-19 (CROW-1464). A root ending emits `Stop` only when the current execution's `experimental.idle` report lists no non-shell work, or (no report, or a `failed`/`interrupted` ending) no tracked child session is running. Shells never hold, mirroring upstream's TUI. Re-check if `experimental.idle` is renamed or loses the experimental prefix (the fallback keeps it fail-closed meanwhile), if `SessionIdleBackground` gains a long-lived kind other than `shell`, or if upstream adds a foreground-subagent option back. A live 2.3.x TUI probe of the event order is still open |
 | Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **1.4.6** (`agy --help` re-probed; changelog read to **1.5.5**) — root flags now also include `--remote-control`, `--mode accept-edits\|auto\|plan`, `--output-format text\|json\|stream-json`, `--input-format`, `--json-schema`, `--print-timeout`, `--sandbox`, `--effort`; subcommands add `remote-control`, `plugin`, `mic-serve`; `acp` only from 1.5.0 | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-11-11 (CROW-1428) — `-p`, `-c`, `--conversation` unchanged. Re-probe on upgrade |
 | Antigravity session-scoped Remote Control (`--remote-control`) | `agy` **≥ 1.2.6** (flag), **1.1.19** free-port fix, **1.3.3** ADC exits with an error; probed live on **1.4.6** — two concurrent panes, distinct connections, `paste-buffer` still drives, ADC → exit 2 | `AntigravityLaunchArgs.remoteControlSuffix` | 2026-11-11 (CROW-1428) — wired on interactive launches behind the `AGY_ADC_AUTH` shell guard. Re-check if a `--name`-style label appears (then label with the session name) or ADC gains RC support (then drop the guard). The `agy remote-control start` OS service stays unwired (machine-global) |
 | Antigravity structured-stdout / ACP (would promote toward first-class parity) | `--output-format json\|stream-json` + `--input-format stream-json` present on **1.4.6**; `finished_reason` **1.4.11**; `agy acp` **1.5.0** (fixes 1.5.1/1.5.4) — upstream FRs **#119/#597/#31** landed | `AntigravitySignalSource` | 2026-11-11 (CROW-1428) — evaluated, **not adopted**: a second, non-tmux drive path against ADR 0001 (Cursor's adapter likewise shipped without the stream-json #829 scoped). Revisit with an ADR if Crow adds a headless session kind |

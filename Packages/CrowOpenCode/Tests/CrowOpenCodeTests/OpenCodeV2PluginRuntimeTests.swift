@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import CrowOpenCode
+@testable import CrowCore
 
 /// The `node` binary for the V2 plugin runtime tests, or nil to skip them.
 private let openCodeTestNodePath: String? = {
@@ -18,9 +19,23 @@ private let openCodeTestNodePath: String? = {
 /// The fake `ctx` mirrors the v2.0.32 shapes the plugin depends on:
 /// `{ type, data }` event payloads from `ctx.event.subscribe({ signal })`,
 /// `ctx.session.get({ sessionID })` returning the session info, and
-/// `ctx.tool.hook(name, fn)`. Skipped when no `node` is installed.
+/// `ctx.tool.hook(name, fn)` — plus the v2.3.2 `ctx.session.hook(name, fn)`
+/// (CROW-1464). An entry `{ hook: "<name>", data }` in the event list runs that
+/// session hook between bus events, the way upstream runs `experimental.idle`
+/// inside the drain before it publishes `session.execution.succeeded`.
+/// Skipped when no `node` is installed.
 @Suite("OpenCode V2 plugin runtime", .enabled(if: openCodeTestNodePath != nil))
 struct OpenCodeV2PluginRuntimeTests {
+
+    /// How the fake `ctx.session.hook` behaves.
+    enum SessionHookAPI {
+        /// Registers the callback (OpenCode ≥ 2.2.1).
+        case available
+        /// `ctx.session.hook` is absent.
+        case missing
+        /// Registration rejects (an unknown or renamed hook name).
+        case throwing
+    }
 
     /// Run the plugin with `events` (JS array literal of `{type, data}`),
     /// optional `sessions` (JS object: id → info for `session.get`), and an
@@ -31,7 +46,8 @@ struct OpenCodeV2PluginRuntimeTests {
         sessions: String = "{}",
         ctxOverride: String? = nil,
         sessionID: UUID? = UUID(),
-        exerciseToolHooks: Bool = false
+        exerciseToolHooks: Bool = false,
+        sessionHookAPI: SessionHookAPI = .available
     ) throws -> [String] {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("crow-oc2-\(UUID().uuidString)")
@@ -58,13 +74,28 @@ struct OpenCodeV2PluginRuntimeTests {
         ).write(to: plugin, atomically: true, encoding: .utf8)
 
         let harness = dir.appendingPathComponent("harness.mjs")
+        let sessionHook: String
+        switch sessionHookAPI {
+        case .available: sessionHook = "async hook(name, fn) { SESSION_HOOKS[name] = fn; },"
+        case .missing: sessionHook = ""
+        case .throwing: sessionHook = "async hook(name) { throw new Error(\"unknown hook \" + name); },"
+        }
         let ctx = ctxOverride ?? """
         {
           location: { directory: \(jsString(dir.path)) },
           event: {
             subscribe({ signal }) {
               return (async function* () {
-                for (const e of EVENTS) { yield e; await new Promise((r) => setTimeout(r, 5)); }
+                for (const e of EVENTS) {
+                  // A session hook runs between bus events. The consumer has
+                  // handled every earlier event by now (for-await awaits it).
+                  if (e.hook) {
+                    if (SESSION_HOOKS[e.hook]) await SESSION_HOOKS[e.hook](e.data);
+                    continue;
+                  }
+                  yield e;
+                  await new Promise((r) => setTimeout(r, 5));
+                }
               })();
             },
           },
@@ -73,6 +104,7 @@ struct OpenCodeV2PluginRuntimeTests {
               if (!(sessionID in SESSIONS)) throw new Error("not found");
               return SESSIONS[sessionID];
             },
+            \(sessionHook)
           },
           tool: { async hook(name, fn) { HOOKS[name] = fn; } },
         }
@@ -82,6 +114,7 @@ struct OpenCodeV2PluginRuntimeTests {
         const EVENTS = \(events);
         const SESSIONS = \(sessions);
         const HOOKS = {};
+        const SESSION_HOOKS = {};
         // Every scenario ends with `BridgeUnavailable` (the fake stream ends,
         // or the API is missing), so wait for that line — deterministic even
         // when the suite's parallel spawns are slow — then for the tool hooks.
@@ -113,6 +146,24 @@ struct OpenCodeV2PluginRuntimeTests {
 
         let text = (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
         return text.split(separator: "\n").map(String.init)
+    }
+
+    /// Fold the emitted events through `OpenCodeSignalSource` from `.idle`,
+    /// stopping at the trailing `BridgeUnavailable` (the fake stream ending),
+    /// and return the card's activity state at that point.
+    private func cardState(after names: [String]) -> AgentActivityState {
+        let source = OpenCodeSignalSource()
+        var state = AgentActivityState.idle
+        for name in names {
+            if name == "BridgeUnavailable" { break }
+            let t = source.transition(
+                for: AgentHookEvent(sessionID: UUID(), eventName: name, summary: name),
+                currentActivityState: state,
+                currentNotificationType: nil,
+                currentLastTopLevelStopAt: nil)
+            if let next = t.newActivityState { state = next }
+        }
+        return state
     }
 
     private func jsString(_ s: String) -> String {
@@ -200,5 +251,187 @@ struct OpenCodeV2PluginRuntimeTests {
         let names = try run(events: "[]", ctxOverride: "{ location: { directory: \"/tmp\" } }")
         #expect(names == ["BridgeUnavailable"])
         #expect(!names.contains("Stop"))
+    }
+
+    // MARK: - Background subagents (CROW-1464, OpenCode ≥ 2.3.0)
+
+    /// A background subagent the root is still waiting on, as
+    /// `experimental.idle` lists it.
+    private let subagentWork = """
+    { kind: "subagent", sessionID: "ses_root", childSessionID: "ses_child", agent: "general", description: "survey" }
+    """
+
+    /// The opening of a 2.3.0 turn that delegates: the subagent tool returns at
+    /// once, so the root goes idle while the child is still working.
+    private var rootEndsWhileSubagentRuns: String {
+        """
+          { type: "session.created", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { type: "session.created", data: { sessionID: "ses_child", parentID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_child" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [\(subagentWork)] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        """
+    }
+
+    @Test func rootExecutionEndWithOutstandingSubagentIsNotDone() throws {
+        // The ticket's pin: the root's execution ends, its subagent is still
+        // running, so the card must not reach `.done` (for a job, `.done` is
+        // completion — ADR 0015).
+        let names = try run(events: "[\(rootEndsWhileSubagentRuns)]")
+        #expect(!names.contains("Stop"))
+        #expect(cardState(after: names) == .working)
+        #expect(cardState(after: names) != .done)
+    }
+
+    @Test func subagentReportWakesRootAndOnlyThatEndingIsDone() throws {
+        // The child finishes; its report wakes the root for a new execution,
+        // which ends with nothing outstanding. That ending is the one `Stop`.
+        let names = try run(events: """
+        [
+        \(rootEndsWhileSubagentRuns)
+          { hook: "experimental.idle", data: { sessionID: "ses_child", background: [] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_child" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        ]
+        """)
+        #expect(Array(names.prefix(4)) == ["SessionStart", "UserPromptSubmit", "UserPromptSubmit", "Stop"])
+        #expect(names.filter { $0 == "Stop" }.count == 1)
+        #expect(cardState(after: names) == .done)
+    }
+
+    @Test func backgroundShellDoesNotHoldDone() throws {
+        // A shell may be a dev server that never exits; upstream's own TUI
+        // "done" ignores shells, and so does Crow.
+        let names = try run(events: """
+        [
+          { type: "session.created", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [
+            { kind: "shell", sessionID: "ses_root", shellID: "sh_1", command: "npm run dev" },
+          ] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        ]
+        """)
+        #expect(names.filter { $0 == "Stop" }.count == 1)
+        #expect(cardState(after: names) == .done)
+    }
+
+    @Test func nonShellAndUnknownBackgroundKindsHoldDone() throws {
+        // `codemode` / `image` report back and wake the session; a kind added
+        // later is assumed to as well — never Stop on doubt.
+        for kind in ["codemode", "image", "something-new"] {
+            let names = try run(events: """
+            [
+              { type: "session.created", data: { sessionID: "ses_root" } },
+              { type: "session.execution.started", data: { sessionID: "ses_root" } },
+              { hook: "experimental.idle", data: { sessionID: "ses_root", background: [
+                { kind: "\(kind)", sessionID: "ses_root" },
+              ] } },
+              { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+            ]
+            """)
+            #expect(!names.contains("Stop"), "kind \(kind) must hold done")
+        }
+    }
+
+    @Test func freshEmptyIdleReportOutranksChildTracking() throws {
+        // A child was created but this plugin never saw it end (e.g. it ended
+        // before a reload). Upstream's own report says nothing is outstanding,
+        // so the root's ending is done.
+        let names = try run(events: """
+        [
+          { type: "session.created", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { type: "session.created", data: { sessionID: "ses_child", parentID: "ses_root" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        ]
+        """)
+        #expect(names.filter { $0 == "Stop" }.count == 1)
+    }
+
+    @Test func idleReportOnlySpeaksForItsOwnExecution() throws {
+        // Execution 1 is held by its report. Execution 2 ends with no report
+        // (a control-only drain skips the hook): the stale hold must not strand
+        // the card, so the child tracking decides — the child is done — Stop.
+        let names = try run(events: """
+        [
+        \(rootEndsWhileSubagentRuns)
+          { type: "session.execution.succeeded", data: { sessionID: "ses_child" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        ]
+        """)
+        #expect(names.filter { $0 == "Stop" }.count == 1)
+        #expect(cardState(after: names) == .done)
+    }
+
+    @Test func withoutIdleHookTrackedChildrenHoldDone() throws {
+        // OpenCode < 2.2.1 (hook missing) or a renamed hook (registration
+        // rejects): the stable-event fallback alone holds Stop while a child
+        // created by this root is still running.
+        for api in [SessionHookAPI.missing, .throwing] {
+            let names = try run(events: """
+            [
+              { type: "session.created", data: { sessionID: "ses_root" } },
+              { type: "session.execution.started", data: { sessionID: "ses_root" } },
+              { type: "session.created", data: { sessionID: "ses_child", parentID: "ses_root" } },
+              { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+              { type: "session.execution.started", data: { sessionID: "ses_child" } },
+              { type: "session.execution.succeeded", data: { sessionID: "ses_child" } },
+              { type: "session.execution.started", data: { sessionID: "ses_root" } },
+              { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+            ]
+            """, sessionHookAPI: api)
+            #expect(Array(names.prefix(4)) == ["SessionStart", "UserPromptSubmit", "UserPromptSubmit", "Stop"],
+                    "api \(api)")
+            #expect(names.filter { $0 == "Stop" }.count == 1, "api \(api)")
+        }
+    }
+
+    @Test func failedOrInterruptedRootWithRunningChildIsNotDone() throws {
+        // The hook does not run after a failure or an interruption, and on
+        // 2.3.0 Escape no longer cancels children — they report later. A report
+        // from earlier in the execution must not license a Stop either.
+        for ending in [
+            #"{ type: "session.execution.failed", data: { sessionID: "ses_root", error: { type: "x", message: "boom" } } }"#,
+            #"{ type: "session.execution.interrupted", data: { sessionID: "ses_root", reason: "user" } }"#,
+        ] {
+            let names = try run(events: """
+            [
+              { type: "session.created", data: { sessionID: "ses_root" } },
+              { type: "session.execution.started", data: { sessionID: "ses_root" } },
+              { type: "session.created", data: { sessionID: "ses_child", parentID: "ses_root" } },
+              { type: "session.execution.started", data: { sessionID: "ses_child" } },
+              { hook: "experimental.idle", data: { sessionID: "ses_root", background: [] } },
+              \(ending),
+            ]
+            """)
+            #expect(!names.contains("Stop"), "ending \(ending)")
+            #expect(cardState(after: names) == .working)
+        }
+    }
+
+    @Test func malformedIdleReportFallsBackWithoutBreakingTheBridge() throws {
+        // A hook that throws fails the execution upstream, so the callback
+        // swallows bad input; the fallback then decides (child still running).
+        let names = try run(events: """
+        [
+          { type: "session.created", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { type: "session.created", data: { sessionID: "ses_child", parentID: "ses_root" } },
+          { hook: "experimental.idle", data: null },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: "nope" } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_child" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        ]
+        """)
+        #expect(names.filter { $0 == "Stop" }.count == 1)
+        #expect(names.last == "BridgeUnavailable")
     }
 }
