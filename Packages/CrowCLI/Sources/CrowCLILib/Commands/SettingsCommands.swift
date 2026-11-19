@@ -222,6 +222,11 @@ public struct UISet: ParsableCommand {
     var hideSessionDetails: Bool?
 
     @Option(
+        name: .customLong("brandmark-color"),
+        help: "Color of the particle crow brandmark: gold (default) or pink")
+    var brandmarkColor: String?
+
+    @Option(
         name: .customLong("switcher-enabled"),
         help: "Enable the session switcher overlay (true or false)")
     var switcherEnabled: Bool?
@@ -265,11 +270,15 @@ public struct UISet: ParsableCommand {
     public init() {}
 
     public func validate() throws {
-        guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
+        guard hideSessionDetails != nil || brandmarkColor != nil
+            || switcherEnabled != nil || switcherBinding != nil
             || switcherCaptureInTerminal != nil || switcherOrder != nil || switcherPreview != nil
             || !switcherIncludes.isEmpty || chatView != nil || debugMode != nil else {
             throw ValidationError(
                 "Nothing to set — provide at least one UI preference flag.")
+        }
+        if let brandmarkColor, !["gold", "pink"].contains(brandmarkColor) {
+            throw ValidationError("--brandmark-color must be gold or pink.")
         }
         if let switcherOrder, !["mru", "sidebar"].contains(switcherOrder) {
             throw ValidationError("--switcher-order must be mru or sidebar.")
@@ -291,6 +300,9 @@ public struct UISet: ParsableCommand {
         var params: [String: JSONValue] = [:]
         if let hideSessionDetails {
             params["hide_session_details"] = .bool(hideSessionDetails)
+        }
+        if let brandmarkColor {
+            params["brandmark_color"] = .string(brandmarkColor)
         }
         if let switcherEnabled {
             params["switcher_enabled"] = .bool(switcherEnabled)

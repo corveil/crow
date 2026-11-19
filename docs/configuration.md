@@ -453,9 +453,10 @@ Three top-level blocks in `{devRoot}/.claude/config.json`, editable from **Setti
 
 **`sidebar`** — view preferences (the `ui` CLI group's first block).
 
-| Key                  | Default | Range   | Description                                              |
-| -------------------- | ------- | ------- | -------------------------------------------------------- |
-| `hideSessionDetails` | `false` | boolean | Hides ticket title and repo/branch lines in sidebar rows |
+| Key                  | Default | Range            | Description                                              |
+| -------------------- | ------- | ---------------- | -------------------------------------------------------- |
+| `hideSessionDetails` | `false` | boolean          | Hides ticket title and repo/branch lines in sidebar rows |
+| `brandmarkColor`     | `gold`  | `gold` \| `pink` | Color of the particle crow: the animated sidebar and empty-state mark, and the static `/brand.svg` behind the favicon, login card, manifest and About. The UI accent and the desktop app icon stay gold. An unknown value reads as `gold` |
 
 **`chatView`** — the experimental [web Chat view](web-chat-view.md) (`crow ui set --chat-view`, Settings → General).
 

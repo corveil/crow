@@ -361,6 +361,26 @@ function el(tag, className, text) {
   return node;
 }
 
+// The animated particle crow (CROW-1469), built once and re-appended on every
+// render: `root.innerHTML = ''` only detaches it, so the canvas keeps its one
+// WebGL context and the formation isn't replayed on each poll. The <img> of
+// /brand.svg inside is the fallback when WebGL is unavailable.
+let sidebarBrandNode = null;
+function sidebarBrandmark() {
+  if (sidebarBrandNode) return sidebarBrandNode;
+  const host = el('div', 'brand-mark');
+  host.id = 'brand-img';
+  host.setAttribute('role', 'img');
+  host.setAttribute('aria-label', 'Crow');
+  const img = document.createElement('img');
+  img.src = window.crowBrand ? window.crowBrand.src() : '/brand.svg';
+  img.alt = '';
+  host.appendChild(img);
+  if (window.crowBrand) window.crowBrand.mount(host);
+  sidebarBrandNode = host;
+  return host;
+}
+
 // Signature of everything the sidebar renders — used to skip rebuilds when the
 // poll returns identical data (avoids the repaint/layout jump).
 let lastSidebarSig = null;
@@ -401,12 +421,7 @@ function renderSidebar() {
   const root = document.getElementById('sidebar');
   root.innerHTML = '';
 
-  // Brandmark (the desktop's CorveilBrandmark, served at /brand.svg).
-  const brand = document.createElement('img');
-  brand.id = 'brand-img';
-  brand.src = '/brand.svg';
-  brand.alt = 'Crow';
-  root.appendChild(brand);
+  root.appendChild(sidebarBrandmark());
 
   // Two-column sidebar top (CROW-917): a left stack [tickets → Reviews/Scorecard
   // → Manager] over a far-right column of four stacked icon buttons

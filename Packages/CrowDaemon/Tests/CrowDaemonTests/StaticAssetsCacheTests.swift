@@ -1,7 +1,9 @@
+import CrowCore
 import Foundation
 import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
+import NIOCore
 import Testing
 
 @testable import CrowDaemon
@@ -150,6 +152,88 @@ struct StaticAssetsCacheTests {
                     #expect(response.body.readableBytes > 0, "\(path) should have a body")
                     #expect(response.headers[.contentType] == "image/png", "\(path) content type")
                 }
+            }
+        }
+    }
+}
+
+/// `/brand.svg` is the static particle crow in the configured color (CROW-1469):
+/// the favicon, the pre-auth login card, the manifest and About all load it, so
+/// the server, not the client, picks the variant.
+@Suite("Brandmark variant")
+struct BrandmarkVariantTests {
+    private func makeApp(_ color: BrandmarkColor? = nil) -> some ApplicationProtocol {
+        let router = Router(context: CrowHTTPContext.self)
+        if let color {
+            StaticAssets.mount(on: router, brandmark: { color })
+        } else {
+            StaticAssets.mount(on: router)
+        }
+        return Application(router: router)
+    }
+
+    private static let goldStop = "#DDC482"
+    private static let pinkStop = "#FF4AA2"
+
+    @Test("Default is gold, revalidated")
+    func defaultIsGold() async throws {
+        try await makeApp().test(.router) { client in
+            try await client.execute(uri: "/brand.svg", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "image/svg+xml")
+                #expect(response.headers[.cacheControl] == "no-cache")
+                #expect(response.headers[.eTag] != nil)
+                let body = String(buffer: response.body)
+                #expect(body.contains(Self.goldStop))
+                #expect(!body.contains(Self.pinkStop))
+            }
+        }
+    }
+
+    @Test("The setting picks the variant", arguments: [BrandmarkColor.gold, .pink])
+    func settingPicksVariant(color: BrandmarkColor) async throws {
+        try await makeApp(color).test(.router) { client in
+            try await client.execute(uri: "/brand.svg", method: .get) { response in
+                #expect(response.status == .ok)
+                let body = String(buffer: response.body)
+                #expect(body.contains(color == .gold ? Self.goldStop : Self.pinkStop))
+                #expect(!body.contains(color == .gold ? Self.pinkStop : Self.goldStop))
+            }
+        }
+    }
+
+    /// The two variants carry different ETags, so a revalidating browser gets
+    /// the new mark (200) on reload after the setting changes, not a 304.
+    @Test("Variants have distinct ETags")
+    func variantsHaveDistinctETags() async throws {
+        var tags: [String] = []
+        for color in [BrandmarkColor.gold, .pink] {
+            let tag = try await makeApp(color).test(.router) { client in
+                try await client.execute(uri: "/brand.svg", method: .get) { response in
+                    response.headers[.eTag] ?? ""
+                }
+            }
+            tags.append(tag)
+        }
+        #expect(tags.count == 2 && tags[0] != tags[1] && !tags[0].isEmpty)
+    }
+
+    @Test("?color= pins a variant over the setting; junk falls back to it")
+    func queryPinsVariant() {
+        #expect(StaticAssets.brandmarkColor(query: "pink", configured: { .gold }) == .pink)
+        #expect(StaticAssets.brandmarkColor(query: "gold", configured: { .pink }) == .gold)
+        #expect(StaticAssets.brandmarkColor(query: "purple", configured: { .pink }) == .pink)
+        #expect(StaticAssets.brandmarkColor(query: nil, configured: { .pink }) == .pink)
+        #expect(StaticAssets.brandSVGFile(.gold) == "brand-gold.svg")
+        #expect(StaticAssets.brandSVGFile(.pink) == "brand-pink.svg")
+    }
+
+    @Test("?color=pink is served pink when the setting is gold")
+    func queryOverridesOverHTTP() async throws {
+        try await makeApp(.gold).test(.router) { client in
+            try await client.execute(uri: "/brand.svg?color=pink", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains(Self.pinkStop))
             }
         }
     }

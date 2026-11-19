@@ -95,6 +95,7 @@ func makeSettingsHandlers(
         "ui-set": { params in
             try await mapRPCError {
                 let hideSessionDetails = try SettingsRPC.patchBool(params, "hide_session_details")
+                let brandmarkColor = try SettingsRPC.patchBrandmarkColor(params)
                 let switcherEnabled = try SettingsRPC.patchBool(params, "switcher_enabled")
                 let switcherBinding = try SettingsRPC.patchNonEmptyString(params, "switcher_binding")
                 let switcherCapture = try SettingsRPC.patchBool(params, "switcher_capture_in_terminal")
@@ -113,7 +114,8 @@ func makeSettingsHandlers(
                         + "every focused terminal. Pick another chord (default: "
                         + "\(SwitcherSettings.defaultBinding)).")
                 }
-                guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
+                guard hideSessionDetails != nil || brandmarkColor != nil
+                    || switcherEnabled != nil || switcherBinding != nil
                     || switcherCapture != nil || switcherOrder != nil || switcherPreview != nil
                     || !includePatches.isEmpty || chatViewEnabled != nil || debugModeEnabled != nil else {
                     throw RPCError.invalidParams(
@@ -124,6 +126,7 @@ func makeSettingsHandlers(
                     if let hideSessionDetails {
                         config.sidebar.hideSessionDetails = hideSessionDetails
                     }
+                    if let brandmarkColor { config.sidebar.brandmarkColor = brandmarkColor }
                     if let switcherEnabled { config.switcher.enabled = switcherEnabled }
                     if let switcherBinding { config.switcher.binding = switcherBinding }
                     if let switcherCapture {

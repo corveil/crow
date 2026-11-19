@@ -441,6 +441,7 @@ Display preferences for the web UI. This does not start, stop, or open the UI.
 ```bash
 crow ui get
 crow ui set --hide-session-details true
+crow ui set --brandmark-color pink
 crow ui set --chat-view true
 crow ui set --debug-mode true
 ```
@@ -448,6 +449,7 @@ crow ui set --debug-mode true
 | Flag                     | Required | Description                                                        |
 | ------------------------ | -------- | ------------------------------------------------------------------ |
 | `--hide-session-details` | no¹      | `true` or `false` — hide ticket title and repo/branch sidebar lines |
+| `--brandmark-color`      | no¹      | `gold` (default) or `pink` — color of the particle crow brandmark; connected browsers recolor it in place, and `/brand.svg` (favicon, login card) serves the new color |
 | `--chat-view`            | no¹      | `true` or `false` — show the experimental [web Chat view](web-chat-view.md) toggle in session headers (default `false`) |
 | `--debug-mode`           | no¹      | `true` or `false` — debug mode: diagnostic features, today the sidebar recording indicator (default `false`) |
 

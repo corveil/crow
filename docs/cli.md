@@ -2754,7 +2754,7 @@ crow ui get
 Change UI display preferences.
 
 ```
-crow ui set [--hide-session-details <hide-session-details>] [--switcher-enabled <switcher-enabled>] [--switcher-binding <switcher-binding>] [--switcher-capture-in-terminal <switcher-capture-in-terminal>] [--switcher-order <switcher-order>] [--switcher-preview <switcher-preview>] [--switcher-include <switcher-include> ...] [--chat-view <chat-view>] [--debug-mode <debug-mode>]
+crow ui set [--hide-session-details <hide-session-details>] [--brandmark-color <brandmark-color>] [--switcher-enabled <switcher-enabled>] [--switcher-binding <switcher-binding>] [--switcher-capture-in-terminal <switcher-capture-in-terminal>] [--switcher-order <switcher-order>] [--switcher-preview <switcher-preview>] [--switcher-include <switcher-include> ...] [--chat-view <chat-view>] [--debug-mode <debug-mode>]
 ```
 
 Only the flags you pass change; at least one is required. Connected browsers pick the change up within a couple of seconds — no reload.
@@ -2766,6 +2766,7 @@ Only the flags you pass change; at least one is required. Connected browsers pic
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--hide-session-details` | `<hide-session-details>` | no | Hide ticket title and repo/branch lines in sidebar rows (true or false) |
+| `--brandmark-color` | `<brandmark-color>` | no | Color of the particle crow brandmark: gold (default) or pink |
 | `--switcher-enabled` | `<switcher-enabled>` | no | Enable the session switcher overlay (true or false) |
 | `--switcher-binding` | `<switcher-binding>` | no | Session switcher key chord (default: cmd+/; shift+tab is reserved by agents) |
 | `--switcher-capture-in-terminal` | `<switcher-capture-in-terminal>` | no | Capture the switcher binding inside focused terminals (true or false) |

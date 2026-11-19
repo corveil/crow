@@ -20,7 +20,8 @@ enum StaticAssets {
     /// catch-all. Settings tab bodies load before the Settings shell;
     /// `settings.js` is last. `session-modals.js` precedes sidebar callers.
     static let uiJavaScriptFiles = [
-        "theme.js", "rpc.js", "notifications.js", "session-modals.js", "sidebar.js", "sidebar-chrome.js",
+        "theme.js", "rpc.js", "notifications.js", "session-modals.js",
+        "brand-points.js", "brand-particles.js", "sidebar.js", "sidebar-chrome.js",
         "pr-glyphs.js", "recording-glyphs.js", "session-row.js", "session-menu.js", "switcher.js",
         "session.js", "session-header.js", "session-tabs.js", "grid.js", "boards.js", "scorecard-board.js",
         "tickets-board.js", "reviews-board.js", "scratch-board.js",
@@ -33,8 +34,11 @@ enum StaticAssets {
 
     /// `skins` adds the operator's custom skins and daemon-wide default
     /// (CROW-1334); nil serves the built-ins under `webDir` alone.
+    /// `brandmark` reads the configured mark color per request (CROW-1469);
+    /// the default serves gold.
     static func mount(on router: Router<CrowHTTPContext>, webDir: String? = nil,
-                      skins: WebSkinSources? = nil) {
+                      skins: WebSkinSources? = nil,
+                      brandmark: @escaping @Sendable () -> BrandmarkColor = { .default }) {
         let skinSources = skins ?? WebSkinSources(webDir: webDir)
         router.get("/") { req, _ in webResponse("index.html", webDir: webDir, request: req) }
         router.get("/index.html") { req, _ in webResponse("index.html", webDir: webDir, request: req) }
@@ -69,7 +73,17 @@ enum StaticAssets {
         router.get("/markdown-it.min.js") { req, _ in webResponse("markdown-it.min.js", webDir: webDir, request: req) }
         // Web Settings modal stylesheet (CROW-581) — split out of app.css.
         router.get("/settings.css") { req, _ in webResponse("settings.css", webDir: webDir, request: req) }
-        router.get("/brand.svg") { req, _ in webResponse("brand.svg", webDir: webDir, request: req) }
+        // The static particle crow (CROW-1469) in the configured color, so the
+        // favicon, the login card (before sign-in, when the page has no config),
+        // the manifest and About all follow `sidebar.brandmarkColor` with no
+        // client code. `?color=gold|pink` pins a variant: the web client uses it
+        // to swap an in-page <img> the moment the setting changes, since the same
+        // URL would keep showing the image the page already decoded. Both files
+        // revalidate (`no-cache` + ETag), so a change also lands on reload.
+        router.get("/brand.svg") { req, _ in
+            let color = brandmarkColor(query: req.uri.queryParameters.get("color"), configured: brandmark)
+            return webResponse(brandSVGFile(color), webDir: webDir, request: req)
+        }
         // Web app manifest + install icons (CROW-1073) so Chrome installs Crow as a
         // standalone app with the Crow mark instead of a page screenshot. The manifest
         // and its PNG icons are auth-exempt (WebAuthMiddleware.isAuthExempt) like
@@ -111,6 +125,16 @@ enum StaticAssets {
             return fileResponse(data, name: file)
         }
     }
+
+    /// The color `/brand.svg` serves: a valid `?color=` wins, else the setting.
+    /// The setting is only read when the query doesn't decide, so a pinned
+    /// request never touches config.json.
+    static func brandmarkColor(query: String?, configured: () -> BrandmarkColor) -> BrandmarkColor {
+        query.flatMap(BrandmarkColor.init(rawValue:)) ?? configured()
+    }
+
+    /// `brand-gold.svg` / `brand-pink.svg` under `web/`.
+    static func brandSVGFile(_ color: BrandmarkColor) -> String { "brand-\(color.rawValue).svg" }
 
     /// `corveil-classic.css` → `corveil-classic`; nil for anything that is not a
     /// well-formed skin id plus `.css` (so no traversal reaches the catalog).

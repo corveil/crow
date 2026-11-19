@@ -72,6 +72,10 @@
     body.appendChild(S.group('Sidebar'));
     body.appendChild(S.toggleField('Hide session details', S.cfg.sidebar, 'hideSessionDetails',
       'Hides ticket title and repo/branch lines in sidebar rows.'));
+    if (S.cfg.sidebar.brandmarkColor !== 'pink') S.cfg.sidebar.brandmarkColor = 'gold';
+    body.appendChild(S.selectField('Brandmark color', S.cfg.sidebar, 'brandmarkColor', [
+      ['gold', 'Gold, Crow\'s accent (default)'], ['pink', 'Pink, Corveil\'s'],
+    ], { help: 'Colors the particle crow: the sidebar and empty-state animation, the favicon, the login card and About. The UI accent stays gold. CLI: crow ui set --brandmark-color gold|pink.' }));
 
     body.appendChild(S.group('Chat view (experimental)'));
     S.cfg.chatView = S.cfg.chatView || { enabled: false };

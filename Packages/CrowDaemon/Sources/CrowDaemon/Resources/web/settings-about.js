@@ -10,7 +10,8 @@
   function renderAbout(body) {
     const head = el('div', 'st-about-head');
     const logo = el('img', 'st-about-logo');
-    logo.src = '/brand.svg';
+    logo.src = window.crowBrand ? window.crowBrand.src() : '/brand.svg';
+    logo.setAttribute('data-brand-static', '');
     logo.alt = 'Crow';
     const htext = el('div');
     htext.appendChild(el('div', 'st-about-name', 'Crow'));
