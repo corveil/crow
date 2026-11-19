@@ -185,7 +185,9 @@ showing the cover; a sustained drop covering the app (`#app` inert) and the
 reconnect clearing it and re-fetching sessions and boards; a plain disconnect
 leaving localStorage alone; and session expiry showing the scrim, not the
 cover, and emptying `sessions`, `boardData`, the session xterm, the grid
-xterms and the content DOM.
+xterms and the content DOM. The shipped markup carries the particle crow host
+(`#conn-cover-brand`, CROW-1471) with its `/brand.svg` fallback above the
+"Disconnected" title, and none on the session-expired scrim.
 
 ## `router.test.js` — hash URL routing (CROW-936)
 
@@ -265,7 +267,12 @@ re-uploads the palette and repoints the fallback imgs and the SVG favicon
 `loadUIConfig()` hands `sidebar.brandmarkColor` to the mark; reduced motion
 paints one still, formed frame and never re-arms the loop, and turning it on
 mid-formation settles on the formed crow; without WebGL no context is requested
-and the `/brand.svg` img stays.
+and the `/brand.svg` img stays. The Disconnected cover's mark (CROW-1471) is
+mounted at boot while the cover is hidden, and each appearance through the real
+`syncDisconnectCover()` replays the formation (sphere painted at once, then the
+crow) on the same context, three cycles without a new one; a re-sync that
+doesn't change visibility doesn't replay; pink recolors it; reduced motion
+shows it formed and still; without WebGL its boot-time `/brand.svg` img stays.
 
 ## Run
 

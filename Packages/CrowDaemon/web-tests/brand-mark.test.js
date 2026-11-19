@@ -11,13 +11,18 @@ const { loadClientSource } = require('./load-client');
 // - setColor() recolors in place (palette upload, fallback imgs, favicon);
 // - prefers-reduced-motion paints one still, formed frame and stops the loop;
 // - marks hold their first frame until the configured color is known;
-// - no WebGL → no canvas, the /brand.svg <img> stays.
+// - no WebGL → no canvas, the /brand.svg <img> stays;
+// - the Disconnected cover's mark (CROW-1471) mounts at boot and replays its
+//   formation on each appearance, on the same WebGL context.
 
 const epilogue = `
 ;globalThis.__t = {
   renderSidebar(){ lastSidebarSig = null; renderSidebar(); },
   uiConfig,
   loadUIConfig,
+  // Show or hide the Disconnected cover through the real syncDisconnectCover(),
+  // skipping the 3 s grace (this fixture's setTimeout never fires).
+  cover(up) { wsConnected = !up; if (up) disconnectCoverShown = true; syncDisconnectCover(); },
 };
 `;
 const source = loadClientSource() + epilogue;
@@ -44,7 +49,11 @@ function recorder(log, label) {
   return make();
 }
 
-function boot({ webgl = true, reducedMotion = false, emptyState = true } = {}) {
+const COVER = `<div id="conn-cover" class="app-cover" hidden><div class="scrim-card">
+  <div class="conn-cover-brand brand-mark" id="conn-cover-brand" aria-hidden="true"><img src="/brand.svg" alt=""></div>
+  <div class="scrim-title">Disconnected</div></div></div>`;
+
+function boot({ webgl = true, reducedMotion = false, emptyState = true, cover = false } = {}) {
   const dom = new JSDOM(
     `<!doctype html><html><head>
        <link rel="icon" type="image/svg+xml" href="/brand.svg">
@@ -53,6 +62,7 @@ function boot({ webgl = true, reducedMotion = false, emptyState = true } = {}) {
      </head><body>
        <div id="sidebar"></div><div id="board"></div><div id="header"></div>
        ${emptyState ? '<div id="detail-empty"><div class="empty-brand brand-mark" id="empty-brand"><img src="/brand.svg" alt=""></div></div>' : ''}
+       ${cover ? COVER : ''}
      </body></html>`,
     { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/' });
   const { window } = dom;
@@ -237,6 +247,80 @@ function finish() {
     b.brand.setColor('gold');
     b.brand.setColor('pink');
     check('fallback img still recolors', host.querySelector('img').getAttribute('src') === '/brand.svg?color=pink');
+  }
+
+  console.log('\nDisconnected cover: mounted at boot, replays on every appearance (CROW-1471):');
+  {
+    // No empty state, and the sidebar's mark (if the boot paint built one) is
+    // detached, so the loop skips it: every recorded draw is the cover's.
+    const b = boot({ cover: true, emptyState: false });
+    const baseline = boot({ emptyState: false }).contexts.webgl;
+    const doc = b.window.document;
+    const cover = doc.getElementById('conn-cover');
+    const host = doc.getElementById('conn-cover-brand');
+    check('mounted at boot while the cover is hidden: one context, canvas + /brand.svg fallback',
+      cover.hidden && b.contexts.webgl === baseline + 1 && !!host.querySelector('canvas')
+      && host.querySelector('img').getAttribute('src') === '/brand.svg');
+    b.brand.setColor('gold');
+    b.runFrames(1000);
+    let cycles = 0;
+    for (let i = 0; i < 3; i++) {
+      b.gl.length = 0;
+      const t = b.window.performance.now();
+      b.T.cover(true);
+      const first = morphValues(b.gl);
+      if (!cover.hidden && first.length === 1 && first[0] === 0) cycles++;
+      b.gl.length = 0;
+      b.runFrames(t + 300 + 1200);
+      const mid = morphValues(b.gl);
+      b.gl.length = 0;
+      b.runFrames(t + 300 + 2400 + 50);
+      const done = morphValues(b.gl);
+      if (mid.some((v) => v > 0 && v < 1) && done.includes(1)) cycles++;
+      b.T.cover(false);
+    }
+    check('each appearance paints the sphere at once (morph 0), then forms the crow — 3 of 3', cycles === 6);
+    check('3 disconnects later: no new context, still one canvas', b.contexts.webgl === baseline + 1
+      && host.querySelectorAll('canvas').length === 1);
+    b.gl.length = 0;
+    b.T.cover(false);
+    check('a re-sync while already hidden does not replay', morphValues(b.gl).length === 0);
+    b.T.cover(true);
+    b.gl.length = 0;
+    b.T.cover(true);
+    check('a re-sync while already shown does not replay', morphValues(b.gl).length === 0);
+    b.gl.length = 0;
+    b.brand.setColor('pink');
+    check('pink: cover palette re-uploaded and its fallback img pinned to ?color=pink',
+      b.gl.filter(([, k]) => k === 'bufferSubData').length === b.contexts.webgl
+      && host.querySelector('img').getAttribute('src') === '/brand.svg?color=pink');
+    check('replay() of an unmounted host or null is a no-op',
+      (b.brand.replay(doc.createElement('div')), b.brand.replay(null), true));
+  }
+
+  console.log('\nDisconnected cover with reduced motion: a still, formed crow:');
+  {
+    const b = boot({ cover: true, emptyState: false, reducedMotion: true });
+    b.brand.setColor('gold');
+    b.runFrames(1000);
+    b.gl.length = 0;
+    b.T.cover(true);
+    b.runFrames(2000);
+    const vals = morphValues(b.gl);
+    check('drawn formed (morph 1), never the sphere or mid-formation',
+      vals.length > 0 && vals.every((v) => v === 1));
+    check('no loop left running', b.frames.length === 0);
+  }
+
+  console.log('\nDisconnected cover without WebGL: the boot-time fallback img:');
+  {
+    const b = boot({ cover: true, emptyState: false, webgl: false });
+    const host = b.window.document.getElementById('conn-cover-brand');
+    check('no context, no canvas; the /brand.svg img is in place from boot',
+      b.contexts.webgl === 0 && !host.querySelector('canvas')
+      && host.querySelector('img').getAttribute('src') === '/brand.svg');
+    b.T.cover(true);
+    check('the cover still shows (replay is a no-op)', !b.window.document.getElementById('conn-cover').hidden);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
