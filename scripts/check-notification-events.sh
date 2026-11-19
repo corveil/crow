@@ -55,7 +55,7 @@ swift_voice_defaults() {
     const s = require("fs").readFileSync(process.argv[1], "utf8");
     const tpl = s.match(/var defaultVoiceTemplate: String \{([\s\S]*?)\n    \}/)[1];
     const en = s.match(/var defaultVoiceEnabled: Bool \{([\s\S]*?)\n    \}/)[1];
-    // `case .a, .b: false` lines, plus an optional `default: true|false`.
+    // "case .a, .b: false" lines, plus an optional "default: true|false".
     const explicit = {};
     for (const m of en.matchAll(/case ((?:\.\w+(?:,\s*)?)+): (true|false)/g)) {
       for (const n of m[1].match(/\w+/g)) explicit[n] = m[2];
