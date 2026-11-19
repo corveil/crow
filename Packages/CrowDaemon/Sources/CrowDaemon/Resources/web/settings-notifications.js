@@ -272,7 +272,16 @@
     const voices = v ? v.voices() : [];
     if (v && voices.length === 0 && !_voiceRerenderArmed) {
       _voiceRerenderArmed = true;
-      v.onVoices(() => { try { S.render(); } catch (_) {} });
+      // render() builds a fresh modal when none is open, so an unguarded call
+      // here would resurrect a Settings the user closed (or discarded) before
+      // the voice list arrived. Only repaint a modal that is still up; a later
+      // open renders with the voices already loaded (review of #1473). Armed
+      // once per page: the listener stays registered, so it also repaints an
+      // open modal if the OS voice list changes later.
+      v.onVoices(() => {
+        if (!(window.settingsIsOpen && window.settingsIsOpen())) return;
+        try { S.render(); } catch (_) {}
+      });
     }
     const sel = el('select', 'st-select');
     const def = el('option', null, 'System default');

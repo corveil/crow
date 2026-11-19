@@ -179,5 +179,69 @@ console.log('voice: a refused utterance falls back to the chime');
   check('while blocked, later events chime without trying to speak', spoken.length === 1 && chimes.length === 2, { spoken: spoken.length, chimes });
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// Settings: the voice list arrives late (voiceschanged). The one-shot repaint
+// must not resurrect a Settings modal the user already closed (review of #1473).
+async function settingsVoicesScenario() {
+  console.log('voice: late voice list does not reopen a closed Settings');
+  const { loadSettingsSource } = require('./load-client');
+  const dom = new JSDOM(`<!doctype html><html><body><div id="app"><aside id="sidebar"></aside>
+    <main id="detail"><header id="detail-header"></header><div id="tabbar"></div>
+    <div id="board"></div><div id="detail-empty"><div class="empty-msg"></div></div></main></div></body></html>`,
+  { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/' });
+  const { window } = dom;
+  let voices = [];
+  const changed = [];
+  window.SpeechSynthesisUtterance = function (t) { this.text = t; };
+  window.speechSynthesis = {
+    getVoices: () => voices,
+    addEventListener(type, fn) { if (type === 'voiceschanged') changed.push(fn); },
+    speak() {}, cancel() {}, resume() {},
+  };
+  window.WebSocket = function () {
+    return { send() {}, close() {}, set onopen(v) {}, set onmessage(v) {}, set onclose(v) {}, set onerror(v) {} };
+  };
+  window.setInterval = () => 0;
+  window.setTimeout = () => 0;
+  window.requestAnimationFrame = () => 0;
+  window.fetch = () => Promise.resolve({ ok: false, json: () => Promise.reject(new Error('n/a')) });
+  const realGet = window.document.getElementById.bind(window.document);
+  window.document.getElementById = (id) => realGet(id) || window.document.createElement('div');
+  const ctx = dom.getInternalVMContext();
+  try {
+    vm.runInContext(loadClientSource() + ';globalThis.__s={setRpc(f){rpc=f;}};' + loadSettingsSource(), ctx);
+  } catch (e) { console.log('[load warn]', e.message); }
+  ctx.__s.setRpc((m) => (m === 'get-config'
+    ? Promise.resolve({ config: JSON.stringify({ notifications: { voiceEnabled: true } }), dev_root: '/d' })
+    : m === 'list-agents' ? Promise.resolve({ agents: [] })
+      : m === 'notifications-get' ? Promise.resolve({ notifications: { available_sounds: ['Glass'], custom_sounds: [] } })
+        : Promise.reject(new Error('not stubbed: ' + m))));
+  const drain = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+  const fireVoices = () => {
+    voices = [{ name: 'Samantha', lang: 'en-US', default: true }];
+    for (const fn of changed) fn();
+  };
+  const voiceOptions = () => [...window.document.querySelectorAll('option')].filter((o) => o.value === 'Samantha').length;
+
+  await window.openSettings('notifications');
+  await drain();
+  check('Settings opened with an empty voice list', window.settingsIsOpen() && voiceOptions() === 0);
+  await window.closeSettings(true);
+  check('Settings closed', !window.settingsIsOpen());
+  fireVoices();
+  await drain();
+  check('voiceschanged after close leaves Settings closed', !window.settingsIsOpen());
+
+  await window.openSettings('notifications');
+  await drain();
+  check('reopening shows the voices that arrived meanwhile', window.settingsIsOpen() && voiceOptions() === 1);
+  voices = voices.concat([{ name: 'Fred', lang: 'en-US' }]);
+  for (const fn of changed) fn();
+  await drain();
+  check('a later voice-list change repaints the open modal',
+    [...window.document.querySelectorAll('option')].some((o) => o.value === 'Fred'));
+}
+
+settingsVoicesScenario().catch((e) => { fail++; console.log('  ✗ settings scenario threw', e); }).then(() => {
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+});

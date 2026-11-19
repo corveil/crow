@@ -45,6 +45,29 @@ settings_events() {
   ' "$SETTINGS"
 }
 
+# Spoken notifications (#1473): NotificationEvent.defaultVoiceTemplate vs the
+# VOICE_DEFAULTS fallback in notifications.js, as "event<TAB>template" lines. The
+# daemon ships its table to the client at boot, but the JS copy is what speaks
+# until then (or if notifications-get fails), so it must not drift.
+swift_voice_templates() {
+  node -e '
+    const s = require("fs").readFileSync(process.argv[1], "utf8");
+    const body = s.match(/var defaultVoiceTemplate: String \{([\s\S]*?)\n    \}/)[1];
+    const out = [];
+    for (const m of body.matchAll(/case \.(\w+): "([^"]*)"/g)) out.push(m[1] + "\t" + m[2]);
+    console.log(out.sort().join("\n"));
+  ' "$ENUM"
+}
+app_voice_templates() {
+  node -e '
+    const s = require("fs").readFileSync(process.argv[1], "utf8");
+    const body = s.match(/const VOICE_DEFAULTS = \{([\s\S]*?)\n\};/)[1];
+    const out = [];
+    for (const m of body.matchAll(/(\w+): \{ enabled: (?:true|false), template: '"'"'([^'"'"']*)'"'"' \}/g)) out.push(m[1] + "\t" + m[2]);
+    console.log(out.sort().join("\n"));
+  ' "$APP"
+}
+
 status=0
 if ! diff <(swift_events) <(app_events) >/tmp/notif-app.diff 2>&1; then
   echo "MISMATCH: NotificationEvent.swift vs notifications.js (< Swift, > notifications.js):" >&2
@@ -56,8 +79,13 @@ if ! diff <(swift_events) <(settings_events) >/tmp/notif-settings.diff 2>&1; the
   cat /tmp/notif-settings.diff >&2
   status=1
 fi
+if ! diff <(swift_voice_templates) <(app_voice_templates) >/tmp/notif-voice.diff 2>&1; then
+  echo "MISMATCH: defaultVoiceTemplate (Swift) vs VOICE_DEFAULTS (notifications.js) (< Swift, > notifications.js):" >&2
+  cat /tmp/notif-voice.diff >&2
+  status=1
+fi
 
 if [ "$status" -eq 0 ]; then
-  echo "notification-event catalogs agree ($(swift_events | wc -l | tr -d ' ') events)"
+  echo "notification-event catalogs agree ($(swift_events | wc -l | tr -d ' ') events, $(app_voice_templates | wc -l | tr -d ' ') voice templates)"
 fi
 exit "$status"

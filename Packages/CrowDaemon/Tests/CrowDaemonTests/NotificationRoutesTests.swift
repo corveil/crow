@@ -147,6 +147,63 @@ import CrowPersistence
         #expect(stored.notifications.eventSettings.count == 1)
     }
 
+    // MARK: - voice (spike #1473)
+
+    /// Voice fields land on disk, and `""` resets the double-optional fields
+    /// (`voice_name`, `event_voice_template`) back to absent rather than storing
+    /// an empty string — so the event follows the default template again.
+    @Test func setPersistsVoiceFieldsAndEmptyStringResets() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let r = await router(devRoot: devRoot)
+
+        let set = await r.handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-set", params: [
+                "voice_enabled": .bool(true),
+                "voice_name": .string("Samantha"),
+                "voice_rate": .int(2),
+                "voice_volume": .double(0.5),
+                "chime_before_voice": .bool(true),
+                "event": .string("agentWaiting"),
+                "event_voice_enabled": .bool(false),
+                "event_voice_template": .string("{session} wants you"),
+            ]))
+        #expect(set.error == nil)
+        var stored = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(stored.notifications.voiceEnabled == true)
+        #expect(stored.notifications.voiceName == "Samantha")
+        #expect(stored.notifications.voiceRate == 2.0)
+        #expect(stored.notifications.voiceVolume == 0.5)
+        #expect(stored.notifications.chimeBeforeVoice == true)
+        var event = try #require(stored.notifications.eventSettings[.agentWaiting])
+        #expect(event.voiceEnabled == false)
+        #expect(event.voiceTemplate == "{session} wants you")
+
+        let reset = await r.handle(request: JSONRPCRequest(
+            id: 2, method: "notifications-set", params: [
+                "voice_name": .string(""),
+                "event": .string("agentWaiting"),
+                "event_voice_template": .string(""),
+            ]))
+        #expect(reset.error == nil)
+        stored = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(stored.notifications.voiceName == nil)
+        #expect(stored.notifications.voiceEnabled == true) // untouched by the reset
+        event = try #require(stored.notifications.eventSettings[.agentWaiting])
+        #expect(event.voiceTemplate == nil)
+        #expect(event.voiceEnabled == false) // only the template was reset
+        #expect(stored.notifications.voiceTemplate(for: .agentWaiting) == "{session} needs you")
+    }
+
+    @Test func setRejectsOutOfRangeVoiceNumbersWithoutWriting() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let resp = await router(devRoot: devRoot).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-set", params: ["voice_rate": .double(5)]))
+        #expect(resp.error != nil)
+        #expect(ConfigStore.loadConfig(devRoot: devRoot) == nil)
+    }
+
     @Test func setLeavesUnnamedFieldsAlone() async throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
