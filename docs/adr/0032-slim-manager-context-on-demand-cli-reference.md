@@ -10,7 +10,7 @@ Crow scaffolds `{devRoot}/.claude/CLAUDE.md` on every launch. Claude Code loads 
 
 That file was the crow repo's own root `CLAUDE.md`, 64,148 bytes, and 52,421 bytes of it (82%) was the full `crow` CLI reference. It kept growing because [ADR 0016](./0016-cli-control-plane-parity.md) listed "The Manager's context: `CLAUDE.md`" as a place every new verb must be documented, and `CLIDocsTests.claudeMdDocumentsEveryUserFacingVerb` enforced it. A work session in some unrelated repo carried instructions for minting MCP tokens and choosing notification sounds that it would never use.
 
-Corveil gateway logs for 2026-11-04 to 2026-11-11 ([#1443](https://github.com/corveil/crow/issues/1443)) put the cost at roughly 45k tokens per session opener. A Manager's first request was 140–144k tokens before any work. On Opus 5.5 prices that came to about $300 a week of API-equivalent spend for three people (about 7% of the total), and it brought long-running Managers to compaction sooner.
+Gateway logs for 2026-11-04 to 2026-11-11 ([#1443](https://github.com/corveil/crow/issues/1443)) put the cost at roughly 45k tokens per session opener. A Manager's first request was 140–144k tokens before any work. At Opus 5.5 prices that came to about 7% of total usage (API-equivalent), and it brought long-running Managers to compaction sooner.
 
 Two more problems came with using the repo-root file as the source:
 
