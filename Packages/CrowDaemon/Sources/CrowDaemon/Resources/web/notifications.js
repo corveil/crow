@@ -559,12 +559,13 @@ function flushVoiceQueue() {
     } else {
       line = texts.join('. ');
     }
-    // If the browser refuses speech (no user gesture yet), play the chime the
-    // voice was standing in for, unless it already played.
+    // emitEvent skipped the chime because this line was queued, so a line that
+    // never gets spoken must chime instead — whether speak() refuses it up front
+    // (backlog cap, a throwing utterance) or the browser rejects it later
+    // ('not-allowed' before a user gesture). Unless the chime already played.
     const chime = (N.events && N.events[event] && N.events[event].soundName) || DEFAULT_EVENT_SOUND[event] || 'Glass';
-    crowVoice.speak(line, Object.assign({}, opts, {
-      onBlocked: () => { if (!N.chimeBeforeVoice) playEventSoundUngated(event, chime); },
-    }));
+    const fallback = () => { if (!N.chimeBeforeVoice) playEventSoundUngated(event, chime); };
+    if (!crowVoice.speak(line, Object.assign({}, opts, { onBlocked: fallback }))) fallback();
   }
 }
 // The chime fallback for a refused utterance: the event already passed the

@@ -179,6 +179,23 @@ console.log('voice: a refused utterance falls back to the chime');
   check('while blocked, later events chime without trying to speak', spoken.length === 1 && chimes.length === 2, { spoken: spoken.length, chimes });
 }
 
+console.log('voice: a line refused by the backlog cap still chimes');
+{
+  const { T, spoken, chimes, synth } = load();
+  synth.speak = (u) => { spoken.push(u); }; // never ends — utterances stay in flight
+  T.setNotifications({ voiceEnabled: true });
+  // Five different voice-on events in one flush = five lines; the cap is four.
+  T.emit('agentWaiting', 's1');
+  T.emit('taskComplete', 's2');
+  T.emit('changesRequested', 's3');
+  T.emit('checksFailing', 's1');
+  T.emit('reviewRequested', 'r1');
+  T.flush();
+  check('four lines spoken', spoken.length === 4, spoken.map((u) => u.text));
+  check('the refused fifth event chimes instead of going silent',
+    chimes.length === 1 && chimes[0] === 'Glass', chimes);
+}
+
 // Settings: the voice list arrives late (voiceschanged). The one-shot repaint
 // must not resurrect a Settings modal the user already closed (review of #1473).
 async function settingsVoicesScenario() {
