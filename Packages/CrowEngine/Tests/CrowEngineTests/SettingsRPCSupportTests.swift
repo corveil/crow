@@ -116,11 +116,33 @@ struct SettingsRPCSupportTests {
             switcher: SwitcherSettings(),
             chatView: ChatViewSettings(enabled: true))
         #expect(json == .object([
-            "sidebar": .object(["hide_session_details": .bool(true)]),
+            "sidebar": .object([
+                "hide_session_details": .bool(true), "brandmark_color": .string("gold"),
+            ]),
             "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
             "chat_view": .object(["enabled": .bool(true)]),
             "debug_mode": .object(["enabled": .bool(false)]),
         ]))
+    }
+
+    /// The brandmark color rides `ui.sidebar` (CROW-1469).
+    @Test func uiJSONCarriesBrandmarkColor() throws {
+        let json = SettingsRPC.uiJSON(
+            sidebar: SidebarSettings(brandmarkColor: .pink), switcher: SwitcherSettings(),
+            chatView: ChatViewSettings())
+        #expect(json.objectValue?["sidebar"]?.objectValue?["brandmark_color"] == .string("pink"))
+    }
+
+    @Test func patchBrandmarkColorAcceptsGoldAndPinkOnly() throws {
+        #expect(try SettingsRPC.patchBrandmarkColor([:]) == nil)
+        #expect(try SettingsRPC.patchBrandmarkColor(["brandmark_color": .null]) == nil)
+        #expect(try SettingsRPC.patchBrandmarkColor(["brandmark_color": .string("gold")]) == .gold)
+        #expect(try SettingsRPC.patchBrandmarkColor(["brandmark_color": .string("pink")]) == .pink)
+        for bad: JSONValue in [.string("purple"), .string("Pink"), .string(""), .bool(true), .int(1)] {
+            #expect(throws: RPCError.self, "\(bad)") {
+                _ = try SettingsRPC.patchBrandmarkColor(["brandmark_color": bad])
+            }
+        }
     }
 
     /// Debug mode rides the `ui` group, off unless set (spike: recording indicator).

@@ -377,7 +377,7 @@ window.refreshVersionUpdateBanner = refreshVersionUpdateBanner;
 // `changed`, so we load this on boot and re-load it when the Settings modal
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
-const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false,
+const uiConfig = { hideSessionDetails: false, brandmarkColor: 'gold', notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false,
   // Session switcher overlay (CROW-976) — defaults mirror AppConfig.SwitcherSettings.
   switcherEnabled: true,
   switcherBinding: 'cmd+/',
@@ -403,6 +403,8 @@ async function loadUIConfig() {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
+    // Particle crow color (CROW-1469): gold unless the setting says pink.
+    uiConfig.brandmarkColor = (cfg.sidebar && cfg.sidebar.brandmarkColor === 'pink') ? 'pink' : 'gold';
     uiConfig.chatViewEnabled = !!(cfg.chatView && cfg.chatView.enabled);
     uiConfig.debugMode = !!(cfg.debugMode && cfg.debugMode.enabled);
     const sw = cfg.switcher || {};
@@ -454,6 +456,9 @@ async function loadUIConfig() {
       showWizard(res.default_dev_root || '');
     }
   } catch (_) { /* keep defaults */ }
+  // Always, even when the load failed: the marks hold their first frame until
+  // the color is known (brand-particles.js).
+  if (window.crowBrand) window.crowBrand.setColor(uiConfig.brandmarkColor);
   renderSidebar();
   renderStatusBar();
   if (typeof onChatConfigLoaded === 'function') onChatConfigLoaded();

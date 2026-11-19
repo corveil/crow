@@ -61,8 +61,9 @@ crow telemetry get                                                      → {"te
 crow telemetry set [--enabled true|false] [--port N] [--retention-days N]  → patch; enabled/port need a crowd restart (returns "restart_required")
 crow cleanup get                                                        → {"cleanup":{"enabled":…,"retention_hours":…}}
 crow cleanup set [--enabled true|false] [--retention-hours N]           → patch; live within ~1 board poll. Deletes completed/archived sessions incl. worktree + branch
-crow ui get                                                             → {"ui":{"sidebar":{"hide_session_details":…}}}
+crow ui get                                                             → {"ui":{"sidebar":{"hide_session_details":…,"brandmark_color":"gold"|"pink"}}}
 crow ui set --hide-session-details true|false                           → patch; connected browsers repaint within ~2s
+crow ui set --brandmark-color gold|pink                                 → particle crow color (default gold); browsers recolor live, /brand.svg follows
 crow ui set --chat-view true|false                                      → show the experimental web Chat view toggle (default off); live in ~2s
 crow ui set --debug-mode true|false                                     → debug mode (Settings → About): diagnostic features, today the sidebar recording indicator (default off)
 crow terminal get                                                       → {"terminal":{"wheel_scroll_lines":…,"agent_wheel_notches":…}}

@@ -55,7 +55,9 @@ import CrowEngine
 
         let ui = await call("ui-get", devRoot: devRoot)
         #expect(ui.result?["ui"] == .object([
-            "sidebar": .object(["hide_session_details": .bool(false)]),
+            "sidebar": .object([
+                "hide_session_details": .bool(false), "brandmark_color": .string("gold"),
+            ]),
             "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
             "chat_view": .object(["enabled": .bool(false)]),
             "debug_mode": .object(["enabled": .bool(false)]),
@@ -175,6 +177,29 @@ import CrowEngine
         #expect(onDisk.jiraCredential?.tokenRef == "op://vault/jira/token")
     }
 
+    /// CROW-1469: `ui set --brandmark-color` writes `sidebar.brandmarkColor`,
+    /// `ui get` reads it back, and anything but gold/pink is rejected.
+    @Test @MainActor func uiSetRoundTripsBrandmarkColor() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let fresh = await call("ui-get", [:], devRoot: devRoot)
+        #expect(fresh.result?["ui"]?.objectValue?["sidebar"]?.objectValue?["brandmark_color"] == .string("gold"))
+
+        let set = await call("ui-set", ["brandmark_color": .string("pink")], devRoot: devRoot)
+        #expect(set.result?["ui"]?.objectValue?["sidebar"]?.objectValue?["brandmark_color"] == .string("pink"))
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.sidebar.brandmarkColor == .pink)
+
+        let get = await call("ui-get", [:], devRoot: devRoot)
+        #expect(get.result?["ui"]?.objectValue?["sidebar"]?.objectValue?["brandmark_color"] == .string("pink"))
+
+        let bad = await call("ui-set", ["brandmark_color": .string("purple")], devRoot: devRoot)
+        #expect(bad.error?.code == RPCErrorCode.invalidParams)
+        #expect(bad.error?.message.contains("gold, pink") == true)
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?.sidebar.brandmarkColor == .pink,
+                "a rejected write leaves the setting alone")
+    }
+
     @Test @MainActor func uiSetPatchesSwitcherFields() async throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
@@ -190,7 +215,9 @@ import CrowEngine
         ], devRoot: devRoot)
 
         #expect(resp.result?["ui"] == .object([
-            "sidebar": .object(["hide_session_details": .bool(false)]),
+            "sidebar": .object([
+                "hide_session_details": .bool(false), "brandmark_color": .string("gold"),
+            ]),
             "switcher": .object([
                 "enabled": .bool(false),
                 "binding": .string("ctrl+`"),

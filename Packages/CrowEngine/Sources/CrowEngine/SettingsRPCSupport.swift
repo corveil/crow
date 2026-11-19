@@ -215,6 +215,7 @@ public enum SettingsRPC {
         .object([
             "sidebar": .object([
                 "hide_session_details": .bool(sidebar.hideSessionDetails),
+                "brandmark_color": .string(sidebar.brandmarkColor.rawValue),
             ]),
             "switcher": switcherJSON(switcher),
             "chat_view": .object([
@@ -283,6 +284,18 @@ public enum SettingsRPC {
             throw RPCError.invalidParams("\(key) must be \"mru\" or \"sidebar\"")
         }
         return order
+    }
+
+    /// PATCH helper for the brandmark color (CROW-1469): `nil` when absent/null,
+    /// throws unless the value is `"gold"` or `"pink"`.
+    public static func patchBrandmarkColor(
+        _ params: [String: JSONValue], _ key: String = "brandmark_color"
+    ) throws -> BrandmarkColor? {
+        guard let value = params[key], value != .null else { return nil }
+        guard let raw = value.stringValue, let color = BrandmarkColor(rawValue: raw) else {
+            throw RPCError.invalidParams("\(key) must be one of: \(BrandmarkColor.choices)")
+        }
+        return color
     }
 
     public static func patchNonEmptyString(

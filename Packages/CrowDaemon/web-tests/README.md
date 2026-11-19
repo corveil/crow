@@ -252,6 +252,21 @@ are touch/coarse not "has visualViewport", sampler fields (`arrived_at_top`,
 zero `tui-sample`/`resize` frames, `not_active` clearing `sessionStorage`, and
 playback never `text()`-slurping the streamed GET.
 
+## `brand-mark.test.js` — animated particle crow brandmark (CROW-1469)
+
+Drives the real `brand-particles.js` with a fake WebGL context that records
+every call (jsdom has no WebGL). Coverage: 50 `renderSidebar()` calls leave one
+WebGL context per mounted mark (sidebar + empty state) and re-append the same
+host node; marks hold their first frame until the configured color is known,
+and only go `.live` (hiding the `/brand.svg` img) once a frame is drawn; the
+sphere → crow formation runs and ends with `uMorph` at 1; `setColor()`
+re-uploads the palette and repoints the fallback imgs and the SVG favicon
+(`/brand.svg?color=pink`) but never the PNG icon or apple-touch-icon;
+`loadUIConfig()` hands `sidebar.brandmarkColor` to the mark; reduced motion
+paints one still, formed frame and never re-arms the loop, and turning it on
+mid-formation settles on the formed crow; without WebGL no context is requested
+and the `/brand.svg` img stays.
+
 ## Run
 
 Tests must not evaluate a single concern file in isolation: `load-client.js`

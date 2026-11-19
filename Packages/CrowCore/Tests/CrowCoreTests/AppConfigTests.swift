@@ -1513,3 +1513,37 @@ import Testing
     let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
     #expect(decoded.chatView.enabled == true)
 }
+
+// MARK: - sidebar.brandmarkColor (CROW-1469)
+
+@Test func brandmarkColorDefaultsToGold() throws {
+    #expect(AppConfig().sidebar.brandmarkColor == .gold)
+    #expect(BrandmarkColor.default == .gold)
+    // A config written before the key existed, an empty block, and no block at all.
+    for json in [#"{"sidebar":{"hideSessionDetails":true}}"#, #"{"sidebar":{}}"#, "{}"] {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.sidebar.brandmarkColor == .gold, "\(json)")
+    }
+}
+
+/// A hand-edited unknown or wrong-typed value is cosmetic: it falls back to gold
+/// instead of failing the whole config decode (CROW-814). `ui set` rejects it
+/// on write.
+@Test func brandmarkColorUnknownValueFallsBackToGold() throws {
+    for json in [#"{"sidebar":{"brandmarkColor":"purple","hideSessionDetails":true}}"#,
+                 #"{"sidebar":{"brandmarkColor":7,"hideSessionDetails":true}}"#,
+                 #"{"sidebar":{"brandmarkColor":null,"hideSessionDetails":true}}"#] {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.sidebar.brandmarkColor == .gold, "\(json)")
+        #expect(config.sidebar.hideSessionDetails == true, "sibling key survives: \(json)")
+    }
+}
+
+@Test func brandmarkColorRoundTripsPink() throws {
+    var config = AppConfig()
+    config.sidebar.brandmarkColor = .pink
+    let data = try JSONEncoder().encode(config)
+    #expect(String(decoding: data, as: UTF8.self).contains(#""brandmarkColor":"pink""#))
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.sidebar.brandmarkColor == .pink)
+}

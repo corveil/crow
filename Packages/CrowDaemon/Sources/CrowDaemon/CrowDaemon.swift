@@ -702,7 +702,10 @@ public enum CrowDaemon {
             // of the web UI.
             consentLimiter: LoginRateLimiter(),
             registrationLimiter: LoginRateLimiter(max: 20, window: 60))
-        StaticAssets.mount(on: httpRouter, webDir: options.webDir, skins: skinSources)
+        let brandDevRoot = options.devRoot
+        StaticAssets.mount(
+            on: httpRouter, webDir: options.webDir, skins: skinSources,
+            brandmark: { ConfigStore.loadConfig(devRoot: brandDevRoot)?.sidebar.brandmarkColor ?? .default })
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).
         Artifacts.mount(on: httpRouter, boundHost: options.host)

@@ -555,6 +555,7 @@ public enum ParityLedger {
         .field("versionUpdate.intervalHours", read: "version get", write: "version set"),
 
         .field("sidebar.hideSessionDetails", read: "ui get", write: "ui set"),
+        .field("sidebar.brandmarkColor", read: "ui get", write: "ui set"),
 
         .field("webDefaultSkin", read: "skin list", write: "skin default set"),
 

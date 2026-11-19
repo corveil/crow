@@ -112,6 +112,20 @@ import ArgumentParser
     #expect(try UISet.parse(["--hide-session-details", "true"]).hideSessionDetails == true)
 }
 
+@Test func uiSetParsesBrandmarkColor() throws {
+    #expect(try UISet.parse(["--brandmark-color", "pink"]).brandmarkColor == "pink")
+    #expect(try UISet.parse(["--brandmark-color", "gold"]).brandmarkColor == "gold")
+    #expect(try UISet.parse(["--hide-session-details", "true"]).brandmarkColor == nil)
+}
+
+@Test func uiSetRejectsUnknownBrandmarkColor() {
+    for bad in ["purple", "Gold", ""] {
+        #expect(throws: (any Error).self, "\(bad)") {
+            _ = try UISet.parse(["--brandmark-color", bad])
+        }
+    }
+}
+
 @Test func uiSetParsesChatView() throws {
     #expect(try UISet.parse(["--chat-view", "true"]).chatView == true)
     #expect(try UISet.parse(["--chat-view", "false"]).chatView == false)
