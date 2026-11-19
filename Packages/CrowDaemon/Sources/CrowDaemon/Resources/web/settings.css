@@ -173,7 +173,8 @@
 /* Sound select + inline Preview button share a row. */
 .st-sound-row { display: flex; gap: 8px; align-items: center; }
 .st-sound-row .st-select { flex: 1; }
-.st-sound-row .st-input { flex: 1; }
+.st-sound-row .st-input { flex: 1; min-width: 0; }
+.st-sound-row .st-range { flex: 1; min-width: 0; max-width: 280px; accent-color: var(--accent); }
 .st-sound-lib { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .st-sound-lib-row { display: flex; gap: 8px; align-items: center; }
 .st-sound-lib-name { flex: 1; font-size: 13px; }

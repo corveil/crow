@@ -302,11 +302,17 @@ crow notifications set --event <name> [--event-enabled|--no-event-enabled]
                        [--event-sound-enabled|--no-event-sound-enabled]
                        [--event-system-notification-enabled|--no-event-system-notification-enabled]
                        [--event-sound-name <Sound>]     → {"notifications":{...},"saved":true}
+crow notifications set [--voice-enabled|--no-voice-enabled] [--voice-name NAME] [--voice-rate 0.5-2]
+                       [--voice-volume 0-1] [--chime-before-voice|--no-chime-before-voice]
+crow notifications set --event <name> [--event-voice-enabled|--no-event-voice-enabled]
+                       [--event-voice-template "{session} needs you"]
 crow notifications add-sound <path> [--name NAME]      → {"sound":{name,file,url},"saved":true}
 crow notifications remove-sound <name>                 → {"removed":true,"name":"..."}
 ```
 
 Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. Sounds: the 14 built-ins listed under `available_sounds`, plus any custom files in `~/Library/Application Support/crow/sounds/` (`.wav` / `.mp3` / `.aiff`, 2 MB cap). `--event-sound-name` accepts either, case-insensitively. `add-sound` is local-only (it copies a host path); Settings → Notifications uploads via HTTP instead. Removing a custom sound keeps the name in config; playback falls back to a default if the file is gone.
+
+Spoken notifications are a third category beside sound and system notifications, off by default (`--voice-enabled`). The client speaks each event's template through the Web Speech API; placeholders are `{session}`, `{repo}`, `{pr}`, `{event}`, `{title}`, `{body}`. `""` for `--voice-name` / `--event-voice-template` resets to the default. When an event speaks, the voice replaces its chime unless `--chime-before-voice`.
 
 Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
 

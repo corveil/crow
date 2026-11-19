@@ -592,6 +592,17 @@ public enum ParityLedger {
         .field(
             "notifications.eventSettings[].soundName",
             read: "notifications get", write: "notifications set"),
+        .field("notifications.voiceEnabled", read: "notifications get", write: "notifications set"),
+        .field("notifications.voiceName", read: "notifications get", write: "notifications set"),
+        .field("notifications.voiceRate", read: "notifications get", write: "notifications set"),
+        .field("notifications.voiceVolume", read: "notifications get", write: "notifications set"),
+        .field("notifications.chimeBeforeVoice", read: "notifications get", write: "notifications set"),
+        .field(
+            "notifications.eventSettings[].voiceEnabled",
+            read: "notifications get", write: "notifications set"),
+        .field(
+            "notifications.eventSettings[].voiceTemplate",
+            read: "notifications get", write: "notifications set"),
 
         // Gateways and the web password are local-socket only (CROW-815).
         .field("managerGateway.baseURL", read: "gateway get", write: "gateway set"),

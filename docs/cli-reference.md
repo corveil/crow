@@ -1637,6 +1637,8 @@ Change global toggles, one event's settings, or both. Only the provided flags ch
 crow notifications set --global-mute
 crow notifications set --no-global-mute --sound-enabled
 crow notifications set --event checksFailing --event-sound-name Hero --no-event-sound-enabled
+crow notifications set --voice-enabled --voice-name Samantha --voice-rate 1.1
+crow notifications set --event agentWaiting --event-voice-template "{session} needs you"
 ```
 
 | Flag                                       | Required | Description                                                    |
@@ -1649,6 +1651,13 @@ crow notifications set --event checksFailing --event-sound-name Hero --no-event-
 | `--event-sound-enabled` / `--no-…`         | no       | Whether this event plays a sound                                |
 | `--event-system-notification-enabled` / `--no-…` | no | Whether this event posts a system notification                  |
 | `--event-sound-name`                       | no       | Sound for this event — a built-in or custom name, matched case-insensitively |
+| `--voice-enabled` / `--no-voice-enabled`   | no       | Global spoken-notification toggle (off by default)              |
+| `--voice-name`                             | no       | Voice by name (e.g. `Samantha`); `""` for the system default    |
+| `--voice-rate`                             | no       | Speech rate, 0.5–2 (1 = normal)                                 |
+| `--voice-volume`                           | no       | Speech volume, 0–1                                              |
+| `--chime-before-voice` / `--no-…`          | no       | Play the chime, then speak (otherwise the voice replaces it)    |
+| `--event-voice-enabled` / `--no-…`         | no       | Whether this event is spoken                                    |
+| `--event-voice-template`                   | no       | What this event says; placeholders `{session}` `{repo}` `{pr}` `{event}` `{title}` `{body}`; `""` resets |
 
 Returns the resulting settings in the same shape as `get`, plus `"saved": true`.
 

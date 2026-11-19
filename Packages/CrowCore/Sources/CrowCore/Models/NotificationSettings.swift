@@ -29,6 +29,43 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
     /// Per-event-category configuration.
     public var eventSettings: [NotificationEvent: EventNotificationConfig]
 
+    // MARK: Spoken notifications (voice spike)
+    //
+    // A third category beside sound and system notifications: the client speaks
+    // a short sentence about what happened ("crow-1078 needs you") through the
+    // Web Speech API. Off by default — it is opt-in, and every open client
+    // speaks, exactly like chimes.
+
+    /// Global toggle for spoken notifications. Default **false**.
+    public var voiceEnabled: Bool
+
+    /// Preferred voice by `SpeechSynthesisVoice.name` (e.g. `Samantha`). `nil`
+    /// means the platform default. Voices live in the *client*, so the daemon
+    /// can't validate this; a client that doesn't have it falls back to its
+    /// default.
+    public var voiceName: String?
+
+    /// Speech rate, `SpeechSynthesisUtterance.rate` units (1 = normal).
+    public var voiceRate: Double
+
+    /// Speech volume, 0…1.
+    public var voiceVolume: Double
+
+    /// When an event both chimes and speaks: true plays the chime first, false
+    /// lets the voice *replace* the chime (the default — "a voice instead of a
+    /// sound I don't recognize").
+    public var chimeBeforeVoice: Bool
+
+    public static let defaultVoiceRate = 1.0
+    public static let defaultVoiceVolume = 1.0
+    public static let voiceRateRange: ClosedRange<Double> = 0.5...2.0
+    public static let voiceVolumeRange: ClosedRange<Double> = 0.0...1.0
+    /// Longest stored voice template / voice name, in characters.
+    public static let maxVoiceTemplateLength = 200
+    public static let maxVoiceNameLength = 100
+    /// Placeholders a voice template may use; the client fills them in.
+    public static let voicePlaceholders = ["session", "repo", "pr", "event", "title", "body"]
+
     /// `eventSettings` starts **empty**, not pre-populated with all ten events.
     ///
     /// Absence is the contract: `config(for:)` resolves a missing event to its
@@ -43,12 +80,22 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
         globalMute: Bool = false,
         soundEnabled: Bool = true,
         systemNotificationsEnabled: Bool = true,
-        eventSettings: [NotificationEvent: EventNotificationConfig] = [:]
+        eventSettings: [NotificationEvent: EventNotificationConfig] = [:],
+        voiceEnabled: Bool = false,
+        voiceName: String? = nil,
+        voiceRate: Double = NotificationSettings.defaultVoiceRate,
+        voiceVolume: Double = NotificationSettings.defaultVoiceVolume,
+        chimeBeforeVoice: Bool = false
     ) {
         self.globalMute = globalMute
         self.soundEnabled = soundEnabled
         self.systemNotificationsEnabled = systemNotificationsEnabled
         self.eventSettings = eventSettings
+        self.voiceEnabled = voiceEnabled
+        self.voiceName = voiceName
+        self.voiceRate = voiceRate
+        self.voiceVolume = voiceVolume
+        self.chimeBeforeVoice = chimeBeforeVoice
     }
 
     /// Tolerant decode: every key is optional and falls back to its default.
@@ -69,12 +116,69 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
             // Absent stays absent — see the designated init. A round-trip must
             // not invent entries the file didn't have.
             eventSettings: try c.decodeIfPresent(
-                [NotificationEvent: EventNotificationConfig].self, forKey: .eventSettings) ?? [:]
+                [NotificationEvent: EventNotificationConfig].self, forKey: .eventSettings) ?? [:],
+            voiceEnabled: try c.decodeIfPresent(Bool.self, forKey: .voiceEnabled) ?? false,
+            voiceName: try c.decodeIfPresent(String.self, forKey: .voiceName),
+            // Out-of-range numbers are clamped rather than rejected: a hand edit
+            // of `voiceRate: 5` must not take the whole config down (CROW-813).
+            voiceRate: Self.clamp(
+                try c.decodeIfPresent(Double.self, forKey: .voiceRate) ?? Self.defaultVoiceRate,
+                to: Self.voiceRateRange),
+            voiceVolume: Self.clamp(
+                try c.decodeIfPresent(Double.self, forKey: .voiceVolume) ?? Self.defaultVoiceVolume,
+                to: Self.voiceVolumeRange),
+            chimeBeforeVoice: try c.decodeIfPresent(Bool.self, forKey: .chimeBeforeVoice) ?? false
         )
     }
 
     private enum CodingKeys: String, CodingKey {
         case globalMute, soundEnabled, systemNotificationsEnabled, eventSettings
+        case voiceEnabled, voiceName, voiceRate, voiceVolume, chimeBeforeVoice
+    }
+
+    static func clamp(_ value: Double, to range: ClosedRange<Double>) -> Double {
+        guard value.isFinite else { return range.lowerBound }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    /// Whether `event` speaks, resolving an absent override to the event's default.
+    /// This is the per-event level only; the caller still applies `globalMute`,
+    /// `voiceEnabled` and the event's `enabled` master toggle.
+    public func voiceEnabled(for event: NotificationEvent) -> Bool {
+        eventSettings[event]?.voiceEnabled ?? event.defaultVoiceEnabled
+    }
+
+    /// The template `event` speaks, resolving an absent override to the default.
+    public func voiceTemplate(for event: NotificationEvent) -> String {
+        eventSettings[event]?.voiceTemplate ?? event.defaultVoiceTemplate
+    }
+
+    /// Validate a user-supplied voice template. Returns the trimmed template, or
+    /// nil for "reset to default" (an empty string). Throws a message on a
+    /// template that's too long or contains control characters.
+    public static func normalizedVoiceTemplate(_ raw: String) throws -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        guard trimmed.count <= maxVoiceTemplateLength else {
+            throw VoiceSettingError("voice template is longer than \(maxVoiceTemplateLength) characters")
+        }
+        guard !trimmed.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw VoiceSettingError("voice template must not contain control characters")
+        }
+        return trimmed
+    }
+
+    /// Validate a voice name. Returns nil for "system default" (an empty string).
+    public static func normalizedVoiceName(_ raw: String) throws -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        guard trimmed.count <= maxVoiceNameLength else {
+            throw VoiceSettingError("voice name is longer than \(maxVoiceNameLength) characters")
+        }
+        guard !trimmed.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw VoiceSettingError("voice name must not contain control characters")
+        }
+        return trimmed
     }
 
     /// Get the config for a specific event, falling back to defaults.
@@ -118,16 +222,33 @@ public struct EventNotificationConfig: Codable, Sendable, Equatable {
     /// name. Bytes live in Application Support, not here.
     public var soundName: String
 
+    /// Whether this event speaks. `nil` = the event's `defaultVoiceEnabled`.
+    ///
+    /// Optional on purpose, unlike `soundName`: an entry can't know which event
+    /// keys it while decoding (see `init(from:)`), so a concrete default here
+    /// would hit the same "partial entry silently becomes Glass" trap. `nil`
+    /// stays nil on a round-trip and resolves through
+    /// `NotificationSettings.voiceEnabled(for:)`.
+    public var voiceEnabled: Bool?
+
+    /// What this event says, with `{session}`-style placeholders. `nil` = the
+    /// event's `defaultVoiceTemplate`.
+    public var voiceTemplate: String?
+
     public init(
         enabled: Bool = true,
         soundEnabled: Bool = true,
         systemNotificationEnabled: Bool = true,
-        soundName: String = "Glass"
+        soundName: String = "Glass",
+        voiceEnabled: Bool? = nil,
+        voiceTemplate: String? = nil
     ) {
         self.enabled = enabled
         self.soundEnabled = soundEnabled
         self.systemNotificationEnabled = systemNotificationEnabled
         self.soundName = soundName
+        self.voiceEnabled = voiceEnabled
+        self.voiceTemplate = voiceTemplate
     }
 
     /// Tolerant decode, for the same reason as `NotificationSettings` above: a
@@ -149,9 +270,19 @@ public struct EventNotificationConfig: Codable, Sendable, Equatable {
         systemNotificationEnabled = try c.decodeIfPresent(
             Bool.self, forKey: .systemNotificationEnabled) ?? true
         soundName = try c.decodeIfPresent(String.self, forKey: .soundName) ?? "Glass"
+        voiceEnabled = try c.decodeIfPresent(Bool.self, forKey: .voiceEnabled)
+        voiceTemplate = try c.decodeIfPresent(String.self, forKey: .voiceTemplate)
     }
 
     private enum CodingKeys: String, CodingKey {
         case enabled, soundEnabled, systemNotificationEnabled, soundName
+        case voiceEnabled, voiceTemplate
     }
+}
+
+/// A rejected voice setting; the message is user-facing.
+public struct VoiceSettingError: Error, Equatable, CustomStringConvertible {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var description: String { message }
 }

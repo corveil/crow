@@ -1661,21 +1661,30 @@ Deletes the file from the sound library. Events that still name it keep the refe
 Change notification settings.
 
 ```
-crow notifications set [--global-mute|--no-global-mute] [--sound-enabled|--no-sound-enabled] [--system-notifications-enabled|--no-system-notifications-enabled] [--event <event>] [--event-enabled|--no-event-enabled] [--event-sound-enabled|--no-event-sound-enabled] [--event-system-notification-enabled|--no-event-system-notification-enabled] [--event-sound-name <event-sound-name>]
+crow notifications set [--global-mute|--no-global-mute] [--sound-enabled|--no-sound-enabled] [--system-notifications-enabled|--no-system-notifications-enabled] [--voice-enabled|--no-voice-enabled] [--voice-name <voice-name>] [--voice-rate <voice-rate>] [--voice-volume <voice-volume>] [--chime-before-voice|--no-chime-before-voice] [--event <event>] [--event-enabled|--no-event-enabled] [--event-sound-enabled|--no-event-sound-enabled] [--event-system-notification-enabled|--no-event-system-notification-enabled] [--event-sound-name <event-sound-name>] [--event-voice-enabled|--no-event-voice-enabled] [--event-voice-template <event-voice-template>]
 ```
 
 Only the provided flags change; everything else keeps its value. Each toggle takes a --flag / --no-flag pair. The --event-* flags require --event and apply to that event alone. --event-sound-name accepts a built-in or custom sound listed by `crow notifications get` (case-insensitive).
+
+Spoken notifications: --voice-enabled turns on speech globally (off by default); --event-voice-enabled / --event-voice-template control one event. Templates may use {session}, {repo}, {pr}, {event}, {title} and {body}. Pass "" to --voice-name or --event-voice-template to reset to the default.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--global-mute`, `--no-global-mute` | — | no | Master mute — suppresses every sound and system notification |
 | `--sound-enabled`, `--no-sound-enabled` | — | no | Global sound-playback toggle |
 | `--system-notifications-enabled`, `--no-system-notifications-enabled` | — | no | Global system-notification toggle |
+| `--voice-enabled`, `--no-voice-enabled` | — | no | Global spoken-notification toggle (off by default) |
+| `--voice-name` | `<voice-name>` | no | Voice to speak with, by name (e.g. Samantha); "" for the system default |
+| `--voice-rate` | `<voice-rate>` | no | Speech rate, 0.5–2 (1 = normal) |
+| `--voice-volume` | `<voice-volume>` | no | Speech volume, 0–1 |
+| `--chime-before-voice`, `--no-chime-before-voice` | — | no | Play the event's chime before speaking (otherwise the voice replaces it) |
 | `--event` | `<event>` | no | Event to change (required by every --event-* flag). Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. |
 | `--event-enabled`, `--no-event-enabled` | — | no | Whether this event notifies at all |
 | `--event-sound-enabled`, `--no-event-sound-enabled` | — | no | Whether this event plays a sound |
 | `--event-system-notification-enabled`, `--no-event-system-notification-enabled` | — | no | Whether this event posts a system notification |
 | `--event-sound-name` | `<event-sound-name>` | no | Sound for this event (a built-in or custom sound name) |
+| `--event-voice-enabled`, `--no-event-voice-enabled` | — | no | Whether this event is spoken |
+| `--event-voice-template` | `<event-voice-template>` | no | What this event says, e.g. "{session} needs you"; "" resets to the default |
 
 ---
 

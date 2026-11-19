@@ -247,3 +247,43 @@ private func setParseError(_ args: [String]) -> String {
     let cmd = try NotificationsRemoveSound.parse(["Office-Bell"])
     #expect(cmd.name == "Office-Bell")
 }
+
+// MARK: - voice flags (voice spike)
+
+@Test func notificationsSetParsesGlobalVoiceFlags() throws {
+    let cmd = try NotificationsSet.parse([
+        "--voice-enabled", "--voice-name", "Samantha", "--voice-rate", "1.2",
+        "--voice-volume", "0.5", "--chime-before-voice",
+    ])
+    #expect(cmd.voiceEnabled == true)
+    #expect(cmd.voiceName == "Samantha")
+    #expect(cmd.voiceRate == 1.2)
+    #expect(cmd.voiceVolume == 0.5)
+    #expect(cmd.chimeBeforeVoice == true)
+}
+
+@Test func notificationsSetParsesEventVoiceFlags() throws {
+    let cmd = try NotificationsSet.parse([
+        "--event", "agentWaiting", "--no-event-voice-enabled",
+        "--event-voice-template", "{session} wants you",
+    ])
+    #expect(cmd.eventVoiceEnabled == false)
+    #expect(cmd.eventVoiceTemplate == "{session} wants you")
+}
+
+/// `--voice-name ""` is a real change (reset to the system default), not "nothing to set".
+@Test func notificationsSetAcceptsEmptyVoiceNameAsReset() throws {
+    let cmd = try NotificationsSet.parse(["--voice-name", ""])
+    #expect(cmd.voiceName == "")
+}
+
+@Test func notificationsSetRejectsOutOfRangeVoiceNumbers() {
+    #expect(throws: (any Error).self) { _ = try NotificationsSet.parse(["--voice-rate", "3"]) }
+    #expect(throws: (any Error).self) { _ = try NotificationsSet.parse(["--voice-volume", "1.5"]) }
+}
+
+@Test func notificationsSetRejectsEventVoiceTemplateWithoutEvent() {
+    #expect(throws: (any Error).self) {
+        _ = try NotificationsSet.parse(["--event-voice-template", "{session} done"])
+    }
+}
