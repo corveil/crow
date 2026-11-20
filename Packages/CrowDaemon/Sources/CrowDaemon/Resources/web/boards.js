@@ -10,6 +10,8 @@ function selectBoard(key) {
   navigate({ view: 'board', board: key });
   selectedBoard = key;
   selectedId = null;
+  // Leaving Chat for a board: stop a reply being read aloud (#1488).
+  if (typeof stopChatSpeech === 'function') stopChatSpeech();
   // Leaving a board (or re-entering) drops any stale selection on it.
   ticketSelectionMode = false;
   selectedIssueIDs.clear();

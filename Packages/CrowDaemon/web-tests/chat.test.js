@@ -9,11 +9,13 @@ const epilogue = `
 ;globalThis.__t = {
   parseRoute, routeToHash,
   newChatState, applyChatPage, ensureChatDom, sendChatMessage, buildChatMarkdown,
+  chatSpeakableText, chatSpeechChunks, stopChatSpeech,
   updateChatMenu, chatMenuKeydown, chatHistoryKeydown, filterChatCommands, formatChatModel, formatChatTokens,
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
   get chatState(){ return chatState; },
+  selectBoard, showEmptyDetail, clearPageDataOnExpiry,
   applyChatView, setChatViewActive, chatHeaderMeter, chatToggleControl, onChatConfigLoaded,
   insertChatText, chatDrafts,
   set chatViewFlag(v){ uiConfig.chatViewEnabled = v; },
@@ -161,13 +163,13 @@ T.applyChatPage(st, { supported: true, reset: true, cursor: 3, path: '/c.jsonl',
   { kind: 'user', text: 'Use `rg`' },
 ] });
 const cB = log.querySelector('.chat-assistant');
-const msgCopy = cB.querySelector(':scope > .chat-msg-copy');
-check('each bubble has a message Copy', msgCopy && log.querySelector('.chat-user > .chat-msg-copy'));
+const msgCopy = cB.querySelector(':scope > .chat-msg-actions > .chat-msg-copy');
+check('each bubble has a message Copy', msgCopy && log.querySelector('.chat-user > .chat-msg-actions > .chat-msg-copy'));
 msgCopy.click();
 check('message Copy puts the exact source markdown on the clipboard', copied.pop() === SRC);
 check('button reads Copied after a click', msgCopy.classList.contains('copied')
   && msgCopy.getAttribute('aria-label') === 'Copied');
-log.querySelector('.chat-user > .chat-msg-copy').click();
+log.querySelector('.chat-user > .chat-msg-actions > .chat-msg-copy').click();
 check('user message copies its source too', copied.pop() === 'Use `rg`');
 const codeCopy = cB.querySelector('.chat-code-block > .chat-code-copy');
 check('fenced block gets its own Copy', codeCopy && cB.querySelectorAll('.chat-code-copy').length === 1);
@@ -206,6 +208,98 @@ check('fallback message Copy is the source', copied.pop() === 'Run **this**:\n\n
 fB.querySelector('.chat-code-copy').click();
 check('fallback code Copy is the block body', copied.pop() === 'make test');
 T.chatMd = T.buildChatMarkdown();
+
+console.log('listen and select');
+check('no Listen when speechSynthesis is missing (jsdom has none)',
+  !log.querySelector('.chat-msg-listen') && !!log.querySelector('.chat-msg-select'));
+// A fake speechSynthesis with a real queue: cancel() errors every queued
+// utterance ('canceled'), endAll() plays the queue to the end.
+const synth = {
+  queue: [], spoken: [], cancels: 0, paused: false,
+  speak(u) { this.queue.push(u); this.spoken.push(u.text); },
+  cancel() { this.cancels++; for (const u of this.queue.splice(0)) if (u.onerror) u.onerror({ error: 'canceled' }); },
+  resume() { this.paused = false; },
+  endAll() { for (const u of this.queue.splice(0)) if (u.onend) u.onend({}); },
+};
+window.speechSynthesis = synth;
+window.SpeechSynthesisUtterance = function (text) { this.text = text; };
+const LSRC = '# Plan\n\nRun **this** now with `rg`.\n\n```sh\nmake test\n```\n\n'
+  + 'See https://github.com/corveil/crow/pull/2 for details.\n\n| a | b |\n|---|---|\n| 1 | 2 |';
+T.applyChatPage(st, { supported: true, reset: true, cursor: 5, path: '/l.jsonl', events: [
+  { kind: 'assistant', text: LSRC },
+  { kind: 'user', text: 'and you?' },
+  { kind: 'assistant', text: 'Second reply.' },
+] });
+const [lA, lB] = [...log.querySelectorAll('.chat-assistant')];
+const listenA = lA.querySelector('.chat-msg-actions > .chat-msg-listen');
+const listenB = lB.querySelector('.chat-msg-listen');
+check('every assistant bubble gets Listen', listenA && listenB);
+check('user bubbles get no Listen', !log.querySelector('.chat-user .chat-msg-listen'));
+check('Listen and Select add no text to the message (selection / Copy stay clean)',
+  lA.querySelector('.chat-msg-body').textContent === lA.textContent && !/Listen|Select/.test(lA.textContent));
+listenA.click();
+check('Listen speaks the rendered text: no markdown, code block replaced, URL read as host',
+  JSON.stringify(synth.spoken) === JSON.stringify(
+    ['Plan', 'Run this now with rg.', 'Code block.', 'See link to github.com for details.', 'a, b', '1, 2']));
+check('code-block contents are never spoken', !synth.spoken.some((t) => /make test/.test(t)));
+check('the button reads Stop while speaking', listenA.classList.contains('speaking')
+  && listenA.getAttribute('aria-pressed') === 'true' && listenA.getAttribute('aria-label') === 'Stop reading');
+listenA.click();
+check('tapping again stops it', synth.cancels === 1 && synth.queue.length === 0
+  && !listenA.classList.contains('speaking') && listenA.getAttribute('aria-pressed') === 'false');
+synth.spoken.length = 0;
+listenA.click();
+listenB.click();
+check('starting a second bubble stops the first (one utterance stream at a time)',
+  synth.cancels === 2 && !listenA.classList.contains('speaking') && listenB.classList.contains('speaking')
+  && synth.queue.length === 1 && synth.queue[0].text === 'Second reply.');
+synth.endAll();
+check('the last chunk ending resets the button, with no extra cancel',
+  !listenB.classList.contains('speaking') && synth.cancels === 2);
+T.stopChatSpeech();
+check('stopping when nothing plays cancels nothing (spares notification lines)', synth.cancels === 2);
+listenA.click();
+{ const u = synth.queue.shift(); if (u.onend) u.onend({}); } // a middle chunk finishing is not the end
+check('a middle chunk ending keeps playing', listenA.classList.contains('speaking'));
+let c0 = synth.cancels;
+synth.cancel(); // someone else cancelled (a notification Preview, which then speaks its line)
+check('a cancel from elsewhere resets the button without cancelling again (the Preview line survives)',
+  !listenA.classList.contains('speaking') && synth.cancels === c0 + 1);
+listenA.click();
+c0 = synth.cancels;
+synth.queue[1].onerror({ error: 'synthesis-failed' });
+check('a chunk that fails to synthesize stops the rest of the reply', !listenA.classList.contains('speaking')
+  && synth.cancels === c0 + 1 && synth.queue.length === 0);
+
+const sentence = 'This is sentence number %d of a long reply, and it has a few words in it. ';
+const longPara = Array.from({ length: 30 }, (_, i) => sentence.replace('%d', i + 1)).join('').trim();
+const chunks = T.chatSpeechChunks([longPara, 'Short.']);
+check('a long paragraph is split into chunks of at most 200 characters',
+  chunks.length > 5 && chunks.every((c) => c.length <= 200));
+check('…packed by sentence, losing nothing', chunks.slice(0, -1).join(' ') === longPara
+  && chunks.every((c, i) => i === chunks.length - 1 || /\.$/.test(c)) && chunks[chunks.length - 1] === 'Short.');
+const runOn = Array.from({ length: 120 }, () => 'word').join(' ');
+const runChunks = T.chatSpeechChunks([runOn]);
+check('a run-on sentence is cut at spaces', runChunks.length === 3
+  && runChunks.every((c) => c.length <= 200 && !/^ | $/.test(c)) && runChunks.join(' ') === runOn);
+listenA.click();
+check('a long reply queues every chunk at once (inside the tap, for iOS)', synth.queue.length === 6);
+T.stopChatSpeech();
+
+const selA = lA.querySelector('.chat-msg-select');
+selA.click();
+const sel = window.getSelection();
+check('Select selects exactly the bubble body', sel.rangeCount === 1
+  && sel.getRangeAt(0).startContainer === lA.querySelector('.chat-msg-body')
+  && sel.toString() === lA.querySelector('.chat-msg-body').textContent);
+sel.removeAllRanges();
+
+delete window.speechSynthesis;
+T.applyChatPage(st, { supported: true, reset: true, cursor: 6, path: '/u.jsonl', events: [
+  { kind: 'assistant', text: 'No voice here.' },
+] });
+check('Listen is hidden once speechSynthesis is gone', !log.querySelector('.chat-msg-listen'));
+window.speechSynthesis = synth;
 
 console.log('sending');
 const calls = [];
@@ -517,6 +611,56 @@ check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.que
   console.log('chat view flag (crow ui set --chat-view)');
   const app = doc.getElementById('app');
   T.rpc = pending;
+  console.log('speech stops on switch');
+  T.rpc = pending;
+  T.setChatViewActive(true);
+  T.selectedId = 'V-1';
+  T.applyChatView();
+  T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/v', terminal_id: 'T-V',
+    agent_kind: 'claude-code', events: [{ kind: 'assistant', text: 'Read me.' }] });
+  const vBtn = () => doc.querySelector('#chat-log .chat-msg-listen');
+  let before = synth.cancels;
+  const v1 = vBtn();
+  v1.click();
+  T.applyChatPage(T.chatState, { supported: true, reset: false, cursor: 2, events: [] });
+  check('a poll leaves speech alone', v1.classList.contains('speaking') && synth.cancels === before);
+  T.selectedId = 'V-2';
+  T.applyChatView();
+  check('switching session cancels speech', synth.cancels === before + 1 && synth.queue.length === 0);
+  T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/v2', terminal_id: 'T-V',
+    agent_kind: 'claude-code', events: [{ kind: 'assistant', text: 'Read me too.' }] });
+  before = synth.cancels;
+  vBtn().click();
+  T.setChatViewActive(false);
+  T.applyChatView();
+  check('leaving Chat for the terminal cancels speech', synth.cancels === before + 1 && synth.queue.length === 0);
+  T.setChatViewActive(true);
+  // The exits that don't go through applyChatView. Each speaks a fresh reply
+  // first; the rest of the exit's repaint may throw in jsdom, which is fine.
+  const exitStops = (name, exit) => {
+    T.selectedId = 'V-3';
+    T.applyChatView();
+    T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/v3-' + name, terminal_id: 'T-V',
+      agent_kind: 'claude-code', events: [{ kind: 'assistant', text: 'Keep talking.' }] });
+    const btn = vBtn();
+    btn.click();
+    const n = synth.cancels;
+    try { exit(); } catch (_) { /* unrelated repaint in jsdom */ }
+    check(name + ' cancels speech', synth.cancels === n + 1 && synth.queue.length === 0
+      && !btn.classList.contains('speaking'));
+  };
+  exitStops('opening a board', () => T.selectBoard('tickets'));
+  exitStops('the empty-detail state', () => T.showEmptyDetail('Select a session'));
+  exitStops('session expiry (CROW-1460 scrim)', () => T.clearPageDataOnExpiry());
+
+  const css = fs.readFileSync(WEB + 'app.css', 'utf8');
+  const at = css.indexOf('@media (pointer: fine) and (min-width: 721px) {');
+  const gutter = at < 0 ? '' : css.slice(at, css.indexOf('\n}', at));
+  check('hidden desktop gutter chips do not hit-test over the next bubble',
+    gutter.includes('.chat-msg > .chat-msg-actions { pointer-events: none; }')
+    && gutter.includes('.chat-msg:hover > .chat-msg-actions, .chat-msg-actions:focus-within,')
+    && gutter.includes('.chat-msg-actions > .chat-chip.speaking { pointer-events: auto; }'));
+
   T.selectedId = 'F-1';
   T.setChatViewActive(true);
   T.chatViewFlag = null; // config not loaded yet
