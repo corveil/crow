@@ -142,4 +142,7 @@ The same prefix rule defeats `find -exec`: the rule engine can't see what gets e
 | Delete matches | `find . -name X -delete` | `find . -name X -exec rm {} \;` |
 | Run a command per match | `find ... -print0 \| xargs -0 CMD` | `find ... -exec CMD {} \;` |
 
+- **Memory files** (`~/.claude/projects/*/memory/`): read them with Read and change them with Write or Edit. Never with shell redirection (`cat >>`, `printf >>`, `tee`, `python … >>`) or `sed -i`: the sandbox denies writes there, so every such call fails.
+- **macOS has no `timeout`.** To bound a command, use the Bash tool's `timeout` parameter, or `run_in_background` and wait for the notification. Don't call `timeout` (or `gtimeout`, which may not be installed).
+
 ## Known Issues / Corrections
