@@ -91,9 +91,15 @@ json_val() {
 # Extract the `readiness` of a specific terminal id from `crow list-terminals`
 # JSON. Walks the flat per-terminal objects, finds the one carrying our id, and
 # reads its readiness field. Usage: terminal_readiness "$tid" "$json"
+#
+# `crow` pretty-prints (`"readiness" : "agentLaunched"`), so the space around
+# the colon is squeezed out first, as json_val does. Without that the grep never
+# matched and every launch logged "not confirmed (last readiness='unknown')"
+# while the terminal was in fact agentLaunched (CROW-1475).
 terminal_readiness() {
   local tid="$1" json="$2"
-  printf '%s' "$json" | tr -d '\n' | grep -o '{[^{}]*}' | grep "\"$tid\"" \
+  printf '%s' "$json" | tr -d '\n' | sed 's/[[:space:]]*:[[:space:]]*/:/g' \
+    | grep -o '{[^{}]*}' | grep -i "\"$tid\"" \
     | grep -o '"readiness":"[^"]*"' | cut -d'"' -f4 | head -1
 }
 

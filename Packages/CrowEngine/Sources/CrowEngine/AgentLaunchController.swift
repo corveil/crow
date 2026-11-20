@@ -103,6 +103,8 @@ final class AgentLaunchController {
         if let launchedKind {
             owner.recordLaunchedGateway(
                 sessionID: sessionID, agentKind: launchedKind, launchText: command, cwd: routedTerminal.cwd)
+            // `agent_state` reads `starting` until this agent's first hook (CROW-1475).
+            appState.noteAgentLaunch(sessionID: sessionID)
         }
         appState.terminalReadiness[terminalID] = .agentLaunched
         // CROW-1410: answer Codex's model-migration screen if it comes up.
@@ -573,6 +575,8 @@ final class AgentLaunchController {
                 sessionID: sessionID, agentKind: agent.kind,
                 launchText: gatewayPrefix + command, cwd: worktree.worktreePath)
             owner.armCodexStartupPromptWatch(terminalID: terminalID, command: command)
+            // `agent_state` reads `starting` until this agent's first hook (CROW-1475).
+            appState.noteAgentLaunch(sessionID: sessionID)
         } else {
             CrowLog.info("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")
         }

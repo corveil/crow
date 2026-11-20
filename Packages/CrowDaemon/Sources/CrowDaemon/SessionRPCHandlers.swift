@@ -106,6 +106,9 @@ func makeSessionHandlers(
                 // a later `todo link` is the one just attached).
                 let openScratchBySession = linkedOpenScratchBySession(
                     TodoRepository(store: store).all())
+                // One tmux read per poll for every session's `agent_state`
+                // exit check (CROW-1475), not one per session.
+                let paneCommands = TerminalRouter.paneCurrentCommands()
                 return appState.sessions.map { session in
                     // Board issue linked to this session (exact ticket URL, plus
                     // the Jira-key fallback). Also backs `labels` below.
@@ -216,6 +219,11 @@ func makeSessionHandlers(
                         object["attention_since"] = .string(
                             ISO8601DateFormatter().string(from: notification.timestamp))
                     }
+                    // Readiness for input (CROW-1475): the same fields, from the
+                    // same code, as `get-session`.
+                    object.merge(
+                        AgentStateReport.fields(for: session, appState: appState, paneCommands: paneCommands),
+                        uniquingKeysWith: { _, new in new })
                     return .object(object)
                 }
             }

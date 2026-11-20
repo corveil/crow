@@ -10,8 +10,9 @@ crow new-session --name "feature-name"          → {"session_id":"<uuid>","name
 crow rename-session --session <uuid> "new-name" → {"session_id":"...","name":"..."}
 crow select-session --session <uuid>            → {"session_id":"..."}
 crow list-sessions                              → {"sessions":[...]}
-crow get-session --session <uuid>               → {id, name, status, ticket_url, ..., agent_conversations:[{id, agent_kind, started_at, last_active_at}]}
+crow get-session --session <uuid>               → {id, name, status, ticket_url, agent_state, last_prompt_at, agent_terminal_id, ..., agent_conversations:[{id, agent_kind, started_at, last_active_at}]}
 crow find-session --agent-session <id|prefix|transcript path> → {session_id, name, status, kind, agent_kind, conversation:{…}}  agent conversation id → Crow session
+crow wait --session <uuid> --until idle|working|waiting_permission|starting|exited [--timeout 60] → blocks; errors on exit/timeout
 crow set-status --session <uuid> active|paused|inReview|completed|archived
 crow set-locked --session <uuid> true|false     → exempt a session from (or return it to) the retention reaper
 crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}
@@ -246,9 +247,13 @@ crow rename-terminal --session <uuid> --terminal <uuid> "new name"
 crow recreate-terminal --session <uuid> --terminal <uuid>   → DESTRUCTIVE: rebuilds the pane to restore scrollback; relaunches the agent with --continue
 crow relaunch-agent --session <uuid>                   → open a managed terminal and resume the agent when the session has none (CROW-1295)
 crow send --session <uuid> --terminal <uuid> "text to send"
+crow send --session <uuid> --terminal <agent_terminal_id> --wait-ready --wait-ack [--timeout 60] "brief\n" → {"sent":true,"accepted":true,...}
 ```
 
 The `crow send` command writes text to the terminal. Newlines in the text are converted to Enter keypresses. To submit a command, include a newline at the end of the text. The text goes in as one bracketed paste, so a multi-line message reaches an agent TUI whole. If it can't be delivered (unknown terminal, tmux failure), `crow send` errors instead of printing `"sent": true`.
+
+- `agent_state` (on `get-session` and `list-sessions`): `starting` (launched, no hook yet), `idle` (ready for input), `working`, `waiting_permission`, `exited`; `null` without an agent terminal. `last_prompt_at` is the last `UserPromptSubmit`.
+- After `create-manager` or a relaunch, don't sleep or grep transcripts: `crow wait --until idle`, or `crow send --wait-ready` to paste only once the agent is idle. `--wait-ack` reports whether the agent picked the text up (`accepted`), and exits non-zero with `accepted: false` on timeout. Both flags need `--terminal` to be `agent_terminal_id`.
 
 ## Maintenance Commands
 

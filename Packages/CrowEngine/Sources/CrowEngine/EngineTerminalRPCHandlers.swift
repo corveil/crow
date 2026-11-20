@@ -458,6 +458,9 @@ func makeEngineTerminalHandlers(
                     capturedService.recordLaunchedGateway(
                         sessionID: sessionID, agentKind: launch.kind,
                         launchText: launch.command, cwd: launch.cwd)
+                    // A launch typed through `send` (`crow send … "claude
+                    // --continue"`) reads `starting` until its first hook too.
+                    capturedAppState.noteAgentLaunch(sessionID: sessionID)
                 }
             }
             return ["sent": .bool(true)]

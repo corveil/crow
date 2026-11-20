@@ -172,6 +172,27 @@ extension TmuxBackend {
         }
     }
 
+    /// Live `#{pane_current_command}` for every bound terminal, from one
+    /// `list-windows` call (CROW-1475: `agent_state` on `list-sessions` reads
+    /// every session per poll). Nil when tmux isn't running or the read
+    /// failed. Never starts a tmux server just to answer.
+    public func paneCurrentCommands() -> [UUID: String]? {
+        guard let ctrl = controller else { return nil }
+        do {
+            let byIndex = Dictionary(
+                try ctrl.listWindowCommands().map { ($0.index, $0.command) },
+                uniquingKeysWith: { first, _ in first })
+            var out: [UUID: String] = [:]
+            for (id, index) in bindings {
+                if let command = byIndex[index], !command.isEmpty { out[id] = command }
+            }
+            return out
+        } catch {
+            reportIfTimeout(error)
+            return nil
+        }
+    }
+
     /// Last `linesBack` lines of terminal `id`'s pane, without SGR escapes
     /// (`capture-pane -p`, no `-e`). Nil when the window is not bound, tmux
     /// fails, or the pane is blank. Extra-Manager handoff reads this before

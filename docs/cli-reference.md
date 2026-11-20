@@ -112,6 +112,16 @@ crow get-session --session <uuid>
 
 Returns full session details: id, name, status, agent, ticket metadata, timestamps, lock state, org-goal/alignment fields, and `is_explore` (true when launched with Start Exploring / `crow:explore`). (Worktrees, terminals and links have their own verbs — `crow list-worktrees`, `crow list-terminals`, `crow list-links`.)
 
+It also reports whether the agent can take input (CROW-1475). `crow list-sessions` carries the same three fields on every row.
+
+| Field               | Meaning |
+| ------------------- | ------- |
+| `agent_state`       | `starting`, `idle`, `working`, `waiting_permission` or `exited`; `null` when the session has no agent terminal |
+| `last_prompt_at`    | When the agent last reported a submitted prompt (`UserPromptSubmit` hook), ISO 8601 with milliseconds; `null` until one arrives after `crowd` starts, and always `null` for a harness that sends no prompt-submit hook (Antigravity) |
+| `agent_terminal_id` | The agent's terminal — the one to `crow send` to; `null` when there is none |
+
+`agent_state` combines signals Crow already has. `starting` means the agent was launched but hasn't sent a hook yet, or sent its first one less than 1.5s ago (a composer can still be drawing). A work terminal whose launch hasn't been typed yet is also `starting`. A harness that sends no startup hook (Antigravity, and OpenCode before its first prompt) leaves `starting` 10s after launch once its process owns the pane. `idle`, `working` and `waiting_permission` follow the hook-driven activity (the sidebar dot). `exited` means the agent pane is back at a shell, the primary Manager's exit monitor fired, or the terminal never came up. Wait on it with [`crow wait`](#crow-wait), or use `crow send --wait-ready`.
+
 It also reports which gateway the session launches with, so a rejected credential can be traced without starting a session:
 
 | Field              | Meaning                                                                       |
@@ -1439,11 +1449,39 @@ The web Chat view uses the same `send` RPC with `raw: true`, which skips the `\n
 crow send --session <uuid> --terminal <uuid> "claude --continue"$'\n'
 ```
 
+`--wait-ready` waits until the session's agent is `idle` (see `agent_state` under [`crow get-session`](#crow-get-session)) before pasting, so the text can't land in a shell or a half-drawn TUI. It fails with an error, and sends nothing, when the agent exits first or `--timeout` passes. `--wait-ack` waits after the paste until the agent picks the text up — `agent_state` moves to `working` (or `waiting_permission`), or `last_prompt_at` changes — and adds `"accepted": true` to the output. On timeout it prints `"accepted": false` and exits non-zero. If the agent was already busy before the send, only a new `last_prompt_at` counts. Both flags need `--terminal` to be the agent's terminal (`agent_terminal_id`), and `--timeout` applies to each wait separately.
+
+```bash
+crow send --session <uuid> --terminal <agent-terminal-uuid> --wait-ready --wait-ack "Read BRIEF.md and start."$'\n'
+# → {"accepted": true, "agent_state": "working", "last_prompt_at": "2026-11-20T15:04:05.120Z", "sent": true}
+```
+
 | Arg / Flag              | Required | Description       |
 | ----------------------- | -------- | ----------------- |
 | `--session`             | yes      | Session UUID      |
 | `--terminal`            | yes      | Terminal UUID     |
+| `--wait-ready`          | no       | Wait until the agent is idle before sending |
+| `--wait-ack`            | no       | After sending, wait until the agent picks the text up; report `accepted` |
+| `--timeout`             | no       | Seconds each wait may take (default 60, max 3600) |
 | *(positional)* `TEXT`   | yes      | Text to send      |
+
+### `crow wait`
+
+Block until a session's agent reaches an `agent_state`, without a sleep loop. The CLI polls `get-session` (every 250ms) and prints the readiness fields once the state matches. It exits non-zero when the agent exits first (unless `--until exited`), when the session has no agent terminal, or when `--timeout` passes.
+
+```bash
+crow create-manager --workspace Corveil          # → {"session_id": "<uuid>", ...}
+crow wait --session <uuid> --until idle --timeout 120
+# → {"agent_state": "idle", "agent_terminal_id": "...", "last_prompt_at": null, "session_id": "...", "waited_seconds": 6.25}
+```
+
+| Arg / Flag   | Required | Description |
+| ------------ | -------- | ----------- |
+| `--session`  | yes      | Session UUID |
+| `--until`    | yes      | `starting`, `idle`, `working`, `waiting_permission` or `exited` |
+| `--timeout`  | no       | Seconds to wait before failing (default 60, max 3600) |
+
+`--until working` can miss a very short turn that starts and ends between two polls. To confirm a prompt arrived, use `crow send --wait-ack`, which also checks `last_prompt_at`.
 
 ---
 
