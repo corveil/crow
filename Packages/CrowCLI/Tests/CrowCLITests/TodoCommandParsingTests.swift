@@ -142,36 +142,3 @@ private let todoUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     #expect(try CrowCommand.parseAsRoot(["todo", "done", "--id", todoUUID]) is TodoDone)
     #expect(try CrowCommand.parseAsRoot(["todo", "work", "--id", todoUUID]) is TodoWork)
 }
-
-// MARK: - Friction (CROW-1477)
-
-@Test func todoAddParsesKind() throws {
-    let cmd = try TodoAdd.parse(["[friction] no --wait on send — polled", "--kind", "friction"])
-    #expect(cmd.kind == "friction")
-    #expect(try TodoAdd.parse(["an idea"]).kind == nil)
-}
-
-@Test func todoKindRejectsUnknownValue() {
-    #expect(throws: (any Error).self) { _ = try TodoAdd.parse(["x", "--kind", "bug"]) }
-    #expect(throws: (any Error).self) { _ = try TodoList.parse(["--kind", "bug"]) }
-    #expect(throws: (any Error).self) { _ = try TodoEdit.parse(["--id", todoUUID, "--kind", "bug"]) }
-}
-
-@Test func todoListAndEditParseKind() throws {
-    #expect(try TodoList.parse(["--kind", "friction"]).kind == "friction")
-    #expect(try TodoEdit.parse(["--id", todoUUID, "--kind", "idea"]).kind == "idea")
-}
-
-@Test func frictionReportParsesFlags() throws {
-    let cmd = try FrictionReport.parse(["--limit", "5", "--include-closed"])
-    #expect(cmd.limit == 5)
-    #expect(cmd.includeClosed)
-    let bare = try FrictionReport.parse([])
-    #expect(bare.limit == nil)
-    #expect(!bare.includeClosed)
-}
-
-@Test func frictionReportRejectsOutOfRangeLimit() {
-    #expect(throws: (any Error).self) { _ = try FrictionReport.parse(["--limit", "0"]) }
-    #expect(throws: (any Error).self) { _ = try FrictionReport.parse(["--limit", "101"]) }
-}

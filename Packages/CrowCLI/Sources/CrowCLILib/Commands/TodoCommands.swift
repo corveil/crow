@@ -42,16 +42,11 @@ public struct TodoAdd: ParsableCommand {
         running this command when it is tagged with a workspace \
         ($CROW_SESSION_ID), then the defaults (defaults.managerWorkspace; the \
         Manager agent). Fails only when no workspace resolves.
-
-        --kind is idea or friction. Without it, text starting with \
-        "[friction]" is friction and anything else an idea.
         """
     )
 
     @Argument(help: "Item text")
     var text: String
-    @Option(name: .long, help: "Kind: idea or friction (default: friction when the text starts with [friction], else idea)")
-    var kind: String?
     @Option(name: .long, help: "Comma-separated tags")
     var tag: String?
     @Option(name: .long, help: "Priority: p1, p2, p3, or p4")
@@ -69,12 +64,10 @@ public struct TodoAdd: ParsableCommand {
         try validateTodoText(text)
         if let priority { try validateTodoPriority(priority) }
         try validateTodoAgent(agent)
-        if let kind { try validateTodoKind(kind) }
     }
 
     public func run() throws {
         var params: [String: JSONValue] = ["text": .string(text)]
-        if let kind { params["kind"] = .string(kind) }
         if let note { params["note"] = .string(note) }
         if let priority { params["priority"] = .string(priority) }
         if let workspace { params["workspace"] = .string(workspace) }
@@ -92,32 +85,24 @@ public struct TodoAdd: ParsableCommand {
 public struct TodoList: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "list",
-        abstract: "List Scratch items",
-        discussion: """
-        kind_counts counts each kind under the --state / --tag filter, \
-        before --kind narrows the rows.
-        """
+        abstract: "List Scratch items"
     )
 
     @Option(name: .long, help: "Only items in this state")
     var state: String?
     @Option(name: .long, help: "Only items with this tag")
     var tag: String?
-    @Option(name: .long, help: "Only items of this kind: idea or friction")
-    var kind: String?
 
     public init() {}
 
     public func validate() throws {
         if let state { try validateTodoState(state) }
-        if let kind { try validateTodoKind(kind) }
     }
 
     public func run() throws {
         var params: [String: JSONValue] = [:]
         if let state { params["state"] = .string(state) }
         if let tag { params["tag"] = .string(tag) }
-        if let kind { params["kind"] = .string(kind) }
         printJSON(try rpc("todo-list", params: params))
     }
 }
@@ -160,7 +145,6 @@ public struct TodoEdit: ParsableCommand {
     @Option(name: .customLong("append-note"), help: "Paragraph to add after the existing note")
     var appendNote: String?
     @Option(name: .long, help: "Priority: p1, p2, p3, or p4") var priority: String?
-    @Option(name: .long, help: "Kind: idea or friction") var kind: String?
     @Option(name: .long, help: "Workspace name or UUID; \"\" clears it") var workspace: String?
     @Option(name: .long, help: "Coding agent kind; \"\" clears it") var agent: String?
     @Option(name: .customLong("add-tag"), parsing: .singleValue, help: "Tag to add (repeatable)")
@@ -174,7 +158,6 @@ public struct TodoEdit: ParsableCommand {
         try validateUUID(id, label: "todo UUID")
         if let text { try validateTodoText(text) }
         if let priority { try validateTodoPriority(priority) }
-        if let kind { try validateTodoKind(kind) }
     }
 
     public func run() throws {
@@ -183,7 +166,6 @@ public struct TodoEdit: ParsableCommand {
         if let note { params["note"] = .string(note) }
         if let appendNote { params["append_note"] = .string(appendNote) }
         if let priority { params["priority"] = .string(priority) }
-        if let kind { params["kind"] = .string(kind) }
         if let workspace { params["workspace"] = .string(workspace) }
         if let agent { params["agent_kind"] = .string(agent) }
         if !addTag.isEmpty { params["add_tags"] = .array(addTag.map { .string($0) }) }
@@ -418,51 +400,9 @@ func validateTodoState(_ value: String) throws {
     }
 }
 
-func validateTodoKind(_ value: String) throws {
-    let allowed = ["idea", "friction"]
-    guard allowed.contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
-        throw ValidationError("kind must be one of: \(allowed.joined(separator: ", "))")
-    }
-}
-
 func validateTodoLinkType(_ value: String) throws {
     let allowed = ["session", "ticket", "pr", "custom"]
     guard allowed.contains(value) else {
         throw ValidationError("type must be one of: \(allowed.joined(separator: ", "))")
-    }
-}
-
-/// `crow get-friction-report` (CROW-1477): the agent friction report.
-public struct FrictionReport: ParsableCommand {
-    public static let configuration = CommandConfiguration(
-        commandName: "get-friction-report",
-        abstract: "Show agent tool friction: Scratch friction items, grouped and counted",
-        discussion: """
-        local groups the Scratch items of kind friction by what happened \
-        (the text before " — "), most repeated first, with each group's todo \
-        ids. corveil is Corveil's transcript-derived friction report; until \
-        corveil/corveil#5601 publishes an API it is available: false with the \
-        reason and the tracking issue.
-        """
-    )
-
-    @Option(name: .long, help: "Most groups to return (1-100, default 10)")
-    var limit: Int?
-    @Flag(name: .customLong("include-closed"), help: "Also group items already done or dropped")
-    var includeClosed = false
-
-    public init() {}
-
-    public func validate() throws {
-        if let limit, !(1...100).contains(limit) {
-            throw ValidationError("--limit must be from 1 to 100")
-        }
-    }
-
-    public func run() throws {
-        var params: [String: JSONValue] = [:]
-        if let limit { params["limit"] = .int(limit) }
-        if includeClosed { params["include_closed"] = .bool(true) }
-        printJSON(try rpc("get-friction-report", params: params))
     }
 }

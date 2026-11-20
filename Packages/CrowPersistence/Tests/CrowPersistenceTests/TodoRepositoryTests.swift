@@ -70,4 +70,37 @@ struct TodoRepositoryTests {
         #expect(store.data.todos == nil)
         #expect(TodoRepository(store: store).all().isEmpty)
     }
+
+    /// CROW-1477 stored a `kind` (`idea` / `friction`) on each item; CROW-1486
+    /// reverted it. A store written in between must still load with every item
+    /// intact — a decode failure here would send `store.json` down the
+    /// corrupt-store backup path and empty the user's Scratch board.
+    @Test func storeWithFrictionKindTodosStillLoads() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let frictionID = UUID()
+        let ideaID = UUID()
+        let json = """
+        {"sessions":[],"worktrees":[],"links":[],"terminals":[],"todos":[
+          {"id":"\(frictionID.uuidString)","text":"[friction] crow send has no --wait-ready — polled",
+           "note":"","tags":[],"state":"captured","kind":"friction","links":[],
+           "createdAt":"2026-11-20T17:01:21Z","updatedAt":"2026-11-20T17:01:21Z"},
+          {"id":"\(ideaID.uuidString)","text":"native scratch list","note":"","tags":["crow"],
+           "state":"parked","kind":"idea","links":[],
+           "createdAt":"2026-11-20T17:02:00Z","updatedAt":"2026-11-20T17:02:00Z"}
+        ]}
+        """
+        let storeURL = dir.appendingPathComponent("store.json")
+        try json.write(to: storeURL, atomically: true, encoding: .utf8)
+
+        let repo = TodoRepository(store: JSONStore(directory: dir))
+        #expect(repo.all().count == 2)
+        #expect(repo.find(id: frictionID)?.text == "[friction] crow send has no --wait-ready — polled")
+        #expect(repo.find(id: frictionID)?.state == .captured)
+        #expect(repo.find(id: ideaID)?.state == .parked)
+        #expect(repo.find(id: ideaID)?.tags == ["crow"])
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("store.json.bak").path))
+    }
 }

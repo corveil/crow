@@ -27,29 +27,6 @@ struct TodoItemTests {
         #expect(decoded.workspace == nil)
     }
 
-    @Test func kindDefaultsToIdeaAndOldItemsDecodeAsIdea() throws {
-        #expect(TodoItem(text: "x").kind == .idea)
-        let decoded = try JSONDecoder().decode(TodoItem.self, from: Data(#"{"text":"old"}"#.utf8))
-        #expect(decoded.kind == .idea)
-    }
-
-    @Test func kindRoundTripsAndUnknownKindReadsAsIdea() throws {
-        let item = TodoItem(text: "[friction] no --wait flag", kind: .friction)
-        let decoded = try JSONDecoder().decode(TodoItem.self, from: JSONEncoder().encode(item))
-        #expect(decoded.kind == .friction)
-        let future = try JSONDecoder().decode(
-            TodoItem.self, from: Data(#"{"text":"t","kind":"from-the-future"}"#.utf8))
-        #expect(future.kind == .idea)
-        #expect(future.text == "t")
-    }
-
-    @Test func frictionPrefixInfersKind() {
-        #expect(TodoKind.inferred(fromText: "[friction] crow send has no --wait") == .friction)
-        #expect(TodoKind.inferred(fromText: "  [FRICTION] sandbox retries") == .friction)
-        #expect(TodoKind.inferred(fromText: "add a friction dashboard") == .idea)
-        #expect(TodoKind.inferred(fromText: "friction] typo") == .idea)
-    }
-
     @Test func workspaceRoundTrips() throws {
         let item = TodoItem(text: "tagged", workspace: "Corveil")
         let data = try JSONEncoder().encode(item)
@@ -103,5 +80,18 @@ struct TodoItemTests {
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(TodoItem.self, from: data)
         #expect(decoded == item)
+    }
+
+    /// Items stored while CROW-1477's `kind` existed (reverted in CROW-1486)
+    /// still decode: the key is ignored, whatever its value.
+    @Test func storedKindKeyIsIgnored() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        for kind in ["friction", "idea", "something-else"] {
+            let json = #"{"text":"[friction] missing flag","state":"done","kind":"\#(kind)"}"#
+            let decoded = try decoder.decode(TodoItem.self, from: Data(json.utf8))
+            #expect(decoded.text == "[friction] missing flag")
+            #expect(decoded.state == .done)
+        }
     }
 }

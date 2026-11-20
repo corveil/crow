@@ -43,7 +43,6 @@ public struct CrowCommand: ParsableCommand {
             ListReviews.self,
             Job.self,
             Todo.self,
-            FrictionReport.self,
             Tui.self,
             Telemetry.self,
             Cleanup.self,

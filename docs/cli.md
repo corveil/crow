@@ -63,7 +63,6 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow gateway get`](#crow-gateway-get) | Show a gateway's base URL and header names |
 | [`crow gateway set`](#crow-gateway-set) | Set a gateway's base URL and headers |
 | [`crow generate-docs`](#crow-generate-docs) | Regenerate the generated CLI reference from ArgumentParser metadata |
-| [`crow get-friction-report`](#crow-get-friction-report) | Show agent tool friction: Scratch friction items, grouped and counted |
 | [`crow get-scorecard`](#crow-get-scorecard) | Print the efficiency scorecard as JSON |
 | [`crow get-session`](#crow-get-session) | Get session details |
 | [`crow get-state`](#crow-get-state) | Print the daemon's full render-state snapshot as JSON |
@@ -1061,23 +1060,6 @@ Writes every subcommand and flag the binary accepts to docs/cli.md. Run it after
 | --- | --- | --- | --- |
 | `--output` | `<output>` | no | Path to write (default: docs/cli.md, relative to the current directory) |
 | `--check` | — | no | Verify the file on disk instead of writing it; exits non-zero when stale |
-
----
-
-## `crow get-friction-report`
-
-Show agent tool friction: Scratch friction items, grouped and counted.
-
-```
-crow get-friction-report [--limit <limit>] [--include-closed]
-```
-
-local groups the Scratch items of kind friction by what happened (the text before " — "), most repeated first, with each group's todo ids. corveil is Corveil's transcript-derived friction report; until corveil/corveil#5601 publishes an API it is available: false with the reason and the tracking issue.
-
-| Flag | Value | Required | Description |
-| --- | --- | --- | --- |
-| `--limit` | `<limit>` | no | Most groups to return (1-100, default 10) |
-| `--include-closed` | — | no | Also group items already done or dropped |
 
 ---
 
@@ -2380,17 +2362,14 @@ Subcommands: [`add`](#crow-todo-add), [`list`](#crow-todo-list), [`get`](#crow-t
 Capture a Scratch item.
 
 ```
-crow todo add <text> [--kind <kind>] [--tag <tag>] [--priority <priority>] [--note <note>] [--workspace <workspace>] [--agent <agent>]
+crow todo add <text> [--tag <tag>] [--priority <priority>] [--note <note>] [--workspace <workspace>] [--agent <agent>]
 ```
 
 Every item carries an agent and a workspace, which Explore and Ticket launch the Manager with. Each resolves from the flag, then the Manager running this command when it is tagged with a workspace ($CROW_SESSION_ID), then the defaults (defaults.managerWorkspace; the Manager agent). Fails only when no workspace resolves.
 
---kind is idea or friction. Without it, text starting with "[friction]" is friction and anything else an idea.
-
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | _(positional)_ | `<text>` | yes | Item text |
-| `--kind` | `<kind>` | no | Kind: idea or friction (default: friction when the text starts with [friction], else idea) |
 | `--tag` | `<tag>` | no | Comma-separated tags |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
 | `--note` | `<note>` | no | Longer note |
@@ -2446,7 +2425,7 @@ crow todo drop --id <id>
 Update fields on an existing Scratch item.
 
 ```
-crow todo edit --id <id> [--text <text>] [--note <note>] [--append-note <append-note>] [--priority <priority>] [--kind <kind>] [--workspace <workspace>] [--agent <agent>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
+crow todo edit --id <id> [--text <text>] [--note <note>] [--append-note <append-note>] [--priority <priority>] [--workspace <workspace>] [--agent <agent>] [--add-tag <add-tag> ...] [--remove-tag <remove-tag> ...]
 ```
 
 Only the provided flags change. --add-tag / --remove-tag compose; they do not replace the whole list. --append-note adds a paragraph after the existing note (after --note, when both are given) instead of replacing it. --workspace "" clears the workspace; --agent "" clears the agent.
@@ -2458,7 +2437,6 @@ Only the provided flags change. --add-tag / --remove-tag compose; they do not re
 | `--note` | `<note>` | no | Replacement note |
 | `--append-note` | `<append-note>` | no | Paragraph to add after the existing note |
 | `--priority` | `<priority>` | no | Priority: p1, p2, p3, or p4 |
-| `--kind` | `<kind>` | no | Kind: idea or friction |
 | `--workspace` | `<workspace>` | no | Workspace name or UUID; "" clears it |
 | `--agent` | `<agent>` | no | Coding agent kind; "" clears it |
 | `--add-tag` | `<add-tag>` _(repeatable)_ | no | Tag to add (repeatable) |
@@ -2519,16 +2497,13 @@ crow todo link --id <id> --type <type> [--url <url>] [--session <session>] [--la
 List Scratch items.
 
 ```
-crow todo list [--state <state>] [--tag <tag>] [--kind <kind>]
+crow todo list [--state <state>] [--tag <tag>]
 ```
-
-kind_counts counts each kind under the --state / --tag filter, before --kind narrows the rows.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--state` | `<state>` | no | Only items in this state |
 | `--tag` | `<tag>` | no | Only items with this tag |
-| `--kind` | `<kind>` | no | Only items of this kind: idea or friction |
 
 ---
 
