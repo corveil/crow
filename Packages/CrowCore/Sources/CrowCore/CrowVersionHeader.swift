@@ -8,7 +8,7 @@ import Foundation
 /// `X-Crow-Version: <version>+<short sha>`, e.g. `0.2.0+8e32cc67`, or
 /// `0.2.0+dev` for an unstamped build.
 ///
-/// - Claude Code: ``GatewayResolver/resolve(_:crowVersion:resolveSecret:)``
+/// - Claude Code: ``GatewayResolver/resolve(_:crowVersion:crowSession:resolveSecret:)``
 ///   appends the header to `ANTHROPIC_CUSTOM_HEADERS`, unless the gateway
 ///   already configures a header with that name (the user's value wins).
 /// - Codex: `CodexGatewayArgs` names an env var in an `env_http_headers`

@@ -271,6 +271,16 @@ resolve_gateway_env() {
     headers+="X-Crow-Version: $crow_version"
   fi
 
+  # CROW-1476: name the Crow session too, so a gateway's request log maps back
+  # to it. Same rules: a UUID only, after X-Crow-Version, and skipped when the
+  # gateway names X-Crow-Session itself. No session id yet means no header.
+  if [[ "$SESSION_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
+      && ! jq -e '[(.customHeaders // {}) | keys[] | ascii_downcase
+      | select(. == "x-crow-session")] | length > 0' <<< "$gateway" >/dev/null 2>&1; then
+    [[ -n "$headers" ]] && headers+=$'\n'
+    headers+="X-Crow-Session: $SESSION_ID"
+  fi
+
   WS_BASE_URL="$base_url"
   WS_CUSTOM_HEADERS="$headers"
   WS_HAS_GATEWAY=true
@@ -423,6 +433,8 @@ codex_auth_upstream() {
 # `crow new-terminal --command`'s argv. That is also why this needs no `op read`.
 # X-Crow-Version (CROW-1458) is read from an env var the same way, exported in
 # that same paste-time statement, so the build is current at every relaunch.
+# X-Crow-Session (CROW-1476) likewise: the daemon exports the session id beside
+# the key when it pastes the command.
 # No `"` anywhere: the result sits inside eval_prompt_launch's `eval "…"`.
 codex_gateway_overrides() {
   local config_path="$DEV_ROOT/.claude/config.json"
@@ -467,8 +479,8 @@ codex_gateway_overrides() {
   esac
 
   local p="model_providers.crow-corveil"
-  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY -c %s.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION' \
-    "$p" "$p" "$(posix_quote "$base")" "$p" "$p" "$p" "$upstream" "$p" "$p"
+  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY -c %s.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION -c %s.env_http_headers.X-Crow-Session=CROW_GATEWAY_CROW_SESSION' \
+    "$p" "$p" "$(posix_quote "$base")" "$p" "$p" "$p" "$upstream" "$p" "$p" "$p"
   log "Codex gateway: routing through $base (X-Corveil-Upstream: $upstream)"
 }
 

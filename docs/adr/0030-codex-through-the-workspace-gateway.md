@@ -54,6 +54,9 @@ provider, `crow-corveil`. It never edits `~/.codex/config.toml`:
 - `env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION` (CROW-1458) sends
   the Crow build. The paste-time export below sets that variable too, so a
   stored Manager command reports the current build after an upgrade.
+- `env_http_headers.X-Crow-Session=CROW_GATEWAY_CROW_SESSION` (CROW-1476) sends
+  the Crow session's UUID, exported at paste time in the same statement, so the
+  gateway's request log names the session.
 - A gateway with no Corveil key header (`x-citadel-api-key` / `X-Corveil-Key`) is
   not a Corveil gateway, so it never routes Codex.
 

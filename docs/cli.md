@@ -57,6 +57,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow delete-session`](#crow-delete-session) | Delete a session |
 | [`crow edit-link`](#crow-edit-link) | Edit a link's label, URL, or type in place |
 | [`crow explore-issue`](#crow-explore-issue) | Start exploring a ticket (types /crow-workspace --explore into the Manager) |
+| [`crow find-session`](#crow-find-session) | Find the Crow session that ran an agent conversation |
 | [`crow gateway`](#crow-gateway) | Manage AI gateways (local-only) |
 | [`crow gateway clear`](#crow-gateway-clear) | Remove a gateway |
 | [`crow gateway get`](#crow-gateway-get) | Show a gateway's base URL and header names |
@@ -946,6 +947,22 @@ crow explore-issue --url <url>
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--url` | `<url>` | yes | Ticket / issue URL |
+
+---
+
+## `crow find-session`
+
+Find the Crow session that ran an agent conversation.
+
+```
+crow find-session --agent-session <agent-session>
+```
+
+--agent-session takes the agent's own conversation id (a Claude Code session id, a Codex thread id, a Cursor chat id, …): the full id, a unique prefix of at least 4 characters, or a transcript path such as ~/.claude/projects/<dir>/<id>.jsonl. Prints {session_id, name, status, kind, agent_kind, conversation}. Fails when nothing matches or the prefix matches more than one conversation.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--agent-session` | `<agent-session>` | yes | Agent conversation id, unique prefix, or transcript path |
 
 ---
 

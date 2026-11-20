@@ -43,6 +43,10 @@ public enum GatewayResolver {
     ///   build `crowd` installed (``CrowVersionHeader/current``). Skipped when nil,
     ///   or when the gateway configures a header with that name itself, so the
     ///   user's value wins and the header is never sent twice.
+    /// - Parameter crowSession: The Crow session this launch belongs to, sent as
+    ///   `X-Crow-Session` (CROW-1476) after `X-Crow-Version`, so a gateway's
+    ///   request log names the session. Nil (the default) sends no header; the
+    ///   same "a configured header with that name wins" rule applies.
     /// - Parameter resolveSecret: Injected for testability; defaults to `op read`.
     ///   When a reference fails to resolve, the header is dropped and a redacted
     ///   warning is logged — the `baseURL` is still applied, so requests reach the
@@ -51,6 +55,7 @@ public enum GatewayResolver {
     public static func resolve(
         _ gateway: WorkspaceGateway,
         crowVersion: String? = CrowVersionHeader.current,
+        crowSession: UUID? = nil,
         resolveSecret: (String) -> String? = Self.opRead
     ) -> Resolved? {
         guard !gateway.isEmpty else { return nil }
@@ -93,6 +98,10 @@ public enum GatewayResolver {
         if let crowVersion, !CrowVersionHeader.isConfigured(in: gateway.customHeaders.keys) {
             if !lines.isEmpty { lines += "\n" }
             lines += "\(CrowVersionHeader.name): \(crowVersion)"
+        }
+        if let crowSession, !CrowSessionHeader.isConfigured(in: gateway.customHeaders.keys) {
+            if !lines.isEmpty { lines += "\n" }
+            lines += "\(CrowSessionHeader.name): \(CrowSessionHeader.value(for: crowSession))"
         }
         return Resolved(baseURL: gateway.baseURL, customHeaders: lines)
     }

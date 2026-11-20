@@ -321,6 +321,10 @@ struct ParityGateTests {
         // but `-log` isn't `get-`/`list-` shaped, so the heuristic presumes a
         // write (CROW-1255). CLI watch is this poll; there is no watch RPC.
         "tui-record-log",
+        // `find-session` looks a session up by an agent conversation id — a
+        // read, no mutation — but `find-` isn't `get-`/`list-` shaped, so the
+        // heuristic presumes a write (CROW-1476).
+        "find-session",
     ]
 
     /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`

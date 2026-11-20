@@ -10,7 +10,8 @@ crow new-session --name "feature-name"          → {"session_id":"<uuid>","name
 crow rename-session --session <uuid> "new-name" → {"session_id":"...","name":"..."}
 crow select-session --session <uuid>            → {"session_id":"..."}
 crow list-sessions                              → {"sessions":[...]}
-crow get-session --session <uuid>               → {id, name, status, ticket_url, ...}
+crow get-session --session <uuid>               → {id, name, status, ticket_url, ..., agent_conversations:[{id, agent_kind, started_at, last_active_at}]}
+crow find-session --agent-session <id|prefix|transcript path> → {session_id, name, status, kind, agent_kind, conversation:{…}}  agent conversation id → Crow session
 crow set-status --session <uuid> active|paused|inReview|completed|archived
 crow set-locked --session <uuid> true|false     → exempt a session from (or return it to) the retention reaper
 crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}

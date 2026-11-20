@@ -195,6 +195,14 @@ To check a worktree, without printing the credential:
 jq -r '.env.ANTHROPIC_CUSTOM_HEADERS' <worktree>/.claude/settings.local.json | grep -i '^x-crow-version:'
 ```
 
+#### Crow session header
+
+Next to `X-Crow-Version`, Crow sends `X-Crow-Session: <crow session uuid>` with every gateway request (CROW-1476), so a request in the gateway's log maps back to the Crow session that made it, not only to the agent's own conversation id. The value is only the session's UUID, the same one `crow get-session --session` takes: no name, path or ticket. It follows the version header's rules: one more `ANTHROPIC_CUSTOM_HEADERS` line for Claude Code (workers, handoffs, Managers, and `setup.sh` for new workers), and for [Codex](#codex-sessions-opt-in) an `env_http_headers.X-Crow-Session=CROW_GATEWAY_CROW_SESSION` override whose value is exported next to the key at paste time. A gateway that configures its own `X-Crow-Session` header (any case) keeps it, and Crow adds none. No gateway, no header. The other direction, from an agent conversation id to the session, is `crow find-session --agent-session <id>`; `crow get-session` lists a session's conversations as `agent_conversations`.
+
+```bash
+jq -r '.env.ANTHROPIC_CUSTOM_HEADERS' <worktree>/.claude/settings.local.json | grep -i '^x-crow-session:'
+```
+
 > **Precedence note:** Claude Code applies its `settings.local.json` `env` block on top of the environment it inherited, so a value in that block wins over the launch line and over a `~/.zshrc` export (checked against Claude Code 2.1.322: a variable set in both reads the settings value inside the agent). Crow writes the same gateway to both places, so they agree on a normal launch; the launch line still matters for a variable the block doesn't set, such as an inherited `ANTHROPIC_CUSTOM_HEADERS` it `unset`s. The intended end state is still to delete the global `~/.zshrc` exports once per-workspace gateways are configured, leaving `config.json` the single source of truth. The debug-mode recording indicator ([Telemetry, Cleanup & UI](#telemetry-cleanup--ui)) records the launch by the same rule.
 
 > **Applied at launch:** the gateway env is resolved and written when the agent **starts** (or is handed off to another agent). A session that was already running when you edited a gateway keeps the environment it launched with — relaunch it, or hand it off, to pick up the change.

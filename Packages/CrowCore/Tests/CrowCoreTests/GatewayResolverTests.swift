@@ -168,3 +168,60 @@ import Testing
     #expect(CrowVersionHeader.isConfigured(in: ["Other", "X-CROW-VERSION"]))
     #expect(!CrowVersionHeader.isConfigured(in: ["x-crow-versions", "x-citadel-api-key"]))
 }
+
+// MARK: - X-Crow-Session (CROW-1476)
+
+@Test func gatewayResolverAppendsCrowSessionAfterCrowVersion() throws {
+    let session = UUID(uuidString: "4D2B091E-5D06-4855-9BD4-EC8FD76C712F")!
+    let gateway = WorkspaceGateway(
+        baseURL: "https://corveil.io",
+        customHeaders: ["x-citadel-api-key": "sk-plain"]
+    )
+    let resolved = GatewayResolver.resolve(
+        gateway, crowVersion: "0.2.0+8e32cc67", crowSession: session) { _ in nil }
+    #expect(resolved?.customHeaders == """
+        x-citadel-api-key: sk-plain
+        X-Crow-Version: 0.2.0+8e32cc67
+        X-Crow-Session: 4D2B091E-5D06-4855-9BD4-EC8FD76C712F
+        """)
+}
+
+@Test func gatewayResolverSendsCrowSessionWithoutAVersion() throws {
+    let session = UUID()
+    let gateway = WorkspaceGateway(baseURL: "https://corveil.io", customHeaders: ["x-k": "v"])
+    #expect(GatewayResolver.resolve(gateway, crowVersion: nil, crowSession: session) { _ in nil }?.customHeaders
+        == "x-k: v\nX-Crow-Session: \(session.uuidString)")
+}
+
+@Test func gatewayResolverSendsNoCrowSessionByDefaultOrWithoutAGateway() throws {
+    let gateway = WorkspaceGateway(baseURL: "https://corveil.io", customHeaders: ["x-k": "v"])
+    #expect(GatewayResolver.resolve(gateway, crowVersion: nil) { _ in nil }?.customHeaders == "x-k: v")
+    let empty = WorkspaceGateway(baseURL: "", customHeaders: [:])
+    #expect(GatewayResolver.resolve(empty, crowVersion: nil, crowSession: UUID()) { _ in nil } == nil)
+}
+
+@Test func gatewayResolverKeepsAUserConfiguredCrowSession() throws {
+    for name in ["X-Crow-Session", "x-crow-session", "X-CROW-SESSION"] {
+        let gateway = WorkspaceGateway(
+            baseURL: "https://corveil.io",
+            customHeaders: ["x-k": "v", name: "pinned"]
+        )
+        let lines = GatewayResolver.resolve(gateway, crowVersion: nil, crowSession: UUID()) { _ in nil }?
+            .customHeaders.split(separator: "\n").map(String.init) ?? []
+        #expect(lines.sorted() == ["\(name): pinned", "x-k: v"].sorted(), "\(name)")
+    }
+    // A failed `op://` reference is still the user's choice: dropped, not replaced.
+    let failed = WorkspaceGateway(
+        baseURL: "https://corveil.io",
+        customHeaders: ["x-k": "v", "X-Crow-Session": "op://V/I/f"]
+    )
+    #expect(GatewayResolver.resolve(failed, crowVersion: nil, crowSession: UUID()) { _ in nil }?.customHeaders
+        == "x-k: v")
+}
+
+@Test func crowSessionHeaderValueIsOnlyTheUUID() throws {
+    let id = UUID()
+    #expect(CrowSessionHeader.value(for: id) == id.uuidString)
+    #expect(CrowSessionHeader.isConfigured(in: ["x-crow-session"]))
+    #expect(!CrowSessionHeader.isConfigured(in: ["X-Crow-Version"]))
+}

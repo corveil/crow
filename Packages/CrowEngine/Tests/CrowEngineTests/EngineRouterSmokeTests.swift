@@ -256,4 +256,55 @@ struct EngineRouterSmokeTests {
         #expect(result["headers"] == nil)
         #expect(result["customHeaders"] == nil)
     }
+
+    /// CROW-1476: `get-session` lists the agent conversations a session ran,
+    /// and `find-session` maps one of them back to the session.
+    @Test("get-session lists agent conversations and find-session maps them back")
+    func agentConversationsRoundTripThroughTheRouter() async throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
+        let appState = AppState()
+        let store = JSONStore(directory: tmp)
+        let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
+
+        var session = Session(name: "conversations")
+        session.recordHarnessConversationID("5e1f0c2a-0000-4000-8000-00000000abcd")
+        appState.sessions.append(session)
+
+        let ctx = EngineContext(
+            appState: appState,
+            store: store,
+            sessionService: service,
+            issueTracker: nil,
+            telemetryPort: nil,
+            devRoot: tmp.path,
+            hostBridge: NoopHostBridge(),
+            loadConfig: { nil },
+            applyConfig: { _ in nil }
+        )
+        let router = makeEngineRouter(ctx)
+
+        let got = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "get-session",
+            params: ["session_id": .string(session.id.uuidString)]))
+        let conversations = try #require(got.result?["agent_conversations"])
+        guard case .array(let rows) = conversations, case .object(let row) = rows.first else {
+            Issue.record("agent_conversations is not a one-row array: \(conversations)"); return
+        }
+        #expect(rows.count == 1)
+        #expect(row["id"] == .string("5e1f0c2a-0000-4000-8000-00000000abcd"))
+        for key in ["agent_kind", "started_at", "last_active_at"] {
+            #expect(row[key] != nil, "expected '\(key)' on the conversation row")
+        }
+
+        let found = await router.handle(request: JSONRPCRequest(
+            id: 2, method: "find-session", params: ["agent_session": .string("5E1F0C2A")]))
+        #expect(found.result?["session_id"] == .string(session.id.uuidString))
+        #expect(found.result?["name"] == .string("conversations"))
+
+        let missing = await router.handle(request: JSONRPCRequest(
+            id: 3, method: "find-session", params: ["agent_session": .string("ffffffff")]))
+        #expect(missing.result == nil)
+        #expect(missing.error != nil)
+    }
 }

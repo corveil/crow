@@ -107,6 +107,38 @@ public struct GetSession: ParsableCommand {
     }
 }
 
+/// Find the Crow session that ran an agent conversation (CROW-1476): the
+/// reverse of `get-session`'s `agent_conversations`.
+public struct FindSession: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "find-session",
+        abstract: "Find the Crow session that ran an agent conversation",
+        discussion: """
+            --agent-session takes the agent's own conversation id (a Claude Code \
+            session id, a Codex thread id, a Cursor chat id, …): the full id, a \
+            unique prefix of at least 4 characters, or a transcript path such as \
+            ~/.claude/projects/<dir>/<id>.jsonl. Prints {session_id, name, status, \
+            kind, agent_kind, conversation}. Fails when nothing matches or the \
+            prefix matches more than one conversation.
+            """
+    )
+    @Option(name: .customLong("agent-session"), help: "Agent conversation id, unique prefix, or transcript path")
+    var agentSession: String
+
+    public init() {}
+
+    public func validate() throws {
+        guard !agentSession.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ValidationError("--agent-session must not be empty")
+        }
+    }
+
+    public func run() throws {
+        let result = try rpc("find-session", params: ["agent_session": .string(agentSession)])
+        printJSON(result)
+    }
+}
+
 /// Set the status of a session (active, paused, inReview, completed, archived).
 public struct SetStatus: ParsableCommand {
     public static let configuration = CommandConfiguration(commandName: "set-status", abstract: "Set session status")

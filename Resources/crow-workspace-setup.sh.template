@@ -271,6 +271,16 @@ resolve_gateway_env() {
     headers+="X-Crow-Version: $crow_version"
   fi
 
+  # CROW-1476: name the Crow session too, so a gateway's request log maps back
+  # to it. Same rules: a UUID only, after X-Crow-Version, and skipped when the
+  # gateway names X-Crow-Session itself. No session id yet means no header.
+  if [[ "$SESSION_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
+      && ! jq -e '[(.customHeaders // {}) | keys[] | ascii_downcase
+      | select(. == "x-crow-session")] | length > 0' <<< "$gateway" >/dev/null 2>&1; then
+    [[ -n "$headers" ]] && headers+=$'\n'
+    headers+="X-Crow-Session: $SESSION_ID"
+  fi
+
   WS_BASE_URL="$base_url"
   WS_CUSTOM_HEADERS="$headers"
   WS_HAS_GATEWAY=true

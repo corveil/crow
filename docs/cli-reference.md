@@ -98,7 +98,7 @@ crow select-session --session <uuid>
 
 ### `crow list-sessions`
 
-Print all sessions. Each row includes `is_explore` (`true` when launched with Start Exploring / `crow:explore`).
+Print all sessions. Each row includes `is_explore` (`true` when launched with Start Exploring / `crow:explore`) and `agent_conversations`, the same array `crow get-session` returns.
 
 ```bash
 crow list-sessions
@@ -125,6 +125,25 @@ It also reports which gateway the session launches with, so a rejected credentia
 These are the **redacted** subset — a set flag and the non-secret base URL, never header names or values, because `get-session` is readable by a remote `/rpc` client. Headers live in `crow gateway get`, which is local-only.
 
 `workspace_match` distinguishes the two lookups: work and job sessions match by worktree path, while review clones (which live under `crow-reviews/`) match by the PR's `owner/repo`. Those can land on **different workspaces for the same repo**, so a work session and a review of that repo's PR may use different gateways — see [configuration.md](configuration.md#which-gateway-applies). A `null` `workspace_name` with `gateway_set: false` means nothing claimed the session at all; a non-null name with `gateway_set: false` means the workspace claimed it and has no gateway.
+
+`agent_conversations` lists every conversation the session's agent has run, oldest first (CROW-1476): `[{"id":"…","agent_kind":"claude-code","started_at":"…","last_active_at":"…"}]`. `id` is the agent's own conversation id: a Claude Code session id (the transcript's file name), a Codex thread id, a Cursor chat id. It is the id a gateway's request log records from the request body. `started_at` and `last_active_at` are when Crow first and most recently saw a hook carrying it, to the minute; both are `null` for a conversation recorded before Crow stamped them. A `/clear`, a resume and an agent handoff each add a row. Work sessions recorded only their latest conversation before CROW-1476, so an older work session lists at most one.
+
+### `crow find-session`
+
+```bash
+crow find-session --agent-session 0b1e2d3c-1111-4222-8333-444455556666
+crow find-session --agent-session 0b1e2d3c
+crow find-session --agent-session ~/.claude/projects/-Users-me-dev-repo/0b1e2d3c-1111-4222-8333-444455556666.jsonl
+```
+
+The reverse of `agent_conversations`: from an agent's conversation id to the Crow session that ran it (CROW-1476). `--agent-session` takes the full id, a unique prefix of at least 4 characters (compared case-insensitively), or a transcript path, which is reduced to its file name without `.jsonl`. It returns:
+
+```json
+{"session_id":"…","name":"crow-1476-session-id-mapping","status":"active","kind":"work","agent_kind":"claude-code",
+ "conversation":{"id":"0b1e2d3c-…","agent_kind":"claude-code","started_at":"…","last_active_at":"…"}}
+```
+
+An exact id wins over longer ids it prefixes. A prefix that matches more than one conversation fails and lists up to five of them; so does an id no session has run. The gateway side of the same mapping is the `X-Crow-Session` header ([configuration.md](configuration.md#crow-session-header)).
 
 ### `crow set-status`
 
