@@ -195,6 +195,10 @@ cleared, and the count starts again, when:
 `crowd-automation.log` shows `skipped:conflicts-already-handed-off` when a poll would have
 re-sent a known conflict, and the conflict line now carries `prompt N/2 for this head`.
 
+### Context compaction
+
+Off by default. Types `/compact` into a large, idle Claude Code session shortly before its prompt cache expires, so a later resume writes a small cache instead of rebuilding a large one. It never sends while the agent is working or waiting on you, or while the prompt holds unsent text. Compaction keeps a summary, not the conversation, so the agent loses detail. The rules, settings and trade-off are in [Context size and compaction](context-compaction.md) (CROW-1493).
+
 ### Auto-launch workspaces
 
 PR #312 gated the existing `crow:auto` label automation behind a single opt-in toggle. Off by default — typing `/crow-workspace` into the Manager terminal without an explicit opt-in is intrusive, and matches the precedent set by `crow:merge` auto-merge (#299).

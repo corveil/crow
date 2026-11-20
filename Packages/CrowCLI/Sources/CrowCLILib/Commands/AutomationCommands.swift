@@ -221,6 +221,34 @@ struct AutomationRespondArgs: ParsableArguments {
     }
 }
 
+/// Context size + pre-expiry compaction (CROW-1493): `AppConfig.contextCompaction`.
+struct AutomationCompactionArgs: ParsableArguments {
+    @Option(
+        name: .customLong("auto-compact"),
+        help: "Type /compact into large, idle Claude Code sessions before their prompt cache expires. Compaction loses detail (true or false)")
+    var autoCompact: Bool?
+
+    @Option(
+        name: .customLong("auto-compact-min-context-tokens"),
+        help: "Context size, in tokens, that counts as large (10000-10000000)")
+    var minContextTokens: Int?
+
+    @Option(
+        name: .customLong("auto-compact-idle-minutes"),
+        help: "Minutes since the session's last model call before it is compacted (1-1440)")
+    var idleMinutes: Int?
+
+    var isEmpty: Bool { autoCompact == nil && minContextTokens == nil && idleMinutes == nil }
+
+    var params: [String: JSONValue] {
+        var params: [String: JSONValue] = [:]
+        if let autoCompact { params["auto_compact"] = .bool(autoCompact) }
+        if let minContextTokens { params["auto_compact_min_context_tokens"] = .int(minContextTokens) }
+        if let idleMinutes { params["auto_compact_idle_minutes"] = .int(idleMinutes) }
+        return params
+    }
+}
+
 // MARK: - crow automation set
 
 public struct AutomationSet: ParsableCommand {
@@ -241,6 +269,12 @@ public struct AutomationSet: ParsableCommand {
         an app relaunch) to take effect. A change to it returns \
         "manager_restart_required": true.
 
+        --auto-compact sends /compact into idle Claude Code sessions whose context \
+        is at least --auto-compact-min-context-tokens, once they have been idle \
+        --auto-compact-idle-minutes and while their prompt cache is still warm. \
+        Compaction keeps a summary, not the conversation: the agent loses detail. \
+        See docs/context-compaction.md.
+
         The tab's three board-filter lists (excluded review repos, ignored review \
         labels, excluded ticket repos) are `AppConfig.defaults` fields, so they \
         belong to `crow defaults set` — one writer, one set of semantics. \
@@ -257,10 +291,13 @@ public struct AutomationSet: ParsableCommand {
     @OptionGroup(title: "Auto-respond")
     var respond: AutomationRespondArgs
 
+    @OptionGroup(title: "Context compaction")
+    var compaction: AutomationCompactionArgs
+
     public init() {}
 
     public func validate() throws {
-        guard !permissions.isEmpty || !watchers.isEmpty || !respond.isEmpty else {
+        guard !permissions.isEmpty || !watchers.isEmpty || !respond.isEmpty || !compaction.isEmpty else {
             throw ValidationError(
                 "Nothing to set — provide at least one flag. See `crow automation set --help`.")
         }
@@ -273,9 +310,10 @@ public struct AutomationSet: ParsableCommand {
     /// tests. `setAcceptsEveryWireKeyTheCLIEmits` pins it against the handler.
     var params: [String: JSONValue] {
         var params = permissions.params
-        // The three groups own disjoint keys, so the combine closure never fires.
+        // The groups own disjoint keys, so the combine closure never fires.
         params.merge(watchers.params) { current, _ in current }
         params.merge(respond.params) { current, _ in current }
+        params.merge(compaction.params) { current, _ in current }
         return params
     }
 

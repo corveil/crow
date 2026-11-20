@@ -409,7 +409,10 @@ func makeEngineHookHandlers(
                 // through to the signal source's `default`, so the grade's
                 // heaviest penalty was inert on real data. Wired in
                 // CROW-983.
-                if eventName == SessionHookState.compactionEventName {
+                // A compaction Crow requested itself (CROW-1493, pre-expiry
+                // `/compact`) is a cost saving, not waste: don't grade it.
+                if eventName == SessionHookState.compactionEventName,
+                   !state.consumeCrowCompactionRequest() {
                     state.noteCompactionEvent(eventName)
                     // A Manager never reaches a terminal status, so it has
                     // no snapshot to persist the running total into.

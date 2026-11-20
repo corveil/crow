@@ -100,6 +100,26 @@
       'Rebases a behind/conflicting Crow-authored PR onto base and force-pushes (--force-with-lease). Off by default.'));
     body.appendChild(S.toggleField('Re-request review once changes are addressed', S.cfg.autoRespond, 'autoReRequestReview',
       'Re-adds the reviewers who requested changes once the fix lands, so the PR goes back on their queue instead of stalling.'));
+
+    // Context size + pre-expiry compaction (CROW-1493).
+    S.cfg.contextCompaction = S.cfg.contextCompaction || {};
+    const cc = S.cfg.contextCompaction;
+    if (cc.minContextTokens == null) cc.minContextTokens = 200000;
+    if (cc.idleMinutes == null) cc.idleMinutes = 50;
+    body.appendChild(S.group('Context compaction'));
+    body.appendChild(S.toggleField('Compact large idle sessions before their prompt cache expires', cc, 'autoCompact',
+      'Types /compact into an idle Claude Code session whose context is at least the size below, once it has been idle '
+      + 'that many minutes and while its prompt cache is still warm. A later resume then writes a small cache instead of '
+      + 're-writing a large one. Compaction keeps a summary, not the conversation, so the agent loses detail. Never sends '
+      + 'while the agent is working or waiting on you, or when the prompt holds unsent text. Off by default.'));
+    body.appendChild(S.textField('Large context (tokens)', cc, 'minContextTokens', {
+      type: 'number', number: true,
+      help: 'Sessions at or above this size are compacted, and their sidebar context badge turns amber. 10000 to 10000000.',
+    }));
+    body.appendChild(S.textField('Idle minutes before compacting', cc, 'idleMinutes', {
+      type: 'number', number: true,
+      help: 'Minutes since the session’s last model call. Claude Code’s cache lasts an hour, so the default 50 leaves ten minutes of margin. 1 to 1440.',
+    }));
   }
 
   T.automation = renderAutomation;

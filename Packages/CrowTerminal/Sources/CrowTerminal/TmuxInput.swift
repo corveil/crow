@@ -212,15 +212,17 @@ extension TmuxBackend {
         }
     }
 
-    /// The visible rows of terminal `id`'s pane as plain text (`capture-pane
-    /// -p`, no history, no escapes). Nil when the window is not bound or tmux
-    /// fails. The Codex startup-prompt watch reads this (CROW-1410).
-    public func captureVisibleText(id: UUID) -> String? {
+    /// The visible rows of terminal `id`'s pane (`capture-pane -p`, no
+    /// history), as plain text unless `escapes` keeps the SGR sequences. Nil
+    /// when the window is not bound or tmux fails. The Codex startup-prompt
+    /// watch reads this (CROW-1410); pre-expiry compaction reads it with
+    /// escapes to tell typed text from placeholder styling (CROW-1493).
+    public func captureVisibleText(id: UUID, escapes: Bool = false) -> String? {
         guard let windowIndex = bindings[id] else { return nil }
         do {
             let ctrl = try ensureRunningServer()
             return try ctrl.captureVisiblePane(
-                target: "\(ctrl.sessionName):\(windowIndex)", escapes: false)
+                target: "\(ctrl.sessionName):\(windowIndex)", escapes: escapes)
         } catch {
             reportIfTimeout(error)
             return nil

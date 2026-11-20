@@ -89,6 +89,19 @@ extension CrowDaemon {
         }
     }
 
+    /// Drive pre-expiry compaction (CROW-1493) once a minute. Delay-first: a
+    /// fresh daemon has no idle sessions worth compacting yet, and the
+    /// controller's window (idle ≥ `idleMinutes`, before the cache lifetime)
+    /// is ten minutes wide by default, so a minute's granularity is plenty.
+    static func startAutoCompactPoll(controller: AutoCompactController) {
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                await controller.tick()
+            }
+        }
+    }
+
     /// Keep the ungraded Manager rollups and the capture-status line moving
     /// while the daemon runs (#767). The desktop app refreshed these only at
     /// launch and on the manual Rebuild — fine for a process restarted daily,

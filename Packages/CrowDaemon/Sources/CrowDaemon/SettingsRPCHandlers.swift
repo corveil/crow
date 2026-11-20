@@ -210,7 +210,8 @@ func makeSettingsHandlers(
         // likewise un-gated on remote `/rpc` — see the ledger in
         // `RPCWebSocketHandler.localOnlyDenial`.
         //
-        // Writes the thirteen booleans only. The Automation tab also renders three
+        // Writes the automation booleans and the `contextCompaction` knobs
+        // (CROW-1493) only. The Automation tab also renders three
         // board-filter lists, but those are `AppConfig.defaults` fields owned by
         // `defaults-set` (CROW-810) — two writers for one field with two sets of
         // list semantics is exactly the drift the parity work exists to prevent.
@@ -247,13 +248,21 @@ func makeSettingsHandlers(
                 let autoRebase = try SettingsRPC.patchBool(
                     params, "auto_rebase_and_resolve_conflicts")
                 let autoReRequest = try SettingsRPC.patchBool(params, "auto_re_request_review")
+                let autoCompact = try SettingsRPC.patchBool(params, "auto_compact")
+                let compactMinTokens = try SettingsRPC.patchInt(
+                    params, "auto_compact_min_context_tokens",
+                    in: ContextCompactionSettings.minContextTokensRange)
+                let compactIdleMinutes = try SettingsRPC.patchInt(
+                    params, "auto_compact_idle_minutes", in: ContextCompactionSettings.idleMinutesRange)
 
                 let booleans = [
                     remoteControl, managerMode, reviewMode, coderViewMode, jobsMode, trailers,
                     autoCreate, autoMerge, reviewInProgress, changesRequested, failedChecks,
                     autoRebase, autoReRequest,
                 ]
-                guard booleans.contains(where: { $0 != nil }) else {
+                let numbers = [compactMinTokens, compactIdleMinutes]
+                guard booleans.contains(where: { $0 != nil }) || autoCompact != nil
+                    || numbers.contains(where: { $0 != nil }) else {
                     throw RPCError.invalidParams("Nothing to set — provide at least one field")
                 }
 
@@ -281,6 +290,9 @@ func makeSettingsHandlers(
                     if let autoReRequest {
                         config.autoRespond.autoReRequestReview = autoReRequest
                     }
+                    if let autoCompact { config.contextCompaction.autoCompact = autoCompact }
+                    if let compactMinTokens { config.contextCompaction.minContextTokens = compactMinTokens }
+                    if let compactIdleMinutes { config.contextCompaction.idleMinutes = compactIdleMinutes }
                     return (config, managerModeBefore != config.managerAutoPermissionMode)
                 }
                 return [

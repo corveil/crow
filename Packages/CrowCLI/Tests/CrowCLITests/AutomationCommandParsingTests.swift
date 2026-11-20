@@ -98,12 +98,25 @@ import Testing
     #expect(setParseError([]).contains("Nothing to set"))
 }
 
-/// Each of the three flag groups on its own has to satisfy the guard — a bug
+/// Each flag group on its own has to satisfy the guard — a bug
 /// here would reject a legitimate single-group edit.
 @Test func automationSetAcceptsAnySingleGroup() throws {
     _ = try AutomationSet.parse(["--jobs-auto-permission-mode", "true"])
     _ = try AutomationSet.parse(["--auto-merge-watcher-enabled", "true"])
     _ = try AutomationSet.parse(["--respond-to-failed-checks", "true"])
+    _ = try AutomationSet.parse(["--auto-compact-idle-minutes", "45"])
+}
+
+/// The compaction knobs are integers on the wire, and the boolean takes a literal
+/// like every other toggle here (CROW-1493).
+@Test func automationSetParsesTheCompactionGroup() throws {
+    let cmd = try AutomationSet.parse([
+        "--auto-compact", "true", "--auto-compact-min-context-tokens", "300000",
+    ])
+    #expect(cmd.params["auto_compact"] == .bool(true))
+    #expect(cmd.params["auto_compact_min_context_tokens"] == .int(300_000))
+    #expect(cmd.params["auto_compact_idle_minutes"] == nil)
+    #expect(throws: (any Error).self) { try AutomationSet.parse(["--auto-compact-idle-minutes", "soon"]) }
 }
 
 /// The three board-filter lists the Automation tab renders belong to
@@ -165,6 +178,9 @@ private func setParseError(_ args: [String]) -> String {
         "--respond-to-failed-checks", "true",
         "--auto-rebase-and-resolve-conflicts", "true",
         "--auto-re-request-review", "false",
+        "--auto-compact", "true",
+        "--auto-compact-min-context-tokens", "300000",
+        "--auto-compact-idle-minutes", "40",
     ])
 
     #expect(Set(cmd.params.keys) == Set(automationWireKeys))
@@ -196,4 +212,7 @@ let automationWireKeys = [
     "respond_to_failed_checks",
     "auto_rebase_and_resolve_conflicts",
     "auto_re_request_review",
+    "auto_compact",
+    "auto_compact_min_context_tokens",
+    "auto_compact_idle_minutes",
 ]

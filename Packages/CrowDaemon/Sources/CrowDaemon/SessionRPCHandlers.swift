@@ -100,7 +100,8 @@ func makeSessionHandlers(
             // there is no context, the ledger isn't read and rows carry no
             // `recording`.
             let recording = await RecordingStatusJSON.Context.load(devRoot: devRoot, config: config)
-            let items: [JSONValue] = await MainActor.run {
+            let largeContext = (config?.contextCompaction ?? ContextCompactionSettings()).effectiveMinContextTokens
+            let (rows, contextSources): ([[String: JSONValue]], [SessionContextReport.Source]) = await MainActor.run {
                 // One pass per poll. Newest open item wins when more than one
                 // Scratch points at the same Manager (Explore itself is 1:1;
                 // a later `todo link` is the one just attached).
@@ -109,7 +110,11 @@ func makeSessionHandlers(
                 // One tmux read per poll for every session's `agent_state`
                 // exit check (CROW-1475), not one per session.
                 let paneCommands = TerminalRouter.paneCurrentCommands()
-                return appState.sessions.map { session in
+                // Where each session's transcript is, for `context` below.
+                let contextSources = appState.sessions.compactMap {
+                    SessionContextReport.source(for: $0, appState: appState)
+                }
+                let rows = appState.sessions.map { session -> [String: JSONValue] in
                     // Board issue linked to this session (exact ticket URL, plus
                     // the Jira-key fallback). Also backs `labels` below.
                     let issue = appState.assignedIssue(for: session)
@@ -224,8 +229,20 @@ func makeSessionHandlers(
                     object.merge(
                         AgentStateReport.fields(for: session, appState: appState, paneCommands: paneCommands),
                         uniquingKeysWith: { _, new in new })
-                    return .object(object)
+                    return object
                 }
+                return (rows, contextSources)
+            }
+            // Context size (CROW-1493), the same object `get-session` returns.
+            // Read here, off the MainActor (#892); a session's transcript is
+            // re-parsed only when its size or mtime moved since the last poll.
+            let contexts = SessionContextReport.snapshots(for: contextSources)
+            let items: [JSONValue] = rows.map { row in
+                var object = row
+                let id = row["id"]?.stringValue.flatMap(UUID.init(uuidString:))
+                object["context"] = SessionContextReport.json(
+                    id.flatMap { contexts[$0] }, largeThreshold: largeContext)
+                return .object(object)
             }
             return ["sessions": .array(items)]
         },

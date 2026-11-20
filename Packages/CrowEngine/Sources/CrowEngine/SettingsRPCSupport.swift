@@ -72,6 +72,19 @@ public enum SettingsRPC {
         return hours
     }
 
+    /// An integer within `range`, for the bounded knobs (CROW-1493's
+    /// compaction threshold and idle window).
+    public static func patchInt(
+        _ params: [String: JSONValue], _ key: String, in range: ClosedRange<Int>
+    ) throws -> Int? {
+        guard let value = try patchInt(params, key) else { return nil }
+        guard range.contains(value) else {
+            throw RPCError.invalidParams(
+                "\(key) must be between \(range.lowerBound) and \(range.upperBound)")
+        }
+        return value
+    }
+
     private static func patchInt(_ params: [String: JSONValue], _ key: String) throws -> Int? {
         guard let value = params[key], value != .null else { return nil }
         guard let number = value.intValue else {
@@ -82,11 +95,11 @@ public enum SettingsRPC {
 
     // MARK: - Automation (CROW-812)
 
-    /// The Settings → Automation tab as one payload: the eight top-level
-    /// `AppConfig` booleans, the three `autoRespond` booleans, and the three
-    /// board-filter lists.
+    /// The Settings → Automation tab as one payload: the top-level `AppConfig`
+    /// booleans, the `autoRespond` booleans, the `contextCompaction` knobs
+    /// (CROW-1493), and the three board-filter lists.
     ///
-    /// `auto_respond` and `defaults` nest by *config-block* name, the same
+    /// `auto_respond`, `context_compaction` and `defaults` nest by *config-block* name, the same
     /// reasoning as `uiJSON`'s `sidebar`: the board-filter lists genuinely live
     /// under `AppConfig.defaults`, not at top level, and nesting keeps the wire
     /// shape honest about where a hand edit would go.
@@ -100,7 +113,7 @@ public enum SettingsRPC {
     /// `config_readable` follows `notifications-get`: `ConfigStore.loadConfig`
     /// returns nil both for "no config yet" (defaults really apply) and for
     /// "present but undecodable" (the defaults are a fiction). That matters more
-    /// here than for telemetry — six of these thirteen booleans default to `true`,
+    /// here than for telemetry — six of these booleans default to `true`,
     /// so a caller shown invented settings as fact would conclude automation is
     /// armed when the daemon can't read the file at all.
     public static func automationJSON(
@@ -123,6 +136,12 @@ public enum SettingsRPC {
                 "auto_rebase_and_resolve_conflicts":
                     .bool(config.autoRespond.autoRebaseAndResolveConflicts),
                 "auto_re_request_review": .bool(config.autoRespond.autoReRequestReview),
+            ]),
+            // Context size + pre-expiry `/compact` (CROW-1493).
+            "context_compaction": .object([
+                "auto_compact": .bool(config.contextCompaction.autoCompact),
+                "min_context_tokens": .int(config.contextCompaction.minContextTokens),
+                "idle_minutes": .int(config.contextCompaction.idleMinutes),
             ]),
             "defaults": .object([
                 "exclude_review_repos": stringArray(config.defaults.excludeReviewRepos),

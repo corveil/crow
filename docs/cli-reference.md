@@ -98,7 +98,7 @@ crow select-session --session <uuid>
 
 ### `crow list-sessions`
 
-Print all sessions. Each row includes `is_explore` (`true` when launched with Start Exploring / `crow:explore`) and `agent_conversations`, the same array `crow get-session` returns.
+Print all sessions. Each row includes `is_explore` (`true` when launched with Start Exploring / `crow:explore`), `agent_conversations` and `context`, the same values `crow get-session` returns.
 
 ```bash
 crow list-sessions
@@ -137,6 +137,8 @@ These are the **redacted** subset — a set flag and the non-secret base URL, ne
 `workspace_match` distinguishes the two lookups: work and job sessions match by worktree path, while review clones (which live under `crow-reviews/`) match by the PR's `owner/repo`. Those can land on **different workspaces for the same repo**, so a work session and a review of that repo's PR may use different gateways — see [configuration.md](configuration.md#which-gateway-applies). A `null` `workspace_name` with `gateway_set: false` means nothing claimed the session at all; a non-null name with `gateway_set: false` means the workspace claimed it and has no gateway.
 
 `agent_conversations` lists every conversation the session's agent has run, oldest first (CROW-1476): `[{"id":"…","agent_kind":"claude-code","started_at":"…","last_active_at":"…"}]`. `id` is the agent's own conversation id: a Claude Code session id (the transcript's file name), a Codex thread id, a Cursor chat id. It is the id a gateway's request log records from the request body. `started_at` and `last_active_at` are when Crow first and most recently saw a hook carrying it, to the minute; both are `null` for a conversation recorded before Crow stamped them. A `/clear`, a resume and an agent handoff each add a row. Work sessions recorded only their latest conversation before CROW-1476, so an older work session lists at most one.
+
+`context` is how much context the agent carries and whether its prompt cache has likely expired (CROW-1493), read from the latest model call in its transcript: `{"tokens":512004,"max_tokens":1000000,"model":"claude-opus-5-5","last_request_at":"…","idle_seconds":4210,"cache_ttl_seconds":3600,"cache_expired":true,"large":true,"compacted_at":null}`. `cache_expired: true` means the next message will likely re-write the whole context at the cache-write price. `large` compares `tokens` with `contextCompaction.minContextTokens`. It is `null` for a harness other than Claude Code or Codex, and until the agent's first hook reports its conversation id. Every field is described in [Context size and compaction](context-compaction.md).
 
 ### `crow find-session`
 
@@ -1201,7 +1203,7 @@ Settings → Automation: which sessions launch in auto permission mode, whether 
 
 The tab also renders three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos). Those are `AppConfig.defaults` fields and are written by [`crow defaults set`](#crow-defaults-get--set) — one writer, one set of list semantics. `crow automation get` echoes them read-only so the tab still reads as a whole from one call.
 
-Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these thirteen toggles default to on**, so a bare-flag design could never turn one off.
+Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these toggles default to on**, so a bare-flag design could never turn one off.
 
 ### `crow automation get | set`
 
@@ -1241,6 +1243,18 @@ crow automation set --manager-auto-permission-mode false && crow restart-manager
 | `--auto-rebase-and-resolve-conflicts`  | `false` | Rebase onto the base branch and `--force-with-lease` push          |
 | `--auto-re-request-review`             | `true`  | Re-request review once a changes-requested PR's fix has landed     |
 
+**Context compaction** (CROW-1493) — Crow types `/compact` into a large, idle Claude Code session before its prompt cache expires, so a later resume writes a small cache instead of rebuilding a large one. Compaction keeps a summary, not the conversation, so the agent loses detail. See [Context size and compaction](context-compaction.md).
+
+| Flag                                 | Default  | Description                                                          |
+| ------------------------------------ | -------- | -------------------------------------------------------------------- |
+| `--auto-compact`                     | `false`  | Compact idle, large sessions while their cache is still warm          |
+| `--auto-compact-min-context-tokens`  | `200000` | Context size that counts as large (10000–10000000)                    |
+| `--auto-compact-idle-minutes`        | `50`     | Minutes since the last model call before compacting (1–1440)          |
+
+```bash
+crow automation set --auto-compact true --auto-compact-idle-minutes 45
+```
+
 At least one flag from any group is required.
 
 Returns:
@@ -1261,6 +1275,11 @@ Returns:
       "respond_to_failed_checks": false,
       "auto_rebase_and_resolve_conflicts": false,
       "auto_re_request_review": true
+    },
+    "context_compaction": {
+      "auto_compact": false,
+      "min_context_tokens": 200000,
+      "idle_minutes": 50
     },
     "defaults": {
       "exclude_review_repos": ["corveil/*"],

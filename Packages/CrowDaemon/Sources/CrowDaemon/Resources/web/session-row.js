@@ -19,6 +19,48 @@ function activityIndicator(s) {
   }
 }
 
+// Context size for the sidebar (CROW-1493): `512k`, `1.2M`.
+function formatContextTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(n);
+}
+
+function formatIdle(seconds) {
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  return h < 48 ? h + 'h ' + (m % 60) + 'm' : Math.floor(h / 24) + 'd';
+}
+
+// The session's context size from `list-sessions` `context` (CROW-1493), or
+// null when the transcript gave none. Amber once it's past the large threshold
+// (`contextCompaction.minContextTokens`). A large context whose prompt cache has
+// likely expired also reads "cold" in the text itself, not just the tooltip:
+// the web UI is driven from a phone, where there is no hover.
+function contextBadge(s) {
+  const c = s.context;
+  if (!c || (c.tokens == null && !c.compacted_at)) return null;
+  const cold = c.large && c.cache_expired === true;
+  const text = c.tokens == null ? 'compacted' : formatContextTokens(c.tokens) + (cold ? ' · cold' : '');
+  const b = el('span', 'ctx-badge' + (c.large ? ' ctx-large' : '') + (cold ? ' ctx-cold' : ''), text);
+  const lines = [];
+  if (c.tokens != null) {
+    lines.push('Context: ' + c.tokens.toLocaleString() + ' tokens'
+      + (c.max_tokens ? ' of ' + c.max_tokens.toLocaleString() : ''));
+  }
+  if (c.compacted_at) lines.push('Compacted, nothing sent since.');
+  if (c.idle_seconds != null) lines.push('Last model call ' + formatIdle(c.idle_seconds) + ' ago.');
+  if (c.cache_expired === true) {
+    lines.push('Prompt cache likely expired: the next message re-writes the whole context instead of reading it.');
+  } else if (c.cache_expired === false && c.cache_ttl_seconds && c.idle_seconds != null) {
+    lines.push('Prompt cache warm for about ' + formatIdle(Math.max(0, c.cache_ttl_seconds - c.idle_seconds)) + ' more.');
+  }
+  b.title = lines.join('\n');
+  b.setAttribute('aria-label', lines.join(' '));
+  return b;
+}
+
 function sessionRow(s) {
   const multiSel = selectionMode && selectedSessionIDs.has(s.id);
   const row = el('div', 'session-row status-accent'
@@ -73,6 +115,9 @@ function sessionRow(s) {
   // at-a-glance part.
   const rec = recordingGlyphs(s);
   if (rec) trail.appendChild(rec);
+  // Context size (CROW-1493). On the top line so a Manager card stays one line.
+  const ctxBadge = contextBadge(s);
+  if (ctxBadge) trail.appendChild(ctxBadge);
   if (isGridPinned(s.id)) {
     const pinMark = icon('pin', 11);
     pinMark.classList.add('row-pin');

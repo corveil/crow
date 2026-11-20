@@ -261,6 +261,9 @@ import CrowPersistence
             "respond_to_failed_checks": .bool(true),
             "auto_rebase_and_resolve_conflicts": .bool(true),
             "auto_re_request_review": .bool(false),
+            "auto_compact": .bool(true),
+            "auto_compact_min_context_tokens": .int(300_000),
+            "auto_compact_idle_minutes": .int(40),
         ], devRoot: devRoot)
 
         #expect(resp.error == nil)
@@ -281,6 +284,9 @@ import CrowPersistence
         #expect(onDisk.autoRespond.respondToFailedChecks == true)
         #expect(onDisk.autoRespond.autoRebaseAndResolveConflicts == true)
         #expect(onDisk.autoRespond.autoReRequestReview == false)
+        #expect(onDisk.contextCompaction.autoCompact == true)
+        #expect(onDisk.contextCompaction.minContextTokens == 300_000)
+        #expect(onDisk.contextCompaction.idleMinutes == 40)
         // The board-filter lists are `crow defaults`' to write; a stray key here
         // must not touch them.
         #expect(onDisk.defaults.excludeReviewRepos == ["old/one"])
