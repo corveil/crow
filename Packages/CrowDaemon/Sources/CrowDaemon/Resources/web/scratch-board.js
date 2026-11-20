@@ -3,6 +3,9 @@
 
 // ===== Scratch (CROW-1231 / CROW-1233) =====
 let scratchShowClosed = false;
+// Friction filter (CROW-1477): only items of kind `friction`, the tool
+// friction agents log in-flow, apart from feature ideas.
+let scratchFrictionOnly = false;
 // Survives refreshBoard so Ticket cannot re-fire while the Manager is still
 // attaching the issue. Cleared once a ticket URL lands, or once the item is
 // parked or dropped (a diagnosis that isn't a ticket ends the dispatch, and the
@@ -91,6 +94,15 @@ function renderScratchBoard(root) {
     scratchShowClosed ? 'Hide done' : 'Show done');
   toggle.onclick = () => { scratchShowClosed = !scratchShowClosed; renderBoard(); };
   head.appendChild(toggle);
+  const allTodos = (boardData.scratch && boardData.scratch.todos) || [];
+  const frictionOpen = allTodos.filter((t) => t.kind === 'friction' && scratchItemOpen(t)).length;
+  const friction = el('button', 'action-btn' + (scratchFrictionOnly ? ' nav-selecting' : ''),
+    'Friction (' + frictionOpen + ')');
+  friction.title = scratchFrictionOnly
+    ? 'Showing only agent friction — click to show everything'
+    : 'Show only the tool friction agents logged';
+  friction.onclick = () => { scratchFrictionOnly = !scratchFrictionOnly; renderBoard(); };
+  head.appendChild(friction);
   root.appendChild(head);
 
   const capture = el('form', 'scratch-capture');
@@ -147,10 +159,14 @@ function renderScratchBoard(root) {
 
   const data = boardData.scratch;
   const todos = (data && data.todos) || [];
-  const visible = todos.filter((t) => scratchShowClosed || (t.state !== 'done' && t.state !== 'dropped'));
+  const visible = todos.filter((t) => (scratchShowClosed || scratchItemOpen(t))
+    && (!scratchFrictionOnly || t.kind === 'friction'));
   if (!visible.length) {
-    root.appendChild(el('div', 'board-note',
-      todos.length ? 'Nothing open — capture one above, or Show done.' : 'Scratch is empty. Capture one above. Explore opens a Manager to look; Ticket opens one to file.'));
+    let note;
+    if (scratchFrictionOnly) note = 'No agent friction logged. Agents add it with `crow todo add --kind friction`.';
+    else if (todos.length) note = 'Nothing open — capture one above, or Show done.';
+    else note = 'Scratch is empty. Capture one above. Explore opens a Manager to look; Ticket opens one to file.';
+    root.appendChild(el('div', 'board-note', note));
     return;
   }
   const list = el('div', 'scratch-list');
@@ -175,6 +191,13 @@ function scratchRow(item) {
 
   const chips = el('div', 'scratch-chips');
   chips.appendChild(scratchStateChip(item.state));
+  if (item.kind === 'friction') {
+    const kind = el('span', 'status-pill scratch-friction', 'friction');
+    kind.title = 'Tool friction an agent logged while working';
+    kind.style.color = 'var(--yellow)';
+    kind.style.borderColor = 'var(--yellow)';
+    chips.appendChild(kind);
+  }
   if (item.workspace) {
     const ws = el('span', 'status-pill scratch-workspace', item.workspace);
     ws.title = 'Workspace';
@@ -287,6 +310,10 @@ function startScratchTitleEdit(titleEl, item) {
   input.onblur = () => finish(true);
   input.onclick = (e) => e.stopPropagation();
   input.ondblclick = (e) => e.stopPropagation();
+}
+
+function scratchItemOpen(item) {
+  return item.state !== 'done' && item.state !== 'dropped';
 }
 
 function scratchAction(label, onClick) {

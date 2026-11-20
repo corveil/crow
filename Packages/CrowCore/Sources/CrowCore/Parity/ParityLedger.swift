@@ -485,6 +485,10 @@ public enum ParityLedger {
         .write("todo-ticket", cli: "todo ticket"),
         .write("todo-work", cli: "todo work"),
         .write("todo-talk", cli: "todo talk"),
+        // Agent friction (CROW-1477): Scratch items of kind `friction`, grouped
+        // and counted, plus Corveil's friction report once corveil/corveil#5601
+        // publishes one. A read over Scratch data, so it shares `todos:read`.
+        .read("get-friction-report", cli: "get-friction-report", mcp: .read(scope: .todosRead)),
 
         // Agent hooks — emitted by agent hook processes over the 0600 Unix
         // socket only; local-only on `/rpc` (RPCWebSocketHandler.localOnlyDenial,

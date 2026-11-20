@@ -59,7 +59,7 @@ public enum MCPToolCatalog {
     /// clients can cache the list and prompt caches stay warm.
     public static let all: [MCPTool] = [
         boardSummary, listSessions, getSession, listStuckSessions, listTickets, listReviews,
-        listTodos, getTodo,
+        listTodos, getTodo, getFrictionReport,
     ]
 
     /// The tools a caller holding `scopes` may see and call.
@@ -366,8 +366,10 @@ public enum MCPToolCatalog {
         name: "list_todos",
         title: "List Crow Scratch items",
         description: """
-            Items captured in Crow Scratch. Filter by state or tag. \
-            Each row includes its provenance trail (explore session, filed ticket, PR).
+            Items captured in Crow Scratch. Filter by state, tag or kind \
+            (`idea`, or `friction` for tool friction agents logged in-flow). \
+            Each row includes its provenance trail (explore session, filed ticket, PR). \
+            `kind_counts` counts each kind under the same state/tag filter.
             """,
         inputSchema: .object([
             "type": .string("object"),
@@ -381,6 +383,11 @@ public enum MCPToolCatalog {
                     "type": .string("string"),
                     "description": .string("Only items carrying this tag."),
                 ]),
+                "kind": .object([
+                    "type": .string("string"),
+                    "enum": .array(todoKinds.map { .string($0) }),
+                    "description": .string("Only items of this kind."),
+                ]),
                 "limit": limitSchema(default: 50),
             ]),
             "additionalProperties": .bool(false),
@@ -390,11 +397,13 @@ public enum MCPToolCatalog {
         run: { arguments, invoke in
             let state = try optionalEnum(arguments, "state", allowed: todoStates)
             let tag = arguments["tag"]?.stringValue
+            let kind = try optionalEnum(arguments, "kind", allowed: todoKinds)
             let limit = try limit(from: arguments, default: 50)
 
             var params: [String: JSONValue] = [:]
             if let state { params["state"] = .string(state) }
             if let tag, !tag.isEmpty { params["tag"] = .string(tag) }
+            if let kind { params["kind"] = .string(kind) }
             let result = try await invoke("todo-list", params)
             let todos = (result["todos"]?.arrayValue ?? []).compactMap(\.objectValue)
             let trimmed = todos.prefix(limit).map { JSONValue.object(pick($0, todoFields)) }
@@ -402,6 +411,7 @@ public enum MCPToolCatalog {
                 "todos": .array(Array(trimmed)),
                 "returned": .int(trimmed.count),
                 "total_matching": .int(todos.count),
+                "kind_counts": result["kind_counts"] ?? .object([:]),
             ])
         })
 
@@ -437,6 +447,54 @@ public enum MCPToolCatalog {
             return .object(result)
         })
 
+    static let getFrictionReport = MCPTool(
+        name: "get_friction_report",
+        title: "Get the agent friction report",
+        description: """
+            Tool friction agents hit while working: missing CLI verbs or flags, \
+            stale instructions, poll loops, sandbox retries. `local` groups the \
+            Scratch items of kind `friction` by what happened, most repeated first, \
+            with counts and todo ids. `corveil` is Corveil's transcript-derived \
+            report; while that API is unpublished it is `available: false` with \
+            the reason and the tracking issue.
+            """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "properties": .object([
+                "limit": .object([
+                    "type": .string("integer"),
+                    "minimum": .int(1),
+                    "maximum": .int(100),
+                    "default": .int(10),
+                    "description": .string("Most groups to return."),
+                ]),
+                "include_closed": .object([
+                    "type": .string("boolean"),
+                    "default": .bool(false),
+                    "description": .string("Also group friction items already done or dropped."),
+                ]),
+            ]),
+            "additionalProperties": .bool(false),
+        ]),
+        scope: .todosRead,
+        backingMethods: ["get-friction-report"],
+        run: { arguments, invoke in
+            var params: [String: JSONValue] = [:]
+            if let raw = arguments["limit"], raw != .null {
+                guard let value = raw.intValue, value >= 1, value <= 100 else {
+                    throw MCPToolInputError("limit must be an integer from 1 to 100")
+                }
+                params["limit"] = .int(value)
+            }
+            if let raw = arguments["include_closed"], raw != .null {
+                guard let flag = raw.boolValue else {
+                    throw MCPToolInputError("include_closed must be a boolean")
+                }
+                params["include_closed"] = .bool(flag)
+            }
+            return .object(try await invoke("get-friction-report", params))
+        })
+
     // MARK: - Shared vocabulary
 
     /// Mirrors `SessionStatus` / `SessionKind`. Restated rather than derived from
@@ -451,6 +509,8 @@ public enum MCPToolCatalog {
     static let todoStates = [
         "captured", "exploring", "ticketed", "working", "done", "parked", "dropped",
     ]
+    /// Mirrors `TodoKind` (CROW-1477).
+    static let todoKinds = ["idea", "friction"]
 
     /// The subset of a `list-sessions` row worth handing a model. Drops the
     /// browser-only rendering fields (`agent_display_name`, `ticket_badge`,
@@ -471,7 +531,7 @@ public enum MCPToolCatalog {
     ]
 
     static let todoFields = [
-        "id", "text", "note", "tags", "priority", "state", "links", "workspace", "agent_kind",
+        "id", "text", "note", "tags", "priority", "state", "kind", "links", "workspace", "agent_kind",
         "created_at", "updated_at",
     ]
 

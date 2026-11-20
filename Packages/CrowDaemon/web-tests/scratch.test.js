@@ -14,6 +14,7 @@ const epilogue = `
   scratchOpenCount(){ return scratchOpenCount(); },
   get scratchTicketDispatched(){ return scratchTicketDispatched; },
   set scratchShowClosed(v){ scratchShowClosed = v; },
+  set scratchFrictionOnly(v){ scratchFrictionOnly = v; },
   resetScratchPickers(){ scratchPickers = null; scratchPickersLoading = null; scratchCaptureAgent = null; scratchCaptureWorkspace = null; },
 };
 `;
@@ -139,6 +140,28 @@ for (const state of ['parked', 'dropped']) {
   check(`${state} clears the remembered dispatch`, !T.scratchTicketDispatched.has(filingItem.id));
 }
 T.scratchShowClosed = false;
+
+// CROW-1477: friction items carry a pill, and the Friction toggle counts the
+// open ones and filters to them.
+{
+  const friction = { ...item, id: 'ffffffff-ffff-ffff-ffff-ffffffffffff', text: '[friction] no --wait', kind: 'friction' };
+  const closedFriction = { ...friction, id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', state: 'done' };
+  T.boardData.scratch = { todos: [{ ...item, kind: 'idea' }, friction, closedFriction] };
+  T.renderBoard();
+  const toggle = [...board.querySelectorAll('button')].find((b) => /^Friction \(/.test(b.textContent));
+  check('Friction toggle counts open friction items', toggle && toggle.textContent === 'Friction (1)');
+  check('friction rows carry a friction pill', board.querySelectorAll('.scratch-friction').length === 1);
+  check('both open items listed without the filter', board.querySelectorAll('.scratch-row').length === 2);
+  T.scratchFrictionOnly = true;
+  T.renderBoard();
+  const rows = [...board.querySelectorAll('.scratch-row .card-title')].map((n) => n.textContent);
+  check('Friction filter shows only friction', rows.length === 1 && rows[0] === '[friction] no --wait');
+  T.boardData.scratch = { todos: [item] };
+  T.renderBoard();
+  check('empty friction filter explains how agents log friction',
+    /crow todo add --kind friction/.test(board.textContent));
+  T.scratchFrictionOnly = false;
+}
 
 T.boardData.scratch = { todos: [item] };
 T.renderBoard();

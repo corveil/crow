@@ -5,19 +5,30 @@ import CrowPersistence
 import Foundation
 
 /// Scratch list (CROW-1231). Mutations go through the injected `JSONStore`
-/// via `TodoRepository` — never a throwaway store.
+/// via `TodoRepository` — never a throwaway store. `get-friction-report`
+/// (CROW-1477) lives here too: its local half is the Scratch friction items,
+/// and `frictionSource` is the seam for Corveil's report.
 func makeTodoHandlers(
     appState: AppState,
     store: JSONStore,
     sessionService: SessionService?,
-    devRoot: String
+    devRoot: String,
+    frictionSource: any CorveilFrictionReportSource = PendingCorveilFrictionReportSource()
 ) -> [String: CommandRouter.Handler] {
     let repo = TodoRepository(store: store)
     let handlers: [String: CommandRouter.Handler] = [
         "todo-list": { params in
             try await mapRPCError {
-                let items = try TodoRPC.filtered(repo.all(), params: params)
-                return ["todos": .array(items.map { TodoRPC.todoJSON($0) })]
+                try TodoRPC.listResult(repo.all(), params: params)
+            }
+        },
+        "get-friction-report": { params in
+            try await mapRPCError {
+                // Validate before the (future) network call.
+                _ = try FrictionRPC.decodeLimit(params)
+                _ = try FrictionRPC.decodeIncludeClosed(params)
+                let corveil = await frictionSource.fetch()
+                return try FrictionRPC.report(todos: repo.all(), corveil: corveil, params: params)
             }
         },
         "todo-get": { params in
@@ -38,11 +49,13 @@ func makeTodoHandlers(
                 let target = try TodoRPC.captureTarget(
                     params: params, creator: creator,
                     config: ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
+                let text = try TodoRPC.decodeText(params["text"])
                 let item = TodoItem(
-                    text: try TodoRPC.decodeText(params["text"]),
+                    text: text,
                     note: TodoRPC.decodeNote(params["note"]),
                     tags: try TodoRPC.decodeTags(params["tags"]),
                     priority: try TodoRPC.decodePriority(params["priority"]),
+                    kind: try TodoRPC.captureKind(params: params, text: text),
                     workspace: target.workspace,
                     agentKind: target.agentKind
                 )

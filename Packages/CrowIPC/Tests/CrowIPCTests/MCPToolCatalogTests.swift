@@ -197,3 +197,63 @@ struct MCPToolArgumentTests {
         #expect(picked["b"] == nil)
     }
 }
+
+/// Records the RPC calls a tool makes, so a test can check the params it forwards.
+private actor InvokeLog {
+    var calls: [(String, [String: JSONValue])] = []
+    func record(_ method: String, _ params: [String: JSONValue]) { calls.append((method, params)) }
+}
+
+@Suite("MCP friction tools (CROW-1477)")
+struct MCPFrictionToolTests {
+
+    @Test("list_todos forwards kind and passes kind_counts through")
+    func listTodosKind() async throws {
+        let log = InvokeLog()
+        let result = try await MCPToolCatalog.listTodos.run(["kind": .string("friction")]) { method, params in
+            await log.record(method, params)
+            return [
+                "todos": .array([.object(["id": .string("a"), "kind": .string("friction")])]),
+                "kind_counts": .object(["idea": .int(3), "friction": .int(1)]),
+            ]
+        }
+        let calls = await log.calls
+        #expect(calls.count == 1)
+        #expect(calls.first?.0 == "todo-list")
+        #expect(calls.first?.1["kind"] == .string("friction"))
+        let object = try #require(result.objectValue)
+        #expect(object["kind_counts"]?.objectValue?["friction"] == .int(1))
+        let row = try #require(object["todos"]?.arrayValue?.first?.objectValue)
+        #expect(row["kind"] == .string("friction"))
+    }
+
+    @Test("list_todos rejects an unknown kind")
+    func listTodosBadKind() async {
+        await #expect(throws: MCPToolInputError.self) {
+            _ = try await MCPToolCatalog.listTodos.run(["kind": .string("bug")]) { _, _ in [:] }
+        }
+    }
+
+    @Test("get_friction_report forwards limit and include_closed and validates them")
+    func frictionReport() async throws {
+        let log = InvokeLog()
+        let result = try await MCPToolCatalog.getFrictionReport.run(
+            ["limit": .int(5), "include_closed": .bool(true)]
+        ) { method, params in
+            await log.record(method, params)
+            return ["local": .object([:]), "corveil": .object(["available": .bool(false)])]
+        }
+        let calls = await log.calls
+        #expect(calls.first?.0 == "get-friction-report")
+        #expect(calls.first?.1["limit"] == .int(5))
+        #expect(calls.first?.1["include_closed"] == .bool(true))
+        #expect(result.objectValue?["corveil"]?.objectValue?["available"] == .bool(false))
+
+        await #expect(throws: MCPToolInputError.self) {
+            _ = try await MCPToolCatalog.getFrictionReport.run(["limit": .int(0)]) { _, _ in [:] }
+        }
+        await #expect(throws: MCPToolInputError.self) {
+            _ = try await MCPToolCatalog.getFrictionReport.run(["include_closed": .string("yes")]) { _, _ in [:] }
+        }
+    }
+}
