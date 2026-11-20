@@ -132,35 +132,66 @@ struct ManagerWorkspaceTagTests {
         #expect(match.workspaceID == config.workspaces[0].id)
         #expect(match.workspaceName == "Corveil")
         #expect(match.gateway == Self.corveilGateway)
-        #expect(match.gatewayFromWorkspace)
     }
 
-    /// The fallback the ticket specifies: still reported as the workspace (that
-    /// is what `get-session` is asked about), but launching with the Manager
-    /// gateway.
-    @Test func taggedManagerWithoutWorkspaceGatewayFallsBackToManagerGateway() {
+    /// CROW-1478: a workspace with no gateway is how an operator keeps traffic
+    /// out of every Corveil org, so a Manager tagged with it gets no gateway —
+    /// never the Manager gateway's org key. Still reported as the workspace.
+    @Test func taggedManagerWithoutWorkspaceGatewayGetsNoGateway() {
         let config = config()
         let match = ManagerSessionController.managerGatewayMatch(
             workspaceTag: config.workspaces[1].id, config: config)
         #expect(match.source == .workspace)
+        #expect(match.workspaceID == config.workspaces[1].id)
         #expect(match.workspaceName == "Radius")
-        #expect(match.gateway == Self.managerGateway)
-        #expect(!match.gatewayFromWorkspace)
+        #expect(match.gateway == nil)
     }
 
-    /// An empty gateway block is "none", the same test the launch path applies.
-    @Test func emptyWorkspaceGatewayCountsAsNone() {
+    /// An empty gateway block is "none" too, and is reported as nil so
+    /// `get-session` says `gateway_base_url: null`, not a blank URL.
+    @Test func taggedManagerWithEmptyWorkspaceGatewayGetsNoGateway() {
         var config = config()
         config.workspaces[1].gateway = WorkspaceGateway(baseURL: " ", customHeaders: [:])
         let match = ManagerSessionController.managerGatewayMatch(
             workspaceTag: config.workspaces[1].id, config: config)
-        #expect(match.gateway == Self.managerGateway)
+        #expect(match.source == .workspace)
+        #expect(match.workspaceName == "Radius")
+        #expect(match.gateway == nil)
     }
 
-    @Test func tagForRemovedWorkspaceFallsBackToUntagged() {
-        let match = ManagerSessionController.managerGatewayMatch(workspaceTag: UUID(), config: config())
+    /// A tag whose workspace was removed fails closed: Crow can't know whether
+    /// the operator wanted that traffic in the Manager gateway's org.
+    @Test func tagForRemovedWorkspaceGetsNoGateway() {
+        let tag = UUID()
+        let match = ManagerSessionController.managerGatewayMatch(workspaceTag: tag, config: config())
+        #expect(match.source == .workspace)
+        #expect(match.workspaceID == tag)
+        #expect(match.workspaceName == nil)
+        #expect(match.gateway == nil)
+    }
+
+    /// The primary Manager and untagged extras from before CROW-1386 keep
+    /// the Manager gateway, even with no Manager gateway set.
+    @Test func untaggedManagerKeepsManagerGatewayWhenItIsUnset() {
+        var config = config()
+        config.managerGateway = nil
+        let match = ManagerSessionController.managerGatewayMatch(workspaceTag: nil, config: config)
         #expect(match.source == .manager)
-        #expect(match.gateway == Self.managerGateway)
+        #expect(match.gateway == nil)
+    }
+
+    /// The Codex candidate and the recording verifier read the same rule, so
+    /// a tagged Manager in a gateway-less workspace is neither routed nor
+    /// expected at a gateway.
+    @Test func verifierResolvesNoGatewayForTaggedManagerWithoutOne() {
+        let config = config()
+        var session = Session(name: "Manager 2", kind: .manager, workspaceID: config.workspaces[1].id)
+        #expect(GatewayTrafficVerifier.resolvedGateway(
+            session: session, worktreePath: nil, prLinks: [], devRoot: "/dev", config: config) == nil)
+        session.workspaceID = config.workspaces[0].id
+        #expect(GatewayTrafficVerifier.resolvedGateway(
+            session: session, worktreePath: nil, prLinks: [], devRoot: "/dev", config: config)
+            == Self.corveilGateway)
     }
 
     /// The raw value is API (`get-session`'s `workspace_match`).

@@ -207,9 +207,10 @@ public struct CreateManager: ParsableCommand {
         abstract: "Create an additional Manager session",
         discussion: """
         --workspace tags the new Manager with a workspace for its whole life: it \
-        launches with that workspace's AI gateway (falling back to the Manager \
-        gateway when the workspace has none), ships its transcripts when the \
-        workspace has session-log upload on, and starts with the workspace's \
+        launches with that workspace's AI gateway (and with none when the \
+        workspace has none; it never uses the Manager gateway), ships its \
+        transcripts when the workspace has session-log upload on, and starts \
+        with the workspace's \
         provider, repos and custom instructions. Every extra Manager needs one. \
         Omitted, it comes from the tagged Manager this runs in ($CROW_SESSION_ID), \
         then `defaults.managerWorkspace` (`crow defaults set --manager-workspace`); \

@@ -7,9 +7,11 @@ import CrowCore
 ///
 /// Gateway selection is Claude's rule, unchanged. A worker session takes the
 /// gateway of the workspace that claims it (``SessionService/workspaceGatewayMatch(for:)``,
-/// path first, then PR repo slug). A Manager takes its tagged workspace's
-/// gateway, falling back to `managerGateway` (``SessionService/managerGatewayMatch(for:)``).
-/// Only the *shape* differs. See ``CodexGatewayArgs``.
+/// path first, then PR repo slug). A tagged Manager takes its workspace's
+/// gateway, and is not routed when that workspace has none; only the primary
+/// and untagged Managers use `managerGateway` (CROW-1478,
+/// ``SessionService/managerGatewayMatch(for:)``). Only the *shape* differs.
+/// See ``CodexGatewayArgs``.
 ///
 /// The work is split in two so the key never reaches a persisted or
 /// transported string:

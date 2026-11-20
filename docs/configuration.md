@@ -222,7 +222,7 @@ crow gateway get --workspace corveil        # → "codex_upstream": "auto"
 - **Upstream** — `auto` reads how Codex is signed in (`$CODEX_HOME/auth.json`): ChatGPT → `chatgpt_codex`, API key → `openai_api`, unknown → `chatgpt_codex`. Pin it with `chatgpt_codex` / `openai_api`. `--codex-upstream off` stops routing.
 - **Why opt-in** — `chatgpt_codex` forwards your ChatGPT subscription token, which OpenAI does not document; Corveil asks for an org banner before customers enable it.
 - **Requirements** — the gateway must carry an `x-citadel-api-key` (or `X-Corveil-Key`) header; any other gateway is not a Corveil gateway and Codex is not routed. A base URL with shell-special characters is also refused (logged).
-- **Which gateway** — the same rules as Claude, below; a Codex Manager uses its tagged workspace's gateway, else `managerGateway`.
+- **Which gateway** — the same rules as Claude, below; a tagged Codex Manager uses its workspace's gateway and isn't routed when that workspace has none. Only the primary and untagged Managers use `managerGateway`.
 - **The key** — never in argv, a stored terminal command, `config.toml`, or `settings.local.json`: Crow types `export CROW_CORVEIL_GATEWAY_KEY='…' && ` into the pane right before the command. `op://` values are resolved at that moment.
 - **Restarts after toggling** — Codex threads belong to the provider they were recorded under (`crow-corveil` when routed). `resume --last` only finds threads recorded under the current provider, so the first restart of a Codex work session after you turn routing on (or off) opens a fresh thread. A Codex Manager resumes its thread by id only when that thread was recorded under the provider this launch uses; otherwise it starts a fresh thread (Codex 0.166+ refuses a cross-provider resume and would drop the pane to a shell). The same applies to a thread you started by hand in the Manager pane with your own provider.
 - **Observability** — routed requests appear in Corveil's request log (`corveil control observability logs-list`, path `/v1/responses`, `upstream: chatgpt_codex|openai_api`). Corveil's `sessions-list` currently derives gateway sessions for Claude Code only.
@@ -282,7 +282,7 @@ Since CROW-891 this also applies to **review clones**, which contain code from t
 
 ### Manager gateway
 
-The Manager session sits at the dev root and isn't bound to a single workspace, so it has its **own** top-level gateway rather than inheriting any one workspace's:
+The primary Manager sits at the dev root and isn't bound to a single workspace, so it has its **own** top-level gateway rather than inheriting any one workspace's:
 
 ```jsonc
 {
@@ -294,6 +294,14 @@ The Manager session sits at the dev root and isn't bound to a single workspace, 
 ```
 
 Same shape, same secret-storage rules, same two-way injection (written to `{devRoot}/.claude/settings.local.json`). Configure it under **Settings → Automation → Manager AI Gateway**. Takes effect on the next app launch.
+
+**It covers the primary Manager and untagged extra Managers only.** An extra Manager tagged with a workspace (`crow create-manager --workspace`) takes that workspace's gateway, and **no gateway** when the workspace has none or the workspace was removed, exactly like a work session in it (CROW-1478). It never falls back to `managerGateway`, so a workspace with no gateway keeps its Managers' traffic out of every Corveil org. To route a workspace's Managers through an org, set that workspace's gateway. The launch log says which applied:
+
+```
+[SessionService] Manager gateway for workspace tag <uuid>: workspace 'Personal' has no gateway; ANTHROPIC_* will be unset
+```
+
+In the web Settings, the org picker for both the Manager gateway and a workspace's gateway has an **Off** choice: no gateway. A gateway with nothing stored shows **Off**; an org-derived gateway opens on its org, named in the status line (`Routing through Corveil org "Acme" (https://corveil.io)`), because `get-config` reports which org each stored gateway was derived from (`gateway_orgs`, org id and name only).
 
 ## Corveil connection (first-class)
 

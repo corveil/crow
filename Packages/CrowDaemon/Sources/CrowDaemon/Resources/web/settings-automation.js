@@ -36,6 +36,11 @@
       'Passes --permission-mode auto so a kicked-off code review runs its review flow unattended instead of coming up in plan mode. On by default.'));
 
     body.appendChild(S.group('Manager AI gateway'));
+    // Which Managers this covers (CROW-1478): a Manager tagged with a workspace
+    // uses that workspace's gateway, or none, never this one.
+    body.appendChild(el('div', 'st-help',
+      'Used by the primary Manager and by untagged Managers. A Manager in a workspace uses that '
+      + 'workspace\'s AI gateway, or none when the workspace has none.'));
     if (!S.isLocal) {
       body.appendChild(S.readonlyNote((S.cfg.managerGateway && S.cfg.managerGateway.baseURL
         ? 'Manager gateway: ' + S.cfg.managerGateway.baseURL + '. '
@@ -58,6 +63,9 @@
           target: 'manager',
           current: S.cfg.managerGateway || null,
           postOrg: (orgId) => S.postConfig('/config/manager-gateway', { orgId }),
+          // Off (CROW-1478) is the manual editor's clear.
+          clear: () => applyManual(null),
+          offText: 'Off: the primary Manager does not route through any AI gateway.',
           setGateway: (g) => { S.cfg.managerGateway = g; },
           manual,
         }));

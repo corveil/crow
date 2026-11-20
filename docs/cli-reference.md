@@ -118,7 +118,7 @@ It also reports which gateway the session launches with, so a rejected credentia
 | ------------------ | ----------------------------------------------------------------------------- |
 | `workspace_id`     | The workspace claiming this session, or `null`                                 |
 | `workspace_name`   | Its name, or `null`                                                            |
-| `workspace_match`  | How it was claimed: `worktree_path`, `repo_slug`, or `manager`                 |
+| `workspace_match`  | How it was claimed: `worktree_path`, `repo_slug`, `manager`, or `workspace` (a tagged Manager) |
 | `gateway_set`      | Whether that workspace has a gateway configured                                |
 | `gateway_base_url` | The gateway's base URL, or `null`                                              |
 
@@ -2097,11 +2097,11 @@ Returns `{"session_id": "...", "name": "...", "workspace_id": "...", "workspace_
 
 **Workspace tag (CROW-1382).** A tagged Manager:
 
-- launches with its workspace's AI gateway, or `managerGateway` when that workspace has none — including after a reboot resume and an agent handoff;
+- launches with its workspace's AI gateway, or with **no** gateway when that workspace has none (`ANTHROPIC_*` unset, like a work session there) — including after a reboot resume and an agent handoff. It never uses `managerGateway`, so a workspace without a gateway keeps its Managers out of every Corveil org too (CROW-1478). A tag whose workspace was removed also gets no gateway;
 - ships its transcripts when the workspace has `--upload-session-logs` on, through that workspace's gateway. Each harness conversation is a separate upload keyed by its conversation id, so a resumed or `/clear`ed Manager ships its new conversation too. The primary Manager and pre-CROW-1386 untagged ones never ship;
 - starts with a brief naming the workspace's provider, repos and `customInstructions`, so `/crow-create-ticket` knows where to file.
 
-`crow get-session` reports a tagged Manager as `workspace_match: "workspace"` with its `workspace_id`; `list-sessions` carries `manager_workspace_id` / `manager_workspace_name`. The tag is set at creation only — there is no re-tag verb — and the primary Manager is never tagged.
+`crow get-session` reports a tagged Manager as `workspace_match: "workspace"` with its `workspace_id`, and `gateway_set: false` / `gateway_base_url: null` when its workspace has no gateway (`workspace_name` is `null` when the workspace was removed); `list-sessions` carries `manager_workspace_id` / `manager_workspace_name`. The tag is set at creation only — there is no re-tag verb — and the primary Manager is never tagged.
 
 `--agent` is used **as given**. `AgentKind` is an open `RawRepresentable` struct, so any non-empty string parses and an unrecognized kind is not rejected — a typo like `claude_code` stamps the Manager with a kind no agent is registered for (the terminal then launches with the registry's default agent, but the session record keeps the bogus kind). Only **omitting** `--agent` falls back to the configured Manager default. Same open-kind model as [`crow handoff-agent`](#crow-handoff-agent).
 

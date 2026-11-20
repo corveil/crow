@@ -161,6 +161,11 @@ func makeSnapshotHandlers(
                 // Computed here (not off `sessionService`) so it's independent of
                 // tmux presence (CROW-749).
                 "vs_code_available": .bool(SessionService.findVSCodeBinary() != nil),
+                // Which Corveil org each stored gateway belongs to (CROW-1478),
+                // so the Settings org picker can select it on every open. The
+                // stripped config can't say: the key is blanked and every org
+                // shares the base URL. Org id and name only.
+                "gateway_orgs": gatewayOrgsJSON(config),
             ]
         },
         // Non-secret settings write. `defaults.binaries` is held to the same
@@ -261,6 +266,36 @@ func makeSnapshotHandlers(
 
 /// Expand a wizard-supplied `dev_root`: leading `~` → home; relative paths
 /// resolve under home. Absolute paths pass through unchanged (CROW-605).
+/// `get-config`'s `gateway_orgs` (CROW-1478): the Corveil org each stored
+/// gateway was derived from, per ``CorveilGatewayMigration/managedOrgKey(for:config:)``
+/// — the same match `crow corveil link` and the recording indicator use.
+///
+/// ```
+/// { "manager": {"org_id", "org_name"},          // only when org-derived
+///   "workspaces": { "<workspace uuid>": {"org_id", "org_name"} } }
+/// ```
+///
+/// A gateway that isn't org-derived (manual, unset, or a connection that no
+/// longer holds its key) has no entry. ⚠️ `get-config` reaches remote `/rpc`
+/// peers, so this carries the org's id and name and nothing else: never a
+/// key id, prefix, secret or header value.
+func gatewayOrgsJSON(_ config: AppConfig) -> JSONValue {
+    func org(_ gateway: WorkspaceGateway?) -> JSONValue? {
+        guard let key = CorveilGatewayMigration.managedOrgKey(for: gateway, config: config) else {
+            return nil
+        }
+        return .object(["org_id": .string(key.orgID), "org_name": .string(key.orgName)])
+    }
+    var result: [String: JSONValue] = [:]
+    if let manager = org(config.managerGateway) { result["manager"] = manager }
+    var workspaces: [String: JSONValue] = [:]
+    for workspace in config.workspaces {
+        if let entry = org(workspace.gateway) { workspaces[workspace.id.uuidString] = entry }
+    }
+    result["workspaces"] = .object(workspaces)
+    return .object(result)
+}
+
 private func expandSetupDevRoot(_ raw: String) -> String {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     if raw == "~" { return home }
