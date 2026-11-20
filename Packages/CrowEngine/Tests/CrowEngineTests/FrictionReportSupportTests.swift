@@ -72,6 +72,11 @@ struct FrictionReportSupportTests {
             == "crow send has no --wait-ready")
         #expect(FrictionRPC.summary(of: "plain text without prefix") == "plain text without prefix")
         #expect(FrictionRPC.summaryKey(of: "[friction] Crow Send — x") == "crow send")
+        // Only the first separator cuts: a ` -- ` in the symptom survives an
+        // em-dash workaround (review on #1481).
+        #expect(FrictionRPC.summary(of: "[friction] seedLaunchCommand needs -- between flags and brief — passed endOfOptions")
+            == "seedLaunchCommand needs -- between flags and brief")
+        #expect(FrictionRPC.summary(of: "[friction] a – b -- c") == "a")
     }
 
     // MARK: - report

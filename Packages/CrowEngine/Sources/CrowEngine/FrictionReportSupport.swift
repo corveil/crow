@@ -11,12 +11,17 @@ import Foundation
 public enum CorveilFrictionReport: Sendable, Equatable {
     /// Crow cannot fetch the report: there is nothing to call yet.
     case unavailable(reason: String, tracking: String)
-    /// A report from Corveil, passed through without reshaping.
+    /// A report from Corveil, passed through without reshaping. Before a real
+    /// source returns this, pick the fields worth handing `/rpc` and MCP (the
+    /// way `list_tickets` drops `body`) once #5601's shape is known.
     case report(JSONValue)
 }
 
 /// Where the Corveil half of `get-friction-report` comes from. The one seam a
 /// real client plugs into once corveil/corveil#5601 publishes an endpoint.
+/// A Crow connection can hold several Corveil orgs (ADR 0020), so the real
+/// client will need the selected org; `fetch()` takes none yet because the
+/// pending source needs nothing and the endpoint's scoping is unknown.
 public protocol CorveilFrictionReportSource: Sendable {
     func fetch() async -> CorveilFrictionReport
 }
@@ -49,7 +54,9 @@ public enum FrictionRPC {
     static let workaroundSeparators = [" — ", " – ", " -- "]
 
     /// The grouping key for a friction item: the text without the
-    /// `[friction]` prefix, cut at the workaround separator, lowercased,
+    /// `[friction]` prefix, cut at the first workaround separator found in
+    /// preference order (em dash, en dash, then ` -- `) and only that one, so
+    /// a ` -- ` inside the symptom survives an em-dash workaround. Lowercased,
     /// whitespace collapsed, trailing punctuation dropped. Two agents that hit
     /// the same missing flag and worked around it differently share a key.
     public static func summary(of text: String) -> String {
@@ -60,6 +67,7 @@ public enum FrictionRPC {
         for separator in workaroundSeparators {
             if let range = body.range(of: separator) {
                 body = String(body[..<range.lowerBound])
+                break
             }
         }
         let collapsed = body
