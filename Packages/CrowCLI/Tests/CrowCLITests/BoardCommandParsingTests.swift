@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import ArgumentParser
+import CrowCore
 @testable import CrowCLILib
 
 // MARK: - Board & workflow command parsing (CROW-817)
@@ -143,6 +144,68 @@ private let prURL = "https://github.com/corveil/crow/pull/842"
     // extend, so the CLI must not hold a stale allowlist.
     let cmd = try CreateManager.parse(["--agent", "some-future-agent"])
     #expect(cmd.agent == "some-future-agent")
+}
+
+// MARK: create-manager --name / --prompt / --prompt-file (CROW-1474)
+
+@Test func createManagerParsesNameAndPrompt() throws {
+    let cmd = try CreateManager.parse(["--name", "review crow-1078", "--prompt", "Do the thing"])
+    #expect(cmd.name == "review crow-1078")
+    #expect(cmd.prompt == "Do the thing")
+    #expect(try cmd.resolvedPrompt() == "Do the thing")
+}
+
+@Test func createManagerWithoutPromptResolvesNil() throws {
+    let cmd = try CreateManager.parse([])
+    #expect(try cmd.resolvedPrompt() == nil)
+}
+
+@Test func createManagerRejectsInvalidNames() {
+    // Same rule as rename-session, plus whitespace-only.
+    for bad in ["", "   ", "tab\there", String(repeating: "x", count: 257)] {
+        #expect(throws: (any Error).self) {
+            _ = try CreateManager.parse(["--name", bad])
+        }
+    }
+}
+
+@Test func createManagerRejectsBlankOrOversizedPrompt() {
+    #expect(throws: (any Error).self) {
+        _ = try CreateManager.parse(["--prompt", " \n "])
+    }
+    #expect(throws: (any Error).self) {
+        _ = try CreateManager.parse([
+            "--prompt", String(repeating: "x", count: ManagerCreation.maxPromptBytes + 1)])
+    }
+}
+
+@Test func createManagerRejectsBothPromptSources() {
+    #expect(throws: (any Error).self) {
+        _ = try CreateManager.parse(["--prompt", "hi", "--prompt-file", "/tmp/brief.md"])
+    }
+}
+
+@Test func createManagerReadsPromptFile() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("crow-1474-brief-\(UUID().uuidString).md")
+    try "# Brief\n\nShip it.\n".write(to: url, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let cmd = try CreateManager.parse(["--prompt-file", url.path])
+    #expect(try cmd.resolvedPrompt() == "# Brief\n\nShip it.\n")
+}
+
+@Test func createManagerRejectsEmptyPromptFile() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("crow-1474-empty-\(UUID().uuidString).md")
+    try "\n".write(to: url, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let cmd = try CreateManager.parse(["--prompt-file", url.path])
+    #expect(throws: (any Error).self) { _ = try cmd.resolvedPrompt() }
+}
+
+@Test func createManagerRejectsMissingPromptFile() throws {
+    let cmd = try CreateManager.parse(["--prompt-file", "/nonexistent/crow-1474/brief.md"])
+    #expect(throws: (any Error).self) { _ = try cmd.resolvedPrompt() }
 }
 
 // MARK: quick-action

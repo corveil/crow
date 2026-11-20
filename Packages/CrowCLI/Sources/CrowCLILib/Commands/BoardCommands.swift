@@ -1,4 +1,5 @@
 import ArgumentParser
+import CrowCore
 import CrowIPC
 import Foundation
 
@@ -197,7 +198,9 @@ public struct StartReview: ParsableCommand {
 }
 
 /// `crow create-manager` — spawns an additional Manager session, named with the
-/// lowest unused "Manager N". Same behavior as the sidebar's `+` button.
+/// lowest unused "Manager N" (or `--name`). Same behavior as the sidebar's `+`
+/// button. `--prompt` / `--prompt-file` seed its first prompt as argv, the way
+/// `crow todo explore` does (CROW-1474).
 public struct CreateManager: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "create-manager",
@@ -212,6 +215,14 @@ public struct CreateManager: ParsableCommand {
         then `defaults.managerWorkspace` (`crow defaults set --manager-workspace`); \
         if neither resolves, the command fails rather than guess. The tag cannot be \
         changed later, and the primary Manager is never tagged.
+
+        --prompt / --prompt-file hand the new Manager a brief in the same call: \
+        the text is written to a brief file and passed to the agent as its first \
+        prompt on launch (argv, nothing pasted), after the workspace brief. \
+        --prompt-file - reads stdin. The response's `seeded` says whether it rode \
+        the launch. --name names the Manager at creation (same rules as \
+        rename-session), so it never comes up as "Manager N" and skips the \
+        Manager context's rename step.
         """
     )
 
@@ -220,6 +231,15 @@ public struct CreateManager: ParsableCommand {
 
     @Option(name: .long, help: "Workspace to tag the Manager with (name or UUID); when omitted, the calling Manager's workspace, then defaults.managerWorkspace")
     var workspace: String?
+
+    @Option(name: .long, help: "Session name (same rules as rename-session); the lowest unused \"Manager N\" when omitted")
+    var name: String?
+
+    @Option(name: .long, help: "First prompt for the new Manager, passed as argv on launch")
+    var prompt: String?
+
+    @Option(name: .customLong("prompt-file"), help: "Read the first prompt from a file ('-' for stdin)")
+    var promptFile: String?
 
     public init() {}
 
@@ -235,12 +255,38 @@ public struct CreateManager: ParsableCommand {
         if let workspace, workspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw ValidationError("--workspace must not be blank — pass a workspace name or UUID.")
         }
+        do {
+            _ = try ManagerCreation.validatedName(name)
+            // --prompt-file is read in run(); its text is checked there.
+            _ = try ManagerCreation.validatedPrompt(prompt)
+        } catch let error as ManagerCreation.InvalidRequest {
+            throw ValidationError(error.description)
+        }
+        if prompt != nil, promptFile != nil {
+            throw ValidationError("Pass --prompt or --prompt-file, not both.")
+        }
+        if let promptFile, promptFile.isEmpty {
+            throw ValidationError("--prompt-file must not be empty — pass a path, or '-' for stdin.")
+        }
+    }
+
+    /// The first prompt from `--prompt` or `--prompt-file`, validated.
+    func resolvedPrompt() throws -> String? {
+        let text = try promptFile.map(JobScheduleArgs.readPromptText) ?? prompt
+        do {
+            return try ManagerCreation.validatedPrompt(text)
+        } catch let error as ManagerCreation.InvalidRequest {
+            let source = promptFile.map { $0 == "-" ? "stdin" : "'\($0)'" }
+            throw ValidationError(source.map { "\(error.description) (from \($0))" } ?? error.description)
+        }
     }
 
     public func run() throws {
         var params: [String: JSONValue] = [:]
         if let agent { params["agent_kind"] = .string(agent) }
         if let workspace { params["workspace"] = .string(workspace) }
+        if let name { params["name"] = .string(name) }
+        if let text = try resolvedPrompt() { params["prompt"] = .string(text) }
         // Context for an omitted --workspace (CROW-1386): run from inside a
         // tagged Manager, the new one inherits its workspace. The daemon
         // ignores any session that isn't a tagged extra Manager.

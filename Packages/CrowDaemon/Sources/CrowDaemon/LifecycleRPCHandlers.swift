@@ -30,6 +30,16 @@ func makeLifecycleHandlers(
                 throw DaemonRPCError.applicationError(
                     "Creating a manager requires tmux on the daemon host")
             }
+            // `--name` / `--prompt` (CROW-1474). Validated here as well as in
+            // the CLI, so the web RPC and scripts get the same rules.
+            let requestedName: String?
+            let prompt: String?
+            do {
+                requestedName = try ManagerCreation.validatedName(optionalString(params, "name"))
+                prompt = try ManagerCreation.validatedPrompt(optionalString(params, "prompt"))
+            } catch let error as ManagerCreation.InvalidRequest {
+                throw DaemonRPCError.invalidParams(error.description)
+            }
             let requestedAgentKind = params["agent_kind"]?.stringValue
                 .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
             // Workspace tag (CROW-1382). Every new extra Manager has one
@@ -51,20 +61,36 @@ func makeLifecycleHandlers(
                     config: ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig())
             }
             return await MainActor.run {
-                // Lowest unused "Manager N", matching the app's picker so a
-                // delete-in-the-middle doesn't collide (AppDelegate.onCreateManager).
-                let existing = Set(appState.managerSessions.map(\.name))
-                var n = 2
-                while existing.contains("Manager \(n)") { n += 1 }
+                // Named at creation, never renamed afterwards: a follow-up
+                // `renameSession` would paste `/rename` into the pane before
+                // the agent owns stdin and offset the seeded brief (CROW-1237).
+                let name = requestedName ?? ManagerCreation.defaultName(
+                    existing: Set(appState.managerSessions.map(\.name)))
+                // The prompt goes the `todo explore` way: written to the
+                // explore brief file and passed as argv on first launch,
+                // never pasted (CROW-1327).
                 let id = sessionService.createManagerSession(
-                    name: "Manager \(n)", cwd: devRoot, agentKind: requestedAgentKind,
-                    workspaceID: tag.workspaceID)
-                return [
+                    name: name, cwd: devRoot, agentKind: requestedAgentKind,
+                    initialPrompt: prompt, workspaceID: tag.workspaceID)
+                let path = TodoRPC.explorePromptPath(sessionID: id)
+                let seeded = ManagerCreation.seeded(
+                    promptGiven: prompt != nil,
+                    briefWritten: FileManager.default.fileExists(atPath: path),
+                    paneUp: appState.terminals[id]?.first != nil)
+                var result: [String: JSONValue] = [
                     "session_id": .string(id.uuidString),
-                    "name": .string("Manager \(n)"),
+                    "name": .string(name),
                     "workspace_id": .string(tag.workspaceID.uuidString),
                     "workspace_name": .string(tag.workspaceName),
+                    "seeded": .bool(seeded),
                 ]
+                if prompt != nil, !seeded {
+                    result["warning"] = .string(
+                        "The Manager launched without its prompt (\(path) was not written or the pane never appeared). "
+                        + "Once it is ready, `crow send` it a line such as \"Read and follow the instructions in <file>\" "
+                        + "(`crow list-terminals --session \(id.uuidString)` gives the terminal).")
+                }
+                return result
             }
         },
         // Session-lifecycle verbs, shared by the web session menu and the `crow`
