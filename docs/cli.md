@@ -92,7 +92,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow mark-in-review`](#crow-mark-in-review) | Move a session to In Review |
 | [`crow mark-issue-done`](#crow-mark-issue-done) | Close the session's linked issue and complete the session |
 | [`crow mcp`](#crow-mcp) | Serve Crow over MCP, and manage the tokens remote clients use |
-| [`crow mcp serve`](#crow-mcp-serve) | Serve the read-only MCP surface over stdio (for a local client) |
+| [`crow mcp serve`](#crow-mcp-serve) | Serve the MCP surface over stdio (for a local client) |
 | [`crow mcp token`](#crow-mcp-token) | Mint, list and revoke MCP bearer tokens (local-only) |
 | [`crow mcp token list`](#crow-mcp-token-list) | List MCP bearer tokens and OAuth grants (never the secrets themselves) |
 | [`crow mcp token mint`](#crow-mcp-token-mint) | Mint a scoped MCP bearer token |
@@ -1491,7 +1491,7 @@ Subcommands: [`serve`](#crow-mcp-serve), [`token`](#crow-mcp-token).
 
 ## `crow mcp serve`
 
-Serve the read-only MCP surface over stdio (for a local client).
+Serve the MCP surface over stdio (for a local client).
 
 ```
 crow mcp serve [--scope <scope> ...]
@@ -1505,13 +1505,13 @@ Speaks MCP on stdin/stdout and forwards each tool call to the running `crowd` ov
 
 No token is needed. The socket is 0600 and reachable only from this machine, so a caller that can run this command could already run every other `crow` verb — a token would gate nothing. Remote clients use `POST /mcp` with a token from `crow mcp token mint` instead.
 
-The surface is read-only either way, and identical: eight tools over seven read RPCs. This command cannot send prompts, create sessions, or write anything.
+The surface is identical either way: eight read tools over seven read RPCs, plus add_todo (todos:write), which adds a Scratch item and nothing else. This command cannot send prompts, create or change sessions, or touch config.
 
 Unlike every other `crow` verb, stdout here carries framed JSON-RPC rather than one JSON object — it is a transport, not a query. Diagnostics go to stderr.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| `--scope` | `<scope>` _(repeatable)_ | no | Limit the served tools to these scopes (repeatable). Defaults to all read scopes: board:read, sessions:read, todos:read. |
+| `--scope` | `<scope>` _(repeatable)_ | no | Limit the served tools to these scopes (repeatable). Defaults to all scopes: board:read, sessions:read, todos:read, todos:write. |
 
 ---
 
@@ -1551,14 +1551,17 @@ Prints the token once. It is stored only as a SHA-256 hash, so it cannot be reco
 
 ```
 crow mcp token mint --name grok-bot --scope board:read
+crow mcp token mint --name capture-bot --scope todos:read --scope todos:write
 ```
+
+todos:write is the only write scope: it lets the holder add Scratch items, and nothing else.
 
 Expiry defaults to 90 days. Pass --expires-in to choose another, or --no-expiry for a token that never expires — which has to be typed, because an off-box credential that never lapses is a decision, not a default.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--name` | `<name>` | yes | A label for this token, e.g. "grok-bot" |
-| `--scope` | `<scope>` _(repeatable)_ | no | Capability to grant (repeatable). One of: board:read, sessions:read, todos:read. |
+| `--scope` | `<scope>` _(repeatable)_ | no | Capability to grant (repeatable). One of: board:read, sessions:read, todos:read, todos:write. |
 | `--expires-in` | `<expires-in>` | no | Lifetime — a number with a unit: s (seconds), m (minutes), h (hours), d (days), w (weeks) — e.g. 90d. Defaults to 90d. |
 | `--no-expiry` | — | no | Mint a token that never expires (mutually exclusive with --expires-in) |
 

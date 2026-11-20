@@ -75,6 +75,7 @@ struct MCPOAuthTests {
         #expect(try MCPOAuth.parseScope("").get().isEmpty)
         #expect(try MCPOAuth.parseScope("board:read offline_access").get() == [.boardRead])
         #expect(try MCPOAuth.parseScope("sessions:read  todos:read").get() == [.sessionsRead, .todosRead])
+        #expect(try MCPOAuth.parseScope("todos:read todos:write").get() == [.todosRead, .todosWrite])
     }
 
     @Test("An unknown scope is invalid_scope, not dropped")
@@ -366,6 +367,7 @@ struct MCPOAuthTests {
         #expect(resource["resource"] == .string("https://crow.example.ts.net/mcp"))
         #expect(resource["authorization_servers"] == .array([.string("https://crow.example.ts.net")]))
         #expect(resource["scopes_supported"]?.arrayValue?.count == MCPScope.allCases.count)
+        #expect(resource["scopes_supported"]?.arrayValue?.contains(.string("todos:write")) == true)
 
         let server = origin.authorizationServerMetadata
         #expect(server["issuer"] == .string("https://crow.example.ts.net"))
@@ -406,6 +408,33 @@ struct MCPOAuthTests {
         let html = MCPOAuthConsentPage.consent(request: request, consentID: "x")
         #expect(html.contains(#"value="board:read" checked"#))
         #expect(!html.contains(#"value="sessions:read" checked"#))
+    }
+
+    @Test("A write scope is never pre-ticked, even when the client asks for it")
+    func consentNeverPreTicksWrites() {
+        for requested: Set<MCPScope> in [[], [.todosRead, .todosWrite], MCPScope.all] {
+            let request = MCPOAuth.AuthorizationRequest(
+                client: client, redirectURI: client.redirectURIs[0], state: nil, codeChallenge: challenge,
+                requestedScopes: requested, resource: resource)
+            let html = MCPOAuthConsentPage.consent(request: request, consentID: "x")
+            #expect(html.contains(#"value="todos:write">"#), "todos:write is offered unticked")
+            #expect(!html.contains(#"value="todos:write" checked"#))
+            #expect(html.contains(#"value="todos:read" checked"#))
+            // The page lists a write scope, so it must not promise read-only.
+            #expect(!html.contains("read-only"))
+            #expect(html.contains("Allow it to change"))
+        }
+    }
+
+    @Test("A write scope the operator ticked stays ticked when the form is re-shown")
+    func consentKeepsOperatorTicks() {
+        let request = MCPOAuth.AuthorizationRequest(
+            client: client, redirectURI: client.redirectURIs[0], state: nil, codeChallenge: challenge,
+            requestedScopes: [], resource: resource)
+        let html = MCPOAuthConsentPage.consent(
+            request: request, consentID: "x", checked: [.todosWrite], message: "wrong password")
+        #expect(html.contains(#"value="todos:write" checked"#))
+        #expect(!html.contains(#"value="todos:read" checked"#))
     }
 
     @Test("With no web password the page refuses and has no form")

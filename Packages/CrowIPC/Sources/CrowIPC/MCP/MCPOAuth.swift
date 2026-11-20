@@ -435,7 +435,8 @@ public enum MCPOAuth {
             self.resource = resource
         }
 
-        /// The scopes the consent page pre-ticks.
+        /// The scopes the client is offering to take. The consent page pre-ticks
+        /// the read scopes among these, never a write scope (CROW-1491).
         public var offeredScopes: Set<MCPScope> {
             requestedScopes.isEmpty ? MCPScope.all : requestedScopes
         }

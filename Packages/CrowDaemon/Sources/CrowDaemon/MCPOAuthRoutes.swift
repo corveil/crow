@@ -175,7 +175,7 @@ enum MCPOAuthRoutes {
                 return retry("That is not the Crow web password.", status: .forbidden)
             }
             guard !ticked.isEmpty else {
-                return retry("Tick at least one thing the app may read.", status: .badRequest)
+                return retry("Tick at least one thing the app may do.", status: .badRequest)
             }
 
             state.closeConsent(consentID)

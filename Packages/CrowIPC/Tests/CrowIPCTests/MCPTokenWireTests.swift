@@ -84,11 +84,14 @@ struct MCPTokenWireTests {
         }
     }
 
-    @Test("The scope vocabulary is exactly the read-only set currently defined")
-    func scopeVocabularyIsPinned() {
-        // No prompt:send, no sessions:write, no admin — and adding one has to be a
-        // deliberate edit here, not a side effect of some other change.
-        #expect(Set(MCPScope.allCases.map(\.rawValue)) == ["board:read", "sessions:read", "todos:read"])
+    @Test("The scope vocabulary is exactly the set currently defined")
+    func scopeVocabularyIsPinned() throws {
+        // No prompt:send, no sessions:write, no todos:dispatch, no admin — and
+        // adding one has to be a deliberate edit here, not a side effect of some
+        // other change. todos:write is the one write (CROW-1491).
+        #expect(Set(MCPScope.allCases.map(\.rawValue)) == ["board:read", "sessions:read", "todos:read", "todos:write"])
+        #expect(MCPScope.allCases.filter(\.isWrite) == [.todosWrite])
+        #expect(try MCPTokenWire.parseScopes(["todos:write"]).get() == [.todosWrite])
     }
 
     // MARK: - Redaction

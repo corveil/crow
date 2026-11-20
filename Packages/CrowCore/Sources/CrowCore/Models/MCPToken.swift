@@ -2,12 +2,13 @@ import Foundation
 
 /// A capability an MCP caller may exercise (CROW-1004).
 ///
-/// Deliberately coarse and deliberately short. v1 is read-only, so there are
-/// three scopes: sessions, the ticket/review boards, and the Scratch list.
-/// There is no `prompt:send`, no `sessions:write`, and no `admin` — not "not
-/// yet implemented" but *not defined*, so a token cannot name a capability the
-/// server might later grow into. Adding a write scope is a decision someone
-/// has to make in this file.
+/// Deliberately coarse and deliberately short. Three scopes read: sessions, the
+/// ticket/review boards, and the Scratch list. One scope writes: `todos:write`,
+/// which adds a Scratch item and nothing else (CROW-1491, ADR 0019 amendment).
+/// There is no `prompt:send`, no `sessions:write`, no `todos:dispatch` and no
+/// `admin` — not "not yet implemented" but *not defined*, so a token cannot name
+/// a capability the server might later grow into. Adding a scope, and above all
+/// a write scope, is a decision someone has to make in this file.
 ///
 /// The raw values are the wire form: they appear in `config.json`, in
 /// `crow mcp token mint --scope`, and in the Settings UI, so they are part of the
@@ -20,6 +21,21 @@ public enum MCPScope: String, Codable, Sendable, Equatable, CaseIterable, Compar
     case boardRead = "board:read"
     /// Read the durable pre-ticket Scratch list (CROW-1231).
     case todosRead = "todos:read"
+    /// Add an item to the Scratch list (CROW-1491). Capture only: no editing,
+    /// dropping, or starting Explore/Ticket/Work on an item. The worst a holder
+    /// can do is leave junk items the operator drops, which is why this is the
+    /// one write MCP carries.
+    case todosWrite = "todos:write"
+
+    /// Whether holding this scope lets a caller change Crow. The consent page
+    /// never pre-ticks a write scope, and `MCPLedgerExportTests` requires a write
+    /// method to be exported at a write scope and a read at a read scope.
+    public var isWrite: Bool {
+        switch self {
+        case .sessionsRead, .boardRead, .todosRead: false
+        case .todosWrite: true
+        }
+    }
 
     /// Sorted output everywhere (token listings, `tools/list` order, error text)
     /// so the same inputs always render the same bytes.

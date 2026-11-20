@@ -197,3 +197,176 @@ struct MCPToolArgumentTests {
         #expect(picked["b"] == nil)
     }
 }
+
+/// Records every daemon call a tool makes, and answers with a canned result.
+private final class InvokeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _calls: [(String, [String: JSONValue])] = []
+    let reply: [String: JSONValue]
+
+    init(reply: [String: JSONValue]) { self.reply = reply }
+
+    var calls: [(String, [String: JSONValue])] {
+        lock.withLock { _calls }
+    }
+
+    var invoke: MCPInvoke {
+        { [self] method, params in
+            lock.withLock { _calls.append((method, params)) }
+            return reply
+        }
+    }
+}
+
+@Suite("MCP add_todo (CROW-1491)")
+struct MCPAddTodoTests {
+    static let created: [String: JSONValue] = [
+        "todo": .object([
+            "id": .string("1E643E4C-7389-40E9-BA2A-B35E0E346191"),
+            "text": .string("mcp capture check"),
+            "note": .string(""),
+            "tags": .array([.string("mcp")]),
+            "state": .string("captured"),
+            "links": .array([]),
+            "workspace": .string("corveil"),
+            "agent_kind": .string("claude-code"),
+            "created_at": .string("2026-11-20T00:00:00Z"),
+            "updated_at": .string("2026-11-20T00:00:00Z"),
+            "ticket_requested_at": .string("not for the model"),
+        ]),
+    ]
+
+    private func run(_ arguments: [String: JSONValue], recorder: InvokeRecorder) async throws -> JSONValue {
+        try await MCPToolCatalog.addTodo.run(arguments, recorder.invoke)
+    }
+
+    @Test("Happy path: calls todo-add with only the known params and returns the item")
+    func happyPath() async throws {
+        let recorder = InvokeRecorder(reply: Self.created)
+        let result = try await run([
+            "text": .string("  mcp capture check  "),
+            "note": .string("from a Claude connector"),
+            "tags": .array([.string("mcp")]),
+            "priority": .string("P2"),
+            "workspace": .string("corveil"),
+            "agent_kind": .string("claude-code"),
+        ], recorder: recorder)
+
+        let calls = recorder.calls
+        #expect(calls.count == 1)
+        #expect(calls.first?.0 == "todo-add")
+        #expect(calls.first?.1 == [
+            "text": .string("mcp capture check"),
+            "note": .string("from a Claude connector"),
+            "tags": .array([.string("mcp")]),
+            "priority": .string("p2"),
+            "workspace": .string("corveil"),
+            "agent_kind": .string("claude-code"),
+        ])
+
+        let todo = try #require(result.objectValue?["todo"]?.objectValue)
+        #expect(todo["id"]?.stringValue == "1E643E4C-7389-40E9-BA2A-B35E0E346191")
+        #expect(todo["text"]?.stringValue == "mcp capture check")
+        #expect(todo["state"]?.stringValue == "captured")
+        #expect(todo["workspace"]?.stringValue == "corveil")
+        #expect(todo["agent_kind"]?.stringValue == "claude-code")
+        // Trimmed to the same field set list_todos returns.
+        #expect(todo["ticket_requested_at"] == nil)
+    }
+
+    @Test("Text alone is enough; optional fields are omitted, not sent blank")
+    func minimal() async throws {
+        let recorder = InvokeRecorder(reply: Self.created)
+        _ = try await run(["text": .string("idea"), "note": .string("   "), "workspace": .null], recorder: recorder)
+        #expect(recorder.calls.first?.1 == ["text": .string("idea")])
+    }
+
+    @Test("from_session is never forwarded, so a caller cannot borrow a Manager's workspace")
+    func fromSessionIsDropped() async throws {
+        let recorder = InvokeRecorder(reply: Self.created)
+        _ = try await run([
+            "text": .string("idea"),
+            "from_session": .string("00000000-0000-0000-0000-000000000000"),
+        ], recorder: recorder)
+        #expect(recorder.calls.first?.1["from_session"] == nil)
+    }
+
+    @Test("Missing, blank or non-string text is an input error and calls nothing")
+    func missingText() async {
+        for arguments: [String: JSONValue] in [[:], ["text": .string("   ")], ["text": .int(3)]] {
+            let recorder = InvokeRecorder(reply: Self.created)
+            await #expect(throws: MCPToolInputError.self) {
+                _ = try await run(arguments, recorder: recorder)
+            }
+            #expect(recorder.calls.isEmpty)
+        }
+    }
+
+    @Test("Bad optional arguments are input errors")
+    func badOptionals() {
+        let bad: [[String: JSONValue]] = [
+            ["text": .string("x"), "priority": .string("urgent")],
+            ["text": .string("x"), "tags": .string("bug")],
+            ["text": .string("x"), "tags": .array([.int(1)])],
+            ["text": .string("x"), "workspace": .int(1)],
+            ["text": .string(String(repeating: "a", count: MCPToolCatalog.maxTodoTextLength + 1))],
+            ["text": .string("x"), "tags": .array(Array(
+                repeating: .string("t"), count: MCPToolCatalog.maxTodoTags + 1))],
+        ]
+        for arguments in bad {
+            #expect(throws: MCPToolInputError.self) { try MCPToolCatalog.addTodoParams(arguments) }
+        }
+    }
+
+    @Test("A daemon refusal (e.g. no workspace resolves) comes back as isError with its message")
+    func daemonErrorIsToolError() async throws {
+        struct Refused: Error, LocalizedError {
+            var errorDescription: String? { "No workspace resolved — pass workspace" }
+        }
+        let server = MCPServer(serverVersion: "test")
+        let outcome = await server.handle(
+            MCPRequest(id: .number(1), method: "tools/call", params: [
+                "name": .string("add_todo"),
+                "arguments": .object(["text": .string("idea")]),
+            ]),
+            scopes: [.todosWrite],
+            invoke: { _, _ in throw Refused() })
+        guard case .reply(let response) = outcome, case .result(let result) = response.payload else {
+            Issue.record("expected a tool result, got \(outcome)"); return
+        }
+        #expect(result["isError"] == .bool(true))
+        let text = result["content"]?.arrayValue?.first?.objectValue?["text"]?.stringValue ?? ""
+        #expect(text.contains("No workspace resolved"))
+    }
+
+    @Test("add_todo needs todos:write: hidden from tools/list and unknown to tools/call otherwise")
+    func scopeFiltering() async throws {
+        #expect(MCPToolCatalog.tools(for: [.todosRead]).map(\.name) == ["list_todos", "get_todo"])
+        #expect(MCPToolCatalog.tools(for: [.todosWrite]).map(\.name) == ["add_todo"])
+        #expect(MCPToolCatalog.tool(named: "add_todo", scopes: [.todosRead]) == nil)
+        let readOnly = Set(MCPScope.allCases.filter { !$0.isWrite })
+        #expect(!MCPToolCatalog.tools(for: readOnly).contains { $0.name == "add_todo" })
+
+        let server = MCPServer(serverVersion: "test")
+        let recorder = InvokeRecorder(reply: Self.created)
+        let listed = await server.handle(
+            MCPRequest(id: .number(1), method: "tools/list", params: [:]),
+            scopes: [.todosRead], invoke: recorder.invoke)
+        guard case .reply(let listResponse) = listed, case .result(let list) = listResponse.payload else {
+            Issue.record("expected tools/list result"); return
+        }
+        let names = (list["tools"]?.arrayValue ?? []).compactMap { $0.objectValue?["name"]?.stringValue }
+        #expect(names == ["list_todos", "get_todo"])
+
+        let called = await server.handle(
+            MCPRequest(id: .number(2), method: "tools/call", params: [
+                "name": .string("add_todo"), "arguments": .object(["text": .string("x")]),
+            ]),
+            scopes: [.todosRead], invoke: recorder.invoke)
+        guard case .reply(let callResponse) = called, case .error(_, let message, _) = callResponse.payload else {
+            Issue.record("expected a protocol error, got \(called)"); return
+        }
+        #expect(message.contains("Unknown tool"))
+        #expect(recorder.calls.isEmpty, "a todos:read token must never reach todo-add")
+    }
+}

@@ -55,7 +55,7 @@ public enum ParityLedger {
 
     // MARK: - RPC methods
 
-    /// Whether an RPC method may be read through the MCP server (CROW-1004).
+    /// Whether an RPC method is reachable through the MCP server (CROW-1004).
     ///
     /// The default is ``none`` and the factories below default to it, so a newly
     /// registered RPC is **not** exported unless somebody types the flag. That
@@ -63,21 +63,34 @@ public enum ParityLedger {
     /// tool is the failure this exists to prevent, and "forgot to add the flag"
     /// must fail closed.
     ///
-    /// There is no `write` case. v1 is read-only, and `MCPLedgerExportTests` fails
-    /// the build if an exported row is also `isWrite` — so adding a write tool means
-    /// coming here and deciding, not just registering a handler.
+    /// Reads and writes are separate cases (CROW-1491). `MCPLedgerExportTests`
+    /// requires an `isWrite` row to use ``write(scope:)`` with a write scope and a
+    /// read row to use ``read(scope:)`` with a read scope, so exporting a mutating
+    /// method means typing `.write` here and naming a write scope in `MCPScope` —
+    /// two deliberate edits a reviewer reads, not one flag copied from a neighbour.
     public enum MCPExposure: Sendable, Equatable {
         /// Not reachable from MCP.
         case none
         /// Readable by an MCP caller holding this scope.
         case read(scope: MCPScope)
+        /// Callable by an MCP caller holding this scope, and the call changes
+        /// Crow. ADR 0019's amendment allows these only under named write scopes.
+        case write(scope: MCPScope)
 
         public var scope: MCPScope? {
-            if case .read(let scope) = self { return scope }
-            return nil
+            switch self {
+            case .none: nil
+            case .read(let scope), .write(let scope): scope
+            }
         }
 
         public var isExported: Bool { scope != nil }
+
+        /// True for ``write(scope:)``.
+        public var isWrite: Bool {
+            if case .write = self { return true }
+            return false
+        }
     }
 
     /// One registered JSON-RPC method.
@@ -111,8 +124,10 @@ public enum ParityLedger {
             RPCEntry(method: method, isWrite: false, coverage: .noCLI(reason: reason), mcp: mcp)
         }
 
-        public static func write(_ method: String, cli path: String) -> RPCEntry {
-            RPCEntry(method: method, isWrite: true, coverage: .cli(path))
+        public static func write(
+            _ method: String, cli path: String, mcp: MCPExposure = .none
+        ) -> RPCEntry {
+            RPCEntry(method: method, isWrite: true, coverage: .cli(path), mcp: mcp)
         }
 
         public static func write(_ method: String, noCLI reason: String) -> RPCEntry {
@@ -465,7 +480,10 @@ public enum ParityLedger {
                 """),
 
         // Scratch / pre-ticket ideas (CROW-1231). Reads are MCP-exported at
-        // `todos:read`; writes stay CLI/web-only (ADR 0019). `TodoItem` lives in
+        // `todos:read`. `todo-add` is the one MCP write, at `todos:write`
+        // (CROW-1491, ADR 0019 amendment); every other write stays CLI/web-only,
+        // and `todo-explore` / `todo-ticket` in particular need their own
+        // dispatch decision because they launch a Manager. `TodoItem` lives in
         // `store.json`, not `AppConfig`, so its fields have no `configFields` row:
         // the item's `workspace` (CROW-1383) and `agent_kind` (CROW-1387) are
         // covered by `todo add --workspace/--agent` / `todo edit
@@ -474,7 +492,7 @@ public enum ParityLedger {
         // overrides are `todo explore|ticket --workspace/--agent`.
         .read("todo-list", cli: "todo list", mcp: .read(scope: .todosRead)),
         .read("todo-get", cli: "todo get", mcp: .read(scope: .todosRead)),
-        .write("todo-add", cli: "todo add"),
+        .write("todo-add", cli: "todo add", mcp: .write(scope: .todosWrite)),
         .write("todo-edit", cli: "todo edit"),
         .write("todo-delete", cli: "todo delete"),
         .write("todo-done", cli: "todo done"),
