@@ -17,27 +17,6 @@ public enum TodoState: String, Codable, Sendable, CaseIterable {
     case dropped
 }
 
-/// What a Scratch item is (CROW-1477). `idea` is everything captured before
-/// kinds existed and anything typed into the capture box; `friction` is a
-/// tool-friction note an agent logged in-flow (a missing verb or flag, a stale
-/// instruction, a poll loop), so friction can be listed and counted apart
-/// from feature ideas.
-public enum TodoKind: String, Codable, Sendable, CaseIterable {
-    case idea
-    case friction
-
-    /// The text prefix the Manager-context capture rule writes. An item whose
-    /// text starts with it is `friction` even when no kind was passed.
-    public static let frictionPrefix = "[friction]"
-
-    /// The kind implied by an item's text: `friction` when it starts with
-    /// ``frictionPrefix`` (case-insensitively), else `idea`.
-    public static func inferred(fromText text: String) -> TodoKind {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed.hasPrefix(frictionPrefix) ? .friction : .idea
-    }
-}
-
 /// Provenance on a Scratch item: the Manager that explored it, the ticket it
 /// became, the PR that shipped, or a free-form URL.
 public enum TodoLinkType: String, Codable, Sendable, CaseIterable {
@@ -83,9 +62,6 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
     public var tags: [String]
     public var priority: String?
     public var state: TodoState
-    /// Idea or friction (CROW-1477). Items stored before kinds existed decode
-    /// as `idea`.
-    public var kind: TodoKind
     public var links: [TodoLink]
     /// The workspace this item belongs to, by its canonical name (CROW-1383).
     /// Nil means untagged. Validated against `AppConfig.workspaces` when set
@@ -109,7 +85,6 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         tags: [String] = [],
         priority: String? = nil,
         state: TodoState = .captured,
-        kind: TodoKind = .idea,
         links: [TodoLink] = [],
         workspace: String? = nil,
         agentKind: AgentKind? = nil,
@@ -123,7 +98,6 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         self.tags = tags
         self.priority = priority
         self.state = state
-        self.kind = kind
         self.links = links
         self.workspace = workspace
         self.agentKind = agentKind
@@ -140,9 +114,6 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         priority = try container.decodeIfPresent(String.self, forKey: .priority)
         state = try container.decodeIfPresent(TodoState.self, forKey: .state) ?? .captured
-        // An unknown kind (a newer build's) reads as `idea` rather than
-        // failing the whole store load.
-        kind = (try? container.decodeIfPresent(TodoKind.self, forKey: .kind)) ?? .idea
         links = try container.decodeIfPresent([TodoLink].self, forKey: .links) ?? []
         workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
         agentKind = try container.decodeIfPresent(AgentKind.self, forKey: .agentKind)
@@ -152,7 +123,7 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, note, tags, priority, state, kind, links, workspace, agentKind, ticketRequestedAt, createdAt, updatedAt
+        case id, text, note, tags, priority, state, links, workspace, agentKind, ticketRequestedAt, createdAt, updatedAt
     }
 
     /// Recognized priority tokens. Stored lowercase (`p1`…`p4`).

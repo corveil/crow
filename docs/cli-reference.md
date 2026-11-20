@@ -717,7 +717,6 @@ crow todo add "native scratch list" --tag crow,cli --priority p2 --note "explore
 | Flag         | Required | Description                         |
 | ------------ | -------- | ----------------------------------- |
 | `<text>`     | yes      | Item text (positional)             |
-| `--kind`    | no       | `idea` or `friction` (CROW-1477). Without it, text starting with `[friction]` is `friction`, anything else `idea`. |
 | `--tag`     | no       | Comma-separated tags                 |
 | `--priority`| no       | `p1`, `p2`, `p3`, or `p4`           |
 | `--note`    | no       | Longer note                         |
@@ -737,15 +736,6 @@ The command fails only when no workspace resolves, including when `defaults.mana
 ```bash
 crow todo list
 crow todo list --state captured --tag crow
-crow todo list --kind friction
-```
-
-The response is `{todos, kind_counts}`. `kind_counts` counts each kind (`idea`, `friction`) under the `--state` / `--tag` filter, before `--kind` narrows the rows, so one call says how much friction sits beside the ideas.
-
-Agents log tool friction as it happens (the Manager context's capture rule, CROW-1477):
-
-```bash
-crow todo add --kind friction "[friction] crow send has no --wait-ready — polled list-terminals until the pane was up"
 ```
 
 ### `crow todo get`
@@ -760,7 +750,7 @@ crow todo get --id <todo-uuid>
 crow todo edit --id <todo-uuid> --text "changed" --add-tag cli --remove-tag ios
 ```
 
-`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list. `--append-note TEXT` adds a paragraph after the existing note instead of replacing it (applied after `--note` when both are given); the Scratch Ticket Manager records a diagnosis outcome this way. `--workspace NAME` sets the item's workspace and `--workspace ""` clears it; `--agent KIND` sets its agent and `--agent ""` clears it. `--kind idea|friction` reclassifies the item.
+`--add-tag` / `--remove-tag` are repeatable and compose; they do not replace the whole list. `--append-note TEXT` adds a paragraph after the existing note instead of replacing it (applied after `--note` when both are given); the Scratch Ticket Manager records a diagnosis outcome this way. `--workspace NAME` sets the item's workspace and `--workspace ""` clears it; `--agent KIND` sets its agent and `--agent ""` clears it.
 
 ```bash
 crow todo edit --id <todo-uuid> --append-note "Diagnosed by /crow-diagnose: needs info. Which browser was this on?"
@@ -857,40 +847,6 @@ Send text to the item's linked exploring Manager.
 crow todo talk --id <todo-uuid> "keep going — skip the ticket"
 ```
 ---
-
-## Friction Report
-
-Agent tool friction (CROW-1477), from the Scratch items of kind `friction` and, once it exists, Corveil's transcript-derived friction report.
-
-```bash
-crow get-friction-report
-crow get-friction-report --limit 5 --include-closed
-```
-
-| Flag               | Required | Description |
-| ------------------ | -------- | ----------- |
-| `--limit`          | no       | Most groups to return, 1–100 (default 10) |
-| `--include-closed` | no       | Also group friction items already `done` or `dropped` |
-
-```json
-{
-  "local": {
-    "open": 3, "total": 4, "by_state": {"captured": 3, "done": 1}, "group_count": 2,
-    "groups": [
-      {"summary": "crow send has no --wait-ready", "count": 2,
-       "latest_text": "[friction] crow send has no --wait-ready — slept 5s",
-       "latest_at": "2026-11-20T17:01:21Z", "states": ["captured"], "todo_ids": ["…", "…"]}
-    ]
-  },
-  "corveil": {
-    "available": false,
-    "reason": "Corveil's agent friction report has no published API yet (corveil/corveil#5601). …",
-    "tracking": "https://github.com/corveil/corveil/issues/5601"
-  }
-}
-```
-
-`local.groups` puts items together by what happened: the text before ` — ` (or ` – `, ` -- `), without the `[friction]` prefix, case-folded. Groups are ranked by count, then by newest item. `corveil` stays `available: false` until corveil/corveil#5601 publishes an API. Crow then passes that report through under `corveil.report` without reshaping it. The MCP tool `get_friction_report` (`todos:read`) returns the same payload. `/crow-triage` turns the groups into tickets or instruction fixes.
 
 ## TUI recording Commands
 
