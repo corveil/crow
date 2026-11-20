@@ -424,11 +424,7 @@ public enum TodoRPC {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         let token = (trimmed as NSString).lastPathComponent.lowercased()
-        let shells: Set<String> = [
-            "zsh", "bash", "sh", "fish", "dash", "login", "tmux",
-            "crow-shell-wrapper.sh",
-        ]
-        if shells.contains(token) { return false }
+        if AgentReadiness.paneIsShell(trimmed) { return false }
         let agents = [
             "claude", "cursor-agent", "codex", "grok", "opencode",
             "muse", "agy", "antigravity",

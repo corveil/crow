@@ -697,6 +697,10 @@ final class ManagerSessionController {
         promptPath: String? = nil
     ) -> SessionTerminal {
         let command = managerCommand(for: session, cwd: cwd)
+        // The Manager agent is the terminal's command, so creating the
+        // terminal is the launch: `agent_state` reads `starting` until its
+        // first hook (CROW-1475). Covers create-manager, restart and handoff.
+        appState.noteAgentLaunch(sessionID: session.id)
         // CROW-539: install hook config so `crow hook-event` fires for the
         // Manager, driving the same activity indicators worker cards get. The
         // Manager has no worktree and runs at the dev root, so hooks carry the

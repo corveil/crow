@@ -140,6 +140,13 @@ func makeEngineSessionHandlers(
                 if let recording {
                     result["recording"] = recording.row(for: s, appState: capturedAppState)
                 }
+                // Can the agent take input, and when did it last accept a
+                // prompt (CROW-1475)? One tmux read for the pane command.
+                result.merge(
+                    AgentStateReport.fields(
+                        for: s, appState: capturedAppState,
+                        paneCommands: TerminalRouter.paneCurrentCommands()),
+                    uniquingKeysWith: { _, new in new })
                 return result
             }
         },

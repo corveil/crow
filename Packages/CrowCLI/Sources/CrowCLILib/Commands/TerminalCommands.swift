@@ -1,4 +1,5 @@
 import ArgumentParser
+import CrowCore
 import CrowIPC
 import Foundation
 
@@ -145,9 +146,24 @@ public struct RenameTerminal: ParsableCommand {
 
 /// Send text to a terminal tab.
 public struct Send: ParsableCommand {
-    public static let configuration = CommandConfiguration(commandName: "send", abstract: "Send text to a terminal")
+    public static let configuration = CommandConfiguration(
+        commandName: "send",
+        abstract: "Send text to a terminal",
+        discussion: """
+            --wait-ready waits until the session's agent is idle before pasting, and fails \
+            on timeout. --wait-ack waits after the paste until the agent picks the text up \
+            (agent_state moves to working, or last_prompt_at changes) and reports \
+            "accepted"; it exits non-zero with "accepted": false on timeout. Both need \
+            --terminal to be the session's agent terminal (agent_terminal_id in get-session).
+            """)
     @Option(name: .long, help: "Session UUID") var session: String
     @Option(name: .long, help: "Terminal UUID") var terminal: String
+    @Flag(name: .long, help: "Wait until the agent is idle and ready for input before sending")
+    var waitReady: Bool = false
+    @Flag(name: .long, help: "After sending, wait until the agent picks the text up and report \"accepted\"")
+    var waitAck: Bool = false
+    @Option(name: .long, help: "Seconds each wait may take (default 60, max 3600)")
+    var timeout: Double = AgentWait.defaultTimeout
     @Argument(help: "Text to send") var text: String
 
     public init() {}
@@ -155,14 +171,67 @@ public struct Send: ParsableCommand {
     public func validate() throws {
         try validateUUID(session, label: "session UUID")
         try validateUUID(terminal, label: "terminal UUID")
+        try AgentWait.validateTimeout(timeout)
     }
 
     public func run() throws {
-        let result = try rpc("send", params: [
+        var before: AgentWait.Snapshot?
+        if waitReady || waitAck {
+            let snap = try AgentWait.fetch(session: session)
+            try checkAgentTerminal(snap)
+            before = snap
+        }
+        if waitReady {
+            let outcome = try AgentWait.poll(
+                timeout: timeout,
+                fetch: { try AgentWait.fetch(session: session) },
+                done: { $0.agentState == AgentReadinessState.idle.rawValue })
+            guard case .reached(let snap) = outcome else {
+                throw AgentWait.failure(outcome, waitingFor: "idle and ready for input", timeout: timeout)
+            }
+            before = snap
+        }
+        var result = try rpc("send", params: [
             "session_id": .string(session),
             "terminal_id": .string(terminal),
             "text": .string(text),
         ])
+        guard waitAck, let before else {
+            printJSON(result)
+            return
+        }
+        let outcome = try AgentWait.poll(
+            timeout: timeout,
+            fetch: { try AgentWait.fetch(session: session) },
+            done: { AgentWait.isAccepted($0, before: before) })
+        let accepted: Bool
+        let last: AgentWait.Snapshot?
+        switch outcome {
+        case .reached(let snap): accepted = true; last = snap
+        case .exited(let snap), .timedOut(let snap): accepted = false; last = snap
+        case .noAgent: accepted = false; last = nil
+        }
+        result["accepted"] = .bool(accepted)
+        result["agent_state"] = last?.agentState.map { .string($0) } ?? .null
+        result["last_prompt_at"] = last?.lastPromptAt.map { .string($0) } ?? .null
         printJSON(result)
+        if !accepted {
+            warn("the agent did not pick the text up within \(AgentWait.formatSeconds(timeout))s"
+                 + " (agent_state=\(last?.agentState ?? "null")).")
+            throw ExitCode.failure
+        }
+    }
+
+    /// `--wait-ready` / `--wait-ack` read the session's agent, so they only
+    /// mean something when the text goes to that agent's terminal.
+    private func checkAgentTerminal(_ snap: AgentWait.Snapshot) throws {
+        guard let agentTerminal = snap.agentTerminalID else {
+            throw ValidationError("The session has no agent terminal, so --wait-ready / --wait-ack have no agent to wait on.")
+        }
+        guard agentTerminal.caseInsensitiveCompare(terminal) == .orderedSame else {
+            throw ValidationError(
+                "--terminal \(terminal) is not the session's agent terminal (\(agentTerminal)). "
+                + "--wait-ready / --wait-ack wait on the agent, so send to its terminal.")
+        }
     }
 }

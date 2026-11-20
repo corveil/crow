@@ -441,6 +441,17 @@ public final class AppState {
         existingHookState(for: sessionID)?.resetForAgentRelaunch()
     }
 
+    /// Mark that an agent launch was just typed into this session's pane, so
+    /// `agent_state` reads `starting` until the agent's first hook (CROW-1475).
+    /// Creates the hook state: a fresh session has none yet, and its launch
+    /// is exactly the case to mark.
+    public func noteAgentLaunch(sessionID: UUID) {
+        let state = hookState(for: sessionID)
+        state.agentLaunchPending = true
+        state.agentLaunchedAt = Date()
+        state.agentAnnouncedAt = nil
+    }
+
     /// Snapshot every session's color-driving hook state for persistence (#367).
     public func allHookStateSnapshots() -> [UUID: PersistedHookState] {
         _sessionState.mapValues { $0.persistedSnapshot }
@@ -944,8 +955,39 @@ public final class SessionHookState {
     /// fires after the user's turn has ended. Cleared on the next
     /// UserPromptSubmit, which marks the start of a new real turn.
     public var lastTopLevelStopAt: Date?
+    /// The agent was (re)launched and no hook event has arrived since
+    /// (CROW-1475). Set by ``AppState/noteAgentLaunch(sessionID:)`` and by
+    /// ``resetForAgentRelaunch()``; cleared by the next hook event. False for
+    /// an agent adopted from a surviving tmux window, so a `crowd` restart
+    /// doesn't make every running agent look like it's starting.
+    public var agentLaunchPending: Bool = false
+    /// When ``agentLaunchPending`` was last set.
+    public var agentLaunchedAt: Date?
+    /// When the first hook event after the latest launch arrived. Drives the
+    /// composer settle in ``AgentReadiness``.
+    public var agentAnnouncedAt: Date?
+    /// When the agent last reported a submitted prompt (`UserPromptSubmit`).
+    /// Kept across relaunches: it answers "did my text get through", which a
+    /// relaunch doesn't change. In memory only.
+    public var lastPromptAt: Date?
 
     public init() {}
+
+    /// Hook events that mark a prompt the agent accepted (CROW-1475).
+    public static let promptSubmitEventName = "UserPromptSubmit"
+
+    /// Record a hook event's effect on launch readiness and `lastPromptAt`.
+    /// Called by the `hook-event` handler for every event it attributes to
+    /// this session.
+    public func noteHookEventForReadiness(_ eventName: String, at date: Date = Date()) {
+        if agentLaunchPending {
+            agentLaunchPending = false
+            agentAnnouncedAt = date
+        }
+        if eventName == Self.promptSubmitEventName {
+            lastPromptAt = date
+        }
+    }
 
     /// The hook event that marks a *completed* compaction. `PreCompact` (and
     /// any failed/aborted compaction, which never emits `PostCompact`) is not
@@ -970,6 +1012,10 @@ public final class SessionHookState {
         lastToolActivity = nil
         hookEvents = []
         lastTopLevelStopAt = nil
+        // Every caller relaunches the agent right after (CROW-1475).
+        agentLaunchPending = true
+        agentLaunchedAt = Date()
+        agentAnnouncedAt = nil
     }
 }
 

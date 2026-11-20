@@ -55,6 +55,13 @@ public enum TerminalRouter {
         TmuxBackend.shared.paneCurrentCommand(id: terminal.id)
     }
 
+    /// Live foreground command of every bound terminal, keyed by terminal id,
+    /// from one tmux call. Nil when tmux isn't running or the read failed
+    /// (CROW-1475).
+    public static func paneCurrentCommands() -> [UUID: String]? {
+        TmuxBackend.shared.paneCurrentCommands()
+    }
+
     /// Last `linesBack` lines of `terminal`'s pane, without SGR escapes.
     /// Nil when the window is not bound or tmux fails. Extra-Manager handoff
     /// calls this before `destroy` (CROW-1314).

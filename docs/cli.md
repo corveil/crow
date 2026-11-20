@@ -181,6 +181,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow version check`](#crow-version-check) | Compare this build against corveil/crow main |
 | [`crow version get`](#crow-version-get) | Show version-update settings and the cached check result |
 | [`crow version set`](#crow-version-set) | Change version-update settings |
+| [`crow wait`](#crow-wait) | Wait until a session's agent reaches a state (idle, working, ...) |
 | [`crow web-password`](#crow-web-password) | Manage the web-access password (local-only) |
 | [`crow web-password clear`](#crow-web-password-clear) | Remove the web-access password |
 | [`crow web-password set`](#crow-web-password-set) | Set or change the web-access password |
@@ -1986,13 +1987,18 @@ crow select-session --session <session>
 Send text to a terminal.
 
 ```
-crow send --session <session> --terminal <terminal> <text>
+crow send --session <session> --terminal <terminal> [--wait-ready] [--wait-ack] [--timeout <timeout>] <text>
 ```
+
+--wait-ready waits until the session's agent is idle before pasting, and fails on timeout. --wait-ack waits after the paste until the agent picks the text up (agent_state moves to working, or last_prompt_at changes) and reports "accepted"; it exits non-zero with "accepted": false on timeout. Both need --terminal to be the session's agent terminal (agent_terminal_id in get-session).
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
 | `--terminal` | `<terminal>` | yes | Terminal UUID |
+| `--wait-ready` | — | no | Wait until the agent is idle and ready for input before sending |
+| `--wait-ack` | — | no | After sending, wait until the agent picks the text up and report "accepted" |
+| `--timeout` | `<timeout>` | no | Seconds each wait may take (default 60, max 3600). Default: `60.0`. |
 | _(positional)_ | `<text>` | yes | Text to send |
 
 ---
@@ -2886,6 +2892,24 @@ Only the flags you pass change; at least one is required. --interval-hours is fl
 | --- | --- | --- | --- |
 | `--enabled` | `<enabled>` | no | Enable periodic upstream checks (true or false) |
 | `--interval-hours` | `<interval-hours>` | no | Hours between automatic checks (minimum 1, default 1) |
+
+---
+
+## `crow wait`
+
+Wait until a session's agent reaches a state (idle, working, ...).
+
+```
+crow wait --session <session> --until <until> [--timeout <timeout>]
+```
+
+Polls the session's agent_state (see get-session) until it equals --until, then prints the session's readiness fields. Fails when the agent exits first (unless --until exited), when the session has no agent terminal, or on timeout.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--until` | `<until>` | yes | State to wait for: starting, idle, working, waiting_permission, exited |
+| `--timeout` | `<timeout>` | no | Seconds to wait before failing (default 60, max 3600). Default: `60.0`. |
 
 ---
 

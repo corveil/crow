@@ -70,6 +70,7 @@ public struct CrowCommand: ParsableCommand {
             RelaunchAgent.self,
             RenameTerminal.self,
             Send.self,
+            Wait.self,
             LaunchAgent.self,
             RetryReadiness.self,
             RestartManager.self,

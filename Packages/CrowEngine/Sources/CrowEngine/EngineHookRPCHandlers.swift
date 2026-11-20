@@ -399,6 +399,9 @@ func makeEngineHookHandlers(
                 // Append to ring buffer (keep last 50 events per session)
                 state.hookEvents.append(event)
                 if state.hookEvents.count > 50 { state.hookEvents.removeFirst(state.hookEvents.count - 50) }
+                // Any hook ends the launch's `starting` window; a prompt submit
+                // stamps `last_prompt_at` (CROW-1475).
+                state.noteHookEventForReadiness(eventName)
 
                 // Count completed compactions (ADR 0008 follow-up 3).
                 // `noteCompactionEvent` and the persist path shipped with
