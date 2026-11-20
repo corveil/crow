@@ -72,6 +72,12 @@ enum RPCLanePolicy {
         // MARK: Worktrees
         "add-worktree": .on("session_id"),
 
+        // MARK: Review clones
+        // Removes files from the session's own clone. Two re-strips of one
+        // clone would race on the same paths; different sessions never share
+        // a clone.
+        "review-restrip": .on("session_id"),
+
         // MARK: Terminals
         // Keyed on the session, not the terminal: these mutate the session's
         // terminal *list*. `send` in particular must never reorder — two lines

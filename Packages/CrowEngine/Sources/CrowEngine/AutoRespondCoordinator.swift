@@ -326,8 +326,10 @@ public enum QuickActionPrompts {
         // CROW-960: checkout restores attacker-controlled harness config into
         // the live session. Re-strip immediately after sync (after `git pull`
         // on GitLab), matching crow-review-pr Step 1. The command string is
-        // shared with the skill so the two paths cannot drift.
-        let restripHint = "Then immediately re-strip restored harness config with `\(ReviewCloneRestrip.workingTreeRmCommand)` (working-tree only; do not git rm)."
+        // shared with the skill so the two paths cannot drift. CROW-1492: the
+        // daemon does the removal (an agent's sandboxed `rm` can't remove
+        // `.claude/settings*.json`), and a failed strip stops the re-review.
+        let restripHint = "Then immediately, as its own Bash call with the sandbox disabled, have Crow re-strip restored harness config with `\(ReviewCloneRestrip.cliCommand)` (do not run your own rm or git rm instead). If it fails or exits non-zero, stop: do not review or post anything, and tell the operator `Re-review stopped: the CROW-1492 re-strip failed: <the error it printed>`."
         if codeBackend.provider == .gitlab {
             syncHint = "Run `\(cli) mr checkout \(prURL)` (then `git pull`) to sync your local checkout to the author's latest head. \(restripHint)"
             reviewHint = "Post a fresh verdict with `\(cli) mr note`/approval per the crow-review-pr skill — never a bare comment."

@@ -151,6 +151,8 @@ struct ReReviewPromptTests {
     /// CROW-960: a head-advancing re-review is the same restore as the skill's
     /// `gh pr checkout`. The prompt must re-strip immediately after sync, using
     /// the shared command so it cannot drift from crow-review-pr Step 1.
+    /// CROW-1492: that command is the daemon verb, not an agent-side `rm`, and
+    /// a failed strip stops the re-review.
     @Test func restripsHarnessConfigAfterCheckout() throws {
         let github = QuickActionPrompts.build(
             action: .reReview,
@@ -159,8 +161,14 @@ struct ReReviewPromptTests {
             prNumber: 753,
             lastReviewedHeadSha: nil
         )
-        #expect(github.contains(ReviewCloneRestrip.workingTreeRmCommand))
-        #expect(github.contains("do not git rm"))
+        #expect(github.contains(ReviewCloneRestrip.cliCommand))
+        #expect(github.contains("sandbox disabled"))
+        #expect(github.contains("do not run your own rm or git rm"))
+        #expect(github.contains("If it fails or exits non-zero, stop"))
+        #expect(!github.contains("rm -rf"))
+        let checkoutRange = try #require(github.range(of: "gh pr checkout"))
+        let restripRange = try #require(github.range(of: ReviewCloneRestrip.cliCommand))
+        #expect(checkoutRange.lowerBound < restripRange.lowerBound)
         // Re-strip is after checkout, still one line.
         #expect(!github.dropLast().contains("\n"))
 
@@ -173,7 +181,7 @@ struct ReReviewPromptTests {
         )
         // GitLab syncs with checkout then `git pull`; the rm must follow both.
         let pullRange = try #require(gitlab.range(of: "git pull"))
-        let rmRange = try #require(gitlab.range(of: ReviewCloneRestrip.workingTreeRmCommand))
+        let rmRange = try #require(gitlab.range(of: ReviewCloneRestrip.cliCommand))
         #expect(pullRange.lowerBound < rmRange.lowerBound)
     }
 }
