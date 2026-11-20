@@ -38,6 +38,14 @@ struct ScaffolderManagerContextTests {
         )
     }
 
+    /// CROW-1494: the two Bash Conventions bullets that stop the most common
+    /// failed tool calls (memory files through the shell, `timeout` on macOS).
+    @Test func managerContextCarriesTheMemoryFileAndTimeoutBullets() {
+        let context = Scaffolder.bundledCLAUDEMD()
+        #expect(context.contains("- **Memory files** (`~/.claude/projects/*/memory/`)"))
+        #expect(context.contains("- **macOS has no `timeout`.**"))
+    }
+
     @Test func managerContextEndsWithTheCorrectionsHeading() {
         // Scaffolder keeps the operator's corrections by splitting on this
         // heading, so the template must carry it.
