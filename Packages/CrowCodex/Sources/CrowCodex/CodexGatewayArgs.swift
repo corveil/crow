@@ -20,6 +20,7 @@ import CrowCore
 ///       -c model_providers.crow-corveil.http_headers.X-Corveil-Upstream=chatgpt_codex
 ///       -c model_providers.crow-corveil.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY
 ///       -c model_providers.crow-corveil.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION
+///       -c model_providers.crow-corveil.env_http_headers.X-Crow-Session=CROW_GATEWAY_CROW_SESSION
 /// ```
 ///
 /// **The key is never in these overrides.** `env_http_headers` names an
@@ -27,7 +28,7 @@ import CrowCore
 /// time. The overrides hold only the base URL, the upstream and env var names,
 /// so they are safe to persist (a Manager terminal's stored `command`), to send
 /// over the socket (`crow new-terminal --command`), and to show in `ps`. The
-/// variable is set separately by ``keyExportPrefix(_:crowVersion:)``. The daemon
+/// variable is set separately by ``keyExportPrefix(_:crowVersion:crowSession:)``. The daemon
 /// types that prefix into the pane immediately before the command, so the key is
 /// shell state, never argv. This is the same trick the Claude prefix uses, minus
 /// Claude's `settings.local.json` copy, because nothing Codex or Grok reads
@@ -37,6 +38,11 @@ import CrowCore
 /// var set at paste time, though it is no secret: a Manager terminal's stored
 /// `command` outlives a Crow upgrade, so a value baked into the overrides would
 /// report the old build after every relaunch.
+///
+/// `X-Crow-Session` (CROW-1476) rides the same paste-time export. The overrides
+/// are built before a session id is always known (`setup.sh` builds them for
+/// `crow new-terminal --command`), and the value differs per session while the
+/// override text doesn't.
 ///
 /// Formatting constraints, all deliberate:
 ///
@@ -68,9 +74,14 @@ public enum CodexGatewayArgs {
     public static let keyHeader = "X-Corveil-Key"
 
     /// The env var Codex reads the `X-Crow-Version` value from (CROW-1458).
-    /// Set by ``keyExportPrefix(_:crowVersion:)`` beside the key. When it is
-    /// unset, Codex omits the header.
+    /// Set by ``keyExportPrefix(_:crowVersion:crowSession:)`` beside the key.
+    /// When it is unset, Codex omits the header.
     public static let crowVersionEnvVar = "CROW_GATEWAY_CROW_VERSION"
+
+    /// The env var Codex reads the `X-Crow-Session` value from (CROW-1476).
+    /// Set by ``keyExportPrefix(_:crowVersion:crowSession:)`` beside the key.
+    /// When it is unset, Codex omits the header.
+    public static let crowSessionEnvVar = "CROW_GATEWAY_CROW_SESSION"
 
     /// Gateway header names that carry a Corveil key, compared case-insensitively.
     /// Corveil accepts the key under either name, and Crow's own derived gateways
@@ -80,7 +91,7 @@ public enum CodexGatewayArgs {
     public static let keyHeaderNames: [String] = ["x-citadel-api-key", "x-corveil-key"]
 
     /// The override that names ``keyEnvVar``. Its presence in a command is how the
-    /// paste paths know the command needs ``keyExportPrefix(_:crowVersion:)`` (see
+    /// paste paths know the command needs ``keyExportPrefix(_:crowVersion:crowSession:)`` (see
     /// ``commandRequestsKey(_:)``).
     static var keyOverride: String {
         "model_providers.\(providerID).env_http_headers.\(keyHeader)=\(keyEnvVar)"
@@ -194,6 +205,7 @@ public enum CodexGatewayArgs {
             "\(p).http_headers.X-Corveil-Upstream=\(route.upstream)",
             keyOverride,
             "\(p).env_http_headers.\(CrowVersionHeader.name)=\(crowVersionEnvVar)",
+            "\(p).env_http_headers.\(CrowSessionHeader.name)=\(crowSessionEnvVar)",
         ]
         return pairs.map { " -c \($0)" }.joined()
     }
@@ -215,12 +227,19 @@ public enum CodexGatewayArgs {
     /// `crowVersion` (CROW-1458, default ``CrowVersionHeader/current``) is
     /// exported in the same statement as ``crowVersionEnvVar``, which the
     /// overrides map to `X-Crow-Version`. Nil leaves the prefix as it was before.
+    ///
+    /// `crowSession` (CROW-1476) is exported the same way as
+    /// ``crowSessionEnvVar``, which the overrides map to `X-Crow-Session`. Nil
+    /// (the default) exports nothing, and Codex omits the header.
     public static func keyExportPrefix(
-        _ key: String, crowVersion: String? = CrowVersionHeader.current
+        _ key: String, crowVersion: String? = CrowVersionHeader.current, crowSession: UUID? = nil
     ) -> String {
         let safe = key.rangeOfCharacter(from: .controlCharacters.union(.newlines)) == nil ? key : ""
         let version = crowVersion.map { " \(crowVersionEnvVar)=\(ShellLaunchArgs.shellQuote($0))" } ?? ""
-        return "export \(keyEnvVar)=\(ShellLaunchArgs.shellQuote(safe))\(version) && "
+        let session = crowSession.map {
+            " \(crowSessionEnvVar)=\(ShellLaunchArgs.shellQuote(CrowSessionHeader.value(for: $0)))"
+        } ?? ""
+        return "export \(keyEnvVar)=\(ShellLaunchArgs.shellQuote(safe))\(version)\(session) && "
     }
 
     /// Resolve the gateway's Corveil key: the stored value, or the secret behind an

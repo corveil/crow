@@ -188,12 +188,7 @@ public enum RecordingStatus {
     /// history plus the current id when the history predates it (CROW-1382).
     /// The collector uploads one artifact per entry.
     public static func managerConversations(_ session: Session) -> [HarnessConversationRef] {
-        var refs = session.harnessConversationHistory
-        if let current = session.harnessConversationID,
-           !refs.contains(where: { $0.id == current }) {
-            refs.append(HarnessConversationRef(agentKind: session.agentKind, id: current))
-        }
-        return refs
+        session.agentConversations
     }
 
     /// `{devRoot}/{workspace}/…` → `workspace`; nil outside the dev root.

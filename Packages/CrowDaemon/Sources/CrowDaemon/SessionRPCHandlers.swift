@@ -156,6 +156,9 @@ func makeSessionHandlers(
                         // retired native `canSetProjectStatus(for:)` (GitHub/Jira
                         // yes, GitLab no). Gates the web "In Review" button (CROW-749).
                         "can_set_project_status": .bool(tracker?.canSetProjectStatus(for: session) ?? false),
+                        // Every agent conversation the session ran (CROW-1476),
+                        // the same array `get-session` returns.
+                        "agent_conversations": AgentConversationRPC.conversationsJSON(session),
                     ]
                     // Gateway traffic + transcript upload. Base URL, key ids/names,
                     // org names and text only — `list-sessions` is remote-readable

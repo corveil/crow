@@ -85,12 +85,14 @@ struct ManagerWorkspaceModelTests {
         #expect(session.harnessConversationHistory.first?.id == "conv-5")
     }
 
-    /// Work sessions upload per Crow session; they keep no history.
-    @Test func workSessionKeepsNoHistory() {
+    /// Work sessions still upload per Crow session, but since CROW-1476 they
+    /// keep a history too, so `find-session` can map any of their
+    /// conversations back to them.
+    @Test func workSessionKeepsAHistoryToo() {
         var session = Session(name: "w", kind: .work)
         session.recordHarnessConversationID("conv-a")
         session.recordHarnessConversationID("conv-b")
-        #expect(session.harnessConversationHistory.isEmpty)
+        #expect(session.harnessConversationHistory.map(\.id) == ["conv-a", "conv-b"])
     }
 
     // MARK: - ConfigDefaults.managerWorkspace

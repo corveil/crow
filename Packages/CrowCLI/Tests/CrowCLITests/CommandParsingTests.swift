@@ -301,3 +301,15 @@ private let otherUUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         try cmd.validate()
     }
 }
+
+// MARK: - find-session (CROW-1476)
+
+@Test func findSessionParsesAgentSession() throws {
+    let cmd = try FindSession.parse(["--agent-session", "0b1e2d3c"])
+    #expect(cmd.agentSession == "0b1e2d3c")
+}
+
+@Test func findSessionRequiresANonEmptyAgentSession() {
+    #expect(throws: (any Error).self) { _ = try FindSession.parse([]) }
+    #expect(throws: (any Error).self) { _ = try FindSession.parse(["--agent-session", "  "]) }
+}

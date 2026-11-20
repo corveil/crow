@@ -52,8 +52,9 @@ extension SessionService {
         }
     }
 
-    /// `export CROW_CORVEIL_GATEWAY_KEY='…' && ` when `command` is a routed Codex
-    /// launch, else `""`. Call it only where text is about to be typed into a
+    /// `export CROW_CORVEIL_GATEWAY_KEY='…' … && ` when `command` is a routed Codex
+    /// launch, else `""`. The same statement exports the session id for
+    /// `X-Crow-Session` (CROW-1476). Call it only where text is about to be typed into a
     /// pane, never where a command is stored, because the result holds the key.
     ///
     /// A key that can't be resolved (a failed `op read`, or a gateway that was
@@ -66,7 +67,7 @@ extension SessionService {
         if key == nil {
             CrowLog.info("[SessionService] Codex gateway for session \(session.id): no Corveil key resolved; Codex will be rejected by the gateway")
         }
-        return CodexGatewayArgs.keyExportPrefix(key ?? "")
+        return CodexGatewayArgs.keyExportPrefix(key ?? "", crowSession: session.id)
     }
 
     /// ``codexGatewayKeyPrefix(for:command:)`` keyed by session id, for the paste

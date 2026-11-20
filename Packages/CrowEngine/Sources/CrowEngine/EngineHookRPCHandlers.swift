@@ -349,9 +349,12 @@ func makeEngineHookHandlers(
                 // cold-start Manager relaunch can resume-by-id. Latest id wins
                 // (`/clear` starts a new Claude session). Never overwrite with
                 // Crow's own UUID (that's the `--session` baked into the hook).
-                // A Manager also appends the id to its conversation history, so
-                // log sync can still ship the conversation this one replaced
-                // (CROW-1382).
+                // The id also goes into the session's conversation history, so
+                // log sync can still ship a Manager conversation this one
+                // replaced (CROW-1382) and any session's conversations map back
+                // to it (`agent_conversations`, `find-session`, CROW-1476).
+                // Repeat hooks for the same id persist only when its
+                // `lastActiveAt` is a minute stale.
                 if sessionIsLive,
                    let hid = HarnessConversationID.extract(
                         fields: payload.compactMapValues { $0.stringValue },

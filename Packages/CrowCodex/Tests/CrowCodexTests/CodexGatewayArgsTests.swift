@@ -73,7 +73,8 @@ struct CodexGatewayArgsTests {
             + " -c model_providers.crow-corveil.requires_openai_auth=true"
             + " -c model_providers.crow-corveil.http_headers.X-Corveil-Upstream=chatgpt_codex"
             + " -c model_providers.crow-corveil.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY"
-            + " -c model_providers.crow-corveil.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION")
+            + " -c model_providers.crow-corveil.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION"
+            + " -c model_providers.crow-corveil.env_http_headers.X-Crow-Session=CROW_GATEWAY_CROW_SESSION")
         #expect(!overrides.contains(Self.key))
         // Sits inside `eval "…"` on prompt-seeded launches.
         #expect(!overrides.contains("\""))
@@ -104,6 +105,7 @@ struct CodexGatewayArgsTests {
         #expect(argv.contains("model_providers.crow-corveil.base_url=https://corveil.io/v1\n"))
         #expect(argv.contains("model_providers.crow-corveil.http_headers.X-Corveil-Upstream=chatgpt_codex\n"))
         #expect(argv.contains("model_providers.crow-corveil.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION\n"))
+        #expect(argv.contains("model_providers.crow-corveil.env_http_headers.X-Crow-Session=CROW_GATEWAY_CROW_SESSION\n"))
         #expect(argv.hasSuffix("--no-alt-screen\nhello\n"))
     }
 
@@ -138,6 +140,38 @@ struct CodexGatewayArgsTests {
         #expect(env.split(separator: "\n").contains("\(CodexGatewayArgs.crowVersionEnvVar)=0.2.0+8e32cc67"))
         #expect(CodexGatewayArgs.configOverrides(r)
             .contains("env_http_headers.\(CrowVersionHeader.name)=\(CodexGatewayArgs.crowVersionEnvVar)"))
+    }
+
+    // MARK: - X-Crow-Session (CROW-1476)
+
+    @Test func crowSessionIsExportedBesideTheKey() {
+        let session = UUID(uuidString: "4D2B091E-5D06-4855-9BD4-EC8FD76C712F")!
+        #expect(CodexGatewayArgs.keyExportPrefix("sk-1", crowVersion: "0.2.0+dev", crowSession: session)
+            == "export CROW_CORVEIL_GATEWAY_KEY='sk-1' CROW_GATEWAY_CROW_VERSION='0.2.0+dev'"
+            + " CROW_GATEWAY_CROW_SESSION='4D2B091E-5D06-4855-9BD4-EC8FD76C712F' && ")
+        #expect(CodexGatewayArgs.keyExportPrefix("", crowVersion: nil, crowSession: session)
+            == "export CROW_CORVEIL_GATEWAY_KEY='' CROW_GATEWAY_CROW_SESSION='4D2B091E-5D06-4855-9BD4-EC8FD76C712F' && ")
+        // No session: nothing exported, and Codex omits the header.
+        #expect(CodexGatewayArgs.keyExportPrefix("sk-1", crowVersion: nil)
+            == "export CROW_CORVEIL_GATEWAY_KEY='sk-1' && ")
+    }
+
+    @Test func crowSessionReachesCodexAsAHeaderEnvVar() throws {
+        let session = UUID()
+        let r = try route(gateway()).get()
+        let script = CodexGatewayArgs.keyExportPrefix("sk-1", crowVersion: nil, crowSession: session)
+            + "env" + " # " + CodexGatewayArgs.configOverrides(r)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-c", script]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let env = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        #expect(env.split(separator: "\n").contains("\(CodexGatewayArgs.crowSessionEnvVar)=\(session.uuidString)"))
+        #expect(CodexGatewayArgs.configOverrides(r)
+            .contains("env_http_headers.\(CrowSessionHeader.name)=\(CodexGatewayArgs.crowSessionEnvVar)"))
     }
 
     // MARK: - key

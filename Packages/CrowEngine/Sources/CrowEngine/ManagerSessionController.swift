@@ -214,7 +214,8 @@ final class ManagerSessionController {
             // written by the terminal-creation / hydrate paths, which own the
             // devRoot write site — keeping this builder pure.
             cmd = ClaudeLaunchArgs.gatewayEnvPrefix(
-                managerGatewayResolved(workspaceTag: session.managerWorkspaceTag)) + claudePath + suffix
+                managerGatewayResolved(sessionID: session.id, workspaceTag: session.managerWorkspaceTag))
+                + claudePath + suffix
         }
         if let cwd,
            let extra = ManagerIdentity.additionalDirectory(
@@ -235,7 +236,7 @@ final class ManagerSessionController {
     /// Mirrors the `createManagerTerminal` write site.
     func writeManagerGatewayEnv(managerKind: AgentKind) {
         guard let devRoot = ConfigStore.loadDevRoot() else { return }
-        writeManagerGatewayEnv(managerKind: managerKind, dirPath: devRoot)
+        writeManagerGatewayEnv(managerKind: managerKind, dirPath: devRoot, sessionID: AppState.managerSessionID)
     }
 
     /// Write (or clear) the Manager gateway env block at `dirPath`. Extra
@@ -244,11 +245,15 @@ final class ManagerSessionController {
     /// ``Session/managerWorkspaceTag`` (CROW-1382) — nil for the primary and
     /// for untagged extras, which keep `AppConfig.managerGateway`. A tagged
     /// Manager whose workspace has no gateway gets its env block cleared
-    /// (CROW-1478).
-    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String, workspaceTag: UUID? = nil) {
+    /// (CROW-1478). `sessionID` is the Manager's own id, sent as
+    /// `X-Crow-Session` (CROW-1476).
+    func writeManagerGatewayEnv(
+        managerKind: AgentKind, dirPath: String, sessionID: UUID, workspaceTag: UUID? = nil
+    ) {
         if managerKind == .claudeCode {
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: dirPath, resolved: managerGatewayResolved(workspaceTag: workspaceTag))
+                dirPath: dirPath,
+                resolved: managerGatewayResolved(sessionID: sessionID, workspaceTag: workspaceTag))
         } else if SessionService.readsClaudeCompatSettings(managerKind) {
             ClaudeHookConfigWriter.writeGatewayEnv(dirPath: dirPath, resolved: nil)
         }
@@ -406,7 +411,10 @@ final class ManagerSessionController {
     /// reboot (#1282), Recreate, and the extra-Manager handoff (#1315) all
     /// rebuild from the persisted `Session`, so the tag cannot be dropped by
     /// one of them.
-    private func managerGatewayResolved(workspaceTag: UUID?) -> GatewayResolver.Resolved? {
+    ///
+    /// `sessionID` rides along as `X-Crow-Session` (CROW-1476), so the
+    /// gateway's request log names the Manager.
+    private func managerGatewayResolved(sessionID: UUID, workspaceTag: UUID?) -> GatewayResolver.Resolved? {
         guard let devRoot = ConfigStore.loadDevRoot(),
               let config = ConfigStore.loadConfig(devRoot: devRoot)
         else { return nil }
@@ -415,7 +423,7 @@ final class ManagerSessionController {
             logManagerGatewayDecision(workspaceTag: workspaceTag, match: match)
         }
         guard let gateway = match.gateway, !gateway.isEmpty else { return nil }
-        return GatewayResolver.resolve(gateway)
+        return GatewayResolver.resolve(gateway, crowSession: sessionID)
     }
 
     /// One line per tagged-Manager launch naming which gateway it got
@@ -496,7 +504,10 @@ final class ManagerSessionController {
     /// There is no `managerGateway` fallback — the Manager's gateway is the
     /// Manager's alone.
     ///
-    /// ⚠️ Calls ``GatewayResolver/resolve(_:crowVersion:resolveSecret:)``, which shells out to
+    /// The resolved headers end with `X-Crow-Session: <sessionID>` (CROW-1476),
+    /// so the gateway's request log names this session.
+    ///
+    /// ⚠️ Calls ``GatewayResolver/resolve(_:crowVersion:crowSession:resolveSecret:)``, which shells out to
     /// `op read` with a **15-second timeout per header**. This is a launch-path
     /// method only. A read RPC wanting the same information must call
     /// ``workspaceGatewayMatch(for:)`` instead, which touches no subprocess.
@@ -504,7 +515,7 @@ final class ManagerSessionController {
         let match = workspaceGatewayMatch(for: sessionID)
         logGatewayLaunchDecision(sessionID: sessionID, match: match)
         guard let gateway = match?.gateway, !gateway.isEmpty else { return nil }
-        return GatewayResolver.resolve(gateway)
+        return GatewayResolver.resolve(gateway, crowSession: sessionID)
     }
 
     /// One line per Claude launch/handoff naming where the session's gateway came
@@ -721,7 +732,8 @@ final class ManagerSessionController {
         // token can't linger in a now-trusted devRoot. A Cursor/OpenCode/Antigravity
         // Manager never reads the file, so it's left untouched (no rewrite churn).
         writeManagerGatewayEnv(
-            managerKind: session.agentKind, dirPath: cwd, workspaceTag: session.managerWorkspaceTag)
+            managerKind: session.agentKind, dirPath: cwd, sessionID: session.id,
+            workspaceTag: session.managerWorkspaceTag)
 
         // Persist the bare Manager command so recreate/hydrate still launches
         // the TUI. The explore brief is a one-shot pending launch (#408) —
@@ -1119,9 +1131,11 @@ extension SessionService {
     }
     func managerCommand(sessionName: String) -> String { manager.managerCommand(sessionName: sessionName) }
     func writeManagerGatewayEnv(managerKind: AgentKind) { manager.writeManagerGatewayEnv(managerKind: managerKind) }
-    func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String, workspaceTag: UUID? = nil) {
+    func writeManagerGatewayEnv(
+        managerKind: AgentKind, dirPath: String, sessionID: UUID, workspaceTag: UUID? = nil
+    ) {
         manager.writeManagerGatewayEnv(
-            managerKind: managerKind, dirPath: dirPath, workspaceTag: workspaceTag)
+            managerKind: managerKind, dirPath: dirPath, sessionID: sessionID, workspaceTag: workspaceTag)
     }
     func writeManagerHookConfig(for session: Session, dirPath: String) {
         manager.writeManagerHookConfig(for: session, dirPath: dirPath)

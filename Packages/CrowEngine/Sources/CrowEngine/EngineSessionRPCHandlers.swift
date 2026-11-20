@@ -129,6 +129,10 @@ func makeEngineSessionHandlers(
                     // (CROW-1310). Null when the label isn't there, or when
                     // this session has no PR status yet.
                     "reviewing_by": capturedAppState.prStatus[id]?.reviewingBy.map { .string($0) } ?? .null,
+                    // Every agent conversation this session ran, oldest first
+                    // (CROW-1476), so a conversation id in a gateway log or a
+                    // transcript file name maps back here. Ids and times only.
+                    "agent_conversations": AgentConversationRPC.conversationsJSON(s),
                 ]
                 // Did the agent's traffic reach the gateway, and has its
                 // transcript reached Corveil? Base URL, key ids/names, org names
@@ -137,6 +141,16 @@ func makeEngineSessionHandlers(
                     result["recording"] = recording.row(for: s, appState: capturedAppState)
                 }
                 return result
+            }
+        },
+
+        // The reverse of `agent_conversations` (CROW-1476): from an agent's own
+        // conversation id (a full id, a unique prefix, or a transcript path)
+        // to the Crow session that ran it.
+        "find-session": { @Sendable params in
+            let raw = params["agent_session"]?.stringValue
+            return try await MainActor.run {
+                try AgentConversationRPC.findSession(agentSession: raw, in: capturedAppState.sessions)
             }
         },
 

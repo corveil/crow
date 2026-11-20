@@ -170,6 +170,39 @@ CROW_BIN=""
 check "no crow binary: no header" "x-citadel-api-key: sk-citadel-plain" "$(resolve_ws Gw)"
 unset FAKE_CROW_VERSION_JSON
 
+echo "== X-Crow-Session header (CROW-1476) =="
+cat > "$DEV_ROOT/.claude/config.json" <<'JSON'
+{
+  "workspaces": [
+    { "name": "Gw", "gateway": { "baseURL": "https://corveil.io",
+        "customHeaders": { "x-citadel-api-key": "sk-citadel-plain" } } },
+    { "name": "OwnSession", "gateway": { "baseURL": "https://corveil.io",
+        "customHeaders": { "x-citadel-api-key": "sk-citadel-plain", "X-CROW-SESSION": "mine" } } },
+    { "name": "Personal" }
+  ]
+}
+JSON
+saved_session_id="$SESSION_ID"
+SESSION_ID="4D2B091E-5D06-4855-9BD4-EC8FD76C712F"
+CROW_BIN="$TMP/bin/fake-crow"
+export FAKE_CROW_VERSION_JSON='{"status":null,"crow_version_header":"0.2.0+8e32cc67"}'
+check "gateway: session appended after the version" \
+  "x-citadel-api-key: sk-citadel-plain"$'\n'"X-Crow-Version: 0.2.0+8e32cc67"$'\n'"X-Crow-Session: 4D2B091E-5D06-4855-9BD4-EC8FD76C712F" \
+  "$(resolve_ws Gw)"
+CROW_BIN=""
+check "no version: session still sent" \
+  "x-citadel-api-key: sk-citadel-plain"$'\n'"X-Crow-Session: 4D2B091E-5D06-4855-9BD4-EC8FD76C712F" "$(resolve_ws Gw)"
+check "no gateway: no session header" "" "$(resolve_ws Personal)"
+out=$(resolve_ws OwnSession)
+contains "user-configured X-Crow-Session kept" "$out" "X-CROW-SESSION: mine"
+check "user-configured X-Crow-Session: Crow adds no second one" "1" "$(grep -ci '^x-crow-session:' <<< "$out")"
+SESSION_ID=""
+check "no session id yet: no header" "x-citadel-api-key: sk-citadel-plain" "$(resolve_ws Gw)"
+SESSION_ID='4D2B091E-5D06-4855-9BD4-EC8FD76C712F;id'
+check "session id that isn't a UUID: no header" "x-citadel-api-key: sk-citadel-plain" "$(resolve_ws Gw)"
+SESSION_ID="$saved_session_id"
+unset FAKE_CROW_VERSION_JSON
+
 echo "== Codex gateway overrides (CROW-1407) =="
 # Rewrite config.json with Codex-specific workspaces. The key never appears in
 # the overrides, so no `op read` is needed for any of these.
@@ -197,8 +230,8 @@ cat > "$DEV_ROOT/.claude/config.json" <<'JSON'
 JSON
 expected_overrides() { # expected_overrides <base> <upstream>
   local p="model_providers.crow-corveil"
-  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY -c %s.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION' \
-    "$p" "$p" "'$1'" "$p" "$p" "$p" "$2" "$p" "$p"
+  printf ' -c model_provider=crow-corveil -c %s.name=Corveil -c %s.base_url=%s -c %s.wire_api=responses -c %s.requires_openai_auth=true -c %s.http_headers.X-Corveil-Upstream=%s -c %s.env_http_headers.X-Corveil-Key=CROW_CORVEIL_GATEWAY_KEY -c %s.env_http_headers.X-Crow-Version=CROW_GATEWAY_CROW_VERSION -c %s.env_http_headers.X-Crow-Session=CROW_GATEWAY_CROW_SESSION' \
+    "$p" "$p" "'$1'" "$p" "$p" "$p" "$2" "$p" "$p" "$p"
 }
 WORKSPACE="OptedIn"
 out=$(codex_gateway_overrides 2>/dev/null)

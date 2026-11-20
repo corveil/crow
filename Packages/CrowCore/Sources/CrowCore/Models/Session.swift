@@ -117,11 +117,15 @@ public struct Session: Identifiable, Codable, Sendable {
     // directly.
     public var workspaceID: UUID?
 
-    // Every harness conversation this Manager has run, oldest first (CROW-1382).
+    // Every harness conversation this session has run, oldest first.
     // `harnessConversationID` keeps only the latest, so a `/clear`, a resume
     // that mints a new id, or an agent handoff would otherwise orphan the
-    // earlier transcript before the log-sync collector could ship it. Only
-    // Managers record here — work sessions upload per Crow session. Capped at
+    // earlier one. Managers have recorded here since CROW-1382, so the
+    // log-sync collector can ship each conversation's transcript; every other
+    // kind since CROW-1476, so `get-session` / `list-sessions`
+    // (`agent_conversations`) and `crow find-session` can map a conversation id
+    // back to its session. Work sessions still upload per Crow session — only
+    // Manager paths read this for log sync. Capped at
     // `conversationHistoryLimit`.
     public var harnessConversationHistory: [HarnessConversationRef]
 
@@ -135,6 +139,12 @@ public struct Session: Identifiable, Codable, Sendable {
     /// drop off the front; a Manager that clears this often has long since
     /// shipped (or given up on) the early ones.
     public static let conversationHistoryLimit = 50
+
+    /// How stale a conversation's `lastActiveAt` may get before the next hook
+    /// for it moves it forward (CROW-1476). Hooks fire on every tool call, and
+    /// each stamp is a store write, so activity is kept to the minute rather
+    /// than to the hook.
+    public static let conversationActivityResolution: TimeInterval = 60
 
     /// The workspace tag that is actually in force: `workspaceID` for an extra
     /// Manager, nil for the primary Manager and every other kind. The primary
@@ -234,21 +244,47 @@ public struct Session: Identifiable, Codable, Sendable {
 
     /// Persist a harness-native conversation id from a hook payload. Latest
     /// non-empty id wins so a `/clear` (new Claude session) is what reboot
-    /// resumes. Returns whether the stored value changed.
+    /// resumes. The id also goes into `harnessConversationHistory`, stamped
+    /// with when it was first and last seen (CROW-1476). Returns whether
+    /// anything the store keeps changed: a new current id, a new history entry,
+    /// or a `lastActiveAt` more than ``conversationActivityResolution`` old.
     @discardableResult
-    public mutating func recordHarnessConversationID(_ raw: String) -> Bool {
+    public mutating func recordHarnessConversationID(_ raw: String, at now: Date = Date()) -> Bool {
         guard let sanitized = HarnessConversationID.sanitize(raw, rejecting: id) else { return false }
-        if harnessConversationID == sanitized { return false }
-        harnessConversationID = sanitized
-        if kind == .manager {
-            let ref = HarnessConversationRef(agentKind: agentKind, id: sanitized)
-            if !harnessConversationHistory.contains(ref) {
-                harnessConversationHistory.append(ref)
-                let overflow = harnessConversationHistory.count - Self.conversationHistoryLimit
-                if overflow > 0 { harnessConversationHistory.removeFirst(overflow) }
-            }
+        var changed = false
+        if harnessConversationID != sanitized {
+            harnessConversationID = sanitized
+            changed = true
         }
-        return true
+        let ref = HarnessConversationRef(agentKind: agentKind, id: sanitized)
+        if let i = harnessConversationHistory.firstIndex(of: ref) {
+            // An entry from before CROW-1476 has no stamps. Its start is
+            // unknown (it ran before now), so only `lastActiveAt` is filled in.
+            let last = harnessConversationHistory[i].lastActiveAt
+            if last.map({ now.timeIntervalSince($0) >= Self.conversationActivityResolution }) ?? true {
+                harnessConversationHistory[i].lastActiveAt = now
+                changed = true
+            }
+        } else {
+            harnessConversationHistory.append(
+                HarnessConversationRef(agentKind: agentKind, id: sanitized, startedAt: now, lastActiveAt: now))
+            let overflow = harnessConversationHistory.count - Self.conversationHistoryLimit
+            if overflow > 0 { harnessConversationHistory.removeFirst(overflow) }
+            changed = true
+        }
+        return changed
+    }
+
+    /// Every agent conversation this session has run, oldest first: the
+    /// recorded history plus the current id when the history predates it (a
+    /// session whose last hook fired before its kind recorded history). The
+    /// appended current id carries no timestamps.
+    public var agentConversations: [HarnessConversationRef] {
+        var refs = harnessConversationHistory
+        if let current = harnessConversationID, !refs.contains(where: { $0.id == current }) {
+            refs.append(HarnessConversationRef(agentKind: agentKind, id: current))
+        }
+        return refs
     }
 
     /// Change this session's coding agent. The prior harness conversation id
@@ -386,16 +422,35 @@ public struct Session: Identifiable, Codable, Sendable {
     }
 }
 
-/// One harness conversation a Manager ran: which CLI wrote it and that CLI's
+/// One harness conversation a session ran: which CLI wrote it and that CLI's
 /// own conversation id (CROW-1382). The kind travels with the id because a
 /// handoff changes `Session.agentKind` but the earlier transcript is still the
 /// earlier harness's file.
+///
+/// `startedAt` / `lastActiveAt` (CROW-1476) are when Crow first and most
+/// recently saw a hook carrying this id, the latter to within
+/// ``Session/conversationActivityResolution``. Both are nil on an entry
+/// recorded before they existed. They are metadata, not identity: two refs
+/// are equal (and hash alike) when the kind and id match.
 public struct HarnessConversationRef: Codable, Sendable, Equatable, Hashable {
     public var agentKind: AgentKind
     public var id: String
+    public var startedAt: Date?
+    public var lastActiveAt: Date?
 
-    public init(agentKind: AgentKind, id: String) {
+    public init(agentKind: AgentKind, id: String, startedAt: Date? = nil, lastActiveAt: Date? = nil) {
         self.agentKind = agentKind
         self.id = id
+        self.startedAt = startedAt
+        self.lastActiveAt = lastActiveAt
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.agentKind == rhs.agentKind && lhs.id == rhs.id
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(agentKind)
+        hasher.combine(id)
     }
 }

@@ -169,6 +169,7 @@ public enum ParityLedger {
         .write("select-session", cli: "select-session"),
         .read("list-sessions", cli: "list-sessions", mcp: .read(scope: .sessionsRead)),
         .read("get-session", cli: "get-session", mcp: .read(scope: .sessionsRead)),
+        .read("find-session", cli: "find-session"),
         .write("set-status", cli: "set-status"),
         .write("set-locked", cli: "set-locked"),
         .write("delete-session", cli: "delete-session"),
