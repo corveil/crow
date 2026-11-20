@@ -41,11 +41,14 @@ crow send --session <uuid> --terminal <uuid> "text to send"
 crow list-tickets / crow list-reviews           → board payloads verbatim; filter with jq
 crow work-on-issue --url "..."                  → types /crow-workspace <url> into the Manager
 crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
-crow create-manager [--agent KIND] [--workspace NAME]
+crow create-manager [--agent KIND] [--workspace NAME] [--name "..."] [--prompt "..." | --prompt-file PATH|-]
+                                                → {session_id, name, seeded, ...}
 crow todo add "text" / crow todo list
 ```
 
 `crow send` writes text to the terminal as one bracketed paste; newlines become Enter, so end with a newline to submit. It errors instead of printing `"sent": true` when the text can't be delivered. `add-link --type pr` is idempotent: it skips when the session already has a PR link.
+
+To hand work to a new Manager, do it in one call: `crow create-manager --workspace <ws> --name "<short-title>" --prompt-file <brief.md>`. The brief is its first prompt (argv, nothing pasted), `seeded: true` confirms it rode the launch, and the name means it skips the rename step above. Don't poll `list-terminals` and `crow send` the brief afterwards.
 
 ## Important Notes
 

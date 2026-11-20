@@ -819,15 +819,20 @@ Prints `{"ok": true|false, "message": "…", "path": "…"}`. Branch on `ok`, no
 Create an additional Manager session.
 
 ```
-crow create-manager [--agent <agent>] [--workspace <workspace>]
+crow create-manager [--agent <agent>] [--workspace <workspace>] [--name <name>] [--prompt <prompt>] [--prompt-file <prompt-file>]
 ```
 
 --workspace tags the new Manager with a workspace for its whole life: it launches with that workspace's AI gateway (falling back to the Manager gateway when the workspace has none), ships its transcripts when the workspace has session-log upload on, and starts with the workspace's provider, repos and custom instructions. Every extra Manager needs one. Omitted, it comes from the tagged Manager this runs in ($CROW_SESSION_ID), then `defaults.managerWorkspace` (`crow defaults set --manager-workspace`); if neither resolves, the command fails rather than guess. The tag cannot be changed later, and the primary Manager is never tagged.
+
+--prompt / --prompt-file hand the new Manager a brief in the same call: the text is written to a brief file and passed to the agent as its first prompt on launch (argv, nothing pasted), after the workspace brief. --prompt-file - reads stdin. The response's `seeded` says whether it rode the launch. --name names the Manager at creation (same rules as rename-session), so it never comes up as "Manager N" and skips the Manager context's rename step.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--agent` | `<agent>` | no | Coding agent kind (claude-code, cursor, codex, opencode, antigravity, grok, muse); default agent when omitted |
 | `--workspace` | `<workspace>` | no | Workspace to tag the Manager with (name or UUID); when omitted, the calling Manager's workspace, then defaults.managerWorkspace |
+| `--name` | `<name>` | no | Session name (same rules as rename-session); the lowest unused "Manager N" when omitted |
+| `--prompt` | `<prompt>` | no | First prompt for the new Manager, passed as argv on launch |
+| `--prompt-file` | `<prompt-file>` | no | Read the first prompt from a file ('-' for stdin) |
 
 ---
 

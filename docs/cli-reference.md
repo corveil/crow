@@ -2068,20 +2068,30 @@ Unlike `work-on-issue`, the URL is only checked for non-emptiness: it goes to `g
 
 ### `crow create-manager`
 
-Create an additional Manager session, named with the lowest unused `Manager N` — identical to the sidebar's `+` button.
+Create an additional Manager session, named with the lowest unused `Manager N` (or `--name`). Without `--name` and a prompt it is identical to the sidebar's `+` button.
 
 ```bash
 crow create-manager
 crow create-manager --agent cursor
 crow create-manager --workspace Corveil
+crow create-manager --workspace Corveil --name "review crow-1078" --prompt-file "$TMPDIR/brief.md"
+crow create-manager --workspace Corveil --name "triage" --prompt "Run /crow-triage on the backlog"
+cat brief.md | crow create-manager --workspace Corveil --prompt-file -
 ```
 
-| Flag          | Required | Description                                                                  |
-| ------------- | -------- | ---------------------------------------------------------------------------- |
-| `--agent`     | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`, `antigravity`, `grok`, `muse`); default agent when omitted |
-| `--workspace` | no       | Workspace to tag the Manager with (name or UUID); when omitted, the calling Manager's workspace, then `defaults.managerWorkspace` |
+| Flag            | Required | Description                                                                  |
+| --------------- | -------- | ---------------------------------------------------------------------------- |
+| `--agent`       | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`, `antigravity`, `grok`, `muse`); default agent when omitted |
+| `--workspace`   | no       | Workspace to tag the Manager with (name or UUID); when omitted, the calling Manager's workspace, then `defaults.managerWorkspace` |
+| `--name`        | no       | Session name, with `rename-session`'s rules; the lowest unused `Manager N` when omitted |
+| `--prompt`      | no       | First prompt for the new Manager, passed as argv on launch                   |
+| `--prompt-file` | no       | Read the first prompt from a file (`-` for stdin). Not with `--prompt`       |
 
-Returns `{"session_id": "...", "name": "Manager N", "workspace_id": "...", "workspace_name": "..."}`.
+Returns `{"session_id": "...", "name": "...", "workspace_id": "...", "workspace_name": "...", "seeded": true|false}`, plus a `warning` when a prompt was given but did not ride the launch.
+
+**Handing work to a new Manager (CROW-1474).** `--prompt` / `--prompt-file` use the same seeding path as `crow todo explore`: the text is written to a brief file and the agent launches with it as its first prompt, as argv, after the workspace brief. Nothing is pasted into the pane, so there is nothing to wait for and no `crow send` follow-up. `seeded` is `true` when the brief was written and the Manager's pane came up, and `false` when no prompt was given. Blank text and prompts over 64 KiB are refused. The prompt becomes a single argv string, and Linux caps one at 128 KiB, so put a long brief in a file and pass `--prompt "Read and follow the instructions in <path>"`. The 64 KiB cap covers only the caller's prompt. The workspace brief, including that workspace's `customInstructions`, is prepended to it in the same argv string, so a very large `customInstructions` plus a near-limit prompt can still overflow. `seeded` checks that the brief file was written and the pane came up, not that the agent started, so it would not catch that. `crow todo explore` has the same shape.
+
+`--name` sets the name at creation. The rules are the ones `rename-session` applies: non-blank, at most 256 characters, no control characters. The name is not checked against existing sessions. Because the name is set before the agent launches, nothing is renamed afterwards. A Manager created with a name is not `Manager <N>`, so the Manager context's rename step leaves it alone.
 
 **Every extra Manager has a workspace (CROW-1386).** Crow never guesses one. It is resolved, in order, from `--workspace`; then the context the Manager is created from — run inside a tagged Manager (`$CROW_SESSION_ID`), the new one takes that Manager's workspace; `crow todo explore` / `todo ticket` use the Scratch item's workspace; then `defaults.managerWorkspace`. If none of these names an existing workspace, the command fails with a message naming `--workspace` and `crow defaults set --manager-workspace`. A default naming a workspace that no longer exists counts as unset. With no workspaces configured at all, creating an extra Manager is refused. `--workspace none` is no longer accepted. Extra Managers created untagged before this keep running unchanged and show an **untagged** badge in the sidebar.
 
