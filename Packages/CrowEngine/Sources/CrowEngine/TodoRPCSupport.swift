@@ -550,8 +550,10 @@ public enum TodoRPC {
     public static let managerTerminalPollNanos: UInt64 = 250_000_000
 
     /// After the agent announces (SessionStart), Cursor's composer still
-    /// needs a beat before Enter is accepted (#1233 / #272).
-    public static let composerSettleNanos: UInt64 = 1_500_000_000
+    /// needs a beat before Enter is accepted (#1233 / #272). Derived from
+    /// `AgentReadiness.composerSettle`, which `agent_state` uses for the same
+    /// wait, so the two cannot drift (CROW-1475).
+    public static let composerSettleNanos = UInt64(AgentReadiness.composerSettle * 1_000_000_000)
     /// Already-running Manager (Talk / re-Explore after SessionStart): skip
     /// the long composer settle — the TUI is already focused.
     public static let alreadyUpSettleNanos: UInt64 = 200_000_000

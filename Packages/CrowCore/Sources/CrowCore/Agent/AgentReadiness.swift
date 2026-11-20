@@ -30,8 +30,8 @@ public enum AgentReadiness {
 
     /// After the first hook of a fresh launch, the agent's composer can still
     /// need a moment before it accepts a paste. Cursor's `SessionStart` fires
-    /// before its composer owns stdin (CROW-1237); this matches
-    /// `TodoRPC.composerSettleNanos`.
+    /// before its composer owns stdin (CROW-1237). `TodoRPC.composerSettleNanos`
+    /// is derived from this, so Explore/Talk and `agent_state` wait the same.
     public static let composerSettle: TimeInterval = 1.5
 
     /// How long after a launch an agent that owns its pane but has sent no

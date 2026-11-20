@@ -239,6 +239,12 @@ final class AgentHandoffController {
         store.mutate { data in
             data.terminals.removeAll { $0.sessionID == sessionID && $0.isManaged }
         }
+        // The old agent is gone: drop its activity, notification and
+        // SessionStart, and mark the new launch pending, so `agent_state`
+        // never reports the prior agent's `working` / `waiting_permission`
+        // for the new one (CROW-1475 review; parity with the extra-Manager
+        // handoff, `restartManager` and `recreateTerminalSurface`).
+        appState.resetHookStateForAgentRelaunch(sessionID: sessionID)
 
         // Deferred paste on `.shellReady` (#408) — same path as `new-terminal --command`.
         let raw = SessionTerminal(

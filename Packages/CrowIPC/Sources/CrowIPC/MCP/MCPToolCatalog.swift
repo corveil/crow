@@ -520,6 +520,8 @@ public enum MCPToolCatalog {
         "ticket_title", "ticket_url", "ticket_state", "provider", "review_author",
         "org_goal", "repo", "branch", "worktree_path", "activity", "attention",
         "attention_since", "is_explore",
+        // Readiness for input (CROW-1475).
+        "agent_state", "last_prompt_at", "agent_terminal_id",
     ]
 
     /// Every `list-tickets` field except `body`.
