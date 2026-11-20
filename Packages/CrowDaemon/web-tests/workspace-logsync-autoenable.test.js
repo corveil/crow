@@ -15,6 +15,10 @@ const { loadClientSource, loadSettingsSource } = require('./load-client');
 // clobbers the opt-in the pick just turned on. It also pins that the client honors the
 // POST's `log_sync_enabled` (single source of truth) rather than inferring enablement,
 // so a server that declines to enable is respected.
+//
+// CROW-1478: the workspace picker's Off choice clears the workspace gateway through
+// the same POST as the Advanced Clear, and a workspace whose gateway was derived from
+// an org opens with that org selected (get-config's `gateway_orgs.workspaces`).
 
 const epilogue = `
 ;globalThis.__t = {
@@ -40,7 +44,7 @@ const MARKUP = `<!doctype html><html><body>
 // A connected config with one existing workspace and no gateway yet, as get-config
 // would send it (OAuth tokens + per-org key secrets stripped; the derivation and the
 // uploadSessionLogs flip both happen server-side).
-function connectedConfig() {
+function connectedConfig(gateway) {
   return JSON.stringify({
     corveilConnection: {
       baseURL: 'https://app.corveil.example',
@@ -52,13 +56,13 @@ function connectedConfig() {
     },
     defaults: { provider: 'github', branchPrefix: 'feature/' },
     workspaces: [
-      { id: 'ws-1', name: 'Acme', provider: 'github', cli: 'gh',
+      { id: 'ws-1', name: 'Acme', provider: 'github', cli: 'gh', gateway: gateway || undefined,
         alwaysInclude: [], autoReviewRepos: [], excludeReviewRepos: [], uploadSessionLogs: false },
     ],
   });
 }
 
-function load({ config, logSyncEnabled }) {
+function load({ config, logSyncEnabled, gatewayOrgs }) {
   const dom = new JSDOM(MARKUP, {
     runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/',
   });
@@ -113,7 +117,9 @@ function load({ config, logSyncEnabled }) {
   if (!T) throw new Error('epilogue did not run');
   T.setRpc((method, params) => {
     calls.rpc.push({ method, params });
-    if (method === 'get-config') return Promise.resolve({ config: configBody, dev_root: '/dev' });
+    if (method === 'get-config') {
+      return Promise.resolve({ config: configBody, dev_root: '/dev', gateway_orgs: gatewayOrgs });
+    }
     if (method === 'list-agents') return Promise.resolve({ agents: [] });
     if (method === 'corveil-list-orgs') return hooks.listOrgs();
     if (method === 'corveil-select-org') return hooks.selectOrg();
@@ -129,9 +135,11 @@ function byText(window, selector, re) {
   return Array.from(window.document.querySelectorAll(selector)).find((n) => re.test(n.textContent)) || null;
 }
 
+// The org picker's <select>: the one that offers Off (CROW-1478).
+const OFF = '__off__';
 function orgSelect(window) {
   return Array.from(window.document.querySelectorAll('select')).find(
-    (s) => Array.from(s.options).some((o) => /organization/i.test(o.textContent))) || null;
+    (s) => Array.from(s.options).some((o) => o.value === OFF)) || null;
 }
 
 function logSyncCheckbox(window) {
@@ -268,8 +276,43 @@ const check = (name, cond) => {
     await save.onclick();
     await drain();
     const selAfter = orgSelect(h.window);
-    check('dropdown snaps back to the placeholder after manual clear',
-      !!selAfter && selAfter.value === '');
+    check('dropdown shows Off after manual clear',
+      !!selAfter && selAfter.value === OFF);
+  }
+
+  console.log('\nCROW-1478: a workspace with no gateway shows Off:');
+  {
+    const h = load({ config: connectedConfig() });
+    await openWorkspaceForm(h);
+    const sel = orgSelect(h.window);
+    check('Off is selected', !!sel && sel.value === OFF);
+    check('the status line says what Off covers', h.window.document.body.textContent.includes(
+      'Off: this workspace\'s sessions and Managers do not route through any AI gateway.'));
+  }
+
+  console.log('\nCROW-1478: a workspace opens on its stored org, and Off clears it:');
+  {
+    const derived = { baseURL: 'https://app.corveil.example', customHeaders: { 'x-citadel-api-key': '' } };
+    const h = load({
+      config: connectedConfig(derived),
+      gatewayOrgs: { workspaces: { 'WS-1': { org_id: 'org_acme', org_name: 'Acme Corp' } } },
+    });
+    await openWorkspaceForm(h);
+    const sel = orgSelect(h.window);
+    check('the stored org is selected (workspace ids matched case-insensitively)',
+      !!sel && sel.value === 'org_acme');
+    check('the status line names it', h.window.document.body.textContent.includes(
+      'Routing through Corveil org "Acme Corp" (https://app.corveil.example)'));
+    sel.value = OFF;
+    await sel.onchange();
+    await drain();
+    check('Off POSTed { workspaceId, clear: true }', h.calls.gatewayPosts.length === 1
+      && h.calls.gatewayPosts[0].workspaceId === 'ws-1' && h.calls.gatewayPosts[0].clear === true
+      && h.calls.gatewayPosts[0].orgId === undefined);
+    const selAfter = orgSelect(h.window);
+    check('picker shows Off afterwards', !!selAfter && selAfter.value === OFF);
+    const cb = logSyncCheckbox(h.window);
+    check('session-log upload is disabled with no gateway', !!cb && cb.disabled === true);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

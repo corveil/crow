@@ -100,7 +100,10 @@
     dirty = false;
     subForm = null;
     if (window.CrowSettingsTabs && window.CrowSettingsTabs.resetCorveilConnectState) {
-      window.CrowSettingsTabs.resetCorveilConnectState();
+      // Which org each stored gateway came from, so the org pickers open on it
+      // (CROW-1478). Absent from an older daemon: the pickers fall back to the
+      // placeholder for a set gateway, as before.
+      window.CrowSettingsTabs.resetCorveilConnectState(res.gateway_orgs || null);
     }
     activeTab = TABS.some(([k]) => k === tab) ? tab : 'general';
     if (typeof navigate === 'function') navigate({ view: 'settings', tab: activeTab });

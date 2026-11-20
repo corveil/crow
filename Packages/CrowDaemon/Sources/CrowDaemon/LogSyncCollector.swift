@@ -428,8 +428,8 @@ struct LogSyncCollector: Sendable {
     /// Same opt-in and security invariant as a workspace session: the Manager's
     /// tagged workspace must have `uploadSessionLogs` on, and the destination +
     /// credential come solely from that workspace's local-only gateway — never
-    /// `AppConfig.managerGateway`, which the Manager may *launch* with when its
-    /// workspace has none, but which is no workspace's upload address.
+    /// `AppConfig.managerGateway`, which is no workspace's upload address (and
+    /// which a tagged Manager doesn't launch with either, CROW-1478).
     ///
     /// Unlike a work session, a Manager is long-lived and resumes: it can run
     /// many harness conversations, and the server keeps one artifact per

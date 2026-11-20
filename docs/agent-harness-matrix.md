@@ -1294,7 +1294,8 @@ exhaustive, including the two Manager gateway writes noted below):
 - **AI gateway (Codex, CROW-1407 / [ADR 0030](adr/0030-codex-through-the-workspace-gateway.md))**
   — Codex does **not** get the `ANTHROPIC_*` block above (that stays cleared for
   it). When the session's gateway (same resolution as Claude: workspace by path
-  then PR slug; Manager → tagged workspace, else `managerGateway`) sets
+  then PR slug; a tagged Manager → its workspace's gateway, or none — CROW-1478;
+  the primary and untagged Managers → `managerGateway`) sets
   `codexUpstream` **and** carries a Corveil key header, every Codex launch gets
   per-run `-c` overrides defining a `crow-corveil` model provider: `base_url`
   = gateway + `/v1`, `wire_api=responses`, `requires_openai_auth=true`,

@@ -173,10 +173,11 @@ final class ManagerSessionController {
             ?? AgentRegistry.shared.defaultAgent
         var cmd: String
         if let codexAgent = resolved as? OpenAICodexAgent {
-            // CROW-1407: a Codex Manager routes through its gateway (tagged
-            // workspace's, else managerGateway) when that gateway opted Codex
-            // in. The command is persisted as the terminal's `command`, so it
-            // carries only the non-secret overrides; the paste sites
+            // CROW-1407: a Codex Manager routes through its gateway (a tagged
+            // Manager's workspace's, or none — CROW-1478; an untagged one's
+            // managerGateway) when that gateway opted Codex in. The command
+            // is persisted as the terminal's `command`, so it carries only
+            // the non-secret overrides; the paste sites
             // (`prepareTerminal`, `rehydrateTerminalSurface`,
             // `pasteDeferredLaunch`) type the key export in front of it.
             cmd = codexAgent.managerLaunchCommand(
@@ -205,9 +206,10 @@ final class ManagerSessionController {
                     sessionName: session.name,
                     autoPermissionMode: appState.managerAutoPermissionMode
                 )
-            // CROW-402: prefix the command with the Manager's own gateway (its
-            // tagged workspace's, else AppConfig.managerGateway — CROW-1382) so
-            // the initial launch overrides any global ~/.zshrc export. The
+            // CROW-402: prefix the command with the Manager's own gateway (a
+            // tagged Manager's workspace's, or none; an untagged one's
+            // AppConfig.managerGateway — CROW-1382, CROW-1478) so the initial
+            // launch overrides any global ~/.zshrc export. The
             // matching settings.local.json `env` block (for manual re-runs) is
             // written by the terminal-creation / hydrate paths, which own the
             // devRoot write site — keeping this builder pure.
@@ -240,7 +242,9 @@ final class ManagerSessionController {
     /// Managers isolate their cwd (CROW-1281); the env must follow the terminal,
     /// not always the shared `{devRoot}`. `workspaceTag` is the Manager's
     /// ``Session/managerWorkspaceTag`` (CROW-1382) — nil for the primary and
-    /// for untagged extras, which keep `AppConfig.managerGateway`.
+    /// for untagged extras, which keep `AppConfig.managerGateway`. A tagged
+    /// Manager whose workspace has no gateway gets its env block cleared
+    /// (CROW-1478).
     func writeManagerGatewayEnv(managerKind: AgentKind, dirPath: String, workspaceTag: UUID? = nil) {
         if managerKind == .claudeCode {
             ClaudeHookConfigWriter.writeGatewayEnv(
@@ -393,9 +397,10 @@ final class ManagerSessionController {
 
     /// Resolve a Manager's AI gateway from disk, or nil when unset/empty
     /// (CROW-402). `workspaceTag` is ``Session/managerWorkspaceTag``: a tagged
-    /// extra Manager takes its workspace's gateway when that workspace has one,
-    /// and `AppConfig.managerGateway` otherwise (CROW-1382) — see
-    /// ``managerGatewayMatch(workspaceTag:config:)`` for the rule.
+    /// extra Manager takes its workspace's gateway, or none when that
+    /// workspace has none (CROW-1478) — see
+    /// ``managerGatewayMatch(workspaceTag:config:)`` for the rule. Nil means
+    /// the caller unsets `ANTHROPIC_*`.
     ///
     /// Every launch path funnels through here — fresh create, hydrate after a
     /// reboot (#1282), Recreate, and the extra-Manager handoff (#1315) all
@@ -415,22 +420,20 @@ final class ManagerSessionController {
 
     /// One line per tagged-Manager launch naming which gateway it got
     /// (CROW-1382), the Manager counterpart of `logGatewayLaunchDecision`.
-    /// Header names only — values are credentials.
+    /// It names the outcome, never the Manager gateway: a tagged Manager
+    /// doesn't use it (CROW-1478). Header names only — values are credentials.
     private func logManagerGatewayDecision(workspaceTag: UUID, match: SessionService.GatewayMatch) {
         let prefix = "[SessionService] Manager gateway for workspace tag \(workspaceTag)"
-        guard match.source == .workspace else {
-            CrowLog.info("\(prefix): workspace no longer exists; using the Manager gateway")
+        guard let name = match.workspaceName else {
+            CrowLog.info("\(prefix): workspace no longer exists; ANTHROPIC_* will be unset")
             return
         }
-        let origin = match.gatewayFromWorkspace
-            ? "workspace '\(match.workspaceName ?? "—")'"
-            : "Manager gateway (workspace '\(match.workspaceName ?? "—")' has none)"
         guard let gateway = match.gateway, !gateway.isEmpty else {
-            CrowLog.info("\(prefix): \(origin) — no gateway; ANTHROPIC_* will be unset")
+            CrowLog.info("\(prefix): workspace '\(name)' has no gateway; ANTHROPIC_* will be unset")
             return
         }
         let names = gateway.customHeaders.keys.sorted().joined(separator: ", ")
-        CrowLog.info("\(prefix): \(origin) -> \(gateway.baseURL), headers: \(names)")
+        CrowLog.info("\(prefix): workspace '\(name)' -> \(gateway.baseURL), headers: \(names)")
     }
 
     /// A Manager's gateway as a ``SessionService.GatewayMatch``, for read paths
@@ -448,27 +451,36 @@ final class ManagerSessionController {
         return Self.managerGatewayMatch(workspaceTag: session.managerWorkspaceTag, config: config)
     }
 
-    /// The Manager gateway rule (CROW-1382), pure so it is unit-testable:
+    /// The Manager gateway rule (CROW-1382, CROW-1478), pure so it is
+    /// unit-testable:
     ///
     /// ```
-    /// resolved = workspace(id: tag)?.gateway ?? config.managerGateway
+    /// untagged: resolved = config.managerGateway
+    /// tagged:   resolved = workspace(id: tag)?.gateway   // never managerGateway
     /// ```
     ///
-    /// A tagged Manager whose workspace still exists reports
-    /// ``SessionService/GatewayMatchSource/workspace`` and that workspace's id,
-    /// whichever gateway it ends up with — the tag is what `get-session` is
-    /// asked about, and `gatewayFromWorkspace` says which gateway won. An empty
-    /// workspace gateway counts as none, matching the launch path's
-    /// `!gateway.isEmpty` test. A tag whose workspace was removed falls back to
-    /// the untagged answer rather than leaving the Manager with no gateway.
+    /// A tagged Manager reports ``SessionService/GatewayMatchSource/workspace``
+    /// and its tag as the workspace id — the tag is what `get-session` is asked
+    /// about. It takes its workspace's gateway, or **none** when that workspace
+    /// has none or an empty one, exactly like a work session in that
+    /// workspace. A workspace without a gateway is how an operator keeps its
+    /// traffic out of every Corveil org, so borrowing the Manager gateway's org
+    /// key there would route it somewhere they never chose (CROW-1478).
+    ///
+    /// A tag whose workspace was removed fails closed the same way, with a nil
+    /// `workspaceName`: Crow can't know whether the operator wanted that
+    /// traffic in the Manager gateway's org. The primary Manager and untagged
+    /// extras from before CROW-1386 keep `managerGateway`.
     public nonisolated static func managerGatewayMatch(
         workspaceTag: UUID?, config: AppConfig
     ) -> SessionService.GatewayMatch {
-        guard let workspaceTag,
-              let workspace = config.workspaces.first(where: { $0.id == workspaceTag })
-        else { return SessionService.GatewayMatch(managerGateway: config.managerGateway) }
-        return SessionService.GatewayMatch(
-            taggedManagerWorkspace: workspace, managerGateway: config.managerGateway)
+        guard let workspaceTag else {
+            return SessionService.GatewayMatch(managerGateway: config.managerGateway)
+        }
+        guard let workspace = config.workspaces.first(where: { $0.id == workspaceTag }) else {
+            return SessionService.GatewayMatch(removedManagerWorkspaceTag: workspaceTag)
+        }
+        return SessionService.GatewayMatch(taggedManagerWorkspace: workspace)
     }
 
     /// Resolve the AI gateway for a non-Manager session (CROW-402, CROW-891).
@@ -1047,20 +1059,17 @@ extension SessionService {
         /// Nil for ``GatewayMatchSource/manager`` — the Manager gateway is not a
         /// workspace's.
         public var workspaceID: UUID?
+        /// Nil for ``GatewayMatchSource/manager``, and for a tagged Manager
+        /// whose workspace was removed.
         public var workspaceName: String?
         public var source: GatewayMatchSource
         public var gateway: WorkspaceGateway?
-        /// Whether `gateway` is the claimed workspace's own. False only for a
-        /// tagged Manager whose workspace has no gateway, which falls back to
-        /// `AppConfig.managerGateway` (CROW-1382), and for ``GatewayMatchSource/manager``.
-        public var gatewayFromWorkspace: Bool
 
         init(workspace: WorkspaceInfo, source: GatewayMatchSource) {
             self.workspaceID = workspace.id
             self.workspaceName = workspace.name
             self.source = source
             self.gateway = workspace.gateway
-            self.gatewayFromWorkspace = true
         }
 
         init(managerGateway: WorkspaceGateway?) {
@@ -1068,20 +1077,31 @@ extension SessionService {
             self.workspaceName = nil
             self.source = .manager
             self.gateway = managerGateway
-            self.gatewayFromWorkspace = false
         }
 
-        init(taggedManagerWorkspace workspace: WorkspaceInfo, managerGateway: WorkspaceGateway?) {
+        /// A tagged Manager takes its workspace's own gateway or none — never
+        /// `AppConfig.managerGateway` (CROW-1478). An empty gateway is
+        /// reported as none, so `get-session` says `gateway_base_url: null`
+        /// instead of a blank URL.
+        init(taggedManagerWorkspace workspace: WorkspaceInfo) {
             self.workspaceID = workspace.id
             self.workspaceName = workspace.name
             self.source = .workspace
             if let own = workspace.gateway, !own.isEmpty {
                 self.gateway = own
-                self.gatewayFromWorkspace = true
             } else {
-                self.gateway = managerGateway
-                self.gatewayFromWorkspace = false
+                self.gateway = nil
             }
+        }
+
+        /// A tagged Manager whose workspace no longer exists: no gateway
+        /// (fails closed, CROW-1478). Still reported as the workspace match,
+        /// with the tag as its id and no name.
+        init(removedManagerWorkspaceTag tag: UUID) {
+            self.workspaceID = tag
+            self.workspaceName = nil
+            self.source = .workspace
+            self.gateway = nil
         }
     }
 }

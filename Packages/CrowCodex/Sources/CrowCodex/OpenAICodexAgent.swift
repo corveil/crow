@@ -360,8 +360,9 @@ public struct OpenAICodexAgent: CodingAgent {
             conversationID: conversationID, gatewayRoute: nil)
     }
 
-    /// The Manager launch, routed through its gateway (CROW-1407): the tagged
-    /// workspace's, else `managerGateway`, the same rule Claude follows. The
+    /// The Manager launch, routed through its gateway (CROW-1407): a tagged
+    /// Manager's workspace's (none when it has none, CROW-1478), an untagged
+    /// one's `managerGateway` — the same rule Claude follows. The
     /// result is persisted as the Manager terminal's `command`, which is safe
     /// because the overrides name the key's env var and never hold the key.
     public func managerLaunchCommand(

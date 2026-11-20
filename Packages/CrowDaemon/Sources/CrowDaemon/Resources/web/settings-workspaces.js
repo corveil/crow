@@ -224,6 +224,9 @@
             }
             return res;
           },
+          // Off (CROW-1478) is the manual editor's clear.
+          clear: () => applyManual(null),
+          offText: 'Off: this workspace\'s sessions and Managers do not route through any AI gateway.',
           setGateway: (g) => { d.gateway = g; },
           // Org pick no longer S.render()s the whole modal (corveil/crow#1212).
           // Patch the session-log checkbox / backfill button in place so they

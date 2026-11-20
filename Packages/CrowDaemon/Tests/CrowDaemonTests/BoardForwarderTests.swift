@@ -563,6 +563,68 @@ private struct StubShellRunner: ShellRunner {
         #expect(decoded.remoteControlEnabled == true)
     }
 
+    /// CROW-1478: `get-config` names the org each stored gateway was derived
+    /// from, so the Settings picker can show it on every open — and nothing
+    /// else about the key. A manual gateway, an unset one, and a gateway
+    /// whose key the connection doesn't hold have no entry.
+    @Test @MainActor func getConfigReportsGatewayOrgsWithoutKeys() async throws {
+        let devRoot = tempDevRoot()
+        let connection = CorveilConnection(
+            baseURL: "https://corveil.example", clientID: "crow-client",
+            orgKeys: [
+                CorveilOrgKey(orgID: "org_radius", orgName: "RadiusMethod",
+                              keyID: "key-radius-id", keyPrefix: "sk-citadel-RAD"),
+                CorveilOrgKey(orgID: "org_acme", orgName: "Acme",
+                              keyID: "key-acme-id", keyPrefix: "sk-citadel-ACM"),
+            ],
+            orgKeySecrets: ["org_radius": "sk-citadel-RADIUS-SECRET", "org_acme": "sk-citadel-ACME-SECRET"])
+        var c = AppConfig()
+        c.corveilConnection = connection
+        c.managerGateway = connection.derivedGateway(orgID: "org_radius")
+        let derived = WorkspaceInfo(name: "Corveil", gateway: connection.derivedGateway(orgID: "org_acme"))
+        let manual = WorkspaceInfo(name: "Manual", gateway: WorkspaceGateway(
+            baseURL: "https://corveil.example", customHeaders: ["x-citadel-api-key": "sk-citadel-HAND-ENTERED"]))
+        let off = WorkspaceInfo(name: "Personal")
+        c.workspaces = [derived, manual, off]
+        try ConfigStore.saveConfig(c, devRoot: devRoot)
+
+        let resp = await offlineRouter(devRoot: devRoot)
+            .handle(request: JSONRPCRequest(id: 1, method: "get-config"))
+        #expect(resp.error == nil)
+        let orgs = try #require(resp.result?["gateway_orgs"]?.objectValue)
+        let manager = try #require(orgs["manager"]?.objectValue)
+        #expect(manager["org_id"]?.stringValue == "org_radius")
+        #expect(manager["org_name"]?.stringValue == "RadiusMethod")
+        let workspaces = try #require(orgs["workspaces"]?.objectValue)
+        #expect(workspaces.count == 1)
+        let entry = try #require(workspaces[derived.id.uuidString]?.objectValue)
+        #expect(entry["org_id"]?.stringValue == "org_acme")
+        #expect(entry["org_name"]?.stringValue == "Acme")
+        #expect(Set(entry.keys) == ["org_id", "org_name"])
+        #expect(workspaces[manual.id.uuidString] == nil)
+        #expect(workspaces[off.id.uuidString] == nil)
+
+        // No key secret anywhere in the response, including the stripped config,
+        // and no key metadata at all in the new field.
+        let whole = String(decoding: try JSONEncoder().encode(resp.result), as: UTF8.self)
+        let field = String(decoding: try JSONEncoder().encode(JSONValue.object(orgs)), as: UTF8.self)
+        for secret in ["RADIUS-SECRET", "ACME-SECRET", "HAND-ENTERED"] {
+            #expect(!whole.contains(secret), "\(secret)")
+        }
+        for metadata in ["key-radius-id", "key-acme-id", "sk-citadel"] {
+            #expect(!field.contains(metadata), "\(metadata)")
+        }
+    }
+
+    /// No connection, no gateways: the field is still there, and empty.
+    @Test @MainActor func getConfigGatewayOrgsEmptyWithoutConnection() async throws {
+        let resp = await offlineRouter(devRoot: tempDevRoot())
+            .handle(request: JSONRPCRequest(id: 1, method: "get-config"))
+        let orgs = try #require(resp.result?["gateway_orgs"]?.objectValue)
+        #expect(orgs["manager"] == nil)
+        #expect(orgs["workspaces"]?.objectValue?.isEmpty == true)
+    }
+
     @Test @MainActor func getConfigReturnsDefaultWhenNoFile() async throws {
         let resp = await offlineRouter(devRoot: tempDevRoot())
             .handle(request: JSONRPCRequest(id: 1, method: "get-config"))

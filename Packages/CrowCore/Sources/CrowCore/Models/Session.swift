@@ -106,9 +106,10 @@ public struct Session: Identifiable, Codable, Sendable {
     public var harnessConversationID: String?
 
     // Workspace an **extra** Manager was tagged with at creation (CROW-1382).
-    // Picks the Manager's AI gateway (the workspace's, falling back to
-    // `AppConfig.managerGateway`) and opts its transcripts into the
-    // workspace's `uploadSessionLogs`. Immutable once created — there is no
+    // Picks the Manager's AI gateway (the workspace's, or none when it has
+    // none — never `AppConfig.managerGateway`, CROW-1478) and opts its
+    // transcripts into the workspace's `uploadSessionLogs`. Immutable once
+    // created — there is no
     // re-tag verb. Every extra Manager created since CROW-1386 has one; nil on
     // an extra Manager means it predates that (the sidebar badges it
     // "untagged"). Nil is the only legal value for the primary Manager and for

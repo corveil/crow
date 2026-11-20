@@ -22,6 +22,12 @@ const { loadClientSource, loadSettingsSource } = require('./load-client');
 //      set and never prints "Failed:".
 //   4. Lazy corveil-list-orgs load and a successful pick update the picker in place
 //      — the settings modal node identity is unchanged (no innerHTML teardown).
+//
+// And the CROW-1478 opt-out:
+//   5. An empty gateway shows Off selected, not "Choose an organization…".
+//   6. Choosing Off POSTs { clear: true } through the manual editor's clear path.
+//   7. A reopen with an org-derived gateway shows that org selected and named,
+//      from get-config's `gateway_orgs` (the browser can't recover it itself).
 
 const epilogue = `
 ;globalThis.__t = {
@@ -46,8 +52,10 @@ const MARKUP = `<!doctype html><html><body>
 
 // A connected config as get-config would send it: OAuth token strings + per-org key
 // secrets stripped (the derivation happens server-side), non-secret metadata kept.
-function connectedConfig() {
+// `managerGateway` is the stored Manager gateway as it reads back stripped.
+function connectedConfig(managerGateway) {
   return JSON.stringify({
+    managerGateway: managerGateway || undefined,
     corveilConnection: {
       baseURL: 'https://app.corveil.example',
       clientID: 'crow-client-abc123',
@@ -61,7 +69,12 @@ function connectedConfig() {
 
 // Returns a handle whose `hooks` the test mutates to inject failures, and which
 // records the rpc methods called and the gateway POST bodies sent.
-function load({ config, local }) {
+// The derived Manager gateway as get-config sends it: the key value is blanked.
+const DERIVED_GATEWAY = {
+  baseURL: 'https://app.corveil.example', customHeaders: { 'x-citadel-api-key': '' },
+};
+
+function load({ config, local, gatewayOrgs }) {
   const dom = new JSDOM(MARKUP, {
     runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/',
   });
@@ -124,7 +137,7 @@ function load({ config, local }) {
     calls.rpc.push({ method, params });
     if (method === 'get-config') {
       if (hooks.failNextGetConfig) { hooks.failNextGetConfig = false; return Promise.reject(new Error('refresh boom')); }
-      return Promise.resolve({ config: configBody, dev_root: '/dev' });
+      return Promise.resolve({ config: configBody, dev_root: '/dev', gateway_orgs: gatewayOrgs });
     }
     if (method === 'list-agents') return Promise.resolve({ agents: [] });
     if (method === 'corveil-list-orgs') return hooks.listOrgs();
@@ -136,9 +149,15 @@ function load({ config, local }) {
 
 async function drain(n = 60) { for (let i = 0; i < n; i++) await Promise.resolve(); }
 
+// The org picker's <select>: the one that offers Off (CROW-1478).
+const OFF = '__off__';
 function orgSelect(window) {
   return Array.from(window.document.querySelectorAll('select')).find(
-    (s) => Array.from(s.options).some((o) => /organization/i.test(o.textContent))) || null;
+    (s) => Array.from(s.options).some((o) => o.value === OFF)) || null;
+}
+
+function selectedText(sel) {
+  return sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : '';
 }
 
 // Open Settings on the Automation tab and wait for the org dropdown to populate
@@ -185,8 +204,8 @@ const check = (name, cond) => {
     check('gateway POST carried { orgId } and no manual base URL / headers', h.calls.gatewayPosts.length === 1
       && h.calls.gatewayPosts[0].orgId === 'org_acme'
       && h.calls.gatewayPosts[0].baseURL === undefined && h.calls.gatewayPosts[0].headers === undefined);
-    check('card now shows the gateway set from the connection',
-      h.window.document.body.textContent.includes('Gateway set from your Corveil connection'));
+    check('status names the picked org',
+      h.window.document.body.textContent.includes('Routing through Corveil org "Acme Corp" (https://app.corveil.example)'));
     check('no key secret ever left the browser (POST body has no x-citadel value)',
       !JSON.stringify(h.calls.gatewayPosts).toLowerCase().includes('sk-citadel'));
     const selAfter = orgSelect(h.window);
@@ -204,7 +223,7 @@ const check = (name, cond) => {
     sel.value = 'org_acme';
     await sel.onchange();
     await drain();
-    check('select reset to the placeholder (empty value)', sel.value === '');
+    check('select reset to the stored choice (Off), so the org can be re-picked', sel.value === OFF);
     check('select re-enabled for another attempt', sel.disabled === false);
     check('failure is surfaced', h.window.document.body.textContent.includes('Failed'));
     check('no gateway was written', h.calls.gatewayPosts.length === 0);
@@ -222,7 +241,7 @@ const check = (name, cond) => {
     check('the gateway was still written', h.calls.gatewayPosts.length === 1
       && h.calls.gatewayPosts[0].orgId === 'org_acme');
     check('card shows the gateway set (pick completed)',
-      h.window.document.body.textContent.includes('Gateway set from your Corveil connection'));
+      h.window.document.body.textContent.includes('Routing through Corveil org "Acme Corp"'));
     check('the pick was NOT reported as failed',
       !h.window.document.body.textContent.includes('Failed:'));
   }
@@ -267,10 +286,11 @@ const check = (name, cond) => {
     await save.onclick();
     await drain();
     const selAfter = orgSelect(h.window);
-    check('dropdown snaps back to the placeholder after manual clear',
-      !!selAfter && selAfter.value === '');
+    check('dropdown shows Off after manual clear',
+      !!selAfter && selAfter.value === OFF);
     check('status no longer claims a Corveil-derived gateway',
-      !h.window.document.body.textContent.includes('Gateway set from your Corveil connection'));
+      !h.window.document.body.textContent.includes('Gateway set from your Corveil connection')
+      && !h.window.document.body.textContent.includes('Routing through Corveil org'));
   }
 
   console.log('\nAdvanced manual set also drops the cached org selection:');
@@ -292,6 +312,101 @@ const check = (name, cond) => {
       !!selAfter && selAfter.value === '');
     check('status shows a manually-entered gateway',
       h.window.document.body.textContent.includes('A manually-entered gateway is set'));
+  }
+
+  console.log('\nCROW-1478: an empty gateway shows Off selected:');
+  {
+    const h = await openAutomation({ config: connectedConfig(), local: true });
+    const sel = orgSelect(h.window);
+    check('Off is selected', !!sel && sel.value === OFF);
+    check('the selected option says Off', /^Off\b/.test(selectedText(sel)));
+    check('no "Choose an organization…" placeholder is offered',
+      !Array.from(sel.options).some((o) => /Choose an organization/.test(o.textContent)));
+    check('the status line says Off',
+      h.window.document.body.textContent.includes('Off: the primary Manager does not route through any AI gateway.'));
+  }
+
+  console.log('\nCROW-1478: choosing Off posts a clear:');
+  {
+    const h = await openAutomation({
+      config: connectedConfig(DERIVED_GATEWAY), local: true,
+      gatewayOrgs: { manager: { org_id: 'org_acme', org_name: 'Acme Corp' }, workspaces: {} },
+    });
+    h.setConfig(connectedConfig());
+    const sel = orgSelect(h.window);
+    check('starts on the stored org', sel.value === 'org_acme');
+    sel.value = OFF;
+    await sel.onchange();
+    await drain();
+    check('exactly one gateway POST, and it is { clear: true }', h.calls.gatewayPosts.length === 1
+      && h.calls.gatewayPosts[0].clear === true && h.calls.gatewayPosts[0].orgId === undefined);
+    check('no org was provisioned for Off',
+      !h.calls.rpc.some((c) => c.method === 'corveil-select-org'));
+    const selAfter = orgSelect(h.window);
+    check('picker now shows Off', !!selAfter && selAfter.value === OFF);
+    check('status no longer names the org',
+      !h.window.document.body.textContent.includes('Routing through Corveil org'));
+  }
+
+  console.log('\nCROW-1478: a failed Off leaves the stored org selected:');
+  {
+    const h = await openAutomation({
+      config: connectedConfig(DERIVED_GATEWAY), local: true,
+      gatewayOrgs: { manager: { org_id: 'org_acme', org_name: 'Acme Corp' }, workspaces: {} },
+    });
+    h.hooks.gatewayPost = () => Promise.resolve({ ok: false, status: 500, body: { error: 'disk full' } });
+    const sel = orgSelect(h.window);
+    sel.value = OFF;
+    await sel.onchange();
+    await drain();
+    check('the select is back on the stored org', orgSelect(h.window).value === 'org_acme');
+    check('failure is surfaced', h.window.document.body.textContent.includes('Failed'));
+  }
+
+  console.log('\nCROW-1478: a reopen shows the stored org selected and named:');
+  {
+    const h = await openAutomation({
+      config: connectedConfig(DERIVED_GATEWAY), local: true,
+      gatewayOrgs: { manager: { org_id: 'org_acme', org_name: 'Acme Corp' }, workspaces: {} },
+    });
+    const sel = orgSelect(h.window);
+    check('the stored org is selected on open', !!sel && sel.value === 'org_acme');
+    check('the status line names it',
+      h.window.document.body.textContent.includes('Routing through Corveil org "Acme Corp" (https://app.corveil.example)'));
+    // Close and reopen: the org comes back from get-config, not from modal state.
+    await h.window.closeSettings(true);
+    await h.T.openSettings('automation');
+    await drain(200);
+    const again = orgSelect(h.window);
+    check('still selected after a reopen', !!again && again.value === 'org_acme');
+    check('still named after a reopen',
+      h.window.document.body.textContent.includes('Routing through Corveil org "Acme Corp"'));
+  }
+
+  console.log('\nCROW-1478: a stored org missing from the list is still shown:');
+  {
+    const h = load({
+      config: connectedConfig(DERIVED_GATEWAY), local: true,
+      gatewayOrgs: { manager: { org_id: 'org_gone', org_name: 'Old Org' }, workspaces: {} },
+    });
+    await h.T.openSettings('automation');
+    await drain(200);
+    const sel = orgSelect(h.window);
+    check('the stored org is selected', !!sel && sel.value === 'org_gone');
+    check('under its stored name', selectedText(sel) === 'Old Org');
+  }
+
+  console.log('\nCROW-1478: a manual gateway shows as manual, with no org selected:');
+  {
+    const h = await openAutomation({
+      config: connectedConfig({ baseURL: 'https://gateway.example.com', customHeaders: { 'X-Api-Key': '' } }),
+      local: true,
+      gatewayOrgs: { workspaces: {} },
+    });
+    const sel = orgSelect(h.window);
+    check('the placeholder is selected', !!sel && sel.value === '');
+    check('status shows a manually-entered gateway',
+      h.window.document.body.textContent.includes('A manually-entered gateway is set (https://gateway.example.com)'));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
