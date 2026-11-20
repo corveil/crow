@@ -456,7 +456,8 @@ final class AgentLaunchController {
         if agent.kind == .claudeCode {
             let gatewayResolved = owner.workspaceGatewayResolved(for: sessionID)
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: worktree.worktreePath, resolved: gatewayResolved)
+                dirPath: worktree.worktreePath, resolved: gatewayResolved,
+                toolEnvScriptPath: owner.toolEnvScriptPath)
             gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
         } else if Self.readsClaudeCompatSettings(agent.kind) {
             // #861 review r17/r18 (Yellow 2): the gateway `env` block carries the
@@ -471,7 +472,8 @@ final class AgentLaunchController {
             // risk on a user's hand-edited `permissions`). `writeGatewayEnv` rewrites
             // whenever a file exists; it only truly no-ops when none is present.
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: worktree.worktreePath, resolved: nil)
+                dirPath: worktree.worktreePath, resolved: nil,
+                toolEnvScriptPath: owner.toolEnvScriptPath)
         }
         // Cursor / Grok / Antigravity / Muse worker launching → ensure its global Jira MCP is synced.
         if agent.kind == .cursor {

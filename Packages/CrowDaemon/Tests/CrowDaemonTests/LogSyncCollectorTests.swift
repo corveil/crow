@@ -618,7 +618,7 @@ import CrowPersistence
         let claudeRoot: URL
         let codexRoot: URL
 
-        init() throws {
+        init(gatewayKey: String = "Bearer sk-test") throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("logsync-1394-\(UUID().uuidString)", isDirectory: true)
             devRoot = root.appendingPathComponent("dev").path
@@ -631,7 +631,7 @@ import CrowPersistence
                 name: "Corveil", uploadSessionLogs: true,
                 gateway: WorkspaceGateway(
                     baseURL: "https://corveil.example",
-                    customHeaders: ["x-citadel-api-key": "Bearer sk-test"]))
+                    customHeaders: ["x-citadel-api-key": gatewayKey]))
         }
 
         var worktreePath: String { devRoot + "/Corveil/crow-1394-thing" }
@@ -859,6 +859,63 @@ import CrowPersistence
         #expect(entry.status == .uploaded)
         #expect(entry.sizeBytes == body.count)
         #expect(entry.sha256 == LogSyncCollector.sha256Hex(body))
+    }
+
+    // MARK: Gateway keys are redacted before upload (CROW-1484)
+
+    /// The session's own key (whatever its shape) and any Corveil-shaped key
+    /// an agent printed are gone from the body as sent. Fake keys only.
+    @Test @MainActor func uploadedTranscriptHasGatewayKeysRedacted() async throws {
+        let ownKey = "gw-own-key-0123456789abcdef"
+        let f = try Fixture(gatewayKey: "Bearer \(ownKey)")
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let dir = f.claudeDir(f.worktreePath)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let lines = [
+            #"{"type":"user","text":"env | grep ANTHROPIC"}"#,
+            #"{"type":"tool_result","text":"ANTHROPIC_CUSTOM_HEADERS=x-citadel-api-key: \#(ownKey)\nX-Crow-Session: s"}"#,
+            #"{"type":"tool_result","text":"config: sk-citadel-TESTTESTTESTOTHER"}"#,
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(
+            to: dir.appendingPathComponent("c1.jsonl"), atomically: true, encoding: .utf8)
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport)
+        let session = Session(name: "thing", status: .active, kind: .work, agentKind: .claudeCode)
+
+        await collector.uploadBeforeDelete(sessionID: session.id, appState: f.appState(with: session))
+
+        let request = try #require(transport.requests.first)
+        // The upload itself still authenticates with the key…
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(ownKey)")
+        // …but the transcript it carries no longer holds it.
+        let sent = try #require(request.httpBody)
+        let body = String(decoding: try #require(Gzip.decompress(sent)), as: UTF8.self)
+        #expect(!body.contains(ownKey))
+        #expect(!body.contains("sk-citadel-"))
+        #expect(body.components(separatedBy: TranscriptRedactor.replacement).count - 1 == 2)
+        #expect(body.contains("env | grep ANTHROPIC"))
+        #expect(body.split(separator: "\n").count == 3)
+    }
+
+    /// Same rule on the per-conversation path a Manager uploads through.
+    @Test @MainActor func managerConversationUploadHasGatewayKeysRedacted() async throws {
+        let ownKey = "sk-citadel-TESTTESTTESTMANAGER"
+        let f = try Fixture(gatewayKey: ownKey)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let transcript = f.root.appendingPathComponent("conv-a.jsonl")
+        try #"{"type":"tool_result","text":"\#(ownKey)"}"#.appending("\n")
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        let transport = RecordingTransport()
+        let collector = f.collector(transport: transport, managerTranscript: transcript.path)
+        let session = taggedManager(f)
+
+        await collector.uploadBeforeDelete(sessionID: session.id, appState: f.appState(with: session))
+
+        let request = try #require(transport.requests.first)
+        let sent = try #require(request.httpBody)
+        let body = String(decoding: try #require(Gzip.decompress(sent)), as: UTF8.self)
+        #expect(!body.contains("TESTTESTTESTMANAGER"))
+        #expect(body.contains(TranscriptRedactor.replacement))
     }
 
     /// A stalled upload can't hold the delete: the call returns at the

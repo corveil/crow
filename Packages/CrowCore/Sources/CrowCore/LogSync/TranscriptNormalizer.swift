@@ -82,8 +82,17 @@ public enum TranscriptNormalizer {
     /// set. Event counts describe the lines actually kept. If zlib fails, or no
     /// whole-line prefix compresses under the cap, the plain NDJSON is cut to
     /// the cap and sent uncompressed rather than dropped.
-    public static func gzipForUpload(_ transcript: NormalizedTranscript, maxBytes: Int) -> NormalizedTranscript? {
+    ///
+    /// Gateway keys are redacted first (CROW-1484, ``TranscriptRedactor``):
+    /// every value in `secrets`, plus anything shaped like a Corveil key. This
+    /// is the one step every upload path (live collector, per-conversation,
+    /// backfill) shares, so the argument is required rather than defaulted: a
+    /// caller with no key to name passes `[]` and still gets the shape pass.
+    public static func gzipForUpload(
+        _ input: NormalizedTranscript, maxBytes: Int, redacting secrets: [String]
+    ) -> NormalizedTranscript? {
         guard maxBytes > 0 else { return nil }
+        let (transcript, _) = TranscriptRedactor.redact(input, secrets: secrets)
         let raw = transcript.data
         guard let whole = Gzip.compress(raw) else { return uncompressedFallback(raw, transcript, maxBytes) }
         if whole.count <= maxBytes {

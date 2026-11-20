@@ -24,6 +24,12 @@ struct ClaudeHookConfigWriterTests {
         return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    /// The tool env script lives beside the temp settings, never in the live
+    /// state dir (ADR 0012).
+    private func scriptPath(in dir: URL) -> String {
+        dir.appendingPathComponent("state/\(ClaudeToolEnvScript.fileName)").path
+    }
+
     private func posixPerms(at dir: URL) throws -> Int {
         let path = dir.appendingPathComponent(".claude/settings.local.json").path
         let attrs = try FileManager.default.attributesOfItem(atPath: path)
@@ -36,7 +42,8 @@ struct ClaudeHookConfigWriterTests {
 
         ClaudeHookConfigWriter.writeGatewayEnv(
             dirPath: dir.path,
-            resolved: .init(baseURL: "https://gw.example", customHeaders: "X-Api-Key: secret"))
+            resolved: .init(baseURL: "https://gw.example", customHeaders: "X-Api-Key: secret"),
+            toolEnvScriptPath: scriptPath(in: dir))
 
         // The bearer-token-bearing file must be readable only by its owner.
         #expect(try posixPerms(at: dir) == 0o600)
@@ -65,7 +72,8 @@ struct ClaudeHookConfigWriterTests {
         let seedData = try JSONSerialization.data(withJSONObject: seed)
         try seedData.write(to: claudeDir.appendingPathComponent("settings.local.json"))
 
-        ClaudeHookConfigWriter.writeGatewayEnv(dirPath: dir.path, resolved: nil)
+        ClaudeHookConfigWriter.writeGatewayEnv(
+            dirPath: dir.path, resolved: nil, toolEnvScriptPath: scriptPath(in: dir))
 
         let merged = try settings(at: dir)
         let env = try #require(merged["env"] as? [String: Any])
@@ -75,6 +83,88 @@ struct ClaudeHookConfigWriterTests {
         #expect(merged["permissions"] != nil)              // unrelated top-level key preserved
         // Re-write still restricts the file (unrelated USER_VAR could be secret too).
         #expect(try posixPerms(at: dir) == 0o600)
+    }
+
+    // MARK: - Tool subprocess env (CROW-1484)
+
+    @Test func gatewayPointsClaudeEnvFileAtTheUnsetScript() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = scriptPath(in: dir)
+
+        ClaudeHookConfigWriter.writeGatewayEnv(
+            dirPath: dir.path,
+            resolved: .init(
+                baseURL: "https://gw.example",
+                customHeaders: "x-citadel-api-key: sk-citadel-TESTTESTTEST\nX-Crow-Version: 0.0.0"),
+            toolEnvScriptPath: script)
+
+        let env = try #require(try settings(at: dir)["env"] as? [String: Any])
+        // Claude Code still gets the headers from the env block…
+        #expect((env["ANTHROPIC_CUSTOM_HEADERS"] as? String)?.contains("sk-citadel-TESTTESTTEST") == true)
+        // …and runs the script ahead of every Bash tool command.
+        #expect(env["CLAUDE_ENV_FILE"] as? String == script)
+        let body = try String(contentsOfFile: script, encoding: .utf8)
+        #expect(body == ClaudeToolEnvScript.contents)
+        #expect(body.split(separator: "\n").contains("unset ANTHROPIC_CUSTOM_HEADERS"))
+        // The script is shared and static: it never holds a header value.
+        #expect(!body.contains("sk-citadel-TESTTESTTEST"))
+    }
+
+    @Test func unsetScriptActuallyClearsTheVariableInAShell() throws {
+        // The script is sourced into the shell that runs the tool command, so
+        // run it the same way and check the variable is gone after it.
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = scriptPath(in: dir)
+        #expect(ClaudeToolEnvScript.ensure(at: script))
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", ". \"$1\"; printf '%s' \"${ANTHROPIC_CUSTOM_HEADERS-unset}\"", "sh", script]
+        process.environment = ["ANTHROPIC_CUSTOM_HEADERS": "x-citadel-api-key: sk-citadel-TESTTESTTEST"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        #expect(process.terminationStatus == 0)
+        #expect(out == "unset")
+    }
+
+    @Test func clearingRemovesCrowEnvFileButKeepsAUsersOwn() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = scriptPath(in: dir)
+
+        ClaudeHookConfigWriter.writeGatewayEnv(
+            dirPath: dir.path,
+            resolved: .init(baseURL: "https://gw.example", customHeaders: "X-Api-Key: secret"),
+            toolEnvScriptPath: script)
+        ClaudeHookConfigWriter.writeGatewayEnv(
+            dirPath: dir.path, resolved: nil, toolEnvScriptPath: script)
+        // Nothing of ours is left, so the env block goes away entirely.
+        #expect(try settings(at: dir)["env"] == nil)
+
+        // A CLAUDE_ENV_FILE the user set by hand is theirs: clearing leaves it.
+        let settingsURL = dir.appendingPathComponent(".claude/settings.local.json")
+        let seed: [String: Any] = ["env": ["CLAUDE_ENV_FILE": "/Users/someone/my-env.sh"]]
+        try JSONSerialization.data(withJSONObject: seed).write(to: settingsURL)
+        ClaudeHookConfigWriter.writeGatewayEnv(
+            dirPath: dir.path, resolved: nil, toolEnvScriptPath: script)
+        let env = try #require(try settings(at: dir)["env"] as? [String: Any])
+        #expect(env["CLAUDE_ENV_FILE"] as? String == "/Users/someone/my-env.sh")
+    }
+
+    @Test func ensureRewritesATamperedScript() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = scriptPath(in: dir)
+        try FileManager.default.createDirectory(
+            atPath: (script as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try Data("echo hi\n".utf8).write(to: URL(fileURLWithPath: script))
+        #expect(ClaudeToolEnvScript.ensure(at: script))
+        #expect(try String(contentsOfFile: script, encoding: .utf8) == ClaudeToolEnvScript.contents)
     }
 }
 

@@ -253,9 +253,11 @@ final class ManagerSessionController {
         if managerKind == .claudeCode {
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: dirPath,
-                resolved: managerGatewayResolved(sessionID: sessionID, workspaceTag: workspaceTag))
+                resolved: managerGatewayResolved(sessionID: sessionID, workspaceTag: workspaceTag),
+                toolEnvScriptPath: owner.toolEnvScriptPath)
         } else if SessionService.readsClaudeCompatSettings(managerKind) {
-            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: dirPath, resolved: nil)
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: dirPath, resolved: nil, toolEnvScriptPath: owner.toolEnvScriptPath)
         }
     }
 

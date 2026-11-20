@@ -85,7 +85,7 @@ final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable 
     @Test func gzippedTranscriptIsSentWithContentEncoding() throws {
         let ndjson = Data("{\"a\":1}\n{\"b\":2}\n".utf8)
         let raw = try #require(TranscriptNormalizer.finalize(ndjson, truncated: false))
-        let gz = try #require(TranscriptNormalizer.gzipForUpload(raw, maxBytes: 1 << 20))
+        let gz = try #require(TranscriptNormalizer.gzipForUpload(raw, maxBytes: 1 << 20, redacting: []))
         let req = try #require(TranscriptUploader.makeRequest(
             baseURL: "https://api.x", apiKey: "k", sessionUID: "S", harness: .claude,
             kind: .sessionTranscript, format: .jsonl, transcript: gz,

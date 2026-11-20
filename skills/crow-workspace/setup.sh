@@ -59,6 +59,17 @@ WS_CUSTOM_HEADERS=""
 WS_HAS_GATEWAY=false
 WS_GATEWAY_RESOLVED=false
 
+# The static script a gateway session's CLAUDE_ENV_FILE names (CROW-1484): Claude
+# Code runs it before every Bash tool command, so tool subprocesses don't inherit
+# the gateway key in ANTHROPIC_CUSTOM_HEADERS. Mirrors ClaudeToolEnvScript in
+# Swift: same contents, same place (beside store.json in Crow's app-support dir,
+# which Foundation puts under XDG_DATA_HOME on Linux). Tests point it at a temp file.
+if [[ "$(uname -s)" == Darwin ]]; then
+  CROW_TOOL_ENV_SCRIPT="$HOME/Library/Application Support/crow/crow-claude-tool-env.sh"
+else
+  CROW_TOOL_ENV_SCRIPT="${XDG_DATA_HOME:-$HOME/.local/share}/crow/crow-claude-tool-env.sh"
+fi
+
 # Resolved task provider for this workspace (populated by resolve_task_provider).
 # The CODE provider lives in $PROVIDER (github/gitlab); the TASK provider may
 # differ (e.g. github code + jira tasks). Empty until resolved; falls back to
@@ -387,11 +398,12 @@ resolve_session_env() {
 # Build the shell prefix that applies (or clears) the gateway env vars on the
 # `claude` launch line — mirrors ClaudeLaunchArgs.gatewayEnvPrefix in Swift.
 # Gateway absent → `unset … && ` so a no-gateway workspace doesn't inherit a
-# sibling's or ~/.zshrc's gateway. Single header → `ANTHROPIC_BASE_URL='…'
-# ANTHROPIC_CUSTOM_HEADERS='…' `. Multi-header → the header value has an embedded
-# newline and can't go on the line (a pasted newline would submit the command
-# early), so settings.local.json carries it; we still `unset ANTHROPIC_CUSTOM_HEADERS`
-# so the gateway's baseURL is never paired with a stale ~/.zshrc-inherited header.
+# sibling's or ~/.zshrc's gateway. Gateway present → `unset
+# ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL='…' `. The headers never ride
+# this line (CROW-1484): they carry the gateway key, and the line is typed into
+# a terminal, so it would land in shell history and scrollback.
+# settings.local.json carries them; the unset keeps the gateway's baseURL from
+# being paired with a stale ~/.zshrc-inherited header value.
 # Every gateway branch also sets CLAUDE_CODE_AUTO_MODE_SERVER=1 (CROW-1426): on
 # Claude Code >= 2.1.319 a call the server can't check is asked about or denied
 # behind a gateway, so keep the server-side check on even when the user's shell
@@ -402,13 +414,29 @@ gateway_launch_prefix() {
     printf 'unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && '
     return 0
   fi
-  if [[ "$WS_CUSTOM_HEADERS" == *$'\n'* ]]; then
-    printf 'unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL=%s CLAUDE_CODE_AUTO_MODE_SERVER=1 ' \
-      "$(posix_quote "$WS_BASE_URL")"
+  printf 'unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL=%s CLAUDE_CODE_AUTO_MODE_SERVER=1 ' \
+    "$(posix_quote "$WS_BASE_URL")"
+}
+
+# Write the static tool env script (CROW-1484) unless it already matches.
+# Mirrors ClaudeToolEnvScript.ensure in Swift. Holds no secret. Returns non-zero
+# when it can't be written; the caller still names it in CLAUDE_ENV_FILE, which
+# Claude Code skips silently when the file is missing.
+ensure_tool_env_script() {
+  local want
+  want="# Written by Crow (CROW-1484). Do not edit; Crow rewrites it.
+# Claude Code runs this file before every Bash tool command (CLAUDE_ENV_FILE),
+# so the commands an agent runs don't inherit the AI-gateway key.
+# Claude Code's own process keeps ANTHROPIC_CUSTOM_HEADERS.
+unset ANTHROPIC_CUSTOM_HEADERS"
+  if [[ -f "$CROW_TOOL_ENV_SCRIPT" ]] && [[ "$(cat "$CROW_TOOL_ENV_SCRIPT")" == "$want" ]]; then
     return 0
   fi
-  printf 'ANTHROPIC_BASE_URL=%s CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS=%s ' \
-    "$(posix_quote "$WS_BASE_URL")" "$(posix_quote "$WS_CUSTOM_HEADERS")"
+  mkdir -p "$(dirname "$CROW_TOOL_ENV_SCRIPT")" 2>/dev/null || return 1
+  local tmp="$CROW_TOOL_ENV_SCRIPT.tmp.$$"
+  printf '%s\n' "$want" > "$tmp" 2>/dev/null && mv -f "$tmp" "$CROW_TOOL_ENV_SCRIPT" 2>/dev/null && return 0
+  rm -f "$tmp" 2>/dev/null
+  return 1
 }
 
 # How Codex is signed in, as a Corveil upstream (CROW-1407). Mirrors
@@ -1243,6 +1271,13 @@ Crow-Session: $SESSION_ID"
     fi
   fi
 
+  # CROW-1484: the gateway env names the tool env script in CLAUDE_ENV_FILE so
+  # Bash tool commands don't inherit ANTHROPIC_CUSTOM_HEADERS. Fail open: a
+  # missing script is skipped by Claude Code, so the launch still works.
+  if [[ "$WS_HAS_GATEWAY" == true ]] && ! ensure_tool_env_script; then
+    log "Could not write $CROW_TOOL_ENV_SCRIPT; Bash tool commands will inherit ANTHROPIC_CUSTOM_HEADERS"
+  fi
+
   local merged
   if ! merged=$(jq \
     --argjson want_attr "$want_attribution" \
@@ -1250,11 +1285,13 @@ Crow-Session: $SESSION_ID"
     --argjson want_gw "$WS_HAS_GATEWAY" \
     --arg base_url "$WS_BASE_URL" \
     --arg headers "$WS_CUSTOM_HEADERS" \
+    --arg tool_env "$CROW_TOOL_ENV_SCRIPT" \
     --argjson session_env "$session_env_json" \
     '(if $want_attr then .attribution.commit = $commit else . end)
      | (if ($session_env | length) > 0 then .env = (.env // {}) + $session_env else . end)
      | (if $want_gw then .env.ANTHROPIC_BASE_URL = $base_url
-                       | .env.ANTHROPIC_CUSTOM_HEADERS = $headers else . end)' \
+                       | .env.ANTHROPIC_CUSTOM_HEADERS = $headers
+                       | .env.CLAUDE_ENV_FILE = $tool_env else . end)' \
     <<< "$base"); then
     die "settings_local" "jq failed to build settings.local.json"
   fi

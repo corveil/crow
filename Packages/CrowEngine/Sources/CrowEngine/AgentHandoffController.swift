@@ -163,7 +163,8 @@ final class AgentHandoffController {
             // Claude inherits the workspace AI gateway env on handoff.
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath,
-                resolved: owner.workspaceGatewayResolved(for: sessionID))
+                resolved: owner.workspaceGatewayResolved(for: sessionID),
+                toolEnvScriptPath: owner.toolEnvScriptPath)
         } else if SessionService.readsClaudeCompatSettings(target.kind) {
             // #861 review r17/r18 (Yellow 2): a Grok/Codex target compat-loads
             // `.claude/settings.local.json`, so clear any `Authorization: Bearer`
@@ -173,7 +174,8 @@ final class AgentHandoffController {
             // compat-loaders — Cursor/OpenCode/Antigravity never read the file, so a
             // clear there is churn + a data-loss risk, not a security gain.
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: worktree.worktreePath, resolved: nil)
+                dirPath: worktree.worktreePath, resolved: nil,
+                toolEnvScriptPath: owner.toolEnvScriptPath)
         }
         if target.kind == .grok, session.kind != .review {
             // A `.work`/`.job` handoff from Claude/Cursor leaves that prior

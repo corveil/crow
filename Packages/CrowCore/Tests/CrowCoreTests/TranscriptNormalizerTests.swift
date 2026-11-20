@@ -139,7 +139,7 @@ import CrowCore
         let raw = ndjson(lines: 2_000)
         let cap = raw.count / 4
         let t = try #require(TranscriptNormalizer.finalize(raw, truncated: false))
-        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap, redacting: []))
         #expect(out.gzipped)
         #expect(out.truncated == false)
         #expect(out.data.count <= cap)
@@ -154,7 +154,7 @@ import CrowCore
         let cap = 20_000
         let t = try #require(TranscriptNormalizer.finalize(raw, truncated: false))
         #expect(try #require(Gzip.compress(raw)).count > cap)
-        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap, redacting: []))
         #expect(out.gzipped)
         #expect(out.truncated)
         #expect(out.data.count <= cap)
@@ -169,7 +169,7 @@ import CrowCore
     /// even when what was read compresses under the cap.
     @Test func readTruncationSurvivesCompression() throws {
         let t = try #require(TranscriptNormalizer.finalize(ndjson(lines: 10), truncated: true))
-        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: 1 << 20))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: 1 << 20, redacting: []))
         #expect(out.truncated)
     }
 
@@ -185,7 +185,7 @@ import CrowCore
         let raw = incompressibleNDJSON(lines: 3)
         let cap = 20 // under gzip's own header + trailer, so nothing compressed fits
         let t = try #require(TranscriptNormalizer.finalize(raw, truncated: false))
-        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap))
+        let out = try #require(TranscriptNormalizer.gzipForUpload(t, maxBytes: cap, redacting: []))
         #expect(!out.gzipped)
         #expect(out.truncated)
         #expect(out.data.count <= cap)

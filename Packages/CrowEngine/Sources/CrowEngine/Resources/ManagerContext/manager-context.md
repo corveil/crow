@@ -60,6 +60,10 @@ To hand work to a new Manager, do it in one call: `crow create-manager --workspa
 - Use `$TMPDIR` (not `/tmp`) for temporary files
 - The `crow` CLI is safe to run concurrently, and parallel `setup.sh` runs share nothing (each gets its own worktree, session and terminal)
 
+## Never print the gateway key
+
+A session behind an AI gateway holds its key in `ANTHROPIC_CUSTOM_HEADERS` (Codex: `CROW_CORVEIL_GATEWAY_KEY`), in `.claude/settings.local.json` and in `{devRoot}/.claude/config.json`. Anything printed lands in your transcript, which log sync uploads and the gateway can log. Never run `env`, `printenv`, `set` or `export -p`, never echo those variables, and never dump the `env` block of `settings.local.json` or the `gateway` of `config.json`. To show routing, run `crow gateway get --manager` or `--workspace <name>` (header values blanked), or test presence only: `[ -n "$ANTHROPIC_CUSTOM_HEADERS" ] && echo set`. Claude's Bash tool commands don't see that variable on purpose (CROW-1484); don't re-export it. Fixtures use fake keys (`sk-citadel-TESTTESTTEST`). If a real key gets printed, say so: it must be rotated.
+
 ## Git Worktree Best Practices
 
 ### Branch Conflicts

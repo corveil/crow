@@ -73,6 +73,8 @@ JSON
 # shellcheck disable=SC1090
 source "$SETUP_SH"
 DEV_ROOT="$TMP/devroot"
+# Keep the tool env script out of the live state dir (ADR 0012).
+CROW_TOOL_ENV_SCRIPT="$TMP/state/crow-claude-tool-env.sh"
 
 echo "== gateway-present workspace =="
 WORKSPACE="Corveil"
@@ -112,6 +114,24 @@ contains "resolved secret in env" "$(cat "$settings")" "RESOLVED-SECRET-for-op:/
 contains "both headers serialized in env" "$(cat "$settings")" "x-plain: literal-value"
 # The file caches a resolved bearer token, so it must be owner-only (0600).
 check "settings.local.json is 0600" "600" "$(stat -f '%Lp' "$settings" 2>/dev/null || stat -c '%a' "$settings")"
+# CROW-1484: CLAUDE_ENV_FILE names the script that unsets the headers before
+# every Bash tool command, and the script holds no secret.
+check "env.CLAUDE_ENV_FILE names the tool env script (CROW-1484)" \
+  "$CROW_TOOL_ENV_SCRIPT" "$(jq -r '.env.CLAUDE_ENV_FILE' "$settings")"
+check "tool env script written" "yes" "$([[ -f "$CROW_TOOL_ENV_SCRIPT" ]] && echo yes || echo no)"
+contains "tool env script unsets the headers" "$(cat "$CROW_TOOL_ENV_SCRIPT")" "unset ANTHROPIC_CUSTOM_HEADERS"
+check "tool env script holds no secret" "0" "$(grep -c RESOLVED-SECRET "$CROW_TOOL_ENV_SCRIPT" || true)"
+check "sourcing the script clears the variable" "unset" \
+  "$(ANTHROPIC_CUSTOM_HEADERS='x-citadel-api-key: sk-citadel-TESTTESTTEST' bash -c '. "$1"; printf "%s" "${ANTHROPIC_CUSTOM_HEADERS-unset}"' _ "$CROW_TOOL_ENV_SCRIPT")"
+# Byte-identical to ClaudeToolEnvScript.contents in Swift, so the two writers
+# never flip the shared file back and forth.
+swift_contents='# Written by Crow (CROW-1484). Do not edit; Crow rewrites it.
+# Claude Code runs this file before every Bash tool command (CLAUDE_ENV_FILE),
+# so the commands an agent runs don'"'"'t inherit the AI-gateway key.
+# Claude Code'"'"'s own process keeps ANTHROPIC_CUSTOM_HEADERS.
+unset ANTHROPIC_CUSTOM_HEADERS'
+check "tool env script matches the Swift writer" "$swift_contents" "$(cat "$CROW_TOOL_ENV_SCRIPT")"
+check "tool env script ends in one newline" "a" "$(tail -c 1 "$CROW_TOOL_ENV_SCRIPT" | tr '\n' 'a')"
 
 echo "== gateway-absent workspace =="
 WORKSPACE="Personal"
@@ -123,11 +143,14 @@ check "launch prefix unsets" "unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS 
 check "no-gateway prefix leaves auto-mode server alone" "0" "$([[ "$prefix" == *CLAUDE_CODE_AUTO_MODE_SERVER* ]] && echo 1 || echo 0)"
 
 echo "== single-header launch prefix =="
-WS_HAS_GATEWAY=true; WS_BASE_URL="https://corveil.io"; WS_CUSTOM_HEADERS="x-key: Bearer sk-1"
+# CROW-1484: the line is typed into a terminal (shell history, scrollback), so
+# even a header that fits on one line stays off it.
+WS_HAS_GATEWAY=true; WS_BASE_URL="https://corveil.io"; WS_CUSTOM_HEADERS="x-key: sk-citadel-TESTTESTTEST"
 prefix=$(gateway_launch_prefix)
-check "single header on launch line" \
-  "ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS='x-key: Bearer sk-1' " \
+check "single header stays off the launch line" \
+  "unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 " \
   "$prefix"
+check "launch line never holds the key" "0" "$([[ "$prefix" == *sk-citadel-* ]] && echo 1 || echo 0)"
 
 echo "== X-Crow-Version header (CROW-1458) =="
 # A fake `crow` that answers `version get` with $FAKE_CROW_VERSION_JSON.
