@@ -2234,6 +2234,17 @@ select.text-prompt-input { cursor: pointer; }
   .chat-code-block:hover > .chat-code-copy,
   .chat-chip:hover, .chat-chip:focus-visible, .chat-chip.copied, .chat-chip.speaking { opacity: 1; }
 }
+/* The gutter stack is taller than a one-line bubble and sits a layer above
+   the next message, so while hidden it must not hit-test: otherwise its
+   invisible chips take clicks (and reveal themselves) over the next bubble.
+   It turns on with its own bubble's hover or keyboard focus; a playing Stop
+   stays clickable. Touch and narrow layouts are in-flow with no hover, so
+   they keep the default. */
+@media (pointer: fine) and (min-width: 721px) {
+  .chat-msg > .chat-msg-actions { pointer-events: none; }
+  .chat-msg:hover > .chat-msg-actions, .chat-msg-actions:focus-within,
+  .chat-msg-actions > .chat-chip.speaking { pointer-events: auto; }
+}
 @media (pointer: coarse), (max-width: 720px) {
   .chat-msg > .chat-msg-actions {
     position: static; flex-direction: row; justify-content: flex-end; margin-top: 6px;

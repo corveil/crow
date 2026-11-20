@@ -87,6 +87,8 @@ function clearPageDataOnExpiry() {
   if (typeof stopGridPolling === 'function') stopGridPolling();
   if (typeof disposeGridTerm === 'function') [...gridTerms.keys()].forEach(disposeGridTerm);
   if (typeof stopChatPoll === 'function') stopChatPoll();
+  // Don't keep reading a reply aloud behind the expiry scrim (#1488).
+  if (typeof stopChatSpeech === 'function') stopChatSpeech();
   if (typeof chatState !== 'undefined') chatState = null;
   ['sidebar', 'board', 'detail-header', 'detail-artifacts', 'detail-recordings', 'tabbar', 'chat-view']
     .forEach((id) => { const n = document.getElementById(id); if (n) n.textContent = ''; });

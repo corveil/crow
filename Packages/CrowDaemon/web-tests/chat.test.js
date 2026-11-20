@@ -15,6 +15,7 @@ const epilogue = `
   set selectedId(v){ selectedId = v; },
   set chatState(v){ chatState = v; },
   get chatState(){ return chatState; },
+  selectBoard, showEmptyDetail, clearPageDataOnExpiry,
   applyChatView, setChatViewActive, chatHeaderMeter, chatToggleControl, onChatConfigLoaded,
   insertChatText, chatDrafts,
   set chatViewFlag(v){ uiConfig.chatViewEnabled = v; },
@@ -634,6 +635,31 @@ check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.que
   T.applyChatView();
   check('leaving Chat for the terminal cancels speech', synth.cancels === before + 1 && synth.queue.length === 0);
   T.setChatViewActive(true);
+  // The exits that don't go through applyChatView. Each speaks a fresh reply
+  // first; the rest of the exit's repaint may throw in jsdom, which is fine.
+  const exitStops = (name, exit) => {
+    T.selectedId = 'V-3';
+    T.applyChatView();
+    T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/v3-' + name, terminal_id: 'T-V',
+      agent_kind: 'claude-code', events: [{ kind: 'assistant', text: 'Keep talking.' }] });
+    const btn = vBtn();
+    btn.click();
+    const n = synth.cancels;
+    try { exit(); } catch (_) { /* unrelated repaint in jsdom */ }
+    check(name + ' cancels speech', synth.cancels === n + 1 && synth.queue.length === 0
+      && !btn.classList.contains('speaking'));
+  };
+  exitStops('opening a board', () => T.selectBoard('tickets'));
+  exitStops('the empty-detail state', () => T.showEmptyDetail('Select a session'));
+  exitStops('session expiry (CROW-1460 scrim)', () => T.clearPageDataOnExpiry());
+
+  const css = fs.readFileSync(WEB + 'app.css', 'utf8');
+  const at = css.indexOf('@media (pointer: fine) and (min-width: 721px) {');
+  const gutter = at < 0 ? '' : css.slice(at, css.indexOf('\n}', at));
+  check('hidden desktop gutter chips do not hit-test over the next bubble',
+    gutter.includes('.chat-msg > .chat-msg-actions { pointer-events: none; }')
+    && gutter.includes('.chat-msg:hover > .chat-msg-actions, .chat-msg-actions:focus-within,')
+    && gutter.includes('.chat-msg-actions > .chat-chip.speaking { pointer-events: auto; }'));
 
   T.selectedId = 'F-1';
   T.setChatViewActive(true);
