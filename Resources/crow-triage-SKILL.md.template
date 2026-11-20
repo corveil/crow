@@ -35,6 +35,7 @@ Packages a loop a Manager ran by hand on 12 Oct 2026 for Corveil's CI audit: **p
 This skill activates when:
 - The user invokes `/crow-triage`, optionally with a slug or a path to an `items.json`
 - The user asks for a "triage page", a "decision page", or "Kick off / Later / Drop" for a set of proposals
+- The user invokes `/crow-triage friction` or asks to triage agent friction (see **Source: the friction report**)
 - The user says they've finished deciding on a triage page this skill published ("read the decisions back", "I'm done with the triage")
 
 ## Files
@@ -110,6 +111,23 @@ Gather the items from the conversation, the user's file, or your own analysis, t
 Text fields accept a little inline markup: `` `code` ``, `**bold**`, and `[text](https://…)` links. Everything else is escaped, so there is no HTML.
 
 Write the verdict you actually believe, including `counterproductive` for a proposal that would make things worse. The page exists so the operator can decide on honest numbers.
+
+#### Source: the friction report
+
+`/crow-triage friction` builds the items from agent tool friction (CROW-1477) rather than from a plan. Agents log friction in-flow as Scratch items of kind `friction`. The report groups and counts them:
+
+```
+crow get-friction-report --limit 20
+```
+
+- Make one item per `local.groups` entry. Use a stable `id` such as `fr-1`, and **keep that id for the same `summary` when you republish**.
+- Set `title` to the fix, not the symptom: "Add `--wait-ready` to `crow send`", or "Correct the `todo` flags in the crow-cli reference".
+- Use two `groups`: `ticket` for code changes (a missing verb or flag, a readiness wait), and `instruction` for instruction fixes (a stale line in the shipped Manager context `Packages/CrowEngine/Sources/CrowEngine/Resources/ManagerContext/manager-context.md`, the crow-cli `reference.md` beside it, or a bundled skill under `skills/`). For Crow's own CLI and instructions, `repo` is `corveil/crow`.
+- `evidence`: the `count`, the `latest_at`, two or three `latest_text` lines, and the `todo_ids`. `effect`: the turns it costs per occurrence × `count`, marked estimated.
+- Skip a group whose `states` are all `ticketed` or `working`: it already has a ticket. Check for an open ticket that already covers each other group (`gh search issues`). If one does, set `rec` to "Duplicate of #N" and the verdict to `none`.
+- If the `corveil` section is `available: false`, say so in `lede`, using its `tracking` link. Don't look for the report anywhere else.
+
+After the read-back, close the loop on the friction items. For a group that was kicked off, run `crow todo link --id <todo-id> --type ticket --url <issue-url>` for each of its `todo_ids`, so the group's `states` show `ticketed` and the next report doesn't propose it again. Once an instruction fix merges, run `crow todo done --id <todo-id>`. For a group that was dropped, run `crow todo drop --id <todo-id>` and add the reason with `crow todo edit --append-note`.
 
 ### Phase 2: Build
 

@@ -47,6 +47,39 @@ import CrowEngine
         await router.handle(request: JSONRPCRequest(id: 1, method: method, params: params))
     }
 
+    @Test @MainActor func frictionKindListCountsAndReport() async throws {
+        // CROW-1477: the `[friction]` prefix classifies, `kind` filters,
+        // `kind_counts` counts, and `get-friction-report` groups the repeats.
+        let (router, _) = harness()
+        _ = await call(router, "todo-add", ["text": .string("an idea")])
+        let a = await call(router, "todo-add", [
+            "text": .string("[friction] crow send has no --wait-ready — polled list-terminals"),
+        ])
+        #expect(a.result?["todo"]?.objectValue?["kind"]?.stringValue == "friction")
+        _ = await call(router, "todo-add", [
+            "text": .string("crow send has no --wait-ready — slept"),
+            "kind": .string("friction"),
+        ])
+        let bad = await call(router, "todo-add", ["text": .string("x"), "kind": .string("bug")])
+        #expect(bad.error != nil)
+
+        let listed = await call(router, "todo-list", ["kind": .string("friction")])
+        #expect(listed.result?["todos"]?.arrayValue?.count == 2)
+        #expect(listed.result?["kind_counts"] == .object(["idea": .int(1), "friction": .int(2)]))
+
+        let report = await call(router, "get-friction-report")
+        let local = try #require(report.result?["local"]?.objectValue)
+        #expect(local["open"] == .int(2))
+        let groups = try #require(local["groups"]?.arrayValue)
+        #expect(groups.count == 1)
+        #expect(groups.first?.objectValue?["count"] == .int(2))
+        let corveil = try #require(report.result?["corveil"]?.objectValue)
+        #expect(corveil["available"] == .bool(false))
+
+        let badLimit = await call(router, "get-friction-report", ["limit": .int(0)])
+        #expect(badLimit.error != nil)
+    }
+
     @Test @MainActor func addListGetEditDoneReopen() async throws {
         let (router, store) = harness()
 

@@ -43,7 +43,7 @@ crow work-on-issue --url "..."                  → types /crow-workspace <url> 
 crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
 crow create-manager [--agent KIND] [--workspace NAME] [--name "..."] [--prompt "..." | --prompt-file PATH|-]
                                                 → {session_id, name, seeded, ...}
-crow todo add "text" / crow todo list
+crow todo add "text" / crow todo list           → --kind friction for tool friction (below)
 ```
 
 `crow send` writes text to the terminal as one bracketed paste; newlines become Enter, so end with a newline to submit. It errors instead of printing `"sent": true` when the text can't be delivered. `add-link --type pr` is idempotent: it skips when the session already has a PR link.
@@ -137,5 +137,19 @@ The same prefix rule defeats `find -exec`: the rule engine can't see what gets e
 | Find files by name | `find . -name X` (no `-exec`) | — |
 | Delete matches | `find . -name X -delete` | `find . -name X -exec rm {} \;` |
 | Run a command per match | `find ... -print0 \| xargs -0 CMD` | `find ... -exec CMD {} \;` |
+
+## Log tool friction as it happens
+
+Friction that nobody records never gets fixed. Log it **the moment it happens**, then carry on with the workaround:
+
+- a `crow` (or other) CLI call fails on a verb or flag that doesn't exist;
+- an instruction here, in a skill or in the CLI reference turns out to be stale or wrong;
+- one fact takes more than three calls, or a sleep/poll loop waiting on readiness.
+
+```
+crow todo add --kind friction "[friction] <what happened> — <workaround>"
+```
+
+One line, one occurrence. Name the exact verb or flag, never a secret or private ticket text. Log it again when it recurs — `crow get-friction-report` groups repeats by the text before ` — ` and counts them. Don't stop to fix it or file a ticket: `/crow-triage` turns the report into tickets or instruction fixes.
 
 ## Known Issues / Corrections

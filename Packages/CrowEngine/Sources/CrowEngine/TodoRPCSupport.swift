@@ -9,6 +9,7 @@ import Foundation
 public enum TodoRPC {
     public static let validStates = TodoState.allCases.map(\.rawValue)
     public static let validLinkTypes = TodoLinkType.allCases.map(\.rawValue)
+    public static let validKinds = TodoKind.allCases.map(\.rawValue)
 
     /// Extract a todo UUID from `todo_id`.
     public static func decodeID(_ params: [String: JSONValue]) throws -> UUID {
@@ -76,6 +77,26 @@ public enum TodoRPC {
         return state
     }
 
+    /// Decode an optional `kind` param (CROW-1477). Absent or blank is nil.
+    public static func decodeKind(_ value: JSONValue?) throws -> TodoKind? {
+        guard let value, value != .null else { return nil }
+        guard let raw = value.stringValue else {
+            throw RPCError.invalidParams("kind must be one of: \(validKinds.joined(separator: ", "))")
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.isEmpty { return nil }
+        guard let kind = TodoKind(rawValue: trimmed) else {
+            throw RPCError.invalidParams("kind must be one of: \(validKinds.joined(separator: ", "))")
+        }
+        return kind
+    }
+
+    /// The kind a `todo-add` stores: the explicit `kind` param, else the one
+    /// the text implies (a `[friction]` prefix is friction), else `idea`.
+    public static func captureKind(params: [String: JSONValue], text: String) throws -> TodoKind {
+        try decodeKind(params["kind"]) ?? TodoKind.inferred(fromText: text)
+    }
+
     public static func decodeLinkType(_ value: JSONValue?) throws -> TodoLinkType {
         guard let raw = value?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               let type = TodoLinkType(rawValue: raw) else {
@@ -85,8 +106,19 @@ public enum TodoRPC {
         return type
     }
 
-    /// Filter `items` by optional `state` and `tag` query params.
+    /// Filter `items` by optional `state`, `tag` and `kind` query params.
     public static func filtered(_ items: [TodoItem], params: [String: JSONValue]) throws -> [TodoItem] {
+        let kind = try decodeKind(params["kind"])
+        return try filteredIgnoringKind(items, params: params).filter { item in
+            kind == nil || item.kind == kind
+        }
+    }
+
+    /// `filtered` without the `kind` param: the set ``kindCounts(_:)`` counts,
+    /// so `todo list --kind friction` still says how many ideas sit beside it.
+    public static func filteredIgnoringKind(
+        _ items: [TodoItem], params: [String: JSONValue]
+    ) throws -> [TodoItem] {
         let state = try decodeState(params["state"])
         let tag = params["tag"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -99,6 +131,27 @@ public enum TodoRPC {
             return true
         }
         .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Items per kind, every kind present (zero included), as `todo-list`'s
+    /// `kind_counts`.
+    public static func kindCounts(_ items: [TodoItem]) -> JSONValue {
+        var counts: [String: JSONValue] = [:]
+        for kind in TodoKind.allCases {
+            counts[kind.rawValue] = .int(items.filter { $0.kind == kind }.count)
+        }
+        return .object(counts)
+    }
+
+    /// The `todo-list` payload: the matching rows plus `kind_counts` over the
+    /// same state/tag filter, before the kind filter.
+    public static func listResult(_ items: [TodoItem], params: [String: JSONValue]) throws -> [String: JSONValue] {
+        let unkinded = try filteredIgnoringKind(items, params: params)
+        let rows = try filtered(items, params: params)
+        return [
+            "todos": .array(rows.map { todoJSON($0) }),
+            "kind_counts": kindCounts(unkinded),
+        ]
     }
 
     /// Apply an edit patch. Only provided fields change. `config` resolves a
@@ -129,6 +182,9 @@ public enum TodoRPC {
         }
         if params["state"] != nil {
             next.state = try decodeState(params["state"]) ?? item.state
+        }
+        if params["kind"] != nil {
+            next.kind = try decodeKind(params["kind"]) ?? item.kind
         }
         if params["tags"] != nil {
             next.tags = try decodeTags(params["tags"])
@@ -253,9 +309,15 @@ public enum TodoRPC {
         if let priority = item.priority {
             lines.append("Priority: \(priority)")
         }
+        if item.kind == .friction {
+            lines.append(contentsOf: ["", frictionBriefNote])
+        }
         lines.append("")
         return lines.joined(separator: "\n") + "\n"
     }
+
+    /// The line a friction item's explore / ticket brief carries (CROW-1477).
+    public static let frictionBriefNote = "Kind: friction. An agent logged this tool friction while working. The fix may be an instruction change (the shipped Manager context, the crow-cli reference, a bundled skill) rather than new code; say which."
 
     /// Temp file the Explore Manager launch reads as its initial prompt.
     /// Unique per session so two concurrent Explores cannot clobber each other.
@@ -462,6 +524,9 @@ public enum TodoRPC {
         }
         if let priority = item.priority {
             lines.append("Priority: \(priority)")
+        }
+        if item.kind == .friction {
+            lines.append(contentsOf: ["", frictionBriefNote])
         }
         lines.append("")
         return lines.joined(separator: "\n") + "\n"

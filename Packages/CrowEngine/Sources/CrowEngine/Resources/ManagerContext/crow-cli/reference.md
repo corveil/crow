@@ -176,10 +176,10 @@ crow job duplicate --id <job-uuid>              → {"job":{...}}   the copy sta
 Durable Scratch items (CROW-1231) — the Scratch sidebar. Capture in Crow, then promote into a Manager / ticket / work session. Lives in the shared `JSONStore` (not `config.json`) and is **not** reaped by session cleanup.
 
 ```
-crow todo add "text" [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME] [--agent KIND]
-crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...]
+crow todo add "text" [--kind idea|friction] [--tag a,b] [--priority p1|p2|p3|p4] [--note "..."] [--workspace NAME] [--agent KIND]
+crow todo list [--state captured|exploring|ticketed|working|done|parked|dropped] [--tag ...] [--kind idea|friction]  → {todos, kind_counts}
 crow todo get --id <uuid>
-crow todo edit --id <uuid> [--text ...] [--note ...] [--append-note ...] [--priority ...] [--workspace NAME|""] [--agent KIND|""] [--add-tag ...] [--remove-tag ...]
+crow todo edit --id <uuid> [--text ...] [--note ...] [--append-note ...] [--priority ...] [--kind idea|friction] [--workspace NAME|""] [--agent KIND|""] [--add-tag ...] [--remove-tag ...]
 crow todo done --id <uuid>
 crow todo reopen --id <uuid>
 crow todo park --id <uuid>
@@ -196,7 +196,20 @@ crow todo talk --id <uuid> "..."                      → crow send to the item'
 - Every item carries an **agent** and a **workspace** (CROW-1387), echoed as `agent_kind` / `workspace`. `todo add` resolves each from its flag, then the Manager running it when that Manager is tagged with a workspace (`$CROW_SESSION_ID`), then the defaults (`defaults.managerWorkspace`; `agentsByKind.manager ?? defaultAgentKind`). It fails only when no workspace resolves — it never guesses one. Items from before CROW-1387 have neither and launch with the default agent and `defaults.managerWorkspace` (refused when it doesn't resolve — CROW-1386).
 - `explore` and `ticket` both open a Manager and seed a brief. The brief is written to `$TMPDIR/crow-explore-<session>.md`: a fresh Manager launches with that file as its prompt (argv, nothing pasted), and a Manager that is already up is typed one line, `Read and follow the instructions in <path>` (CROW-1327). `seeded` is false only when the file could not be written or the pane never appeared; `todo talk` (or that same one-liner) can finish it. `explore` / `ticket` launch a Manager tagged with the item's workspace and running its agent; `--agent` / `--workspace` override them for that launch only. `ticket` tells the agent to run `/crow-diagnose <item-id> --yes --workspace <ws>` (CROW-1416) and finish the item by its outcome: a ticket or an epic links every issue it filed with `todo link --type ticket` (the first link moves the item to `ticketed`; an epic is linked last, so `todo work` starts it), a duplicate links the existing issue, a commitment or needs info is parked and a won't do dropped, each with the reason appended by `todo edit --append-note`. There is no repo picker. Re-linking a URL that is already on the item moves it to the end instead of adding it twice, and parking or dropping clears the pending Ticket dispatch. A Jira-tracked workspace files with the `jira` MCP, never `diagnose.sh file`. When the item's linked Manager is still up, the brief goes there instead; if that Manager's workspace differs, the response carries a `warning` and the Manager is never re-tagged. A second `todo ticket` within 15 minutes is a no-op until that URL is linked — do not call it again from the filing Manager.
 - `work` needs a linked ticket (`todo link --type ticket`).
-- Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
+- Every item has a **kind** (CROW-1477): `idea`, or `friction` for tool friction an agent logged in-flow. `todo add` takes `--kind`; without it, text starting with `[friction]` is `friction` and anything else `idea`. Items from before kinds read as `idea`. `todo list --kind` filters, and `kind_counts` counts each kind under the `--state` / `--tag` filter (before `--kind`), so it answers "how much friction vs. ideas" in one call. A friction item's explore / ticket brief says the fix may be an instruction change rather than code.
+- Writes are CLI/web only; MCP is `todos:read` (`list_todos` with a `kind` filter / `get_todo` / `get_friction_report`).
+
+## Friction Report
+
+Agent tool friction (CROW-1477): missing verbs or flags, stale instructions, poll loops. Agents log it in-flow with `crow todo add --kind friction "[friction] <what happened> — <workaround>"`.
+
+```
+crow get-friction-report [--limit N] [--include-closed]   → {local, corveil}
+```
+
+- `local` covers Scratch items of kind `friction`: `open` / `total` / `by_state`, and `groups`, one per distinct "what happened" (the text before ` — `, ` – ` or ` -- `, case-folded), most repeated first. Each group has `summary`, `count`, `latest_text`, `latest_at`, `states` and `todo_ids`. `--limit` (1–100, default 10) caps the groups; `--include-closed` also groups done and dropped items.
+- `corveil` is Corveil's transcript-derived friction report. Its API isn't published yet (corveil/corveil#5601), so today it is always `{"available": false, "reason": ..., "tracking": "https://github.com/corveil/corveil/issues/5601"}`. Don't guess at another endpoint.
+- MCP: `get_friction_report` at `todos:read`, same payload. `/crow-triage` turns the groups into tickets or instruction fixes.
 
 ## TUI recording Commands
 
