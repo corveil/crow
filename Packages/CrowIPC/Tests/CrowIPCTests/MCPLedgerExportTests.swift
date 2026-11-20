@@ -32,9 +32,9 @@ struct MCPLedgerExportTests {
                 #expect(
                     entry.mcp.isExported,
                     """
-                    Tool \(tool.name) reads '\(method)', but that ledger row is not flagged \
-                    for MCP export. Add `mcp: .read(scope: …)` to the row in ParityLedger.swift, \
-                    or stop reading the method.
+                    Tool \(tool.name) calls '\(method)', but that ledger row is not flagged \
+                    for MCP export. Add `mcp: .read(scope: …)` (or `.write(scope: …)` for a \
+                    mutating method) to the row in ParityLedger.swift, or stop calling the method.
                     """)
             }
         }
@@ -70,15 +70,64 @@ struct MCPLedgerExportTests {
             """)
     }
 
-    @Test("No exported method is a write")
-    func exportedMethodsAreReadOnly() {
-        // The v1 surface is read-only by decision, not by accident. If this ever
-        // fails, someone has flagged a mutating method for export — which is a
-        // product decision, not a test to relax.
+    @Test("An exported write is exposed as a write at a write scope; a read at a read scope")
+    func exportedWritesCarryWriteScopes() {
+        // ADR 0019 made the surface read-only; its CROW-1491 amendment allows
+        // writes, but only under named write scopes. This is the rule that keeps
+        // that true: a mutating method flagged `.read(scope:)`, or a write exported
+        // at a read scope, would let a read-only token change Crow.
         for entry in ParityLedger.rpcMethods where entry.mcp.isExported {
+            guard let scope = entry.mcp.scope else { continue }
+            if entry.isWrite {
+                #expect(
+                    entry.mcp.isWrite,
+                    """
+                    '\(entry.method)' is a write but is exported as `.read(scope:)`. \
+                    Use `.write(scope:)` with a write scope.
+                    """)
+                #expect(
+                    scope.isWrite,
+                    """
+                    '\(entry.method)' is a write exported at \(scope.rawValue), a read scope. \
+                    A read-only token would be able to change Crow.
+                    """)
+            } else {
+                #expect(
+                    !entry.mcp.isWrite,
+                    "'\(entry.method)' is a read but is exported as `.write(scope:)`.")
+                #expect(
+                    !scope.isWrite,
+                    """
+                    '\(entry.method)' is a read exported at \(scope.rawValue), a write scope. \
+                    Reads belong under a read scope so a read-only token can see them.
+                    """)
+            }
+        }
+    }
+
+    @Test("Every tool's scope agrees with whether it writes")
+    func toolScopeMatchesWriteness() {
+        // A tool that calls any write must sit behind a write scope, and a tool
+        // behind a write scope must actually write — otherwise the consent page's
+        // "never pre-tick a write scope" protects nothing, or hides a read.
+        for tool in MCPToolCatalog.all {
+            let writes = tool.backingMethods.contains { ledgerByMethod[$0]?.isWrite == true }
             #expect(
-                !entry.isWrite,
-                "'\(entry.method)' is flagged for MCP export but is a write. The MCP surface is read-only.")
+                writes == tool.scope.isWrite,
+                """
+                Tool \(tool.name) is scoped \(tool.scope.rawValue) but \
+                \(writes ? "calls a write" : "only reads").
+                """)
+        }
+    }
+
+    @Test("Every write scope is used by some tool")
+    func writeScopesAreUsed() {
+        // An unused write scope would be a mintable credential that grants
+        // nothing today and something tomorrow, without a fresh decision.
+        let used = Set(MCPToolCatalog.all.map(\.scope))
+        for scope in MCPScope.allCases where scope.isWrite {
+            #expect(used.contains(scope), "\(scope.rawValue) is a write scope no tool uses")
         }
     }
 
@@ -108,7 +157,7 @@ struct MCPLedgerExportTests {
             "localOnlyRPCMethods names methods with no ledger row: \(unknown.sorted()) — likely a typo.")
     }
 
-    @Test("The exported set is exactly the seven read methods currently approved")
+    @Test("The exported set is exactly the methods currently approved")
     func exportedSetIsPinned() {
         // A snapshot, so *growing* the MCP surface is a deliberate edit to this
         // list and shows up in the diff a reviewer reads — which is the same
@@ -118,7 +167,20 @@ struct MCPLedgerExportTests {
                 "list-sessions", "list-sessions-live", "get-session",
                 "list-tickets", "list-reviews",
                 "todo-list", "todo-get",
+                "todo-add",
             ])
+    }
+
+    @Test("The exported writes are exactly the ones ADR 0019's amendment approves")
+    func exportedWritesArePinned() {
+        // Pinned on its own so a new write cannot hide inside a bigger snapshot
+        // edit. `todo-add` is capture only (CROW-1491). `todo-explore` and
+        // `todo-ticket` launch a Manager with dev-root permissions and need their
+        // own scope and ADR decision before they appear here.
+        let writes = Set(ParityLedger.rpcMethods.filter { $0.mcp.isExported && $0.isWrite }.map(\.method))
+        #expect(writes == ["todo-add"])
+        let writeScopes = Set(MCPScope.allCases.filter(\.isWrite))
+        #expect(writeScopes == [.todosWrite])
     }
 
     @Test("Tool names are unique and MCP-legal")

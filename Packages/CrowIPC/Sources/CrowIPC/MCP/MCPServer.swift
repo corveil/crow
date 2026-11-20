@@ -59,11 +59,12 @@ public struct MCPServer: Sendable {
 
     /// Guidance handed to the model alongside the tool list.
     static let instructions = """
-        Crow orchestrates AI coding sessions across git worktrees. This server is \
-        read-only: it can report on sessions, tickets and reviews, but cannot create, \
-        modify or message them. Start with get_board_summary for the shape of the \
-        board, list_stuck_sessions for what needs a human, and get_session for one \
-        session's detail.
+        Crow orchestrates AI coding sessions across git worktrees. This server \
+        reports on sessions, tickets, reviews and the Scratch list, but cannot \
+        create, modify or message sessions. Its one write, add_todo (todos:write), \
+        only captures a Scratch item for the operator to triage. Start with \
+        get_board_summary for the shape of the board, list_stuck_sessions for what \
+        needs a human, and get_session for one session's detail.
         """
 
     /// Capabilities we advertise. Tools only — no resources, prompts, logging, or

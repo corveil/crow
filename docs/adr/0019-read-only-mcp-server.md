@@ -1,6 +1,6 @@
 # 0019 — MCP is a third client, not a mirror of the RPC surface
 
-- **Status:** Accepted
+- **Status:** Accepted. Amended by CROW-1465 (OAuth). Amendment CROW-1491 (`todos:write`) proposed, awaiting approval by @dhilgaertner.
 - **Date:** 2026-08-13
 - **Deciders:** @dhilgaertner
 
@@ -44,6 +44,10 @@ reversal and is not one; the two are opposite directions on the same wire.
 
 **MCP is a third client with a task-shaped surface, generated from an allowlist the
 `ParityLedger` gates. It is read-only.**
+
+*Amended by CROW-1491:* read-only by default, with writes only under named write
+scopes. The one write today is `add_todo` under `todos:write`. See
+[the amendment below](#amendment-mcp-writes-under-named-write-scopes-crow-1491).
 
 Four parts:
 
@@ -98,7 +102,8 @@ instead of requiring a join the model has to rediscover.
 flag, and a scope decision. That is more work than a projection would be, and it is
 the work we want done deliberately. Growing the surface to writes is a bigger step
 still, because `exportedMethodsAreReadOnly` fails the build until someone changes the
-test — which is the point at which a human decides.
+test — which is the point at which a human decides. (CROW-1491 is that decision for
+one write; the test became `exportedWritesCarryWriteScopes` plus a pinned write set.)
 
 **Lived with.** The MCP layer lives in `CrowIPC`, so **`CrowIPC` now depends on
 `CrowCore`** (for `MCPScope` and `MCPTokenRecord`, which `ParityLedger` and
@@ -173,6 +178,55 @@ funnels only `/mcp`, the `.well-known` metadata paths and the three `/oauth/`
 endpoints, each as an exact-path mount, on a dedicated port. Funnel is enabled per
 port, so funneling the web UI's port would make the whole UI public.
 
+## Amendment: MCP writes under named write scopes (CROW-1491)
+
+**Status of this amendment:** proposed. It takes effect when @dhilgaertner approves
+it on the pull request that introduces it; that pull request does not auto-merge.
+
+**Context.** The Scratch list ([ADR 0026](./0026-native-pre-ticket-idea-list.md)) is
+where the operator drops ideas to triage later. With a Claude connector on `/mcp`,
+the natural thing to say from a phone is "add that to Scratch", and the read-only
+surface cannot do it. The RPC that would, `todo-add`, already exists and is what
+`crow todo add` calls.
+
+**Decision.** MCP may write, but only under a **named write scope**, and only for
+methods a human has approved one at a time. The first and only write is capture:
+
+- **`todos:write`** is a new `MCPScope`, and `MCPScope.isWrite` marks it. It grants
+  one tool, `add_todo`, which calls `todo-add` and nothing else. The tool builds the
+  params from a fixed set of keys (`text`, `note`, `tags`, `priority`, `workspace`,
+  `agent_kind`); it never forwards `from_session`, so a remote caller cannot borrow
+  a Manager's workspace or agent.
+- **The ledger says it.** `ParityLedger.MCPExposure` gains `.write(scope:)`, and
+  `todo-add` is ledgered `mcp: .write(scope: .todosWrite)`.
+- **The gate becomes a rule, not a ban.** `exportedMethodsAreReadOnly` is replaced
+  by `exportedWritesCarryWriteScopes`: an `isWrite` row must be exported as
+  `.write(scope:)` at a write scope, and a read as `.read(scope:)` at a read scope.
+  `toolScopeMatchesWriteness` holds the same line per tool, and
+  `exportedWritesArePinned` snapshots the write set (`todo-add`) and the write
+  scopes (`todos:write`) on their own, so a second write is an edit to that test —
+  still the point at which a human decides.
+- **Consent never pre-ticks a write scope**, even when the client asks for one. The
+  page lists write scopes under their own "Allow it to change" heading and no longer
+  calls the access read-only. `scopes_supported` advertises `todos:write`.
+- **`crow mcp serve` keeps all scopes by default**, `todos:write` included: a caller
+  who can run it can already run `crow todo add`.
+
+**Why capture is the safe first write.** The worst a holder of `todos:write` can do
+is add junk items, which the operator drops from the board. It cannot edit, drop or
+park an item, cannot send a prompt, and cannot start a session. Text, note and tag
+counts are capped at the MCP layer so a misbehaving client cannot bloat `store.json`
+one item at a time. An item names its workspace and agent, but those are inert until
+the operator chooses to explore, ticket or work it.
+
+**Still out.** *Dispatch* — `todo-explore` and `todo-ticket` (and `todo-work`,
+`todo-talk`) — opens a Manager with full dev-root permissions and hands it a brief
+built from the item's text. Over the public `/mcp` + OAuth path that would let any
+token holder inject a prompt into an agent that can run anything. It needs its own
+scope (for example `todos:dispatch`) and its own amendment. Editing, parking and
+dropping items over MCP wait until capture has seen use. No other write scope is
+defined.
+
 ## Alternatives considered
 
 **One MCP tool per RPC method.** Mechanical, always current, no catalog to maintain.
@@ -204,7 +258,9 @@ could reach it.
 
 ## References
 
-- Ticket: [corveil/crow#1004](https://github.com/corveil/crow/issues/1004)
+- Ticket: [corveil/crow#1004](https://github.com/corveil/crow/issues/1004); amendments
+  [#1465](https://github.com/corveil/crow/issues/1465) (OAuth) and
+  [#1491](https://github.com/corveil/crow/issues/1491) (`todos:write`)
 - Related ADRs: [0002](./0002-unix-socket-cli-architecture.md) (the Unix socket and
   its trust model), [0007](./0007-linux-ci-swift.md) (why the export gate lives in
   `CrowIPC`), [0009](./0009-crowd-sole-authority-clients-only.md) (crowd is the sole

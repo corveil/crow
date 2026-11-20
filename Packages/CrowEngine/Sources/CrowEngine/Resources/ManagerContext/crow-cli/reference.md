@@ -198,7 +198,7 @@ crow todo talk --id <uuid> "..."                      → crow send to the item'
 - Every item carries an **agent** and a **workspace** (CROW-1387), echoed as `agent_kind` / `workspace`. `todo add` resolves each from its flag, then the Manager running it when that Manager is tagged with a workspace (`$CROW_SESSION_ID`), then the defaults (`defaults.managerWorkspace`; `agentsByKind.manager ?? defaultAgentKind`). It fails only when no workspace resolves — it never guesses one. Items from before CROW-1387 have neither and launch with the default agent and `defaults.managerWorkspace` (refused when it doesn't resolve — CROW-1386).
 - `explore` and `ticket` both open a Manager and seed a brief. The brief is written to `$TMPDIR/crow-explore-<session>.md`: a fresh Manager launches with that file as its prompt (argv, nothing pasted), and a Manager that is already up is typed one line, `Read and follow the instructions in <path>` (CROW-1327). `seeded` is false only when the file could not be written or the pane never appeared; `todo talk` (or that same one-liner) can finish it. `explore` / `ticket` launch a Manager tagged with the item's workspace and running its agent; `--agent` / `--workspace` override them for that launch only. `ticket` tells the agent to run `/crow-diagnose <item-id> --yes --workspace <ws>` (CROW-1416) and finish the item by its outcome: a ticket or an epic links every issue it filed with `todo link --type ticket` (the first link moves the item to `ticketed`; an epic is linked last, so `todo work` starts it), a duplicate links the existing issue, a commitment or needs info is parked and a won't do dropped, each with the reason appended by `todo edit --append-note`. There is no repo picker. Re-linking a URL that is already on the item moves it to the end instead of adding it twice, and parking or dropping clears the pending Ticket dispatch. A Jira-tracked workspace files with the `jira` MCP, never `diagnose.sh file`. When the item's linked Manager is still up, the brief goes there instead; if that Manager's workspace differs, the response carries a `warning` and the Manager is never re-tagged. A second `todo ticket` within 15 minutes is a no-op until that URL is linked — do not call it again from the filing Manager.
 - `work` needs a linked ticket (`todo link --type ticket`).
-- Writes are CLI/web only; MCP is `todos:read` (`list_todos` / `get_todo`).
+- MCP reads at `todos:read` (`list_todos` / `get_todo`); `todos:write` grants `add_todo` (capture only). Every other write is CLI/web only.
 
 ## TUI recording Commands
 
@@ -420,10 +420,10 @@ crow backfill upload --workspace NAME (--session UID … | --all-high-confidence
 
 ## MCP
 
-Crow's read-only MCP surface (CROW-1004) — eight tools over seven read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
+Crow's MCP surface (CROW-1004) — eight read tools over seven read RPCs, plus `add_todo` under `todos:write` (CROW-1491), so an MCP client can read the board and capture Scratch items without a Crow-launched session. No prompt-send, no other writes. See `docs/mcp.md` and ADR 0019.
 
 ```
-crow mcp serve [--scope sessions:read] [--scope board:read] [--scope todos:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
+crow mcp serve [--scope sessions:read] [--scope board:read] [--scope todos:read] [--scope todos:write]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
 crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N,
                                                                  "grants":[{id,kind:"oauth",client_name,client_id,redirect_uris,scopes,created_at,last_refreshed_at,refresh_expires_at,expired,active_access_tokens}],"grant_count":N}
 crow mcp token mint --name N --scope S [--expires-in 90d | --no-expiry]
@@ -434,7 +434,7 @@ crow mcp token revoke --id <uuid> | --name N                  → {"revoked":tru
 - **Two transports, two trust models.** `crow mcp serve` bridges stdio to the Unix socket with **no token** — a caller who can run it can already run every other `crow` verb. Off-box clients POST to `/mcp` with `Authorization: Bearer <token>`.
 - `mcp serve` is the one verb whose **stdout is not a single JSON object**: it streams framed JSON-RPC. Diagnostics go to stderr.
 - The three `token` verbs are **local-only** (like `gateway`/`web-password`) — a remote peer must not mint the credential that gates remote access. Settings → Web access has the same controls, local browser only.
-- Scopes are `sessions:read`, `board:read`, and `todos:read`. `tools/list` is filtered **by the token**, so a `board:read` client never learns the session tools exist.
+- Scopes are `sessions:read`, `board:read`, `todos:read`, and `todos:write` (the only write: `add_todo`). `tools/list` is filtered **by the token**, so a `board:read` client never learns the session tools exist.
 - Expiry defaults to **90 days**; `--no-expiry` must be typed. `--expires-in` needs a unit (`90d`, `12h`, `2w`) — a bare `90` is rejected as ambiguous.
 - The token is printed **once** and stored as a SHA-256 hash; there is no `--reveal`. A lost token is replaced, not recovered.
 - **OAuth grants** (CROW-1465) are the third credential: Claude's connectors (web, Desktop, mobile) register at `/oauth/register` and the operator approves them on `/oauth/authorize`, which **always requires the web password** and refuses when none is set. No verb creates a grant. `token list` shows grants under `grants`; `token revoke --id <grant id>` (or `--name <client name>`) removes the grant and its access tokens.

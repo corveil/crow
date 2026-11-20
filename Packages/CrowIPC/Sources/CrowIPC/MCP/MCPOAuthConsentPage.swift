@@ -10,12 +10,14 @@ import Foundation
 /// client name and redirect URI are chosen by whoever registered the client.
 public enum MCPOAuthConsentPage {
 
-    /// What each scope lets a connected app read, in the operator's terms.
+    /// What each scope lets a connected app do, in the operator's terms.
     public static func describe(_ scope: MCPScope) -> String {
         switch scope {
         case .sessionsRead: return "Sessions: what each one is doing, its status, and what is stuck"
         case .boardRead: return "The ticket and review boards"
         case .todosRead: return "The Scratch list"
+        case .todosWrite:
+            return "Add items to the Scratch list. It cannot edit or drop items, or start work on them"
         }
     }
 
@@ -30,21 +32,36 @@ public enum MCPOAuthConsentPage {
         checked: Set<MCPScope>? = nil,
         message: String? = nil
     ) -> String {
-        let ticked = checked ?? request.offeredScopes
+        // A write scope is never pre-ticked, even when the client asked for it
+        // (CROW-1491): a client that names every scope it knows should not get
+        // write access because the operator skimmed the page and pressed Approve.
+        let ticked = checked ?? request.offeredScopes.filter { !$0.isWrite }
         let redirectHost = URLComponents(string: request.redirectURI)?.host ?? request.redirectURI
-        var scopeRows = ""
-        for scope in MCPScope.allCases.sorted() {
-            let isChecked = ticked.contains(scope) ? " checked" : ""
-            scopeRows += """
-                <label class="scope"><input type="checkbox" name="scope" value="\(escape(scope.rawValue))"\(isChecked)>
-                <span><code>\(escape(scope.rawValue))</code><br><small>\(escape(describe(scope)))</small></span></label>
+        func rows(_ scopes: [MCPScope]) -> String {
+            var out = ""
+            for scope in scopes {
+                let isChecked = ticked.contains(scope) ? " checked" : ""
+                out += """
+                    <label class="scope"><input type="checkbox" name="scope" value="\(escape(scope.rawValue))"\(isChecked)>
+                    <span><code>\(escape(scope.rawValue))</code><br><small>\(escape(describe(scope)))</small></span></label>
 
-                """
+                    """
+            }
+            return out
         }
+        let sorted = MCPScope.allCases.sorted()
+        let readRows = rows(sorted.filter { !$0.isWrite })
+        let writeScopes = sorted.filter(\.isWrite)
+        let writeFieldset = writeScopes.isEmpty ? "" : """
+            <fieldset>
+              <legend>Allow it to change</legend>
+              \(rows(writeScopes))
+            </fieldset>
+            """
         let notice = message.map { #"<p class="error" role="alert">\#(escape($0))</p>"# } ?? ""
         return page(title: "Connect \(request.client.clientName) to Crow", body: """
             <h1>Connect an app to Crow</h1>
-            <p><strong>\(escape(request.client.clientName))</strong> wants read-only access to this Crow.</p>
+            <p><strong>\(escape(request.client.clientName))</strong> wants access to this Crow. Tick only what it needs.</p>
             <dl>
               <dt>Sends you back to</dt>
               <dd><strong>\(escape(redirectHost))</strong><br><small>\(escape(request.redirectURI))</small></dd>
@@ -58,8 +75,9 @@ public enum MCPOAuthConsentPage {
               <input type="hidden" name="consent_id" value="\(escape(consentID))">
               <fieldset>
                 <legend>Allow it to read</legend>
-                \(scopeRows)
+                \(readRows)
               </fieldset>
+              \(writeFieldset)
               <label for="pw">Crow web password</label>
               <input id="pw" type="password" name="password" autocomplete="current-password" autofocus>
               <div class="actions">
@@ -67,7 +85,8 @@ public enum MCPOAuthConsentPage {
                 <button type="submit" name="decision" value="deny" class="secondary">Deny</button>
               </div>
             </form>
-            <p class="hint">Nothing here can change Crow: every MCP tool is read-only. Revoke access any time with
+            <p class="hint">The read scopes cannot change Crow. Nothing here can send a prompt, start or stop a
+            session, or change settings. Revoke access any time with
             <code>crow mcp token revoke</code> or Settings → Web access.</p>
             """)
     }

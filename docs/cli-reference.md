@@ -2381,7 +2381,7 @@ Returns a per-session `results` list (each `uploaded` / `already` / `skipped` / 
 
 ## MCP Commands
 
-Crow serves a **read-only** MCP surface so agent clients that speak MCP — Cowork, a Grok bot — can read the board without a Crow-launched session. Six tools over five read RPCs; there is no prompt-send, no session creation, and no config access. See [MCP](mcp.md) for client setup and the full tool list.
+Crow serves an MCP surface so agent clients that speak MCP — Cowork, a Grok bot, Claude's connectors — can read the board without a Crow-launched session. Eight read tools over seven read RPCs, plus one write: `add_todo` (scope `todos:write`) adds a Scratch item and nothing else. There is no prompt-send, no session creation, and no config access. See [MCP](mcp.md) for client setup and the full tool list.
 
 There are two transports, with two different trust models:
 
@@ -2408,7 +2408,7 @@ crow mcp serve --scope board:read          # narrow the served tools
 
 | Flag      | Required | Description                                                    |
 | --------- | -------- | -------------------------------------------------------------- |
-| `--scope` | no       | Limit served tools (repeatable). Defaults to every read scope.  |
+| `--scope` | no       | Limit served tools (repeatable). Defaults to every scope, `todos:write` included. |
 
 No token is needed: a caller that can run this could already run every other `crow` verb, so a token would gate nothing. Unlike every other verb, **stdout carries framed JSON-RPC** rather than one JSON object — it is a transport, not a query. Diagnostics go to stderr.
 
@@ -2420,12 +2420,13 @@ Mint a scoped bearer token for the remote `POST /mcp` endpoint. **Local-only**, 
 crow mcp token mint --name grok-bot --scope board:read
 crow mcp token mint --name cowork --scope sessions:read --scope board:read --expires-in 30d
 crow mcp token mint --name ci --scope board:read --no-expiry
+crow mcp token mint --name capture-bot --scope todos:read --scope todos:write   # may add Scratch items
 ```
 
 | Flag           | Required | Description                                                          |
 | -------------- | -------- | -------------------------------------------------------------------- |
 | `--name`       | yes      | A label for the token, e.g. `grok-bot`                                |
-| `--scope`      | yes      | `sessions:read` or `board:read` (repeatable; at least one)            |
+| `--scope`      | yes      | `sessions:read`, `board:read`, `todos:read` or `todos:write` (repeatable; at least one). `todos:write` is the only write scope. |
 | `--expires-in` | no       | Lifetime: `30s`, `45m`, `12h`, `90d`, `2w`. Defaults to `90d`.        |
 | `--no-expiry`  | no       | Mint a token that never expires (mutually exclusive with the above)   |
 

@@ -17,7 +17,7 @@ Crow persists a `todos[]` collection on `StoreData` (same `store.json` as sessio
 1. **Lifecycle.** `captured → exploring → ticketed → working → done`, with `parked` / `dropped` as no-ticket exits. `links[]` is the provenance trail (Manager session, filed ticket, PR).
 2. **Promotions reuse existing verbs.** `todo explore` is `create-manager` + an explore brief (pre-ticket sibling of `/crow-workspace --explore`). Since CROW-1237 the brief is argv on launch rather than a `crow send`; since CROW-1327 it is never pasted at all — a live Manager is typed a one-line pointer to the brief file. `todo ticket` used to file via `TaskBackend.createTask`; [ADR 0029](./0029-scratch-ticket-opens-a-manager.md) (CROW-1289) revises that — Ticket opens a Manager the same way Explore does, and the agent files the issue. `todo work` types `/crow-workspace` into the primary Manager. `todo talk` is sugar over `crow send` to the linked Manager.
 3. **Non-reaped.** Session cleanup only deletes completed/archived *sessions*. `todos` is never cascaded on session delete and is never visited by the reaper.
-4. **MCP.** `todo-list` / `todo-get` are ledgered `mcp: .read(scope: .todosRead)`. There is no `todos:write`.
+4. **MCP.** `todo-list` / `todo-get` are ledgered `mcp: .read(scope: .todosRead)`. *Amended by CROW-1491:* `todo-add` is ledgered `mcp: .write(scope: .todosWrite)` behind the `add_todo` tool (see [ADR 0019's amendment](./0019-read-only-mcp-server.md#amendment-mcp-writes-under-named-write-scopes-crow-1491)). No other Scratch write is exported.
 
 ## Consequences
 

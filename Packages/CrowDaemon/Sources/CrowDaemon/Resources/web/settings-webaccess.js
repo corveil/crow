@@ -81,7 +81,8 @@
     S.cfg.mcpTokens = S.cfg.mcpTokens || [];
     body.appendChild(S.group('MCP access tokens'));
     body.appendChild(el('div', 'st-perm-status',
-      'Read-only MCP for off-box clients at POST /mcp. Local clients need no token — '
+      'MCP for off-box clients at POST /mcp. Every scope reads except todos:write, which '
+      + 'only adds Scratch items. Local clients need no token — '
       + 'point them at `crow mcp serve` instead.'));
 
     // OAuth access tokens (CROW-1465) are listed through their grant below, not
@@ -141,6 +142,8 @@
       ['sessions:read', 'sessions:read only'],
       ['board:read', 'board:read only'],
       ['todos:read', 'todos:read only'],
+      ['todos:read todos:write', 'todos:read + todos:write (add Scratch items)'],
+      ['sessions:read board:read todos:read todos:write', 'all scopes, including todos:write'],
     ]) {
       const opt = el('option', null, label);
       opt.value = value;

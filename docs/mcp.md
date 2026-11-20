@@ -1,8 +1,9 @@
 # MCP
 
-Crow serves a **read-only** MCP surface, so clients that speak the Model Context
-Protocol — Cowork, a Grok bot, Claude on the web, Desktop and mobile — can read the
-board without a Crow-launched agent session.
+Crow serves an MCP surface, so clients that speak the Model Context Protocol —
+Cowork, a Grok bot, Claude on the web, Desktop and mobile — can read the board, and
+capture Scratch items, without a Crow-launched agent session. It is read-only except
+for one write: `add_todo`, behind the `todos:write` scope.
 
 > **Scope.** This page is about `crowd` *serving* MCP. It is a different axis from
 > Crow *provisioning* MCP servers into coding agents, which Crow deliberately does
@@ -12,15 +13,23 @@ board without a Crow-launched agent session.
 
 ## What it can and cannot do
 
-**Read-only, and structurally so.** The tool catalog is a closed allowlist of eight
-tools over seven read RPC methods. There is no passthrough tool and no way to name an
-RPC method from the wire, so the local-only surfaces — gateways, the web password,
-MCP tokens themselves, `run-setup`, hook events, host-app launches, the Corveil CLI
-verify/reinstall actions — are unreachable regardless of transport or scope.
+**Read-only by default, and structurally so.** The tool catalog is a closed allowlist
+of nine tools: eight read tools over seven read RPC methods, plus `add_todo` over
+`todo-add`. There is no passthrough tool and no way to name an RPC method from the
+wire, so the local-only surfaces — gateways, the web password, MCP tokens themselves,
+`run-setup`, hook events, host-app launches, the Corveil CLI verify/reinstall
+actions — are unreachable regardless of transport or scope.
+
+**The one write is capture.** `add_todo` adds an item to the Scratch list and does
+nothing else: it cannot edit, park or drop an item, and cannot start Explore, Ticket
+or Work on one. It needs `todos:write`, which no read scope implies and which the
+consent page never ticks for you.
 
 There is **no prompt-send**: nothing here can type into an agent's terminal, create
 a session, change a status, or write config. That is deliberate and enforced by a
-build gate (`MCPLedgerExportTests`), not by convention.
+build gate (`MCPLedgerExportTests`), not by convention: an exported write must be
+ledgered `.write(scope:)` at a write scope, and the set of exported writes is pinned
+([ADR 0019](adr/0019-read-only-mcp-server.md#amendment-mcp-writes-under-named-write-scopes-crow-1491)).
 
 ## Transports
 
@@ -43,10 +52,15 @@ an app you approved with the web password.
 | `sessions:read` | `get_board_summary`, `list_sessions`, `get_session`, `list_stuck_sessions` |
 | `board:read` | `list_tickets`, `list_reviews` |
 | `todos:read` | `list_todos`, `get_todo` |
+| `todos:write` | `add_todo` — the only write scope |
 
-There is no `sessions:write`, no `prompt:send`, and no `admin` — not "not yet
-implemented" but *not defined*, so a token cannot name a capability the server might
-later grow into.
+There is no `sessions:write`, no `prompt:send`, no `todos:dispatch`, and no `admin` —
+not "not yet implemented" but *not defined*, so a token cannot name a capability the
+server might later grow into.
+
+`crow mcp serve` serves every scope by default, `todos:write` included: a caller who
+can run it can already run `crow todo add`. Pass `--scope` to narrow it. A minted
+token or an OAuth grant gets `todos:write` only when you name it or tick it.
 
 `tools/list` is **filtered by the presented token**, not merely enforced at call
 time: a `board:read` token never sees that the session tools exist. A
@@ -64,6 +78,7 @@ deny-after-call would still teach the model that they do.
 | `list_reviews` | `board:read` | The reviews board, by group |
 | `list_todos` | `todos:read` | Scratch items, with their provenance trail |
 | `get_todo` | `todos:read` | One Scratch item in full, by UUID |
+| `add_todo` | `todos:write` | Adds one Scratch item and returns it |
 
 `list_stuck_sessions` is the one worth knowing about. It joins two payloads that are
 disjoint on their own — `list-sessions` carries the agent's activity and pending
@@ -76,6 +91,24 @@ watcher verdicts — and reports each reason with its underlying message:
 `list_tickets` drops the issue `body`, the only unbounded field in that payload; one
 long issue would otherwise crowd the rest of the board out of the model's context.
 Open the row's `url` for the full text.
+
+### `add_todo`
+
+| Argument | Type | |
+| --- | --- | --- |
+| `text` | string | Required. The item, at most 1,000 characters. |
+| `note` | string | Longer context, at most 20,000 characters. |
+| `tags` | array of strings | At most 20. |
+| `priority` | `p1`–`p4` | |
+| `workspace` | string | Workspace name (case-insensitive) or UUID. Defaults to the Manager workspace (`crow defaults`). |
+| `agent_kind` | string | The agent to use when the item is later explored or worked. Defaults to the Manager agent. |
+
+It calls `todo-add`, the RPC `crow todo add` uses, and returns the created item (`id`,
+`text`, `state` — always `captured` — `workspace`, `agent_kind`, …). An MCP caller is
+not a Crow session, so the tool never passes `from_session`: the workspace comes from
+the argument or the default, never from a Manager. Bad input — empty text, an
+unknown workspace or agent, no workspace resolving — comes back as a tool result with
+`isError: true` and the reason, so the model can fix it and retry.
 
 ## Local client (stdio)
 
@@ -109,6 +142,8 @@ be done from a remote browser or over `/rpc`:
 
 ```bash
 crow mcp token mint --name grok-bot --scope board:read
+# or, for a client that may also capture Scratch items:
+crow mcp token mint --name capture-bot --scope todos:read --scope todos:write
 ```
 
 ```json
@@ -176,7 +211,9 @@ What happens when you add the connector:
    as a public client).
 3. It opens `/oauth/authorize` in your browser. Crow shows a consent page with the
    app's name, the host it will send you back to (`claude.ai`), and a checkbox per
-   scope. **You approve with Crow's web password.**
+   scope. The read scopes the app asked for are ticked; `todos:write` sits under
+   **Allow it to change** and is never ticked for you, even when the app asks for it.
+   **You approve with Crow's web password.**
 4. Claude exchanges the code (PKCE `S256` is mandatory) at `/oauth/token` and gets a
    one-hour access token and a refresh token, which rotates every time it is used.
 
@@ -250,6 +287,8 @@ secret empty; Claude registers itself. Click **Connect**, then approve on Crow's
 consent page with the web password and the scopes you want.
 
 Ask Claude on your phone "what's stuck in Crow?" and it calls `list_stuck_sessions`.
+If you ticked `todos:write`, "add 'retry flaky upload' to Crow Scratch" calls
+`add_todo`.
 
 ### What a connected app holds
 
@@ -309,7 +348,8 @@ HTTP specifics, for anyone debugging with `curl`:
 ## See also
 
 - [ADR 0019](adr/0019-read-only-mcp-server.md) — why the surface is task-shaped
-  rather than one tool per RPC, and how it relates to CROW-528
+  rather than one tool per RPC, how it relates to CROW-528, and the CROW-1491
+  amendment that allows writes under named write scopes
 - [ADR 0016](adr/0016-cli-control-plane-parity.md) — the ledger that gates which
   RPCs may be exported
 - [cli-reference.md](cli-reference.md#mcp-commands) — the `crow mcp` verbs

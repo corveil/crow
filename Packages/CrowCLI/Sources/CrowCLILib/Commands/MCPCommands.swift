@@ -32,7 +32,7 @@ public struct MCP: ParsableCommand {
 public struct MCPServe: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "serve",
-        abstract: "Serve the read-only MCP surface over stdio (for a local client)",
+        abstract: "Serve the MCP surface over stdio (for a local client)",
         discussion: """
         Speaks MCP on stdin/stdout and forwards each tool call to the running \
         `crowd` over its Unix socket. Point a local MCP client at it:
@@ -44,9 +44,10 @@ public struct MCPServe: ParsableCommand {
         other `crow` verb — a token would gate nothing. Remote clients use \
         `POST /mcp` with a token from `crow mcp token mint` instead.
 
-        The surface is read-only either way, and identical: eight tools over \
-        seven read RPCs. This command cannot send prompts, create sessions, or write \
-        anything.
+        The surface is identical either way: eight read tools over seven read \
+        RPCs, plus add_todo (todos:write), which adds a Scratch item and nothing \
+        else. This command cannot send prompts, create or change sessions, or \
+        touch config.
 
         Unlike every other `crow` verb, stdout here carries framed JSON-RPC rather \
         than one JSON object — it is a transport, not a query. Diagnostics go to \
@@ -58,7 +59,7 @@ public struct MCPServe: ParsableCommand {
         name: .long,
         help: """
         Limit the served tools to these scopes (repeatable). Defaults to all \
-        read scopes: \(MCPScope.allCases.map(\.rawValue).sorted().joined(separator: ", ")).
+        scopes: \(MCPScope.allCases.map(\.rawValue).sorted().joined(separator: ", ")).
         """)
     public var scope: [String] = []
 
@@ -179,6 +180,10 @@ public struct MCPTokenMint: ParsableCommand {
         be recovered — losing it means minting another and revoking this one.
 
           crow mcp token mint --name grok-bot --scope board:read
+          crow mcp token mint --name capture-bot --scope todos:read --scope todos:write
+
+        todos:write is the only write scope: it lets the holder add Scratch \
+        items, and nothing else.
 
         Expiry defaults to 90 days. Pass --expires-in to choose another, or \
         --no-expiry for a token that never expires — which has to be typed, \

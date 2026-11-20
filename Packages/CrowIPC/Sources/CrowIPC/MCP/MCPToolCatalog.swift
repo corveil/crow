@@ -14,9 +14,9 @@ public struct MCPTool: Sendable {
     public let inputSchema: JSONValue
     /// The single scope a caller must hold to see *or* call this tool.
     public let scope: MCPScope
-    /// Every RPC method this tool reads. Gated against `ParityLedger` by
-    /// `MCPLedgerExportTests`, so a tool cannot quietly start reading a method
-    /// nobody approved for export.
+    /// Every RPC method this tool calls. Gated against `ParityLedger` by
+    /// `MCPLedgerExportTests`, so a tool cannot quietly start calling a method
+    /// nobody approved for export, or call a write under a read scope.
     public let backingMethods: Set<String>
     public let run: @Sendable ([String: JSONValue], @escaping MCPInvoke) async throws -> JSONValue
 
@@ -51,15 +51,18 @@ public struct MCPToolInputError: Error {
 /// `RPCWebSocketHandler.localOnlyDenial` entirely. The gate there is this list, not
 /// the transport.
 ///
-/// v1 is read-only. Every tool here reads; none writes. `MCPLedgerExportTests`
-/// fails the build if a `backingMethods` entry is ledgered `isWrite`.
+/// Reads by default; writes only by name. Every tool reads except `add_todo`,
+/// which adds a Scratch item under `todos:write` (CROW-1491, ADR 0019 amendment).
+/// `MCPLedgerExportTests` fails the build if a write method is exported without
+/// `.write(scope:)` at a write scope, and pins the exported write set, so a second
+/// write tool is a reviewed edit to that test as well as to this file.
 public enum MCPToolCatalog {
 
     /// Every tool, in a stable order. The spec asks for deterministic ordering so
     /// clients can cache the list and prompt caches stay warm.
     public static let all: [MCPTool] = [
         boardSummary, listSessions, getSession, listStuckSessions, listTickets, listReviews,
-        listTodos, getTodo,
+        listTodos, getTodo, addTodo,
     ]
 
     /// The tools a caller holding `scopes` may see and call.
@@ -436,6 +439,134 @@ public enum MCPToolCatalog {
             let result = try await invoke("todo-get", ["todo_id": .string(todoID)])
             return .object(result)
         })
+
+    /// The one write tool (CROW-1491). Capture only: it calls `todo-add` and
+    /// nothing else, so it cannot edit, drop, or start Explore/Ticket/Work on an
+    /// item — those launch a Manager and need their own scope and ADR decision.
+    ///
+    /// The params are built here from a fixed set of keys. In particular
+    /// `from_session` is never forwarded: an MCP caller is not a Crow session, and
+    /// letting it name one would let it borrow that Manager's workspace and agent.
+    static let addTodo = MCPTool(
+        name: "add_todo",
+        title: "Add a Crow Scratch item",
+        description: """
+            Capture one item on the Crow Scratch list, where the operator triages it \
+            later. Use it for an idea, bug or follow-up worth keeping, not for work \
+            that should start now. The item lands in the captured state; it does not \
+            start a session. workspace defaults to the operator's Manager workspace. \
+            Returns the created item.
+            """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "properties": .object([
+                "text": .object([
+                    "type": .string("string"),
+                    "minLength": .int(1),
+                    "maxLength": .int(maxTodoTextLength),
+                    "description": .string("The item itself, one line. Required."),
+                ]),
+                "note": .object([
+                    "type": .string("string"),
+                    "maxLength": .int(maxTodoNoteLength),
+                    "description": .string("Longer context: where it came from, links, detail."),
+                ]),
+                "tags": .object([
+                    "type": .string("array"),
+                    "items": .object(["type": .string("string")]),
+                    "maxItems": .int(maxTodoTags),
+                    "description": .string("Free-form tags, e.g. [\"bug\", \"web\"]."),
+                ]),
+                "priority": .object([
+                    "type": .string("string"),
+                    "enum": .array(TodoItem.validPriorities.map { .string($0) }),
+                    "description": .string("p1 (most urgent) to p4. Omit when unknown."),
+                ]),
+                "workspace": .object([
+                    "type": .string("string"),
+                    "description": .string(
+                        "Crow workspace name (case-insensitive) or UUID. Defaults to the operator's Manager workspace."),
+                ]),
+                "agent_kind": .object([
+                    "type": .string("string"),
+                    "description": .string(
+                        "Coding agent to use when the item is later explored or worked, e.g. claude-code. Defaults to the Manager agent."),
+                ]),
+            ]),
+            "required": .array([.string("text")]),
+            "additionalProperties": .bool(false),
+        ]),
+        scope: .todosWrite,
+        backingMethods: ["todo-add"],
+        run: { arguments, invoke in
+            let params = try addTodoParams(arguments)
+            let result = try await invoke("todo-add", params)
+            let todo = result["todo"]?.objectValue ?? [:]
+            return .object(["todo": .object(pick(todo, todoFields))])
+        })
+
+    /// Validate `add_todo` arguments and build the `todo-add` params.
+    ///
+    /// The daemon validates too; this layer exists so a model gets an actionable
+    /// message without a "daemon error" prefix, and so the size caps hold on the
+    /// remote path. The caps are generous for a human-sized note and exist only to
+    /// keep a misbehaving client from bloating `store.json` one item at a time.
+    static func addTodoParams(_ arguments: [String: JSONValue]) throws -> [String: JSONValue] {
+        guard let raw = arguments["text"] else { throw MCPToolInputError("text is required") }
+        guard let text = raw.stringValue else { throw MCPToolInputError("text must be a string") }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MCPToolInputError("text is required") }
+        guard trimmed.count <= maxTodoTextLength else {
+            throw MCPToolInputError(
+                "text is \(trimmed.count) characters; the limit is \(maxTodoTextLength), so put the detail in note")
+        }
+        var params: [String: JSONValue] = ["text": .string(trimmed)]
+
+        if let note = try optionalString(arguments, "note") {
+            guard note.count <= maxTodoNoteLength else {
+                throw MCPToolInputError("note must be at most \(maxTodoNoteLength) characters")
+            }
+            params["note"] = .string(note)
+        }
+        if let rawTags = arguments["tags"], rawTags != .null {
+            guard let items = rawTags.arrayValue else {
+                throw MCPToolInputError("tags must be an array of strings")
+            }
+            let tags = items.compactMap(\.stringValue)
+            guard tags.count == items.count else {
+                throw MCPToolInputError("tags must be an array of strings")
+            }
+            guard tags.count <= maxTodoTags else {
+                throw MCPToolInputError("at most \(maxTodoTags) tags")
+            }
+            params["tags"] = .array(tags.map { .string($0) })
+        }
+        if let priority = try optionalString(arguments, "priority") {
+            do {
+                if let normalized = try TodoItem.normalizePriority(priority) {
+                    params["priority"] = .string(normalized)
+                }
+            } catch {
+                throw MCPToolInputError(TodoItem.invalidPriorityMessage)
+            }
+        }
+        for key in ["workspace", "agent_kind"] {
+            if let value = try optionalString(arguments, key) { params[key] = .string(value) }
+        }
+        return params
+    }
+
+    static let maxTodoTextLength = 1_000
+    static let maxTodoNoteLength = 20_000
+    static let maxTodoTags = 20
+
+    /// An optional string argument: nil when absent, null or blank.
+    private static func optionalString(_ arguments: [String: JSONValue], _ key: String) throws -> String? {
+        guard let raw = arguments[key], raw != .null else { return nil }
+        guard let value = raw.stringValue else { throw MCPToolInputError("\(key) must be a string") }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     // MARK: - Shared vocabulary
 
