@@ -205,3 +205,66 @@ import Testing
         #expect(config.soundName == event.defaultSound)
     }
 }
+
+// MARK: - Spoken notifications (voice spike)
+
+@Test func voiceSettingsDefaultOffAndResolveToEventDefaults() {
+    let settings = NotificationSettings()
+    #expect(settings.voiceEnabled == false)
+    #expect(settings.voiceName == nil)
+    #expect(settings.voiceRate == 1.0)
+    #expect(settings.voiceVolume == 1.0)
+    #expect(settings.chimeBeforeVoice == false)
+    for event in NotificationEvent.allCases {
+        #expect(settings.voiceEnabled(for: event) == event.defaultVoiceEnabled)
+        #expect(settings.voiceTemplate(for: event) == event.defaultVoiceTemplate)
+        #expect(!event.defaultVoiceTemplate.isEmpty)
+    }
+    #expect(NotificationEvent.agentWaiting.defaultVoiceEnabled)
+    #expect(!NotificationEvent.configReloaded.defaultVoiceEnabled)
+}
+
+@Test func voiceSettingsDecodeFromConfigThatPredatesThem() throws {
+    let json = #"{"globalMute":false,"eventSettings":["taskComplete",{"soundName":"Ping"}]}"#
+    let s = try JSONDecoder().decode(NotificationSettings.self, from: Data(json.utf8))
+    #expect(s.voiceEnabled == false)
+    #expect(s.voiceName == nil)
+    #expect(s.config(for: .taskComplete).voiceEnabled == nil)
+    #expect(s.voiceTemplate(for: .taskComplete) == "{session} is done")
+}
+
+@Test func voiceSettingsDecodeClampsOutOfRangeNumbers() throws {
+    let json = #"{"voiceEnabled":true,"voiceRate":9,"voiceVolume":-1}"#
+    let s = try JSONDecoder().decode(NotificationSettings.self, from: Data(json.utf8))
+    #expect(s.voiceEnabled)
+    #expect(s.voiceRate == 2.0)
+    #expect(s.voiceVolume == 0.0)
+}
+
+/// Unset per-event voice fields must stay absent on a round-trip, so a later
+/// change to the default template reaches users who never touched it.
+@Test func voiceEventOverridesStayAbsentOnRoundTrip() throws {
+    var s = NotificationSettings()
+    s.eventSettings[.taskComplete] = EventNotificationConfig(soundName: "Glass")
+    s.eventSettings[.agentWaiting] = EventNotificationConfig(
+        soundName: "Funk", voiceEnabled: false, voiceTemplate: "{session} wants you")
+    let data = try JSONEncoder().encode(s)
+    let text = String(decoding: data, as: UTF8.self)
+    #expect(!text.contains("voiceName"))
+    let back = try JSONDecoder().decode(NotificationSettings.self, from: data)
+    #expect(back == s)
+    #expect(back.config(for: .taskComplete).voiceTemplate == nil)
+    #expect(back.voiceEnabled(for: .agentWaiting) == false)
+    #expect(back.voiceTemplate(for: .agentWaiting) == "{session} wants you")
+}
+
+@Test func voiceTemplateNormalization() throws {
+    #expect(try NotificationSettings.normalizedVoiceTemplate("  ") == nil)
+    #expect(try NotificationSettings.normalizedVoiceTemplate(" {session} done ") == "{session} done")
+    #expect(throws: VoiceSettingError.self) {
+        _ = try NotificationSettings.normalizedVoiceTemplate(String(repeating: "a", count: 201))
+    }
+    #expect(throws: VoiceSettingError.self) { _ = try NotificationSettings.normalizedVoiceTemplate("a\u{07}b") }
+    #expect(try NotificationSettings.normalizedVoiceName("") == nil)
+    #expect(try NotificationSettings.normalizedVoiceName("Samantha") == "Samantha")
+}

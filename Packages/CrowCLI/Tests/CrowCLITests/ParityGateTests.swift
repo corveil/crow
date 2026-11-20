@@ -173,7 +173,9 @@ struct ParityGateTests {
                 binaries: ["claude": "/usr/local/bin/claude"],
                 managerWorkspace: "probe"
             ),
-            notifications: NotificationSettings(eventSettings: [.taskComplete: EventNotificationConfig()]),
+            notifications: NotificationSettings(
+                eventSettings: [.taskComplete: EventNotificationConfig(voiceEnabled: true, voiceTemplate: "{session} is done")],
+                voiceName: "Samantha"),
             telemetry: TelemetryConfig(),
             terminal: TerminalSettings(),
             autoRespond: AutoRespondSettings(),

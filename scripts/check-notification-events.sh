@@ -45,6 +45,43 @@ settings_events() {
   ' "$SETTINGS"
 }
 
+# Spoken notifications (#1473): NotificationEvent.defaultVoiceEnabled +
+# defaultVoiceTemplate vs the VOICE_DEFAULTS fallback in notifications.js, as
+# "event<TAB>enabled<TAB>template" lines. The daemon ships its table to the
+# client at boot, but the JS copy is what speaks until then (or if
+# notifications-get fails), so neither the wording nor the on/off may drift.
+swift_voice_defaults() {
+  node -e '
+    const s = require("fs").readFileSync(process.argv[1], "utf8");
+    const tpl = s.match(/var defaultVoiceTemplate: String \{([\s\S]*?)\n    \}/)[1];
+    const en = s.match(/var defaultVoiceEnabled: Bool \{([\s\S]*?)\n    \}/)[1];
+    // "case .a, .b: false" lines, plus an optional "default: true|false".
+    const explicit = {};
+    for (const m of en.matchAll(/case ((?:\.\w+(?:,\s*)?)+): (true|false)/g)) {
+      for (const n of m[1].match(/\w+/g)) explicit[n] = m[2];
+    }
+    const dflt = (en.match(/default: (true|false)/) || [])[1];
+    const out = [];
+    for (const m of tpl.matchAll(/case \.(\w+): "([^"]*)"/g)) {
+      const enabled = explicit[m[1]] || dflt;
+      if (!enabled) { console.error("no defaultVoiceEnabled for " + m[1]); process.exit(2); }
+      out.push(m[1] + "\t" + enabled + "\t" + m[2]);
+    }
+    console.log(out.sort().join("\n"));
+  ' "$ENUM"
+}
+app_voice_defaults() {
+  node -e '
+    const s = require("fs").readFileSync(process.argv[1], "utf8");
+    const body = s.match(/const VOICE_DEFAULTS = \{([\s\S]*?)\n\};/)[1];
+    const out = [];
+    for (const m of body.matchAll(/(\w+): \{ enabled: (true|false), template: '"'"'([^'"'"']*)'"'"' \}/g)) {
+      out.push(m[1] + "\t" + m[2] + "\t" + m[3]);
+    }
+    console.log(out.sort().join("\n"));
+  ' "$APP"
+}
+
 status=0
 if ! diff <(swift_events) <(app_events) >/tmp/notif-app.diff 2>&1; then
   echo "MISMATCH: NotificationEvent.swift vs notifications.js (< Swift, > notifications.js):" >&2
@@ -56,8 +93,13 @@ if ! diff <(swift_events) <(settings_events) >/tmp/notif-settings.diff 2>&1; the
   cat /tmp/notif-settings.diff >&2
   status=1
 fi
+if ! diff <(swift_voice_defaults) <(app_voice_defaults) >/tmp/notif-voice.diff 2>&1; then
+  echo "MISMATCH: defaultVoiceEnabled/defaultVoiceTemplate (Swift) vs VOICE_DEFAULTS (notifications.js) (< Swift, > notifications.js):" >&2
+  cat /tmp/notif-voice.diff >&2
+  status=1
+fi
 
 if [ "$status" -eq 0 ]; then
-  echo "notification-event catalogs agree ($(swift_events | wc -l | tr -d ' ') events)"
+  echo "notification-event catalogs agree ($(swift_events | wc -l | tr -d ' ') events, $(app_voice_defaults | wc -l | tr -d ' ') voice defaults)"
 fi
 exit "$status"

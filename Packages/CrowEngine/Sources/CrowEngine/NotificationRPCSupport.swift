@@ -48,6 +48,53 @@ public enum NotificationRPC {
         return canonical
     }
 
+    /// Decode a number param that may arrive as an int (`1`) or a double (`1.25`).
+    public static func decodeNumber(_ value: JSONValue?, name: String) throws -> Double {
+        if let d = value?.doubleValue { return d }
+        if let i = value?.intValue { return Double(i) }
+        throw RPCError.invalidParams("\(name) must be a number")
+    }
+
+    /// `voice_rate` — rejected (not clamped) out of range, so a typo surfaces.
+    public static func decodeVoiceRate(_ value: JSONValue?) throws -> Double {
+        let rate = try decodeNumber(value, name: "voice_rate")
+        let r = NotificationSettings.voiceRateRange
+        guard rate.isFinite, r.contains(rate) else {
+            throw RPCError.invalidParams("voice_rate must be between \(r.lowerBound) and \(r.upperBound)")
+        }
+        return rate
+    }
+
+    /// `voice_volume` — 0…1.
+    public static func decodeVoiceVolume(_ value: JSONValue?) throws -> Double {
+        let volume = try decodeNumber(value, name: "voice_volume")
+        let r = NotificationSettings.voiceVolumeRange
+        guard volume.isFinite, r.contains(volume) else {
+            throw RPCError.invalidParams("voice_volume must be between \(r.lowerBound) and \(r.upperBound)")
+        }
+        return volume
+    }
+
+    /// `voice_name` — `""` clears it back to the system default (returns `.some(nil)`).
+    public static func decodeVoiceName(_ value: JSONValue?) throws -> String? {
+        guard let raw = value?.stringValue else {
+            throw RPCError.invalidParams("voice_name must be a string (\"\" for the system default)")
+        }
+        do { return try NotificationSettings.normalizedVoiceName(raw) } catch let e as VoiceSettingError {
+            throw RPCError.invalidParams(e.message)
+        }
+    }
+
+    /// `event_voice_template` — `""` resets the event to its default template.
+    public static func decodeVoiceTemplate(_ value: JSONValue?) throws -> String? {
+        guard let raw = value?.stringValue else {
+            throw RPCError.invalidParams("event_voice_template must be a string (\"\" for the default)")
+        }
+        do { return try NotificationSettings.normalizedVoiceTemplate(raw) } catch let e as VoiceSettingError {
+            throw RPCError.invalidParams(e.message)
+        }
+    }
+
     /// One custom-sound record as RPC JSON (`name` / `file` / `url`).
     public static func customSoundJSON(_ sound: CustomSound) -> JSONValue {
         .object([
@@ -90,6 +137,13 @@ public enum NotificationRPC {
                 "sound_enabled": .bool(config.soundEnabled),
                 "system_notification_enabled": .bool(config.systemNotificationEnabled),
                 "sound_name": .string(config.soundName),
+                // Resolved values, so a reader sees what will actually be said,
+                // plus the defaults so a UI can show "reset" state without its
+                // own copy of the table.
+                "voice_enabled": .bool(settings.voiceEnabled(for: event)),
+                "voice_template": .string(settings.voiceTemplate(for: event)),
+                "default_voice_enabled": .bool(event.defaultVoiceEnabled),
+                "default_voice_template": .string(event.defaultVoiceTemplate),
             ])
         }
         let available = NotificationSettings.builtInSounds.map { JSONValue.string($0) }
@@ -98,6 +152,12 @@ public enum NotificationRPC {
             "global_mute": .bool(settings.globalMute),
             "sound_enabled": .bool(settings.soundEnabled),
             "system_notifications_enabled": .bool(settings.systemNotificationsEnabled),
+            "voice_enabled": .bool(settings.voiceEnabled),
+            "voice_name": settings.voiceName.map { .string($0) } ?? .null,
+            "voice_rate": .double(settings.voiceRate),
+            "voice_volume": .double(settings.voiceVolume),
+            "chime_before_voice": .bool(settings.chimeBeforeVoice),
+            "voice_placeholders": .array(NotificationSettings.voicePlaceholders.map { .string($0) }),
             "events": .object(eventsObject),
             "available_sounds": .array(available),
             "custom_sounds": .array(customSounds.map(customSoundJSON)),

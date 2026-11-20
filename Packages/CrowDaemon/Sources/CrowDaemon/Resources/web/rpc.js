@@ -434,6 +434,8 @@ async function loadUIConfig() {
     try {
       const nr = await rpc('notifications-get');
       const custom = (nr && nr.notifications && nr.notifications.custom_sounds) || [];
+      // Canonical per-event voice defaults (voice spike) — the daemon owns the table.
+      if (typeof setVoiceDefaults === 'function') setVoiceDefaults(nr && nr.notifications && nr.notifications.events);
       if (window.crowSound && window.crowSound.setCustomSounds) {
         window.crowSound.setCustomSounds(custom);
       }

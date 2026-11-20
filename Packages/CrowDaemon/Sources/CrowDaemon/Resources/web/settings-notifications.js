@@ -231,6 +231,147 @@
       'Preview of a built-in is a synthesized approximation; custom sounds play the uploaded file.');
   }
 
+  // ---- Spoken notifications (voice spike) ---------------------------------
+  // The voice list comes from the *client* (speechSynthesis.getVoices()), which
+  // fills in asynchronously — re-render once when it arrives.
+  let _voiceRerenderArmed = false;
+  function voiceApi() { return window.crowVoice || null; }
+  function voiceDefault(raw) {
+    return (window.crowVoiceDefaultFor && window.crowVoiceDefaultFor(raw)) || { enabled: true, template: '{title}' };
+  }
+  // Speak with the form's *unsaved* globals so Preview reflects what you're editing.
+  function previewSpeak(n, text) {
+    const v = voiceApi();
+    if (!v || !text) return;
+    v.speak(text, {
+      voiceName: n.voiceName || null,
+      rate: typeof n.voiceRate === 'number' ? n.voiceRate : 1,
+      volume: typeof n.voiceVolume === 'number' ? n.voiceVolume : 1,
+      interrupt: true,
+    });
+  }
+  function rangeField(label, n, key, min, max, step, dflt, help) {
+    const wrap = el('div', 'st-sound-row');
+    const input = el('input', 'st-range');
+    input.type = 'range';
+    input.min = String(min); input.max = String(max); input.step = String(step);
+    const cur = typeof n[key] === 'number' ? n[key] : dflt;
+    input.value = String(cur);
+    const out = el('span', 'st-perm-status', cur.toFixed(2));
+    input.oninput = () => {
+      n[key] = parseFloat(input.value);
+      out.textContent = n[key].toFixed(2);
+      S.markDirty();
+    };
+    wrap.appendChild(input);
+    wrap.appendChild(out);
+    return S.field(label, wrap, help);
+  }
+  function voiceSelectField(n) {
+    const v = voiceApi();
+    const voices = v ? v.voices() : [];
+    if (v && voices.length === 0 && !_voiceRerenderArmed) {
+      _voiceRerenderArmed = true;
+      // render() builds a fresh modal when none is open, so an unguarded call
+      // here would resurrect a Settings the user closed (or discarded) before
+      // the voice list arrived. Only repaint a modal that is still up; a later
+      // open renders with the voices already loaded (review of #1473). Armed
+      // once per page: the listener stays registered, so it also repaints an
+      // open modal if the OS voice list changes later.
+      v.onVoices(() => {
+        if (!(window.settingsIsOpen && window.settingsIsOpen())) return;
+        try { S.render(); } catch (_) {}
+      });
+    }
+    const sel = el('select', 'st-select');
+    const def = el('option', null, 'System default');
+    def.value = '';
+    sel.appendChild(def);
+    // Group the user's language first; novelty voices sort in with the rest.
+    const lang = (navigator.language || 'en').slice(0, 2).toLowerCase();
+    const sorted = voices.slice().sort((a, b) => {
+      const al = a.lang.toLowerCase().startsWith(lang) ? 0 : 1;
+      const bl = b.lang.toLowerCase().startsWith(lang) ? 0 : 1;
+      return al - bl || a.name.localeCompare(b.name);
+    });
+    const names = new Set();
+    for (const voice of sorted) {
+      if (names.has(voice.name)) continue;
+      names.add(voice.name);
+      const o = el('option', null, voice.name + ' (' + voice.lang + ')' + (voice.default ? ' — default' : ''));
+      o.value = voice.name;
+      if (n.voiceName === voice.name) o.selected = true;
+      sel.appendChild(o);
+    }
+    // Keep a stored name this client doesn't have, so Save doesn't drop it.
+    if (n.voiceName && !names.has(n.voiceName)) {
+      const o = el('option', null, n.voiceName + ' (not on this device)');
+      o.value = n.voiceName; o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => {
+      if (sel.value) n.voiceName = sel.value; else delete n.voiceName;
+      S.markDirty();
+    };
+    return S.field('Voice', sel,
+      'Voices come from this device (macOS: System Settings → Accessibility → Spoken Content to add more). Each device that has Crow open speaks with its own voices.');
+  }
+  function voiceGlobalSection(body, n) {
+    body.appendChild(S.group('Voice'));
+    const v = voiceApi();
+    if (!v || !v.supported()) {
+      body.appendChild(el('div', 'st-help', 'Speech isn\u2019t available in this browser.'));
+    }
+    body.appendChild(S.toggleField('Speak notifications', n, 'voiceEnabled',
+      'Say what happened ("crow 1078 needs you") instead of an anonymous chime. Per-event wording is below.'));
+    body.appendChild(voiceSelectField(n));
+    body.appendChild(rangeField('Rate', n, 'voiceRate', 0.5, 2, 0.05, 1, '1.00 is normal speed.'));
+    body.appendChild(rangeField('Volume', n, 'voiceVolume', 0, 1, 0.05, 1));
+    body.appendChild(S.toggleField('Chime before speaking', n, 'chimeBeforeVoice',
+      'Off: the voice replaces the event\u2019s sound. On: play the sound, then speak.'));
+    const row = el('div', 'st-sound-row');
+    const btn = el('button', 'action-btn', '\u25B6 Preview voice');
+    btn.type = 'button';
+    btn.onclick = () => previewSpeak(n, window.crowVoicePreviewText
+      ? window.crowVoicePreviewText('agentWaiting') : 'Crow needs you');
+    row.appendChild(btn);
+    body.appendChild(S.field('', row));
+  }
+  // Per-event: a Speak toggle showing the *resolved* value (absent = the event's
+  // default — only an explicit change is written) and a template with Preview.
+  function voiceEventFields(body, raw, conf, n) {
+    const d = voiceDefault(raw);
+    const row = el('label', 'st-switch-row');
+    const input = el('input', 'st-switch');
+    input.type = 'checkbox';
+    input.checked = typeof conf.voiceEnabled === 'boolean' ? conf.voiceEnabled : d.enabled;
+    input.onchange = () => { conf.voiceEnabled = input.checked; S.markDirty(); };
+    row.appendChild(input);
+    row.appendChild(el('span', 'st-switch-label', 'Speak'));
+    const f = el('div', 'st-field');
+    f.appendChild(row);
+    body.appendChild(f);
+
+    const wrap = el('div', 'st-sound-row');
+    const tpl = el('input', 'st-input');
+    tpl.type = 'text';
+    tpl.maxLength = 200;
+    tpl.placeholder = d.template;
+    tpl.value = typeof conf.voiceTemplate === 'string' ? conf.voiceTemplate : '';
+    tpl.oninput = () => {
+      if (tpl.value.trim()) conf.voiceTemplate = tpl.value; else delete conf.voiceTemplate;
+      S.markDirty();
+    };
+    const btn = el('button', 'action-btn', '\u25B6 Preview');
+    btn.type = 'button';
+    btn.onclick = () => previewSpeak(n, window.crowVoicePreviewText
+      ? window.crowVoicePreviewText(raw, tpl.value.trim() || d.template) : (tpl.value || d.template));
+    wrap.appendChild(tpl);
+    wrap.appendChild(btn);
+    body.appendChild(S.field('Spoken text', wrap,
+      'Placeholders: {session} {repo} {pr} {event} {title} {body}. Leave empty for the default.'));
+  }
+
   function renderNotifications(body) {
     S.cfg.notifications = S.cfg.notifications || {};
     const n = S.cfg.notifications;
@@ -240,6 +381,7 @@
     body.appendChild(S.toggleField('Enable system notifications', n, 'systemNotificationsEnabled'));
     body.appendChild(browserNotifRow());
     body.appendChild(customSoundLibrary());
+    voiceGlobalSection(body, n);
 
     for (const [raw, conf] of ensureAllEvents(n)) {
       body.appendChild(S.group(EVENT_LABELS[raw] || raw));
@@ -247,6 +389,7 @@
       body.appendChild(S.toggleField('Play sound', conf, 'soundEnabled'));
       body.appendChild(S.toggleField('System notification', conf, 'systemNotificationEnabled'));
       body.appendChild(soundField(conf));
+      voiceEventFields(body, raw, conf, n);
     }
   }
 

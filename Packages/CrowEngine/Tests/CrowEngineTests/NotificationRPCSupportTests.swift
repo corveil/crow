@@ -142,4 +142,54 @@ struct NotificationRPCSupportTests {
             NotificationRPC.settingsJSON(NotificationSettings(), configReadable: false).objectValue)
         #expect(object["config_readable"]?.boolValue == false)
     }
+
+    // MARK: - Voice (voice spike)
+
+    @Test func settingsJSONReportsResolvedVoiceFields() {
+        var settings = NotificationSettings(voiceEnabled: true, voiceName: "Samantha", voiceRate: 1.25)
+        settings.eventSettings[.agentWaiting] = EventNotificationConfig(
+            soundName: "Funk", voiceEnabled: false, voiceTemplate: "{session} wants you")
+        guard case .object(let root) = NotificationRPC.settingsJSON(settings),
+              case .object(let events) = root["events"],
+              case .object(let waiting) = events["agentWaiting"],
+              case .object(let done) = events["taskComplete"]
+        else { Issue.record("unexpected shape"); return }
+        #expect(root["voice_enabled"] == .bool(true))
+        #expect(root["voice_name"] == .string("Samantha"))
+        #expect(root["voice_rate"] == .double(1.25))
+        #expect(root["chime_before_voice"] == .bool(false))
+        #expect(waiting["voice_enabled"] == .bool(false))
+        #expect(waiting["voice_template"] == .string("{session} wants you"))
+        #expect(waiting["default_voice_template"] == .string("{session} needs you"))
+        #expect(done["voice_enabled"] == .bool(true))
+        #expect(done["voice_template"] == .string("{session} is done"))
+    }
+
+    @Test func settingsJSONReportsNullVoiceNameWhenUnset() {
+        guard case .object(let root) = NotificationRPC.settingsJSON(NotificationSettings()) else {
+            Issue.record("unexpected shape"); return
+        }
+        #expect(root["voice_name"] == .null)
+        #expect(root["voice_enabled"] == .bool(false))
+    }
+
+    @Test func decodeVoiceRateAcceptsIntAndDoubleInRange() throws {
+        #expect(try NotificationRPC.decodeVoiceRate(.int(1)) == 1.0)
+        #expect(try NotificationRPC.decodeVoiceRate(.double(1.5)) == 1.5)
+        #expect(throws: RPCError.self) { _ = try NotificationRPC.decodeVoiceRate(.double(3)) }
+        #expect(throws: RPCError.self) { _ = try NotificationRPC.decodeVoiceRate(.string("fast")) }
+        #expect(try NotificationRPC.decodeVoiceVolume(.int(0)) == 0.0)
+        #expect(throws: RPCError.self) { _ = try NotificationRPC.decodeVoiceVolume(.double(1.5)) }
+    }
+
+    @Test func decodeVoiceNameAndTemplateTreatEmptyAsReset() throws {
+        #expect(try NotificationRPC.decodeVoiceName(.string("")) == nil)
+        #expect(try NotificationRPC.decodeVoiceName(.string("Fred")) == "Fred")
+        #expect(try NotificationRPC.decodeVoiceTemplate(.string("  ")) == nil)
+        #expect(try NotificationRPC.decodeVoiceTemplate(.string("{repo} broke")) == "{repo} broke")
+        #expect(throws: RPCError.self) { _ = try NotificationRPC.decodeVoiceTemplate(.bool(true)) }
+        #expect(throws: RPCError.self) {
+            _ = try NotificationRPC.decodeVoiceTemplate(.string(String(repeating: "x", count: 500)))
+        }
+    }
 }

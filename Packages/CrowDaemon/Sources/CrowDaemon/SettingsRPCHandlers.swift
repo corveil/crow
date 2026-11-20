@@ -328,11 +328,26 @@ func makeSettingsHandlers(
                 let eventSoundName = try params["event_sound_name"].map {
                     try NotificationRPC.decodeSoundName($0, customNames: customNames)
                 }
+                // Spoken notifications (voice spike). `voice_name` /
+                // `event_voice_template` are double optionals: absent = leave
+                // alone, `""` = reset to default (`.some(nil)`).
+                let voiceEnabled = params["voice_enabled"]?.boolValue
+                let voiceName: String?? = try params["voice_name"].map { try NotificationRPC.decodeVoiceName($0) }
+                let voiceRate = try params["voice_rate"].map { try NotificationRPC.decodeVoiceRate($0) }
+                let voiceVolume = try params["voice_volume"].map { try NotificationRPC.decodeVoiceVolume($0) }
+                let chimeBeforeVoice = params["chime_before_voice"]?.boolValue
+                let eventVoiceEnabled = params["event_voice_enabled"]?.boolValue
+                let eventVoiceTemplate: String?? = try params["event_voice_template"].map {
+                    try NotificationRPC.decodeVoiceTemplate($0)
+                }
 
                 let hasEventField = eventEnabled != nil || eventSoundEnabled != nil
                     || eventSystemEnabled != nil || eventSoundName != nil
+                    || eventVoiceEnabled != nil || eventVoiceTemplate != nil
                 let hasGlobalField = globalMute != nil || soundEnabled != nil
                     || systemNotificationsEnabled != nil
+                    || voiceEnabled != nil || voiceName != nil || voiceRate != nil
+                    || voiceVolume != nil || chimeBeforeVoice != nil
                 if event == nil, hasEventField {
                     throw RPCError.invalidParams("event is required when setting any event_* field")
                 }
@@ -350,6 +365,11 @@ func makeSettingsHandlers(
                     if let systemNotificationsEnabled {
                         config.notifications.systemNotificationsEnabled = systemNotificationsEnabled
                     }
+                    if let voiceEnabled { config.notifications.voiceEnabled = voiceEnabled }
+                    if let voiceName { config.notifications.voiceName = voiceName }
+                    if let voiceRate { config.notifications.voiceRate = voiceRate }
+                    if let voiceVolume { config.notifications.voiceVolume = voiceVolume }
+                    if let chimeBeforeVoice { config.notifications.chimeBeforeVoice = chimeBeforeVoice }
                     if let event {
                         // Read through `config(for:)`, which supplies the event's
                         // defaults when it's absent from disk — the common case,
@@ -366,6 +386,8 @@ func makeSettingsHandlers(
                             eventConfig.systemNotificationEnabled = eventSystemEnabled
                         }
                         if let eventSoundName { eventConfig.soundName = eventSoundName }
+                        if let eventVoiceEnabled { eventConfig.voiceEnabled = eventVoiceEnabled }
+                        if let eventVoiceTemplate { eventConfig.voiceTemplate = eventVoiceTemplate }
                         config.notifications.eventSettings[event] = eventConfig
                     }
                     return config.notifications

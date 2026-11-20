@@ -79,10 +79,17 @@ function parseNotificationSettings(n) {
   } else if (es && typeof es === 'object') {
     Object.assign(events, es);
   }
+  const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
   return {
     globalMute: !!n.globalMute,
     soundEnabled: n.soundEnabled !== false, // NotificationSettings default: true
     systemNotificationsEnabled: n.systemNotificationsEnabled !== false, // default: true
+    // Spoken notifications (voice spike) — off unless explicitly turned on.
+    voiceEnabled: n.voiceEnabled === true,
+    voiceName: typeof n.voiceName === 'string' && n.voiceName ? n.voiceName : null,
+    voiceRate: num(n.voiceRate, 1),
+    voiceVolume: num(n.voiceVolume, 1),
+    chimeBeforeVoice: n.chimeBeforeVoice === true,
     events,
   };
 }
@@ -324,10 +331,280 @@ function showEventNotification(event, key, detail) {
   } catch (_) { /* Notification ctor can throw in restricted contexts */ }
 }
 
-// All three channels fire from one call in the detectors below; each self-gates
-// (sound + banner on the full toggle cascade, the history on the master levels).
+
+// --- Spoken notifications (voice spike) ------------------------------------
+// A third channel beside the chime and the banner: say what happened
+// ("crow 1078 needs you") through the Web Speech API. Verified to speak inside
+// the Tauri desktop app's WKWebView without a user gesture, and to expose the
+// macOS voices there (getVoices() is empty until `voiceschanged` fires, so
+// everything below tolerates a late voice list). In Chrome, speak() needs a
+// prior user interaction on the page — the same constraint as Web Audio.
+//
+// Gating mirrors the other channels:
+//   speak ⇔ !globalMute && voiceEnabled && evt.enabled && evt.voiceEnabled(resolved)
+// plus the banner's focus rule and the 2s per-(key,event) dedup. When an event
+// speaks, the voice *replaces* its chime unless chimeBeforeVoice is on.
+
+// NotificationEvent.defaultVoiceEnabled / .defaultVoiceTemplate (CrowCore).
+// Fallback only — `notifications-get` ships the canonical table and
+// setVoiceDefaults() overwrites this at boot.
+const VOICE_DEFAULTS = {
+  taskComplete: { enabled: true, template: '{session} is done' },
+  agentWaiting: { enabled: true, template: '{session} needs you' },
+  reviewRequested: { enabled: true, template: 'Review requested on {repo}' },
+  changesRequested: { enabled: true, template: 'Changes requested on {session}' },
+  checksFailing: { enabled: true, template: 'CI failing on {session}' },
+  autoWorkspaceCreated: { enabled: true, template: '{title}' },
+  autoMergeEnabled: { enabled: false, template: 'Auto-merge enabled on {session}' },
+  autoMergeBlocked: { enabled: true, template: 'Auto-merge blocked on {session}' },
+  autoRebasePushed: { enabled: false, template: '{session} was rebased' },
+  autoRebaseConflicts: { enabled: true, template: 'Rebase conflicts on {session}' },
+  autoRebaseStuck: { enabled: true, template: 'Rebase stuck on {session}' },
+  configReloaded: { enabled: false, template: 'Config reloaded' },
+};
+// What a burst of 3+ of the same event says instead of reading each one.
+const VOICE_BURST = {
+  taskComplete: '{n} sessions are done',
+  agentWaiting: '{n} sessions need you',
+  reviewRequested: '{n} new review requests',
+  changesRequested: 'Changes requested on {n} sessions',
+  checksFailing: 'CI failing on {n} sessions',
+};
+
+// Adopt the daemon's default table (notifications-get `events[].default_voice_*`).
+function setVoiceDefaults(eventsObj) {
+  if (!eventsObj || typeof eventsObj !== 'object') return;
+  for (const ev of Object.keys(eventsObj)) {
+    const e = eventsObj[ev] || {};
+    if (typeof e.default_voice_template !== 'string') continue;
+    VOICE_DEFAULTS[ev] = {
+      enabled: e.default_voice_enabled !== false,
+      template: e.default_voice_template,
+    };
+  }
+}
+window.setVoiceDefaults = setVoiceDefaults;
+function voiceDefaultFor(event) {
+  return VOICE_DEFAULTS[event] || { enabled: true, template: '{title}' };
+}
+window.crowVoiceDefaultFor = voiceDefaultFor;
+// Resolved per-event voice settings: a stored override wins, absence = default.
+function voiceConfigFor(event) {
+  const N = uiConfig.notifications;
+  const cfg = (N && N.events[event]) || {};
+  const d = voiceDefaultFor(event);
+  return {
+    enabled: typeof cfg.voiceEnabled === 'boolean' ? cfg.voiceEnabled : d.enabled,
+    template: typeof cfg.voiceTemplate === 'string' && cfg.voiceTemplate.trim()
+      ? cfg.voiceTemplate : d.template,
+  };
+}
+
+const crowVoice = (() => {
+  const synth = (typeof window !== 'undefined' && window.speechSynthesis) || null;
+  let voices = [];
+  const listeners = [];
+  function refresh() {
+    if (!synth) return;
+    try { voices = synth.getVoices() || []; } catch (_) { voices = []; }
+    for (const f of listeners) { try { f(voices); } catch (_) { /* listener */ } }
+  }
+  if (synth) {
+    refresh();
+    if (synth.addEventListener) synth.addEventListener('voiceschanged', refresh);
+    else synth.onvoiceschanged = refresh;
+  }
+  function pickVoice(name) {
+    if (!name) return null;
+    const lower = String(name).toLowerCase();
+    return voices.find((v) => v.name === name)
+      || voices.find((v) => v.name.toLowerCase() === lower) || null;
+  }
+  const clamp = (v, lo, hi, d) => (typeof v === 'number' && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+  let inFlight = 0;
+  // Chrome refuses speak() ('not-allowed') until the page has had a user
+  // gesture. Once refused, report "blocked" so callers fall back to the chime
+  // instead of going silent, until the next interaction clears it.
+  let blocked = false;
+  ['pointerdown', 'keydown'].forEach((e) =>
+    window.addEventListener(e, () => { blocked = false; }, { passive: true }));
+  // Speak one line. `opts.interrupt` cancels whatever is queued first (Preview).
+  function speak(text, opts) {
+    if (!synth || !text) return false;
+    opts = opts || {};
+    if (opts.interrupt) { try { synth.cancel(); } catch (_) {} inFlight = 0; }
+    // Don't build an unbounded backlog of stale announcements.
+    if (inFlight >= 4 && !opts.force) return false;
+    let u;
+    try { u = new SpeechSynthesisUtterance(String(text)); } catch (_) { return false; }
+    const v = pickVoice(opts.voiceName);
+    if (v) { u.voice = v; u.lang = v.lang; }
+    u.rate = clamp(opts.rate, 0.5, 2, 1);
+    u.volume = clamp(opts.volume, 0, 1, 1);
+    inFlight++;
+    const done = () => { inFlight = Math.max(0, inFlight - 1); };
+    u.onend = done;
+    u.onerror = (e) => {
+      done();
+      if (e && e.error === 'not-allowed') {
+        blocked = true;
+        if (typeof opts.onBlocked === 'function') { try { opts.onBlocked(); } catch (_) {} }
+      }
+    };
+    try {
+      if (synth.paused) synth.resume(); // Chrome can wedge paused after sleep
+      synth.speak(u);
+    } catch (_) { done(); return false; }
+    return true;
+  }
+  return {
+    supported: () => !!synth,
+    blocked: () => blocked,
+    voices: () => voices.slice(),
+    onVoices(f) { listeners.push(f); },
+    speak,
+    cancel() { if (synth) { try { synth.cancel(); } catch (_) {} } inFlight = 0; },
+  };
+})();
+window.crowVoice = crowVoice;
+
+// Session names are slugs ("crow-1078-fix-tab"); read them as words.
+function speakable(s) {
+  return String(s || '').replace(/[-_/]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Placeholder values for one event, from the same data the banner uses.
+function voiceContext(event, key, detail) {
+  const s = sessions.find((x) => x.id === key);
+  const review = !s && ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
+  const { title, body } = eventNotificationText(event, key, detail);
+  let pr = '';
+  if (s) {
+    const link = liveFor(s.id).pr_link;
+    const m = link && /\/(?:pull|merge_requests)\/(\d+)/.exec(link.url || '');
+    if (m) pr = m[1];
+  } else if (review && review.pr_number) {
+    pr = String(review.pr_number);
+  }
+  if (!pr) {
+    const m = /#(\d+)/.exec(((detail && detail.body) || '') + ' ' + ((detail && detail.title) || ''));
+    if (m) pr = m[1];
+  }
+  const repo = (review && review.repo) || (s && s.repo) || '';
+  const session = s ? speakable(s.name) : (review ? speakable(review.repo || 'a review') : 'Crow');
+  return {
+    session, repo: speakable(repo), pr, event: EVENT_LABEL[event] || event,
+    title: speakable(title).replace(/\s—\s/g, ', '), body,
+  };
+}
+
+// Fill a template's {placeholders}; unknown names are left as written.
+function renderVoiceTemplate(template, ctx) {
+  return String(template || '')
+    .replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(ctx, k) ? String(ctx[k]) : m))
+    .replace(/\s+/g, ' ').trim();
+}
+window.renderVoiceTemplate = renderVoiceTemplate;
+
+// Would this event speak? (Gating only — no side effects.)
+function voiceWillSpeak(event, key) {
+  const N = uiConfig.notifications;
+  if (!N || N.globalMute || !N.voiceEnabled) return false;
+  if (!crowVoice.supported() || crowVoice.blocked()) return false;
+  const cfg = N.events[event] || {};
+  if (cfg.enabled === false) return false;
+  if (!voiceConfigFor(event).enabled) return false;
+  // The banner's focus rule: don't announce the session you're looking at.
+  const isSession = !!sessions.find((x) => x.id === key);
+  const isAutomation = AUTOMATION_EVENTS.indexOf(event) !== -1;
+  if (!isAutomation && isSession && document.hasFocus() && selectedId === key) return false;
+  return true;
+}
+
+// Bursts coalesce: events arriving within VOICE_COALESCE_MS are spoken as one
+// batch, and 3+ of the same kind become a count ("3 sessions are done"). The
+// window also leaves room for a chime-before-voice to finish first.
+const VOICE_COALESCE_MS = 700;
+const _voiceQueue = [];
+let _voiceFlushTimer = null;
+const _lastVoiceAt = {};
+function speakEvent(event, key, detail) {
+  if (!voiceWillSpeak(event, key)) return false;
+  const k = (key || '') + '|' + event;
+  const now = Date.now();
+  if (_lastVoiceAt[k] && now - _lastVoiceAt[k] < 2000) return true; // deduped, still "spoken"
+  _lastVoiceAt[k] = now;
+  // Render now, while the session/review that keyed it still exists.
+  const text = renderVoiceTemplate(voiceConfigFor(event).template, voiceContext(event, key, detail));
+  if (!text) return false;
+  _voiceQueue.push({ event, text });
+  if (!_voiceFlushTimer) _voiceFlushTimer = setTimeout(flushVoiceQueue, VOICE_COALESCE_MS);
+  return true;
+}
+function flushVoiceQueue() {
+  _voiceFlushTimer = null;
+  const items = _voiceQueue.splice(0);
+  const groups = new Map();
+  for (const it of items) {
+    if (!groups.has(it.event)) groups.set(it.event, []);
+    groups.get(it.event).push(it.text);
+  }
+  const N = uiConfig.notifications || {};
+  const opts = { voiceName: N.voiceName, rate: N.voiceRate, volume: N.voiceVolume };
+  for (const [event, texts] of groups) {
+    let line;
+    if (texts.length >= 3) {
+      line = (VOICE_BURST[event] || '{n} ' + (EVENT_LABEL[event] || event) + ' notifications')
+        .replace('{n}', String(texts.length));
+    } else {
+      line = texts.join('. ');
+    }
+    // emitEvent skipped the chime because this line was queued, so a line that
+    // never gets spoken must chime instead — whether speak() refuses it up front
+    // (backlog cap, a throwing utterance) or the browser rejects it later
+    // ('not-allowed' before a user gesture). Unless the chime already played.
+    const chime = (N.events && N.events[event] && N.events[event].soundName) || DEFAULT_EVENT_SOUND[event] || 'Glass';
+    const fallback = () => { if (!N.chimeBeforeVoice) playEventSoundUngated(event, chime); };
+    if (!crowVoice.speak(line, Object.assign({}, opts, { onBlocked: fallback }))) fallback();
+  }
+}
+// The chime fallback for a refused utterance: the event already passed the
+// sound gating at emit time (or would have, had the voice not replaced it), so
+// re-check only the sound toggles, not the dedup that just recorded this event.
+function playEventSoundUngated(event, name) {
+  const N = uiConfig.notifications;
+  if (!N || N.globalMute || !N.soundEnabled) return;
+  const cfg = N.events[event] || {};
+  if (cfg.enabled === false || cfg.soundEnabled === false) return;
+  crowSound.play(name, DEFAULT_EVENT_SOUND[event] || 'Glass');
+}
+
+// Manual test hook. crowTestVoice() speaks every event's rendered template
+// against the first session; crowTestVoice('agentWaiting') speaks one.
+// Bypasses gating/dedup (but uses the configured voice/rate/volume).
+window.crowTestVoice = function (event, key) {
+  const k = key || (sessions[0] && sessions[0].id) || 'test';
+  const N = uiConfig.notifications || {};
+  const evs = event ? [event] : ALL_EVENTS;
+  for (const ev of evs) {
+    const text = renderVoiceTemplate(voiceConfigFor(ev).template, voiceContext(ev, k));
+    console.log('[crowVoice] test', ev, '→', JSON.stringify(text));
+    crowVoice.speak(text, { voiceName: N.voiceName, rate: N.voiceRate, volume: N.voiceVolume, force: true });
+  }
+};
+// Settings preview: render a template against the selected (or first) session.
+window.crowVoicePreviewText = function (event, template) {
+  const k = (typeof selectedId !== 'undefined' && selectedId) || (sessions[0] && sessions[0].id) || 'test';
+  return renderVoiceTemplate(template || voiceConfigFor(event).template, voiceContext(event, k));
+};
+
+// All channels fire from one call in the detectors below; each self-gates
+// (sound + banner + voice on the full toggle cascade, the history on the master
+// levels). The voice replaces the chime when it speaks, unless chimeBeforeVoice.
 function emitEvent(event, key, detail) {
-  playEventSound(event, key);
+  const spoke = speakEvent(event, key, detail);
+  const N = uiConfig.notifications;
+  if (!spoke || (N && N.chimeBeforeVoice)) playEventSound(event, key);
   showEventNotification(event, key, detail);
   recordNotification(event, key, detail);
 }

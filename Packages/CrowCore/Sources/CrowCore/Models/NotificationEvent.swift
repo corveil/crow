@@ -93,6 +93,37 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         }
     }
 
+    /// Whether this event speaks when spoken notifications are on and the user
+    /// hasn't overridden it. Off for the routine, high-frequency successes
+    /// (a rebase that just worked, a config reload) so turning voice on doesn't
+    /// narrate background chores; on for anything that wants a human.
+    public var defaultVoiceEnabled: Bool {
+        switch self {
+        case .autoRebasePushed, .autoMergeEnabled, .configReloaded: false
+        default: true
+        }
+    }
+
+    /// The sentence spoken for this event. Placeholders (`{session}`, `{repo}`,
+    /// `{pr}`, `{event}`, `{title}`, `{body}`) are filled in by the client from
+    /// the same data the banner uses. Short on purpose — it is heard, not read.
+    public var defaultVoiceTemplate: String {
+        switch self {
+        case .taskComplete: "{session} is done"
+        case .agentWaiting: "{session} needs you"
+        case .reviewRequested: "Review requested on {repo}"
+        case .changesRequested: "Changes requested on {session}"
+        case .checksFailing: "CI failing on {session}"
+        case .autoWorkspaceCreated: "{title}"
+        case .autoMergeEnabled: "Auto-merge enabled on {session}"
+        case .autoMergeBlocked: "Auto-merge blocked on {session}"
+        case .autoRebasePushed: "{session} was rebased"
+        case .autoRebaseConflicts: "Rebase conflicts on {session}"
+        case .autoRebaseStuck: "Rebase stuck on {session}"
+        case .configReloaded: "Config reloaded"
+        }
+    }
+
     /// Whether this event is one Crow's own automation emits (as opposed to an
     /// agent hook / PR-status transition). Automation events are pushed by the
     /// daemon and always carry their own notification body.

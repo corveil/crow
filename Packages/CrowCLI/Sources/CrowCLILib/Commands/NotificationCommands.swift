@@ -72,6 +72,12 @@ public struct NotificationsSet: ParsableCommand {
         --event and apply to that event alone. --event-sound-name accepts a \
         built-in or custom sound listed by `crow notifications get` \
         (case-insensitive).
+
+        Spoken notifications: --voice-enabled turns on speech globally (off by \
+        default); --event-voice-enabled / --event-voice-template control one \
+        event. Templates may use {session}, {repo}, {pr}, {event}, {title} and \
+        {body}. Pass "" to --voice-name or --event-voice-template to reset to \
+        the default.
         """
     )
 
@@ -88,6 +94,21 @@ public struct NotificationsSet: ParsableCommand {
           help: "Global system-notification toggle")
     var systemNotificationsEnabled: Bool?
 
+    // Spoken notifications (voice spike).
+    @Flag(inversion: .prefixedNo, exclusivity: .exclusive,
+          help: "Global spoken-notification toggle (off by default)")
+    var voiceEnabled: Bool?
+    @Option(name: .customLong("voice-name"),
+            help: "Voice to speak with, by name (e.g. Samantha); \"\" for the system default")
+    var voiceName: String?
+    @Option(name: .customLong("voice-rate"), help: "Speech rate, 0.5–2 (1 = normal)")
+    var voiceRate: Double?
+    @Option(name: .customLong("voice-volume"), help: "Speech volume, 0–1")
+    var voiceVolume: Double?
+    @Flag(inversion: .prefixedNo, exclusivity: .exclusive,
+          help: "Play the event's chime before speaking (otherwise the voice replaces it)")
+    var chimeBeforeVoice: Bool?
+
     // Per-event settings, all scoped by --event.
     @Option(name: .long, help: "Event to change (required by every --event-* flag)")
     var event: NotificationEvent?
@@ -102,16 +123,25 @@ public struct NotificationsSet: ParsableCommand {
     var eventSystemNotificationEnabled: Bool?
     @Option(name: .customLong("event-sound-name"), help: "Sound for this event (a built-in or custom sound name)")
     var eventSoundName: String?
+    @Flag(inversion: .prefixedNo, exclusivity: .exclusive,
+          help: "Whether this event is spoken")
+    var eventVoiceEnabled: Bool?
+    @Option(name: .customLong("event-voice-template"),
+            help: "What this event says, e.g. \"{session} needs you\"; \"\" resets to the default")
+    var eventVoiceTemplate: String?
 
     public init() {}
 
     private var hasEventField: Bool {
         eventEnabled != nil || eventSoundEnabled != nil
             || eventSystemNotificationEnabled != nil || eventSoundName != nil
+            || eventVoiceEnabled != nil || eventVoiceTemplate != nil
     }
 
     private var hasGlobalField: Bool {
         globalMute != nil || soundEnabled != nil || systemNotificationsEnabled != nil
+            || voiceEnabled != nil || voiceName != nil || voiceRate != nil
+            || voiceVolume != nil || chimeBeforeVoice != nil
     }
 
     public func validate() throws {
@@ -127,6 +157,18 @@ public struct NotificationsSet: ParsableCommand {
             throw ValidationError("Nothing to set — provide at least one setting flag.")
         }
         if let eventSoundName { try validateNotificationSound(eventSoundName) }
+        if let voiceRate, !(voiceRate.isFinite && NotificationSettings.voiceRateRange.contains(voiceRate)) {
+            throw ValidationError("--voice-rate must be between 0.5 and 2.")
+        }
+        if let voiceVolume, !(voiceVolume.isFinite && NotificationSettings.voiceVolumeRange.contains(voiceVolume)) {
+            throw ValidationError("--voice-volume must be between 0 and 1.")
+        }
+        do {
+            if let voiceName { _ = try NotificationSettings.normalizedVoiceName(voiceName) }
+            if let eventVoiceTemplate { _ = try NotificationSettings.normalizedVoiceTemplate(eventVoiceTemplate) }
+        } catch let e as VoiceSettingError {
+            throw ValidationError(e.message)
+        }
     }
 
     public func run() throws {
@@ -146,6 +188,13 @@ public struct NotificationsSet: ParsableCommand {
         // `NotificationSettings.canonicalSoundName` this command validated with,
         // so the RPC stays self-sufficient for non-CLI callers.
         if let eventSoundName { params["event_sound_name"] = .string(eventSoundName) }
+        if let voiceEnabled { params["voice_enabled"] = .bool(voiceEnabled) }
+        if let voiceName { params["voice_name"] = .string(voiceName) }
+        if let voiceRate { params["voice_rate"] = .double(voiceRate) }
+        if let voiceVolume { params["voice_volume"] = .double(voiceVolume) }
+        if let chimeBeforeVoice { params["chime_before_voice"] = .bool(chimeBeforeVoice) }
+        if let eventVoiceEnabled { params["event_voice_enabled"] = .bool(eventVoiceEnabled) }
+        if let eventVoiceTemplate { params["event_voice_template"] = .string(eventVoiceTemplate) }
         let result = try rpc("notifications-set", params: params)
         printJSON(result)
     }
