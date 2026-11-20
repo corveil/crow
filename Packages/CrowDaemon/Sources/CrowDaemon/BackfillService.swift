@@ -111,7 +111,7 @@ struct BackfillService: Sendable {
             let file = URL(fileURLWithPath: session.filePath)
             raw = TranscriptNormalizer.normalize(files: [file], format: format, maxBytes: budget)
         }
-        guard let transcript = raw.flatMap({ TranscriptNormalizer.gzipForUpload($0, maxBytes: cap) }) else {
+        guard let transcript = raw.flatMap({ TranscriptNormalizer.gzipForUpload($0, maxBytes: cap, redacting: [upload.apiKey]) }) else {
             return BackfillUploadOutcome(
                 claudeSessionUID: uid, result: .skipped, harness: harness,
                 ownerRepo: session.ownerRepo, reason: "empty_or_unreadable")

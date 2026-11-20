@@ -85,6 +85,15 @@ private final class ShellResume: @unchecked Sendable {
 @MainActor
 public final class SessionService {
     let store: JSONStore
+
+    /// Where Claude's tool env script lives (CROW-1484, ``ClaudeToolEnvScript``):
+    /// beside `store.json`, so Crow's app-support dir in production and the
+    /// injected temp directory in tests, which `JSONStore` already enforces
+    /// (ADR 0012). Never inside a worktree.
+    var toolEnvScriptPath: String {
+        store.storeURL.deletingLastPathComponent()
+            .appendingPathComponent(ClaudeToolEnvScript.fileName).path
+    }
     let appState: AppState
     public let telemetryPort: UInt16?
     /// Backend factory for ticket/PR lookups during recovery. Optional so unit-tests

@@ -1273,8 +1273,12 @@ exhaustive, including the two Manager gateway writes noted below):
   `ANTHROPIC_CUSTOM_HEADERS` (CROW-402): `ClaudeHookConfigWriter.writeGatewayEnv`
   writes the env block into `settings.local.json` (Claude-gated at `launchAgent`
   and `handoffAgent`), and `ClaudeLaunchArgs.gatewayEnvPrefix` adds the
-  launch-line `export …` prefix (at `launchAgent`, plus `managerCommand`'s
-  no-registered-agent fallback). All four `settings.local.json` writes — worker
+  launch-line `export ANTHROPIC_BASE_URL=…` prefix (at `launchAgent`, plus
+  `managerCommand`'s no-registered-agent fallback). The headers ride only the
+  `env` block, never the typed launch line (CROW-1484), and the block also sets
+  `CLAUDE_ENV_FILE` to a static script that unsets `ANTHROPIC_CUSTOM_HEADERS`
+  before each Bash tool command (`ClaudeToolEnvScript`), so tool subprocesses
+  don't inherit the key. All four `settings.local.json` writes — worker
   `launchAgent` / `handoffAgent` and the **two** Manager writes
   (`createManagerTerminal` + the hydrate path's `writeManagerGatewayEnv`) — are
   **Claude-gated**: a Claude target gets the resolved env; a **compat-loading**

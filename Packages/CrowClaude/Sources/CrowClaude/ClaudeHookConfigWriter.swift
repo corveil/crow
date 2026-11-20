@@ -155,9 +155,25 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// `nil` to remove them (so switching a workspace off its gateway clears the
     /// stale values rather than leaving them behind).
     ///
+    /// It is also the **only** place the headers reach Claude: the launch line
+    /// never carries them (CROW-1484, ``ClaudeLaunchArgs/gatewayEnvPrefix(_:)``).
+    ///
+    /// A gateway also sets `CLAUDE_ENV_FILE` to the ``ClaudeToolEnvScript`` at
+    /// `toolEnvScriptPath`, which unsets `ANTHROPIC_CUSTOM_HEADERS` ahead of
+    /// every Bash tool command, so the gateway key isn't in the environment of
+    /// the commands an agent runs (CROW-1484). Clearing removes that entry too,
+    /// but only when it still names a Crow script, never a user's own value.
+    ///
     /// `dirPath` is the worktree path for work/job/review sessions, or the dev
-    /// root for the Manager session.
-    public static func writeGatewayEnv(dirPath: String, resolved: GatewayResolver.Resolved?) {
+    /// root for the Manager session. `toolEnvScriptPath` is where the shared
+    /// script lives; it has no default, so every caller (and every test) names
+    /// a directory it owns (ADR 0012). Crow's own callers pass
+    /// `SessionService.toolEnvScriptPath`, beside `store.json`.
+    public static func writeGatewayEnv(
+        dirPath: String,
+        resolved: GatewayResolver.Resolved?,
+        toolEnvScriptPath: String
+    ) {
         let claudeDir = (dirPath as NSString).appendingPathComponent(".claude")
         let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.local.json")
 
@@ -172,8 +188,19 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
         if let resolved {
             env["ANTHROPIC_BASE_URL"] = resolved.baseURL
             env["ANTHROPIC_CUSTOM_HEADERS"] = resolved.customHeaders
+            // Fail open: if the script can't be written, Claude Code skips a
+            // missing CLAUDE_ENV_FILE silently, so the session still launches
+            // (with the key visible to tools, as before this change).
+            if !ClaudeToolEnvScript.ensure(at: toolEnvScriptPath) {
+                CrowLog.info("[ClaudeHookConfigWriter] Could not write the tool env script at \(toolEnvScriptPath); Bash tool commands will inherit ANTHROPIC_CUSTOM_HEADERS")
+            }
+            env[ClaudeToolEnvScript.envKey] = toolEnvScriptPath
         } else {
             for key in gatewayEnvKeys { env.removeValue(forKey: key) }
+            if let current = env[ClaudeToolEnvScript.envKey] as? String,
+               ClaudeToolEnvScript.isCrowScript(current) {
+                env.removeValue(forKey: ClaudeToolEnvScript.envKey)
+            }
         }
 
         if env.isEmpty {

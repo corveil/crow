@@ -386,7 +386,7 @@ struct LogSyncCollector: Sendable {
         let raw: NormalizedTranscript? = format == .openCodeStore
             ? OpenCodeStore.normalizeSessions(databaseFiles: files, cwd: openCodeCwd, maxBytes: budget)
             : TranscriptNormalizer.normalize(files: files, format: format, maxBytes: budget)
-        guard let transcript = raw.flatMap({ TranscriptNormalizer.gzipForUpload($0, maxBytes: pass.cap) }) else {
+        guard let transcript = raw.flatMap({ TranscriptNormalizer.gzipForUpload($0, maxBytes: pass.cap, redacting: [upload.apiKey]) }) else {
             await pass.inFlight?.end(ledgerKey)
             skip(session, harness: harness, "empty-transcript",
                  "\(agentKind.rawValue) transcript normalized to nothing (\(files.count) file(s) under \(Self.describe(sources)))")
@@ -492,7 +492,7 @@ struct LogSyncCollector: Sendable {
             let raw = TranscriptNormalizer.normalize(
                 files: [file], format: located.format,
                 maxBytes: TranscriptNormalizer.rawReadBudget(forCompressedCap: pass.cap))
-            guard let transcript = raw.flatMap({ TranscriptNormalizer.gzipForUpload($0, maxBytes: pass.cap) }) else {
+            guard let transcript = raw.flatMap({ TranscriptNormalizer.gzipForUpload($0, maxBytes: pass.cap, redacting: [upload.apiKey]) }) else {
                 await pass.inFlight?.end(ledgerKey)
                 skip(session, harness: harness, scope: ref.id, "empty-transcript",
                      "\(ref.agentKind.rawValue) transcript for conversation \(ref.id) normalized to nothing (\(Self.displayPath(located.path)))")

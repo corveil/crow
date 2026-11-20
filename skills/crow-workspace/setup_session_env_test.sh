@@ -80,6 +80,9 @@ JSON
 # shellcheck disable=SC1090
 source "$SETUP_SH"
 DEV_ROOT="$TMP/devroot"
+# The WithGateway case writes the tool env script (CROW-1484); keep it out of
+# the live app-support dir (ADR 0012).
+CROW_TOOL_ENV_SCRIPT="$TMP/state/crow-claude-tool-env.sh"
 
 # Reset the per-case session-env state. resolve_session_env is idempotent via
 # WS_SESSION_ENV_RESOLVED, so flip it back to false between workspaces.
@@ -167,6 +170,12 @@ settings="$WORKTREE_PATH/.claude/settings.local.json"
 contains "session env key present" "$(cat "$settings")" '"COORD_SESSION_NAME": "crow-543-session-env"'
 contains "gateway base URL present" "$(cat "$settings")" '"ANTHROPIC_BASE_URL": "https://corveil.io"'
 contains "gateway header present" "$(cat "$settings")" "x-plain: literal-value"
+# CROW-1484: the gateway case names the tool env script, written to the temp
+# state dir rather than the live one.
+check "CLAUDE_ENV_FILE names the temp tool env script" \
+  "$CROW_TOOL_ENV_SCRIPT" "$(jq -r '.env.CLAUDE_ENV_FILE' "$settings")"
+check "tool env script written under the temp dir" "yes" \
+  "$([[ -f "$CROW_TOOL_ENV_SCRIPT" && "$CROW_TOOL_ENV_SCRIPT" == "$TMP"/* ]] && echo yes || echo no)"
 contains "attribution present" "$(cat "$settings")" '"attribution"'
 
 echo

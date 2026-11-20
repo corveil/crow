@@ -83,15 +83,18 @@ import CrowCore
     #expect(ClaudeLaunchArgs.gatewayEnvPrefix(nil) == "unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && ")
 }
 
-@Test func gatewayEnvPrefixExportsSingleHeader() throws {
-    // Single header → both vars go on the launch line via `export … &&` so they
-    // compose in front of any OTEL `export … &&` prefix and reach `claude`.
+@Test func gatewayEnvPrefixNeverCarriesTheKey() throws {
+    // CROW-1484: the launch line is typed into a terminal, so anything on it
+    // lands in shell history and scrollback. Even a single-line header value
+    // (which would fit) stays off it; settings.local.json carries the headers.
     let resolved = GatewayResolver.Resolved(
         baseURL: "https://corveil.io",
-        customHeaders: "x-citadel-api-key: Bearer sk-1"
+        customHeaders: "x-citadel-api-key: sk-citadel-TESTTESTTEST"
     )
     let prefix = ClaudeLaunchArgs.gatewayEnvPrefix(resolved)
-    #expect(prefix == "export ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 ANTHROPIC_CUSTOM_HEADERS='x-citadel-api-key: Bearer sk-1' && ")
+    #expect(prefix == "unset ANTHROPIC_CUSTOM_HEADERS && export ANTHROPIC_BASE_URL='https://corveil.io' CLAUDE_CODE_AUTO_MODE_SERVER=1 && ")
+    #expect(!prefix.contains("sk-citadel-"))
+    #expect(!prefix.contains("ANTHROPIC_CUSTOM_HEADERS="))
     #expect(!prefix.contains("\n"))
 }
 
@@ -147,7 +150,8 @@ import CrowCore
     ClaudeHookConfigWriter.writeGatewayEnv(
         dirPath: dir.path,
         resolved: GatewayResolver.Resolved(
-            baseURL: "https://corveil.io", customHeaders: "x-citadel-api-key: Bearer sk-1"))
+            baseURL: "https://corveil.io", customHeaders: "x-citadel-api-key: Bearer sk-1"),
+        toolEnvScriptPath: dir.appendingPathComponent(ClaudeToolEnvScript.fileName).path)
     let written = try String(
         contentsOf: dir.appendingPathComponent(".claude/settings.local.json"), encoding: .utf8)
     #expect(written.contains("ANTHROPIC_BASE_URL"))
@@ -170,7 +174,9 @@ import CrowCore
         .appendingPathComponent("crow-1458-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
-    ClaudeHookConfigWriter.writeGatewayEnv(dirPath: dir.path, resolved: resolved)
+    ClaudeHookConfigWriter.writeGatewayEnv(
+        dirPath: dir.path, resolved: resolved,
+        toolEnvScriptPath: dir.appendingPathComponent(ClaudeToolEnvScript.fileName).path)
     let data = try Data(contentsOf: dir.appendingPathComponent(".claude/settings.local.json"))
     let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     let headers = try #require((json["env"] as? [String: Any])?["ANTHROPIC_CUSTOM_HEADERS"] as? String)

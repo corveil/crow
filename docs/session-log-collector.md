@@ -93,7 +93,7 @@ CrowDaemon.startLogSyncPoll (5-min tick, config read fresh each tick)
        for each live session on an OPTED-IN workspace (SessionService.workspaceName):
          for EVERY known harness: agent.logSources(worktree) → resolve files
          (skip until quiescent: terminal status, or newest file older than quietPeriod)
-         → normalize to NDJSON → gzip (cap on the compressed body)
+         → normalize to NDJSON → redact gateway keys → gzip (cap on the compressed body)
          → TranscriptUploader → POST /api/crow-sessions/{sessionUID}/artifacts
          → record in the local ledger (idempotent)
 
@@ -147,6 +147,19 @@ SessionService.deleteSession (CLI, web UI, cleanup reaper)
   compressed size. Transcripts compress about 5×; one is cut only if it is still
   over the cap once compressed — oldest lines kept, `truncated=true`. The ledger's
   `sha256`/`sizeBytes` describe the compressed body.
+
+- **Gateway keys are redacted before upload** (CROW-1484). An agent that prints
+  its environment or `settings.local.json` writes the gateway key into its own
+  transcript. `TranscriptNormalizer.gzipForUpload`, the step the live collector,
+  the per-conversation path and backfill all share, first runs
+  `TranscriptRedactor`: the workspace's own key (the same key the upload
+  authenticates with) is replaced wherever it appears, and so is anything shaped
+  `sk-citadel-` plus 8 or more key characters, which catches other workspaces'
+  and rotated keys. Both become `[REDACTED:gateway-key]`. The replacement has no
+  quote or backslash, so every NDJSON line stays valid JSON. Redaction only
+  covers the upload: the transcript on disk keeps what was printed, and a key
+  that was printed also went out in later request bodies through the gateway, so
+  it still needs rotating.
 
 ## Guarantees (acceptance)
 
