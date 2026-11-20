@@ -829,6 +829,7 @@ function showEmptyDetail(msg, opts) {
   const o = opts || {};
   selectedId = null;
   selectedBoard = null;
+  if (typeof stopChatSpeech === 'function') stopChatSpeech(); // #1488
   terminals = [];
   activeTerminal = null;
   // CROW-979: the ↻ that was spinning belonged to the session we just dropped, and

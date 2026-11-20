@@ -21,6 +21,21 @@ Once it's on, switch with the **Terminal | Chat** toggle in the session header. 
 
 Transcripts never contain permission prompts. When the agent is waiting for approval, answer it in the terminal.
 
+## Copy, Listen and Select
+
+Each message has a few small buttons. On a desktop they sit beside the message and show when you hover over it. On a phone they sit under the text. Their labels are never part of a text selection or of what Copy copies.
+
+- **Copy** copies the message's markdown source. Each code block also has its own Copy, which copies just the code.
+- **Listen** (agent messages only) reads the message aloud with the browser's built-in speech (the Web Speech API). It runs on the device, with no server, key or cost. The button turns into **Stop** while that message is playing; tap it again to stop.
+  - It reads the rendered text, so markdown symbols such as `**` and backticks are not read out. Each code block is read as "Code block", and a bare link as "link to" its site (for example "link to github.com").
+  - Only one message plays at a time. Listen on another message stops the first, and so does switching session, switching to the terminal, or opening a board.
+  - A long reply is queued as short pieces of up to 200 characters, split at sentence ends. Chrome's Google voices silently stop a single long utterance after about 15 seconds.
+  - It uses the device's default voice; there is no voice picker.
+  - Spoken notifications (Settings → Notifications) use the same speech queue. One that arrives during a reply waits until the reply ends, and Stop also drops any notification queued behind the reply.
+  - On a phone, speech stops when the screen locks or the browser goes to the background.
+  - The button is hidden in a browser without speech synthesis.
+- **Select** (mouse or trackpad only) selects the message's text, ready for ⌘C or for macOS's Speak Selection shortcut (⌥Esc, once Spoken Content → Speak selection is on in System Settings → Accessibility). It is hidden on touch screens, because iOS often doesn't show its Copy / Speak menu for a selection made by a script. On a phone, use Listen, or long-press to select.
+
 ## `/` menu (Claude Code)
 
 Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to move, Enter or Tab to pick, and Esc to close; on a phone, tap an entry. Picking inserts `/name ` and nothing else. Claude Code expands it when the message arrives in the terminal, exactly as if you had typed it there. Claude expands one skill per message.

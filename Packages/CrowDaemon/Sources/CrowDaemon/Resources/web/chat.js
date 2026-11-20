@@ -134,6 +134,7 @@ function applyChatView() {
   app.classList.toggle('chat-active', on);
   if (!on) {
     stopChatPoll();
+    stopChatSpeech();
     closeChatMenu();
     // The terminal was display:none while chat was up — refit it.
     if (chatWasShown && typeof fitTerminal === 'function') setTimeout(fitTerminal, 30);
@@ -145,6 +146,7 @@ function applyChatView() {
   ensureChatDom();
   const switched = !chatState || chatState.sessionId !== selectedId;
   if (switched) {
+    stopChatSpeech();
     const input = document.getElementById('chat-input');
     if (input && chatState) chatDrafts.set(chatState.sessionId, input.value);
     chatState = newChatState(selectedId);
@@ -467,6 +469,7 @@ function applyChatPage(st, res) {
   if (res.usage) st.usage = res.usage;
   else if (res.reset) st.usage = null;
   if (res.reset) {
+    stopChatSpeech(); // its bubble is about to go
     if (log) log.innerHTML = '';
     st.toolNodes = new Map();
     st.lastKind = null;
@@ -552,10 +555,12 @@ function formatChatDuration(ms) {
   return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
 }
 
-// A message bubble: the rendered markdown in .chat-msg-body, plus Copy
-// controls that hand back the *source* markdown (CROW-1392). The controls'
-// labels are CSS content (no text nodes) and user-select:none, so they never
-// land in a hand-made selection or in textContent.
+// A message bubble: the rendered markdown in .chat-msg-body, plus a row of
+// chips (.chat-msg-actions): Copy hands back the *source* markdown
+// (CROW-1392), Listen reads the rendered text aloud (assistant only), Select
+// selects the body (#1488). The chips' labels are CSS content (no text nodes)
+// and user-select:none, so they never land in a hand-made selection or in
+// textContent.
 function chatBubble(role, text) {
   const src = text || '';
   const b = el('div', 'chat-msg chat-' + role);
@@ -564,7 +569,11 @@ function chatBubble(role, text) {
   addChatCodeCopy(body);
   b.appendChild(body);
   if (!src) return b;
-  b.appendChild(chatCopyButton('chat-copy chat-msg-copy', 'Copy message as markdown', () => src));
+  const actions = el('div', 'chat-msg-actions');
+  actions.appendChild(chatCopyButton('chat-chip chat-copy chat-msg-copy', 'Copy message as markdown', () => src));
+  if (role === 'assistant' && chatSpeechSupported()) actions.appendChild(chatListenButton(body));
+  actions.appendChild(chatSelectButton(body));
+  b.appendChild(actions);
   // Desktop right-click, like the terminal's menu. Not on touch: Android fires
   // contextmenu for the long press that starts a text selection. Checked per
   // event, so a convertible that switches pointer mid-transcript follows it.
@@ -606,6 +615,190 @@ function chatCopyButton(className, label, getText) {
   return btn;
 }
 
+// Select (#1488): select exactly the bubble's rendered body, for ⌘C or macOS
+// "Speak selection" (⌥Esc). Shown on `pointer: fine` only (app.css): iOS
+// often won't offer its Copy / Speak menu for a selection made by script.
+function chatSelectButton(body) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chat-chip chat-msg-select';
+  btn.title = 'Select message text';
+  btn.setAttribute('aria-label', 'Select message text');
+  btn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const sel = window.getSelection && window.getSelection();
+    if (sel) sel.selectAllChildren(body);
+  };
+  return btn;
+}
+
+// ---------------------------------------------------------------------------
+// Listen (#1488): read an assistant bubble aloud with the browser's Web Speech
+// API: on the device, with no server, key or cost. One bubble speaks at a
+// time, and switching session or view, or leaving Chat, cancels it
+// (applyChatView). No `voice` is set, so the system default speaks; that
+// honours the enhanced / premium voices a user downloaded on iOS and macOS,
+// and means the asynchronously loaded voice list (`voiceschanged`) can't race
+// us. Spoken notifications (notifications.js crowVoice) share the one
+// speechSynthesis queue: a notification line waits behind a reply, and Stop
+// cancels anything queued.
+// ---------------------------------------------------------------------------
+// Chrome's Google voices silently stop a single utterance after ~15s, so a
+// reply is queued as chunks of at most this many characters (~12s of speech).
+const CHAT_SPEECH_CHUNK = 200;
+// The playing reply: { btn, utterances }. The utterances are held so Chrome
+// can't garbage-collect one mid-queue and drop its `end` event.
+let chatSpeech = null;
+
+function chatSpeechSupported() {
+  return 'speechSynthesis' in window && !!window.speechSynthesis
+    && typeof window.SpeechSynthesisUtterance === 'function';
+}
+
+const CHAT_SPEECH_BLOCK = /^(P|DIV|LI|UL|OL|H[1-6]|BLOCKQUOTE|TABLE|THEAD|TBODY|TR|HR|DL|DT|DD)$/;
+
+// The rendered body as speakable paragraphs: no markdown symbols (markdown-it
+// already consumed them), code blocks replaced by "Code block.", a bare URL
+// read as its host, and table cells separated by a pause.
+function chatSpeakableText(body) {
+  const parts = [];
+  let cur = '';
+  const flush = () => {
+    const t = cur.replace(/\s+/g, ' ').replace(/(,\s*)+$/, '').trim();
+    if (t) parts.push(t);
+    cur = '';
+  };
+  const walk = (node) => {
+    for (const n of node.childNodes) {
+      if (n.nodeType === 3) { cur += n.nodeValue; continue; }
+      if (n.nodeType !== 1 || n.tagName === 'BUTTON') continue;
+      if (n.tagName === 'PRE' || n.classList.contains('chat-code-block')) {
+        flush();
+        parts.push('Code block.');
+      } else if (n.tagName === 'BR') {
+        flush();
+      } else if (n.tagName === 'A' && /^(https?:\/\/|www\.)/i.test(n.textContent.trim())) {
+        let host = '';
+        try { host = new URL(n.href).hostname.replace(/^www\./, ''); } catch (_) { /* not a URL */ }
+        cur += host ? 'link to ' + host : 'link';
+      } else if (n.tagName === 'TD' || n.tagName === 'TH') {
+        walk(n);
+        cur += ', ';
+      } else if (CHAT_SPEECH_BLOCK.test(n.tagName)) {
+        flush();
+        walk(n);
+        flush();
+      } else {
+        walk(n);
+      }
+    }
+  };
+  walk(body);
+  flush();
+  return parts;
+}
+
+// Paragraphs → utterance texts of at most `max` characters: a short paragraph
+// is one chunk, a long one is packed sentence by sentence, and a run-on
+// sentence is cut at a space.
+function chatSpeechChunks(parts, max) {
+  max = max || CHAT_SPEECH_CHUNK;
+  const chunks = [];
+  for (const p of parts) {
+    if (p.length <= max) { chunks.push(p); continue; }
+    const sentences = p.match(/[^.!?]*[.!?]+["'”’)\]]*\s*|[^.!?]+$/g) || [p];
+    let cur = '';
+    for (let s of sentences) {
+      s = s.trim();
+      while (s.length > max) {
+        if (cur) { chunks.push(cur); cur = ''; }
+        let cut = s.lastIndexOf(' ', max);
+        if (cut <= 0) cut = max;
+        chunks.push(s.slice(0, cut).trim());
+        s = s.slice(cut).trim();
+      }
+      if (!s) continue;
+      if (cur && cur.length + 1 + s.length > max) { chunks.push(cur); cur = s; }
+      else cur = cur ? cur + ' ' + s : s;
+    }
+    if (cur) chunks.push(cur);
+  }
+  return chunks;
+}
+
+function chatListenButton(body) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chat-chip chat-msg-listen';
+  setChatListenState(btn, false);
+  btn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleChatSpeech(btn, body);
+  };
+  return btn;
+}
+
+function setChatListenState(btn, on) {
+  btn.classList.toggle('speaking', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  const label = on ? 'Stop reading' : 'Read message aloud';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+}
+
+// Tap to speak, tap again to stop; tapping another bubble's Listen switches
+// to it. All chunks are queued inside the tap, which is what unlocks audio on
+// iOS.
+function toggleChatSpeech(btn, body) {
+  const wasMine = !!chatSpeech && chatSpeech.btn === btn;
+  stopChatSpeech();
+  if (wasMine || !chatSpeechSupported()) return;
+  const chunks = chatSpeechChunks(chatSpeakableText(body));
+  if (!chunks.length) return;
+  const synth = window.speechSynthesis;
+  const run = { btn, utterances: [] };
+  try {
+    for (const c of chunks) run.utterances.push(new window.SpeechSynthesisUtterance(c));
+  } catch (_) { return; }
+  // The run ends without a cancel when its last chunk ends, or when someone
+  // else cancelled the queue (a notification Preview cancels, then speaks;
+  // its `interrupted` / `canceled` events reach us *after* its new line is
+  // queued, so cancelling again here would silence it). Any other failure
+  // drops the chunks still queued.
+  const end = () => {
+    if (chatSpeech !== run) return;
+    chatSpeech = null;
+    setChatListenState(btn, false);
+  };
+  for (const u of run.utterances) {
+    u.onerror = (e) => {
+      const why = e && e.error;
+      if (why === 'interrupted' || why === 'canceled') end();
+      else if (chatSpeech === run) stopChatSpeech();
+    };
+  }
+  run.utterances[run.utterances.length - 1].onend = end;
+  chatSpeech = run;
+  setChatListenState(btn, true);
+  try {
+    if (synth.paused) synth.resume(); // Chrome can wedge paused after sleep
+    for (const u of run.utterances) synth.speak(u);
+  } catch (_) { stopChatSpeech(); }
+}
+
+// Stop the reply being read, if any. A no-op otherwise, so a session switch
+// never cancels a notification line that isn't ours.
+function stopChatSpeech() {
+  const run = chatSpeech;
+  if (!run) return;
+  chatSpeech = null;
+  setChatListenState(run.btn, false);
+  try { window.speechSynthesis.cancel(); } catch (_) { /* gone */ }
+}
+window.addEventListener('pagehide', stopChatSpeech);
+
 // Wrap each code block (markdown-it's <pre><code>, or the fallback's
 // pre.chat-code) so it gets its own Copy, which copies just the block's
 // contents — the rendered text is the fence body, minus fences and the
@@ -616,7 +809,7 @@ function addChatCodeCopy(root) {
     const wrap = el('div', 'chat-code-block');
     pre.parentNode.insertBefore(wrap, pre);
     wrap.appendChild(pre);
-    wrap.appendChild(chatCopyButton('chat-copy chat-code-copy', 'Copy code',
+    wrap.appendChild(chatCopyButton('chat-chip chat-copy chat-code-copy', 'Copy code',
       () => pre.textContent.replace(/\n$/, '')));
   }
 }
