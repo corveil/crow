@@ -36,6 +36,22 @@ Each message has a few small buttons. On a desktop they sit beside the message a
   - The button is hidden in a browser without speech synthesis.
 - **Select** (mouse or trackpad only) selects the message's text, ready for ⌘C or for macOS's Speak Selection shortcut (⌥Esc, once Spoken Content → Speak selection is on in System Settings → Accessibility). It is hidden on touch screens, because iOS often doesn't show its Copy / Speak menu for a selection made by a script. On a phone, use Listen, or long-press to select.
 
+## Auto-read
+
+**Auto-read**, beside **Terminal | Chat** in the session header, reads each new agent reply aloud as it arrives. It is off by default. The setting is kept per browser (in `localStorage`), so turning it on for your phone doesn't turn it on for your desktop. In a private window, or where site storage is blocked, it starts off on every visit. It shows only in Chat, and only in a browser with speech synthesis.
+
+- It goes through Listen, so a reply is read the same way: no markdown symbols, code blocks as "Code block", short pieces, the default voice. The playing reply's chip reads **Stop**.
+- Only replies that arrive while it is on are read. Opening Chat, switching session, or reloading never reads the messages already there.
+- A reply that arrives while another is playing (read automatically or by Listen) waits and starts when that one ends. Several replies in one poll are read in order.
+- **Stop drops the queue.** Tapping Stop on the playing reply stops it, and the replies waiting behind it are not read. Auto-read stays on, so the next reply to arrive is read. Listen on another message drops the queue the same way, and so do switching session, switching to the terminal, and opening a board.
+- Turning auto-read off stops the reply it was reading and drops the queue. A message you started with Listen keeps playing.
+
+Platform limits:
+
+- **A tap first.** Browsers don't speak for a page you haven't touched since it loaded, and iOS Safari is stricter: it ignores speech until one has started from a tap. Turning auto-read on is that tap, and so is Listen. After a reload with auto-read already on, the first tap anywhere on the page unlocks it. Until then replies are not read.
+- **Locked screen or background tab.** Speech stops when the screen locks or the browser goes to the background. Chat also stops polling while the tab is hidden, so nothing new arrives. When you come back, the next poll brings everything that arrived meanwhile, and those replies are read in order. Tap Stop to skip them.
+- **One speech queue.** Spoken notifications (Settings → Notifications) share the browser's one speech queue. A notification that arrives during a reply waits until that reply ends, and Stop also drops a notification queued behind it.
+
 ## `/` menu (Claude Code)
 
 Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to move, Enter or Tab to pick, and Esc to close; on a phone, tap an entry. Picking inserts `/name ` and nothing else. Claude Code expands it when the message arrives in the terminal, exactly as if you had typed it there. Claude expands one skill per message.

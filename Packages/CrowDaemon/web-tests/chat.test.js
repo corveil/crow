@@ -10,6 +10,9 @@ const epilogue = `
   parseRoute, routeToHash,
   newChatState, applyChatPage, ensureChatDom, sendChatMessage, buildChatMarkdown,
   chatSpeakableText, chatSpeechChunks, stopChatSpeech,
+  setChatAutoRead, chatAutoReadControl, chatAutoReadQueue,
+  get chatAutoRead(){ return chatAutoRead; },
+  set chatSpeechUnlocked(v){ chatSpeechUnlocked = v; },
   updateChatMenu, chatMenuKeydown, chatHistoryKeydown, filterChatCommands, formatChatModel, formatChatTokens,
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
@@ -307,7 +310,9 @@ T.rpc = async (m, p) => { calls.push([m, p]); return {}; };
 const st3 = T.newChatState(SID);
 T.chatState = st3;
 T.applyChatPage(st3, { supported: true, reset: true, cursor: 1, path: '/d.jsonl', terminal_id: 'TERM', events: [] });
-check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.querySelector('.chat-permission'));
+// [id=…], not #id: jsdom answers #id through the stubbed getElementById above,
+// which hands back a stand-in div for any unknown id.
+check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !doc.querySelector('.chat-permission'));
 (async () => {
   calls.length = 0;
   doc.getElementById('chat-input').value = 'hello';
@@ -652,6 +657,148 @@ check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.que
   exitStops('opening a board', () => T.selectBoard('tickets'));
   exitStops('the empty-detail state', () => T.showEmptyDetail('Select a session'));
   exitStops('session expiry (CROW-1460 scrim)', () => T.clearPageDataOnExpiry());
+
+
+  console.log('auto-read (#1489)');
+  {
+    T.chatViewFlag = true;
+    T.setChatViewActive(true);
+    T.selectedId = 'AR-1';
+    T.applyChatView();
+    const st = T.chatState;
+    let cur = 1;
+    const page = (events, reset) => T.applyChatPage(st, { supported: true, reset: !!reset, cursor: cur++,
+      path: '/ar', terminal_id: 'T-AR', agent_kind: 'claude-code', events });
+    const reply = (text) => ({ kind: 'assistant', text });
+    const chip = (text) => [...doc.querySelectorAll('#chat-log .chat-assistant')]
+      .find((b) => b.querySelector('.chat-msg-body').textContent.trim() === text).querySelector('.chat-msg-listen');
+    const reset = () => { synth.queue.length = 0; synth.spoken.length = 0; };
+    reset();
+
+    check('off by default (nothing stored)', T.chatAutoRead === false
+      && window.localStorage.getItem('crow.chat.autoRead') === null);
+    page([reply('Backlog one.'), reply('Backlog two.')], true);
+    page([reply('Arrives while off.')]);
+    check('nothing is read while it is off', synth.spoken.length === 0);
+
+    const header = doc.getElementById('detail-header');
+    header.innerHTML = '';
+    const ctl = T.chatAutoReadControl();
+    check('the header shows the toggle in Chat', ctl && ctl.id === 'chat-auto-read'
+      && ctl.getAttribute('aria-pressed') === 'false' && /Auto-read/.test(ctl.textContent));
+    header.appendChild(ctl);
+    T.chatSpeechUnlocked = false;
+    ctl.click();
+    check('turning it on presses the toggle and stores it', T.chatAutoRead === true
+      && ctl.getAttribute('aria-pressed') === 'true' && ctl.classList.contains('active')
+      && window.localStorage.getItem('crow.chat.autoRead') === '1');
+    check('…and speaks one silent utterance inside the tap (the iOS unlock)',
+      synth.queue.length === 1 && synth.queue[0].text === ' ' && synth.queue[0].volume === 0);
+    reset();
+
+    page([reply('Old one.'), reply('Old two.')], true);
+    check('a reset page (opening Chat, a switch) never reads the backlog', synth.spoken.length === 0);
+
+    page([{ kind: 'user', text: 'go' }, reply('First reply.'), { kind: 'tool_call', tool_name: 'Bash', text: 'ls' },
+      reply('Second reply.')]);
+    check('a new reply is read as the poll delivers it, through Listen (its chip reads Stop)',
+      JSON.stringify(synth.spoken) === JSON.stringify(['First reply.'])
+      && chip('First reply.').classList.contains('speaking'));
+    check('a second reply in the same page waits its turn', T.chatAutoReadQueue.length === 1
+      && !chip('Second reply.').classList.contains('speaking'));
+    let c0 = synth.cancels;
+    synth.endAll();
+    check('the next reply starts when the playing one ends, with no cancel',
+      JSON.stringify(synth.spoken) === JSON.stringify(['First reply.', 'Second reply.'])
+      && chip('Second reply.').classList.contains('speaking') && !chip('First reply.').classList.contains('speaking')
+      && synth.cancels === c0);
+    page([reply('Third reply.')]);
+    check('a reply that arrives mid-playback is queued, not cut in',
+      synth.spoken.length === 2 && T.chatAutoReadQueue.length === 1 && synth.cancels === c0);
+
+    chip('Second reply.').click(); // Stop
+    check('Stop silences the playing reply and drops the queue', synth.cancels === c0 + 1
+      && synth.queue.length === 0 && T.chatAutoReadQueue.length === 0
+      && !chip('Second reply.').classList.contains('speaking'));
+    synth.endAll();
+    check('…so the queued reply is never read', !synth.spoken.includes('Third reply.'));
+    check('…and auto-read stays on', T.chatAutoRead === true && ctl.getAttribute('aria-pressed') === 'true');
+    page([reply('After stop.')]);
+    check('the next reply to arrive after Stop is read', synth.spoken[synth.spoken.length - 1] === 'After stop.');
+    synth.endAll();
+
+    reset();
+    chip('Old one.').click(); // a manual Listen
+    page([reply('Behind a Listen.')]);
+    check('a reply that arrives during a Listen waits behind it',
+      JSON.stringify(synth.spoken) === JSON.stringify(['Old one.']) && T.chatAutoReadQueue.length === 1);
+    synth.endAll();
+    check('…and is read once the Listen ends', synth.spoken[1] === 'Behind a Listen.');
+    synth.endAll();
+
+    reset();
+    page([reply('Playing A.'), reply('Queued B.')]);
+    chip('Old two.').click(); // Listen on another bubble
+    check('Listen on another bubble takes over and drops the queue',
+      T.chatAutoReadQueue.length === 0 && chip('Old two.').classList.contains('speaking'));
+    synth.endAll();
+    check('…so the dropped reply stays quiet', !synth.spoken.includes('Queued B.'));
+
+    reset();
+    page([reply('Before switch.'), reply('Queued at switch.')]);
+    c0 = synth.cancels;
+    T.selectedId = 'AR-2';
+    T.applyChatView();
+    synth.endAll();
+    check('switching session cancels speech and clears the queue', synth.cancels === c0 + 1
+      && T.chatAutoReadQueue.length === 0 && !synth.spoken.includes('Queued at switch.'));
+    T.selectedId = 'AR-1';
+    T.applyChatView(); // a fresh state for AR-1
+    T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: 1, path: '/ar', terminal_id: 'T-AR', events: [] });
+    const st2 = T.chatState;
+    const page2 = (events) => T.applyChatPage(st2, { supported: true, reset: false, cursor: ++cur, events });
+
+    reset();
+    page2([reply('Auto one.'), reply('Auto two.')]);
+    c0 = synth.cancels;
+    ctl.click(); // off
+    check('turning it off stops what it was reading and clears the queue', T.chatAutoRead === false
+      && synth.cancels === c0 + 1 && T.chatAutoReadQueue.length === 0
+      && ctl.getAttribute('aria-pressed') === 'false' && window.localStorage.getItem('crow.chat.autoRead') === '0');
+    page2([reply('While off again.')]);
+    check('…and nothing new is read', !synth.spoken.includes('While off again.'));
+    chip('Auto one.').click();
+    c0 = synth.cancels;
+    ctl.click(); // on
+    ctl.click(); // off again, while a manual Listen plays
+    check('turning it off leaves a Listen the user started playing',
+      synth.cancels === c0 && chip('Auto one.').classList.contains('speaking'));
+    T.stopChatSpeech();
+
+    reset();
+    T.setChatAutoRead(true);
+    T.chatSpeechUnlocked = false; // a reload with auto-read already on
+    doc.body.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    doc.body.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    check('after a reload with it on, the first tap anywhere unlocks speech (once)',
+      synth.queue.length === 1 && synth.queue[0].volume === 0);
+    reset();
+
+    const realSet = window.Storage.prototype.setItem;
+    window.Storage.prototype.setItem = () => { throw new Error('blocked'); };
+    let threw = false;
+    try { T.setChatAutoRead(false); } catch (_) { threw = true; }
+    window.Storage.prototype.setItem = realSet;
+    check('blocked storage never throws', !threw && T.chatAutoRead === false);
+
+    T.setChatViewActive(false);
+    check('no toggle in terminal mode', T.chatAutoReadControl() === null);
+    T.setChatViewActive(true);
+    const saved = window.speechSynthesis;
+    delete window.speechSynthesis;
+    check('no toggle in a browser without speech', T.chatAutoReadControl() === null);
+    window.speechSynthesis = saved;
+  }
 
   const css = fs.readFileSync(WEB + 'app.css', 'utf8');
   const at = css.indexOf('@media (pointer: fine) and (min-width: 721px) {');
