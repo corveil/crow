@@ -2201,9 +2201,9 @@ select.text-prompt-input { cursor: pointer; }
 .chat-msg .md > .chat-code-block:last-child { margin-bottom: 0; }
 .chat-msg .md .chat-code-block > pre { margin: 0; }
 
-/* Message chips (chat.js chatBubble): Copy (CROW-1392), Listen and Select
-   (#1488). Each label is CSS content, not a text node, and user-select is off,
-   so a hand-made selection or the copied markdown never picks it up. Desktop:
+/* Message chips (chat.js chatBubble): Copy (CROW-1392) and Listen (#1488).
+   Each label is CSS content, not a text node, and user-select is off, so a
+   hand-made selection or the copied markdown never picks it up. Desktop:
    stacked in the gutter beside the bubble, shown on hover/focus. Touch: always
    shown, in their own row under the text so they cover nothing. */
 .chat-msg { position: relative; }
@@ -2224,11 +2224,6 @@ select.text-prompt-input { cursor: pointer; }
 .chat-chip:hover { color: var(--text-primary); }
 .chat-msg-listen::before { content: 'Listen'; }
 .chat-msg-listen.speaking::before { content: 'Stop'; }
-.chat-msg-select::before { content: 'Select'; }
-/* Select is desktop-only: iOS often won't offer Copy / Speak for a selection
-   made by script, so on touch it would be a button that does nothing useful. */
-.chat-msg-select { display: none; }
-@media (pointer: fine) { .chat-msg-select { display: block; } }
 /* Desktop: beside the bubble, in the gutter its max-width leaves, so the chips
    never cover the text (a short bubble is narrower than a chip). The 6px gap
    and 2px drop are the stack's own padding, not offsets: the stack starts

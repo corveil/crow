@@ -21,9 +21,9 @@ Once it's on, switch with the **Terminal | Chat** toggle in the session header. 
 
 Transcripts never contain permission prompts. When the agent is waiting for approval, answer it in the terminal.
 
-## Copy, Listen and Select
+## Copy and Listen
 
-Each message has a few small buttons. On a desktop they sit beside the message and show when you hover over it. On a phone they sit under the text. Their labels are never part of a text selection or of what Copy copies.
+Each message has one or two small buttons. On a desktop they sit beside the message and show when you hover over it. On a phone they sit under the text. Their labels are never part of a text selection or of what Copy copies.
 
 - **Copy** copies the message's markdown source. Each code block also has its own Copy, which copies just the code.
 - **Listen** (agent messages only) reads the message aloud with the browser's built-in speech (the Web Speech API). It runs on the device, with no server, key or cost. The button turns into **Stop** while that message is playing; tap it again to stop.
@@ -34,7 +34,8 @@ Each message has a few small buttons. On a desktop they sit beside the message a
   - Spoken notifications (Settings → Notifications) use the same speech queue. One that arrives during a reply waits until the reply ends, and Stop also drops any notification queued behind the reply.
   - On a phone, speech stops when the screen locks or the browser goes to the background.
   - The button is hidden in a browser without speech synthesis.
-- **Select** (mouse or trackpad only) selects the message's text, ready for ⌘C or for macOS's Speak Selection shortcut (⌥Esc, once Spoken Content → Speak selection is on in System Settings → Accessibility). It is hidden on touch screens, because iOS often doesn't show its Copy / Speak menu for a selection made by a script. On a phone, use Listen, or long-press to select.
+
+To select part of a message, drag over it (or triple-click a paragraph) on a desktop, or long-press on a phone.
 
 ## Auto-read
 
