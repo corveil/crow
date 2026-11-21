@@ -2221,13 +2221,16 @@ select.text-prompt-input { cursor: pointer; }
 .chat-msg-select { display: none; }
 @media (pointer: fine) { .chat-msg-select { display: block; } }
 /* Desktop: beside the bubble, in the gutter its max-width leaves, so the chips
-   never cover the text (a short bubble is narrower than a chip). */
+   never cover the text (a short bubble is narrower than a chip). The 6px gap
+   and 2px drop are the stack's own padding, not offsets: the stack starts
+   flush against the bubble, so the pointer never crosses a strip that is
+   neither, where :hover would drop and the stack stop hit-testing (#1504). */
 .chat-msg-actions {
-  position: absolute; top: 2px; z-index: 1;
+  position: absolute; top: 0; padding-top: 2px; z-index: 1;
   display: flex; flex-direction: column; gap: 4px;
 }
-.chat-assistant > .chat-msg-actions { left: calc(100% + 6px); align-items: flex-start; }
-.chat-user > .chat-msg-actions { right: calc(100% + 6px); align-items: flex-end; }
+.chat-assistant > .chat-msg-actions { left: 100%; padding-left: 6px; align-items: flex-start; }
+.chat-user > .chat-msg-actions { right: 100%; padding-right: 6px; align-items: flex-end; }
 .chat-code-copy {
   position: absolute; top: 4px; right: 4px;
   background: var(--term-bg); color: var(--term-fg); border-color: var(--border-strong);
@@ -2252,6 +2255,7 @@ select.text-prompt-input { cursor: pointer; }
 @media (pointer: coarse), (max-width: 720px) {
   .chat-msg > .chat-msg-actions {
     position: static; flex-direction: row; justify-content: flex-end; margin-top: 6px;
+    padding: 0; /* the gutter's hover-bridge padding; in-flow there is no gap */
   }
 }
 /* In-flow there, so no gutter to reserve. */

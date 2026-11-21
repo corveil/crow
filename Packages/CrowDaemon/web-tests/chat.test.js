@@ -660,6 +660,26 @@ check('no driver UI is rendered', !doc.querySelector('#chat-driver') && !doc.que
     gutter.includes('.chat-msg > .chat-msg-actions { pointer-events: none; }')
     && gutter.includes('.chat-msg:hover > .chat-msg-actions, .chat-msg-actions:focus-within,')
     && gutter.includes('.chat-msg-actions > .chat-chip.speaking { pointer-events: auto; }'));
+  // #1504: the gutter stack must start flush against its bubble, with the
+  // gap as its own padding. An offset (calc(100% + 6px), top: 2px) leaves a
+  // strip that is neither, where :hover drops, the stack above stops
+  // hit-testing, and the chips vanish before the pointer reaches them.
+  // jsdom does no layout, so this pins the rules; the hover is a browser check.
+  const rule = (sel) => {
+    const i = css.indexOf('\n' + sel + ' {');
+    return i < 0 ? '' : css.slice(i, css.indexOf('}', i));
+  };
+  const stack = rule('.chat-msg-actions');
+  const asst = rule('.chat-assistant > .chat-msg-actions');
+  const usr = rule('.chat-user > .chat-msg-actions');
+  check('gutter chips sit flush against the bubble, gap as padding (no hover dead zone)',
+    /\btop: 0;/.test(stack) && stack.includes('padding-top: 2px;')
+    && asst.includes('left: 100%;') && asst.includes('padding-left: 6px;')
+    && usr.includes('right: 100%;') && usr.includes('padding-right: 6px;')
+    && !/calc\(100% \+/.test(asst + usr));
+  const inflowAt = css.indexOf('@media (pointer: coarse), (max-width: 720px) {');
+  const inflow = inflowAt < 0 ? '' : css.slice(inflowAt, css.indexOf('\n}', inflowAt));
+  check('in-flow (touch/narrow) chips drop the gutter padding', /position: static;[^}]*padding: 0;/.test(inflow));
 
   T.selectedId = 'F-1';
   T.setChatViewActive(true);
