@@ -28,6 +28,8 @@ function renderHeader(s) {
   if (s.is_explore) top.appendChild(el('span', 'explore-badge', 'Exploring'));
   const chatToggle = typeof chatToggleControl === 'function' ? chatToggleControl() : null;
   if (chatToggle) top.appendChild(chatToggle);
+  const autoRead = typeof chatAutoReadControl === 'function' ? chatAutoReadControl() : null;
+  if (autoRead) top.appendChild(autoRead);
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));

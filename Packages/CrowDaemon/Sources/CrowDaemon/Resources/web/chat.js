@@ -468,6 +468,9 @@ function applyChatPage(st, res) {
   if (res.agent_kind) st.agentKind = res.agent_kind;
   if (res.usage) st.usage = res.usage;
   else if (res.reset) st.usage = null;
+  // Auto-read (#1489) speaks only replies that arrive on a follow-on poll,
+  // never the backlog a reset or first page carries (opening Chat, a switch).
+  const live = !res.reset && st.cursor != null;
   if (res.reset) {
     stopChatSpeech(); // its bubble is about to go
     if (log) log.innerHTML = '';
@@ -483,7 +486,10 @@ function applyChatPage(st, res) {
     if (res.reset && st.truncated) {
       log.appendChild(el('div', 'chat-notice', 'Earlier messages are in the terminal history.'));
     }
-    for (const ev of events) appendChatEvent(st, log, ev);
+    for (const ev of events) {
+      const bubble = appendChatEvent(st, log, ev);
+      if (live && bubble) queueChatAutoRead(bubble);
+    }
     if (pinned) log.scrollTop = log.scrollHeight;
     else {
       const jump = document.getElementById('chat-jump');
@@ -494,14 +500,17 @@ function applyChatPage(st, res) {
   maybeFocusChatInput(st);
 }
 
+// Returns the bubble an assistant message made (for auto-read), else null.
 function appendChatEvent(st, log, ev) {
+  let bubble = null;
   switch (ev.kind) {
     case 'user':
       log.appendChild(chatBubble('user', ev.text));
       pushChatHistory(st, ev.text);
       break;
     case 'assistant':
-      log.appendChild(chatBubble('assistant', ev.text));
+      bubble = chatBubble('assistant', ev.text);
+      log.appendChild(bubble);
       break;
     case 'tool_call': {
       const d = document.createElement('details');
@@ -536,7 +545,7 @@ function appendChatEvent(st, log, ev) {
       break;
     }
     case 'turn_end':
-      if (st.lastKind === 'turn_end') return; // the harness can mark one turn twice
+      if (st.lastKind === 'turn_end') return null; // the harness can mark one turn twice
       log.appendChild(el('div', 'chat-turn-end',
         ev.duration_ms ? ('Done · ' + formatChatDuration(ev.duration_ms)) : 'Done'));
       break;
@@ -544,9 +553,10 @@ function appendChatEvent(st, log, ev) {
       log.appendChild(appendLinkified(el('div', 'chat-notice'), ev.text || ''));
       break;
     default:
-      return;
+      return null;
   }
   st.lastKind = ev.kind;
+  return bubble;
 }
 
 function formatChatDuration(ms) {
@@ -647,9 +657,17 @@ function chatSelectButton(body) {
 // Chrome's Google voices silently stop a single utterance after ~15s, so a
 // reply is queued as chunks of at most this many characters (~12s of speech).
 const CHAT_SPEECH_CHUNK = 200;
-// The playing reply: { btn, utterances }. The utterances are held so Chrome
+// The playing reply: { btn, utterances, auto }. The utterances are held so Chrome
 // can't garbage-collect one mid-queue and drop its `end` event.
 let chatSpeech = null;
+// Auto-read (#1489, below): the per-browser toggle, and the Listen chips of
+// replies waiting their turn, oldest first.
+const CHAT_AUTO_READ_KEY = 'crow.chat.autoRead';
+let chatAutoRead = false;
+try { chatAutoRead = localStorage.getItem(CHAT_AUTO_READ_KEY) === '1'; } catch (_) { /* private mode */ }
+const chatAutoReadQueue = [];
+// A speech call has run inside a user gesture in this page (the iOS unlock).
+let chatSpeechUnlocked = false;
 
 function chatSpeechSupported() {
   return 'speechSynthesis' in window && !!window.speechSynthesis
@@ -750,47 +768,60 @@ function setChatListenState(btn, on) {
 
 // Tap to speak, tap again to stop; tapping another bubble's Listen switches
 // to it. All chunks are queued inside the tap, which is what unlocks audio on
-// iOS.
+// iOS. Either way the auto-read queue is dropped (stopChatSpeech).
 function toggleChatSpeech(btn, body) {
   const wasMine = !!chatSpeech && chatSpeech.btn === btn;
   stopChatSpeech();
-  if (wasMine || !chatSpeechSupported()) return;
+  chatSpeechUnlocked = true;
+  if (wasMine) return;
+  startChatSpeech(btn, body);
+}
+
+// Speak one bubble: `btn` is its Listen chip, which reads Stop while it plays.
+// Returns false when there was nothing to say.
+function startChatSpeech(btn, body) {
+  if (!chatSpeechSupported()) return false;
   const chunks = chatSpeechChunks(chatSpeakableText(body));
-  if (!chunks.length) return;
+  if (!chunks.length) return false;
   const synth = window.speechSynthesis;
   const run = { btn, utterances: [] };
   try {
     for (const c of chunks) run.utterances.push(new window.SpeechSynthesisUtterance(c));
-  } catch (_) { return; }
-  // The run ends without a cancel when its last chunk ends, or when someone
-  // else cancelled the queue (a notification Preview cancels, then speaks;
-  // its `interrupted` / `canceled` events reach us *after* its new line is
-  // queued, so cancelling again here would silence it). Any other failure
-  // drops the chunks still queued.
-  const end = () => {
+  } catch (_) { return false; }
+  // The run ends without a cancel when its last chunk ends (then the next
+  // auto-read reply starts), or when someone else cancelled the queue (a
+  // notification Preview cancels, then speaks; its `interrupted` / `canceled`
+  // events reach us *after* its new line is queued, so cancelling again here
+  // would silence it). Any other failure drops the chunks still queued.
+  const end = (finished) => {
     if (chatSpeech !== run) return;
     chatSpeech = null;
     setChatListenState(btn, false);
+    if (finished) playNextChatAutoRead();
+    else chatAutoReadQueue.length = 0;
   };
   for (const u of run.utterances) {
     u.onerror = (e) => {
       const why = e && e.error;
-      if (why === 'interrupted' || why === 'canceled') end();
+      if (why === 'interrupted' || why === 'canceled') end(false);
       else if (chatSpeech === run) stopChatSpeech();
     };
   }
-  run.utterances[run.utterances.length - 1].onend = end;
+  run.utterances[run.utterances.length - 1].onend = () => end(true);
   chatSpeech = run;
   setChatListenState(btn, true);
   try {
     if (synth.paused) synth.resume(); // Chrome can wedge paused after sleep
     for (const u of run.utterances) synth.speak(u);
-  } catch (_) { stopChatSpeech(); }
+  } catch (_) { stopChatSpeech(); return false; }
+  return true;
 }
 
-// Stop the reply being read, if any. A no-op otherwise, so a session switch
-// never cancels a notification line that isn't ours.
+// Stop the reply being read, if any, and drop the auto-read queue. Cancels
+// only when a reply of ours is playing, so a session switch never cancels a
+// notification line that isn't ours.
 function stopChatSpeech() {
+  chatAutoReadQueue.length = 0;
   const run = chatSpeech;
   if (!run) return;
   chatSpeech = null;
@@ -798,6 +829,97 @@ function stopChatSpeech() {
   try { window.speechSynthesis.cancel(); } catch (_) { /* gone */ }
 }
 window.addEventListener('pagehide', stopChatSpeech);
+
+// ---------------------------------------------------------------------------
+// Auto-read (#1489): a per-browser toggle in the session header that speaks
+// each new assistant reply as the transcript poll delivers it, through the
+// same pipeline as Listen. Off by default; a private window or blocked storage
+// just means off.
+//
+// - Only replies that arrive while it is on are read: never the backlog of a
+//   reset page (opening Chat, switching session).
+// - A reply that arrives while another plays (auto-read or Listen) waits in
+//   chatAutoReadQueue and starts when the playing one ends.
+// - Stop on the playing reply stops it and drops the queue: the replies
+//   already on screen stay quiet, and the next reply to arrive is read.
+//   Listen on another bubble, switching session or view, and leaving Chat
+//   drop it the same way (stopChatSpeech).
+// - iOS speaks only after one speech call inside a tap. Turning auto-read on
+//   is such a tap, and so is Listen; after a reload with auto-read already on,
+//   the first tap anywhere does it (unlockChatSpeech).
+// ---------------------------------------------------------------------------
+
+function setChatAutoRead(on) {
+  chatAutoRead = !!on;
+  try { localStorage.setItem(CHAT_AUTO_READ_KEY, chatAutoRead ? '1' : '0'); } catch (_) { /* ignore */ }
+  if (chatAutoRead) unlockChatSpeech();
+  // Turning it off silences what it was reading; a Listen the user started
+  // keeps playing.
+  else if (chatSpeech && chatSpeech.auto) stopChatSpeech();
+  else chatAutoReadQueue.length = 0;
+  const btn = document.getElementById('chat-auto-read');
+  if (btn) setChatAutoReadState(btn);
+}
+
+// A new reply landed on a live poll: speak it now, or after the one playing.
+// Not before the page is unlocked: iOS can ignore a gesture-less speak()
+// without an `end` or `error`, which would leave the run (and its Stop chip)
+// stuck and every later reply queued behind it. A reply that lands before the
+// first tap stays quiet; the next one after it is read.
+function queueChatAutoRead(bubble) {
+  if (!chatAutoRead || !chatSpeechUnlocked || !chatSpeechSupported()) return;
+  const btn = bubble.querySelector('.chat-msg-listen');
+  if (!btn) return;
+  chatAutoReadQueue.push(btn);
+  if (!chatSpeech) playNextChatAutoRead();
+}
+
+function playNextChatAutoRead() {
+  while (chatAutoReadQueue.length && !chatSpeech) {
+    const btn = chatAutoReadQueue.shift();
+    const body = btn.closest('.chat-msg') && btn.closest('.chat-msg').querySelector('.chat-msg-body');
+    if (body && btn.isConnected && startChatSpeech(btn, body)) chatSpeech.auto = true;
+  }
+}
+
+// iOS Safari ignores speak() until one call has run inside a user gesture. A
+// silent utterance spoken in the tap unlocks the page for the poll's later,
+// gesture-less calls.
+function unlockChatSpeech() {
+  if (chatSpeechUnlocked || !chatSpeechSupported()) return;
+  chatSpeechUnlocked = true;
+  try {
+    const u = new window.SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    window.speechSynthesis.speak(u);
+  } catch (_) { /* nothing to unlock */ }
+}
+// Auto-read left on from an earlier visit: the first tap anywhere unlocks.
+for (const type of ['click', 'touchend', 'keydown']) {
+  document.addEventListener(type, () => { if (chatAutoRead) unlockChatSpeech(); }, { capture: true, passive: true });
+}
+
+// The header toggle, beside Terminal | Chat. Shown in Chat only, and only in a
+// browser that can speak.
+function chatAutoReadControl() {
+  if (!chatViewEnabled() || !chatViewActive || !chatSpeechSupported()) return null;
+  const btn = el('button', 'chat-auto-read', '');
+  btn.type = 'button';
+  btn.id = 'chat-auto-read';
+  btn.appendChild(icon('speaker', 12));
+  btn.appendChild(el('span', 'chat-auto-read-label', 'Auto-read'));
+  setChatAutoReadState(btn);
+  btn.onclick = (ev) => { ev.stopPropagation(); setChatAutoRead(!chatAutoRead); };
+  return btn;
+}
+
+function setChatAutoReadState(btn) {
+  btn.classList.toggle('active', chatAutoRead);
+  btn.setAttribute('aria-pressed', chatAutoRead ? 'true' : 'false');
+  const label = chatAutoRead ? 'Auto-read is on: new replies are read aloud' : 'Read new replies aloud';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+}
 
 // Wrap each code block (markdown-it's <pre><code>, or the fallback's
 // pre.chat-code) so it gets its own Copy, which copies just the block's

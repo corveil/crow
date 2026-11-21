@@ -2024,6 +2024,15 @@ select.text-prompt-input { cursor: pointer; }
 }
 .view-toggle-btn + .view-toggle-btn { border-left: 1px solid var(--border-subtle); }
 .view-toggle-btn.active { background: var(--accent-soft); color: var(--accent); }
+/* Auto-read (#1489, chat.js chatAutoReadControl): a pressed/unpressed pill
+   right after the Terminal | Chat toggle. */
+.chat-auto-read {
+  display: inline-flex; align-items: center; align-self: center; gap: 5px; flex-shrink: 0;
+  background: transparent; color: var(--text-muted);
+  border: 1px solid var(--border-subtle); border-radius: 8px;
+  padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.chat-auto-read.active { background: var(--accent-soft); color: var(--accent); }
 
 #chat-view { display: none; }
 #app.chat-active #tabbar,
