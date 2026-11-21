@@ -45,13 +45,19 @@ Split `$ARGUMENTS` (see **Arguments** above) before running anything:
 gh pr checkout "$PR"
 ```
 
-Checkout restores the PR head into the working tree, including attacker-controlled harness config that Crow stripped at launch (CROW-960: `.cursor/`, `.grok/`, `.agents/`, `.gemini/`, `.muse/`, `.codex/`, repo-root `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`). **Immediately after checkout — a separate Bash call, before any other tool use — re-strip those layers from the working tree.** Do **not** chain the `rm` onto `gh pr checkout` with `&&` (a compound misses the allowlist prefix). Do **not** `git rm` or `git add` them: the index entry must survive, same as `SessionService.strip*ConfigFromReviewClone`. Do **not** delete `.claude/` wholesale — Crow's copied review skill lives under `.claude/skills/`.
+Checkout restores the PR head into the working tree, including attacker-controlled harness config that Crow stripped at launch (CROW-960: `.cursor/`, `.grok/`, `.agents/`, `.gemini/`, `.muse/`, `.codex/`, repo-root `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`). **Immediately after checkout — a separate Bash call, before any other tool use — have Crow re-strip those layers from the working tree:**
 
 ```bash
-rm -rf -- .cursor .grok .agents .gemini .muse .codex .mcp.json .claude/settings.json .claude/settings.local.json
+crow review restrip --session "$CROW_SESSION_ID"
 ```
 
-`rm` is idempotent when a path is absent. If any of those paths appear in the PR's changed-files list, inspect them with `git show HEAD:<path>` or `gh pr diff` — they are gone from disk by design, not missing from the review.
+Run it with the sandbox disabled, like every `crow` call, and do **not** chain it onto `gh pr checkout` with `&&` (a compound misses the allowlist prefix). Crow's daemon removes the files itself (CROW-1492): an `rm` run inside your sandbox cannot remove `.claude/settings*.json`, because Claude Code's sandbox blocks writes to them. Do **not** run your own `rm`, `git rm` or `git add` on these paths instead: the daemon removes them from the working tree only, and the index entry must survive, same as `SessionService.strip*ConfigFromReviewClone`. It never deletes `.claude/` wholesale — Crow's copied review skill lives under `.claude/skills/`.
+
+On success it prints `"ok" : true` and lists what it removed. It checks every path again after removing them.
+
+**If the command fails or exits non-zero, for any reason, stop the review.** Do not continue to Step 2, do not post anything, and tell the operator: `Review stopped: the CROW-1492 re-strip failed: <the error it printed>`. A failed strip means PR-supplied harness config may still be live in this session.
+
+If any of those paths appear in the PR's changed-files list, inspect them with `git show HEAD:<path>` or `gh pr diff` — they are gone from disk by design, not missing from the review.
 
 ### Step 2: Gather PR Information
 

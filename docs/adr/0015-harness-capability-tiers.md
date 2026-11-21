@@ -130,6 +130,19 @@ deliberate, documented gaps (full grid in the
 > if the agent skips that step. Inspect stripped paths that appear in the PR
 > via `git show HEAD:<path>` / `gh pr diff` — they are gone from disk by design.
 
+> **Amendment (2026-11-20, CROW-1492):** the CROW-960 close never worked on
+> Claude, the harness most reviews run on. The agent ran the `rm` itself, inside
+> its own sandbox, and Claude Code's sandbox denies writes to the project's
+> `.claude/settings.json` and `.claude/settings.local.json`. `gh pr checkout`
+> runs unsandboxed and restored both, and the `rm` that followed failed with
+> `Operation not permitted` on every Claude review. The skill and the re-review
+> prompt now call `crow review restrip --session "$CROW_SESSION_ID"`, and
+> `crowd` removes the union (`ReviewCloneRestrip.paths`, the same list the
+> per-agent launch strips cover) outside any agent sandbox. The daemon acts only
+> on a `.review` session's own clone under `{devRoot}/crow-reviews/`, never
+> follows a symlinked parent out of it, and re-checks every path. A failed or
+> incomplete strip now stops the review rather than letting it continue.
+
 > **Amendment (2026-07-28, #902):** Antigravity's **review** gap — recorded as a
 > Tier-2 deferral (its `autoLaunchCommand(.review)` returned `nil`, so a review
 > session assigned to it never launched) — **closes**. Review now dispatches the

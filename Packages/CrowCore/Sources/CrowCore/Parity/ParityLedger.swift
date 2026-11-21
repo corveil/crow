@@ -230,6 +230,10 @@ public enum ParityLedger {
         .write("add-worktree", cli: "add-worktree"),
         .read("list-worktrees", cli: "list-worktrees"),
 
+        // Review clones (CROW-1492). The daemon removes PR-supplied harness
+        // config from a review session's clone, outside the agent's sandbox.
+        .write("review-restrip", cli: "review restrip"),
+
         // Terminals
         .write("new-terminal", cli: "new-terminal"),
         .read("list-terminals", cli: "list-terminals"),

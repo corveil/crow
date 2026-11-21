@@ -2142,6 +2142,22 @@ crow start-review --url "https://github.com/corveil/crow/pull/842"
 
 Unlike `work-on-issue`, the URL is only checked for non-emptiness: it goes to `git clone` rather than terminal keystrokes. Returns `{"session_id": "..."}`.
 
+### `crow review restrip`
+
+Remove PR-supplied harness config from a review session's clone (CROW-1492). The review skill and the re-review prompt run it right after `gh pr checkout`, which restores the PR head's `.cursor/`, `.grok/`, `.agents/`, `.gemini/`, `.muse/`, `.codex/`, `.mcp.json`, `.claude/settings.json` and `.claude/settings.local.json` into the live session (CROW-960).
+
+```bash
+crow review restrip --session "$CROW_SESSION_ID"
+```
+
+| Flag        | Required | Description                                  |
+| ----------- | -------- | -------------------------------------------- |
+| `--session` | yes      | Review session UUID (usually `$CROW_SESSION_ID`) |
+
+The daemon removes the files, not the agent. Claude Code's sandbox blocks writes to `.claude/settings*.json`, so an `rm` the agent ran itself never removed them. It takes no path: the daemon uses the session's own clone and refuses anything that isn't a review session, or a clone that doesn't resolve to `{devRoot}/crow-reviews/{dir}` after symlinks and `..`. It removes files from the working tree only (never `git rm`), never deletes `.claude/` itself, and never follows a symlinked parent such as a committed `.claude` link out of the clone.
+
+Returns `{"ok": true, "session_id": "...", "clone_path": "...", "removed": [...]}`. After removing, it checks every path again. If any is left, it exits non-zero with each path and the reason, and the review must stop.
+
 ### `crow create-manager`
 
 Create an additional Manager session, named with the lowest unused `Manager N` (or `--name`). Without `--name` and a prompt it is identical to the sidebar's `+` button.

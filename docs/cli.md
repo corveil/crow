@@ -120,6 +120,8 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow restart-tmux-server`](#crow-restart-tmux-server) | Restart the tmux server, rebuilding every terminal (destructive) |
 | [`crow resync-jira`](#crow-resync-jira) | Re-sync Jira ticket statuses from Crow session state |
 | [`crow retry-readiness`](#crow-retry-readiness) | Re-arm the readiness watch for a stuck terminal |
+| [`crow review`](#crow-review) | Act on a PR review session's clone |
+| [`crow review restrip`](#crow-review-restrip) | Remove PR-supplied harness config from a review session's clone |
 | [`crow select-session`](#crow-select-session) | Switch to a session |
 | [`crow send`](#crow-send) | Send text to a terminal |
 | [`crow set-goal`](#crow-set-goal) | Set or clear the org-goal tag on a session |
@@ -1955,6 +1957,38 @@ The daemon applies this only to a terminal that timed out or never reached shell
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--terminal` | `<terminal>` | yes | Terminal UUID |
+
+---
+
+## `crow review`
+
+Act on a PR review session's clone.
+
+```
+crow review <restrip>
+```
+
+Subcommands: [`restrip`](#crow-review-restrip).
+
+---
+
+## `crow review restrip`
+
+Remove PR-supplied harness config from a review session's clone.
+
+```
+crow review restrip --session <session>
+```
+
+Run right after `gh pr checkout` in a review session. Checkout restores the PR head's harness config (.cursor, .grok, .agents, .gemini, .muse, .codex, .mcp.json, .claude/settings.json, .claude/settings.local.json), and this removes it again (CROW-960).
+
+The daemon does the removal, outside the agent's sandbox, because Claude Code's sandbox blocks writes to .claude/settings*.json. It acts only on the session's own clone under {devRoot}/crow-reviews/, and refuses any other kind of session. Working tree only: the files stay in git, so `git show HEAD:<path>` still shows them. It never deletes .claude/ itself.
+
+After removing, it checks every path again. If anything is left, it exits non-zero with the paths and reasons, and the review must stop.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Review session UUID (usually "$CROW_SESSION_ID") |
 
 ---
 

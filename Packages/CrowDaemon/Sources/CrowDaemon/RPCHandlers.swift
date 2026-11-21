@@ -111,5 +111,6 @@ func makeCommandRouter(
     handlers.merge(makeCorveilMigrationHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeBackfillHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeTuiHandlers(appState: appState, tuiRecorder: tuiRecorder)) { existing, _ in existing }
+    handlers.merge(makeReviewHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
     return CommandRouter(handlers: handlers, fallback: fallback)
 }

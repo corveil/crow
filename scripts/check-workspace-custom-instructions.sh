@@ -171,14 +171,24 @@ done
 
 # CROW-960: `gh pr checkout` restores attacker-controlled harness config into
 # a live review session. Both halves must re-strip immediately after checkout
-# (working-tree `rm`, never `git rm`) so Cursor/Grok/Antigravity/Claude/Muse/
-# Codex close in one place rather than four per-adapter changes.
-# shellcheck disable=SC2016  # the rm command is a literal needle, not expansion
+# (working tree only, never `git rm`) so Cursor/Grok/Antigravity/Claude/Muse/
+# Codex close in one place rather than per-adapter changes.
+# CROW-1492: the re-strip is the daemon verb, because the agent's sandboxed
+# `rm` cannot remove `.claude/settings*.json` under Claude Code's sandbox, and
+# a failed strip stops the review. The agent-side `rm` must not come back.
+# shellcheck disable=SC2016  # the commands are literal needles, not expansion
 for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.template; do
     require "$f" \
         "CROW-960" \
-        "rm -rf -- .cursor .grok .agents .gemini .muse .codex .mcp.json .claude/settings.json .claude/settings.local.json" \
-        "Do **not** \`git rm\`"
+        "CROW-1492" \
+        'crow review restrip --session "$CROW_SESSION_ID"' \
+        "with the sandbox disabled" \
+        "Do **not** run your own \`rm\`, \`git rm\` or \`git add\`" \
+        "**If the command fails or exits non-zero, for any reason, stop the review.**"
+    if grep -Fq 'rm -rf -- .cursor' "$f"; then
+        echo "DRIFT: $f still runs the agent-side re-strip rm (CROW-1492)" >&2
+        fail=1
+    fi
 done
 
 # CROW-1166: set-ticket failure must abort setup, not warn-and-continue.
