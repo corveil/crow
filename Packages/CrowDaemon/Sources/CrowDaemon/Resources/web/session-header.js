@@ -30,6 +30,8 @@ function renderHeader(s) {
   if (chatToggle) top.appendChild(chatToggle);
   const autoRead = typeof chatAutoReadControl === 'function' ? chatAutoReadControl() : null;
   if (autoRead) top.appendChild(autoRead);
+  const follow = typeof chatFollowControl === 'function' ? chatFollowControl() : null;
+  if (follow) top.appendChild(follow);
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));

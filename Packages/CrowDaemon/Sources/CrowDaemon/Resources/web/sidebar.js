@@ -89,6 +89,7 @@ function clearPageDataOnExpiry() {
   if (typeof stopChatPoll === 'function') stopChatPoll();
   // Don't keep reading a reply aloud behind the expiry scrim (#1488).
   if (typeof stopChatSpeech === 'function') stopChatSpeech();
+  if (typeof cancelChatFollow === 'function') cancelChatFollow(); // #1507
   if (typeof chatState !== 'undefined') chatState = null;
   ['sidebar', 'board', 'detail-header', 'detail-artifacts', 'detail-recordings', 'tabbar', 'chat-view']
     .forEach((id) => { const n = document.getElementById(id); if (n) n.textContent = ''; });
@@ -802,6 +803,7 @@ const ICONS = {
   code: '<path d="M6 5 2.5 8 6 11"/><path d="M10 5l3.5 3-3.5 3"/>',
   terminal: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5"/><path d="M8 9.5h3"/>',
   comment: '<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>',
+  follow: '<path d="M2.5 8h7.5"/><path d="M7 4.5 10.5 8 7 11.5"/><path d="M13.5 3.5v9"/>',
   speaker: '<path d="M2.5 6.2h2.3L8 3.5v9L4.8 9.8H2.5z"/><path d="M10.6 6a2.8 2.8 0 0 1 0 4"/><path d="M12.4 4.3a5.3 5.3 0 0 1 0 7.4"/>',
   bell: '<path d="M4.5 7a3.5 3.5 0 0 1 7 0c0 3 1 4 1.5 4.5H3C3.5 11 4.5 10 4.5 7Z"/><path d="M6.6 13a1.6 1.6 0 0 0 2.8 0"/>',
   pin: '<path d="M8 2.2c.7 0 1.3.3 1.7.8.4.5.5 1.1.4 1.7-.2 1.1-1.1 2.1-2.1 3.6v3.2M8 2.2c-.7 0-1.3.3-1.7.8-.4.5-.5 1.1-.4 1.7.2 1.1 1.1 2.1 2.1 3.6"/><path d="M5.4 6.4h5.2"/>',
@@ -833,6 +835,7 @@ function showEmptyDetail(msg, opts) {
   selectedId = null;
   selectedBoard = null;
   if (typeof stopChatSpeech === 'function') stopChatSpeech(); // #1488
+  if (typeof cancelChatFollow === 'function') cancelChatFollow(); // #1507
   terminals = [];
   activeTerminal = null;
   // CROW-979: the ↻ that was spinning belonged to the session we just dropped, and

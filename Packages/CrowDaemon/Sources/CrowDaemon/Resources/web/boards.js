@@ -12,6 +12,8 @@ function selectBoard(key) {
   selectedId = null;
   // Leaving Chat for a board: stop a reply being read aloud (#1488).
   if (typeof stopChatSpeech === 'function') stopChatSpeech();
+  // …and drop any Chat Follow switch still waiting (#1507).
+  if (typeof cancelChatFollow === 'function') cancelChatFollow();
   // Leaving a board (or re-entering) drops any stale selection on it.
   ticketSelectionMode = false;
   selectedIssueIDs.clear();

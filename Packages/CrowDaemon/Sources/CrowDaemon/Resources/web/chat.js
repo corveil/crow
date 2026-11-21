@@ -135,6 +135,7 @@ function applyChatView() {
   if (!on) {
     stopChatPoll();
     stopChatSpeech();
+    cancelChatFollow(); // Follow never pulls you back off a board or the terminal
     closeChatMenu();
     // The terminal was display:none while chat was up — refit it.
     if (chatWasShown && typeof fitTerminal === 'function') setTimeout(fitTerminal, 30);
@@ -147,6 +148,8 @@ function applyChatView() {
   const switched = !chatState || chatState.sessionId !== selectedId;
   if (switched) {
     stopChatSpeech();
+    // Only the switch Follow made reads the backlog; any other switch drops it.
+    if (chatFollowArrival !== selectedId) chatFollowArrival = null;
     const input = document.getElementById('chat-input');
     if (input && chatState) chatDrafts.set(chatState.sessionId, input.value);
     chatState = newChatState(selectedId);
@@ -452,6 +455,12 @@ async function refreshChat() {
     applyChatPage(st, res || {});
   } catch (e) {
     if (chatState !== st) return;
+    // A Follow switch whose page failed reads nothing, and the next pending
+    // switch is tried, rather than every later one waiting behind it.
+    if (chatFollowArrival === st.sessionId) {
+      chatFollowArrival = null;
+      if (chatFollowQueue.length) tryChatFollow();
+    }
     st.reason = (e && e.message) || 'Could not read the transcript.';
     renderChatStatus();
   } finally {
@@ -471,6 +480,8 @@ function applyChatPage(st, res) {
   // Auto-read (#1489) speaks only replies that arrive on a follow-on poll,
   // never the backlog a reset or first page carries (opening Chat, a switch).
   const live = !res.reset && st.cursor != null;
+  // …except the one reply a Follow switch came for (#1507).
+  const backlog = [];
   if (res.reset) {
     stopChatSpeech(); // its bubble is about to go
     if (log) log.innerHTML = '';
@@ -489,6 +500,7 @@ function applyChatPage(st, res) {
     for (const ev of events) {
       const bubble = appendChatEvent(st, log, ev);
       if (live && bubble) queueChatAutoRead(bubble);
+      else if (bubble) backlog.push(bubble);
     }
     if (pinned) log.scrollTop = log.scrollHeight;
     else {
@@ -496,6 +508,7 @@ function applyChatPage(st, res) {
       if (jump) jump.hidden = false;
     }
   }
+  if (!live) consumeChatFollowArrival(st, backlog);
   renderChatStatus(st);
   maybeFocusChatInput(st);
 }
@@ -754,7 +767,8 @@ function toggleChatSpeech(btn, body) {
   const wasMine = !!chatSpeech && chatSpeech.btn === btn;
   stopChatSpeech();
   chatSpeechUnlocked = true;
-  if (wasMine) return;
+  // Stop drops the pending Follow switches too (#1507); Follow stays on.
+  if (wasMine) { cancelChatFollow(); return; }
   startChatSpeech(btn, body);
 }
 
@@ -780,6 +794,8 @@ function startChatSpeech(btn, body) {
     setChatListenState(btn, false);
     if (finished) playNextChatAutoRead();
     else chatAutoReadQueue.length = 0;
+    // Nothing left to read here: a pending Follow switch may go (#1507).
+    if (!chatSpeech && chatFollowQueue.length) tryChatFollow();
   };
   for (const u of run.utterances) {
     u.onerror = (e) => {
@@ -835,11 +851,16 @@ function setChatAutoRead(on) {
   try { localStorage.setItem(CHAT_AUTO_READ_KEY, chatAutoRead ? '1' : '0'); } catch (_) { /* ignore */ }
   if (chatAutoRead) unlockChatSpeech();
   // Turning it off silences what it was reading; a Listen the user started
-  // keeps playing.
-  else if (chatSpeech && chatSpeech.auto) stopChatSpeech();
-  else chatAutoReadQueue.length = 0;
+  // keeps playing. Follow has nothing to read for, so its switches go too.
+  else {
+    if (chatSpeech && chatSpeech.auto) stopChatSpeech();
+    else chatAutoReadQueue.length = 0;
+    cancelChatFollow();
+  }
   const btn = document.getElementById('chat-auto-read');
   if (btn) setChatAutoReadState(btn);
+  const follow = document.getElementById('chat-follow');
+  if (follow) setChatFollowState(follow);
 }
 
 // A new reply landed on a live poll: speak it now, or after the one playing.
@@ -898,6 +919,173 @@ function setChatAutoReadState(btn) {
   btn.classList.toggle('active', chatAutoRead);
   btn.setAttribute('aria-pressed', chatAutoRead ? 'true' : 'false');
   const label = chatAutoRead ? 'Auto-read is on: new replies are read aloud' : 'Read new replies aloud';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+}
+
+// ---------------------------------------------------------------------------
+// Follow (#1507): a per-browser toggle beside Auto-read. When another session
+// finishes (`taskComplete`) or needs you (`agentWaiting`), switch to it in Chat
+// and read its latest reply, since auto-read only hears the selected session's
+// transcript poll. Off by default; takes effect only while Auto-read is on.
+//
+// - Trigger: emitEvent (notifications.js) calls chatFollowEvent for every
+//   event; only those two, for a session other than the selected one, while
+//   the page shows a session's Chat. Never from a board, the grid or Terminal.
+// - Wait: a reply playing (auto-read or Listen), or queued, holds the switch
+//   until it ends. Several sessions finishing meanwhile are followed one at a
+//   time, oldest first, each once (chatFollowQueue).
+// - Read on arrival: the switch sets chatFollowArrival to the target, and the
+//   first page for it (the backlog page auto-read otherwise skips) queues its
+//   latest assistant reply. That one-shot is the only exception to "never read
+//   what is already there": manual switches, reloads, opening Chat and a
+//   notification click still read nothing.
+// - Guards: no switch while the composer holds a draft, a send is in flight,
+//   the tab is hidden, a dialog / Settings / the switcher is open, or within
+//   CHAT_FOLLOW_IDLE_MS of a key, tap, click or scroll in the page (or of
+//   coming back to the tab). The switch is retried when the guard clears.
+// - Stop on the playing reply drops the pending switches (Follow stays on);
+//   so do Follow off, Auto-read off, and leaving Chat (applyChatView, plus the
+//   exits that bypass it: selectBoard, showEmptyDetail, session expiry).
+// ---------------------------------------------------------------------------
+const CHAT_FOLLOW_KEY = 'crow.chat.follow';
+// No switch within this long of the user touching the page.
+const CHAT_FOLLOW_IDLE_MS = 5000;
+// How often a held switch is retried.
+const CHAT_FOLLOW_RETRY_MS = 1500;
+// The first try waits a little longer than the spoken notification's coalesce
+// window (VOICE_COALESCE_MS, 700ms), so "crow 1078 is done" is queued in the
+// browser's speech queue before the reply and is heard first.
+const CHAT_FOLLOW_SETTLE_MS = 900;
+let chatFollow = false;
+try { chatFollow = localStorage.getItem(CHAT_FOLLOW_KEY) === '1'; } catch (_) { /* private mode */ }
+const chatFollowQueue = [];
+// The session a Follow switch went to whose first page hasn't landed yet.
+let chatFollowArrival = null;
+let chatFollowTimer = null;
+let chatLastInteractionAt = 0;
+
+for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+  document.addEventListener(type, () => { chatLastInteractionAt = Date.now(); }, { capture: true, passive: true });
+}
+// Coming back to the tab counts too: a switch held while it was hidden waits
+// until the user has had a moment to see where they are.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) chatLastInteractionAt = Date.now();
+});
+
+function chatFollowEnabled() {
+  return chatFollow && chatAutoRead && chatViewEnabled() && chatSpeechSupported();
+}
+
+// The page shows a session's Chat (not a board, the grid or Terminal).
+function chatFollowInChat() {
+  return !!selectedId && !selectedBoard && chatViewShown();
+}
+
+// emitEvent hook: every notification event for every session passes here.
+function chatFollowEvent(event, key) {
+  if (event !== 'taskComplete' && event !== 'agentWaiting') return;
+  // Before the first tap after a reload speech can't start, so a switch
+  // would land on a reply that stays quiet: leave the user where they are.
+  if (!chatFollowEnabled() || !chatSpeechUnlocked || !chatFollowInChat()) return;
+  if (!key || key === selectedId) return; // auto-read already hears this one
+  if (typeof sessions !== 'undefined' && !sessions.some((s) => s.id === key)) return;
+  if (!chatFollowQueue.includes(key)) chatFollowQueue.push(key);
+  scheduleChatFollow(CHAT_FOLLOW_SETTLE_MS);
+}
+
+function scheduleChatFollow(ms) {
+  if (chatFollowTimer) return;
+  chatFollowTimer = setTimeout(() => { chatFollowTimer = null; tryChatFollow(); }, ms);
+}
+
+function cancelChatFollow() {
+  chatFollowQueue.length = 0;
+  chatFollowArrival = null;
+  if (chatFollowTimer) { clearTimeout(chatFollowTimer); chatFollowTimer = null; }
+}
+
+// Why a switch must wait right now, or null when it may go ahead.
+function chatFollowHold() {
+  if (chatSpeech || chatAutoReadQueue.length) return 'speaking';
+  if (chatFollowArrival) return 'arriving';
+  if (document.hidden) return 'hidden';
+  if (chatSending) return 'sending';
+  const input = document.getElementById('chat-input');
+  if (input && input.value && input.value.trim()) return 'draft';
+  if (Date.now() - chatLastInteractionAt < CHAT_FOLLOW_IDLE_MS) return 'interaction';
+  // Something on top of the session: a prompt or modal, Settings, the switcher.
+  if (document.querySelector('.text-prompt-backdrop, .modal-dialog-backdrop')) return 'modal';
+  if (window.settingsIsOpen && window.settingsIsOpen()) return 'modal';
+  const sw = document.getElementById('session-switcher');
+  if (sw && !sw.hidden) return 'modal';
+  return null;
+}
+
+// Switch to the oldest pending session, or schedule a retry if something
+// holds it. Called on a timer, and when a reply finishes playing.
+function tryChatFollow() {
+  if (!chatFollowEnabled() || !chatFollowInChat()) { cancelChatFollow(); return; }
+  while (chatFollowQueue.length) {
+    if (chatFollowHold()) { scheduleChatFollow(CHAT_FOLLOW_RETRY_MS); return; }
+    const id = chatFollowQueue.shift();
+    if (id === selectedId) continue; // the user went there already
+    if (typeof sessions !== 'undefined' && !sessions.some((s) => s.id === id)) continue;
+    chatFollowArrival = id;
+    selectSession(id);
+    // Watchdog for the rest of the queue: the first page normally pumps it
+    // (consumeChatFollowArrival, or refreshChat's catch), but a page that never
+    // lands for this switch (a manual switch drops the arrival, and the late
+    // page is discarded) must not orphan it. While the arrival is pending the
+    // retry just holds; once it clears, the next session is followed after the
+    // usual guards (a manual switch is itself an interaction).
+    if (chatFollowQueue.length) scheduleChatFollow(CHAT_FOLLOW_RETRY_MS);
+    return;
+  }
+}
+
+// applyChatPage: the first page for a session Follow switched to. Queue its
+// latest assistant reply (if any) once, then let the next pending switch go.
+function consumeChatFollowArrival(st, bubbles) {
+  if (chatFollowArrival !== st.sessionId) return;
+  chatFollowArrival = null;
+  if (bubbles.length) queueChatAutoRead(bubbles[bubbles.length - 1]);
+  if (chatFollowQueue.length) tryChatFollow();
+}
+
+function setChatFollow(on) {
+  chatFollow = !!on;
+  try { localStorage.setItem(CHAT_FOLLOW_KEY, chatFollow ? '1' : '0'); } catch (_) { /* ignore */ }
+  if (!chatFollow) cancelChatFollow();
+  // Turning it on is a tap, so it unlocks speech like Auto-read does.
+  else if (chatAutoRead) unlockChatSpeech();
+  const btn = document.getElementById('chat-follow');
+  if (btn) setChatFollowState(btn);
+}
+
+// The header toggle, right after Auto-read, under the same conditions.
+function chatFollowControl() {
+  if (!chatViewEnabled() || !chatViewActive || !chatSpeechSupported()) return null;
+  const btn = el('button', 'chat-auto-read chat-follow', '');
+  btn.type = 'button';
+  btn.id = 'chat-follow';
+  btn.appendChild(icon('follow', 12));
+  btn.appendChild(el('span', 'chat-auto-read-label', 'Follow'));
+  setChatFollowState(btn);
+  btn.onclick = (ev) => { ev.stopPropagation(); setChatFollow(!chatFollow); };
+  return btn;
+}
+
+function setChatFollowState(btn) {
+  btn.classList.toggle('active', chatFollow);
+  // On, but idle until Auto-read is on too.
+  btn.classList.toggle('dormant', chatFollow && !chatAutoRead);
+  btn.setAttribute('aria-pressed', chatFollow ? 'true' : 'false');
+  let label;
+  if (!chatFollow) label = 'Switch to a session when it finishes or needs you, and read its reply';
+  else if (!chatAutoRead) label = 'Follow is on, but waits for Auto-read';
+  else label = 'Follow is on: switches to a session when it finishes or needs you, and reads its reply';
   btn.title = label;
   btn.setAttribute('aria-label', label);
 }

@@ -13,6 +13,16 @@ const epilogue = `
   setChatAutoRead, chatAutoReadControl, chatAutoReadQueue,
   get chatAutoRead(){ return chatAutoRead; },
   set chatSpeechUnlocked(v){ chatSpeechUnlocked = v; },
+  setChatFollow, chatFollowControl, chatFollowQueue, tryChatFollow, emitEvent, renderHeader, refreshChat,
+  get chatFollow(){ return chatFollow; },
+  get chatFollowArrival(){ return chatFollowArrival; },
+  set chatFollowArrival(v){ chatFollowArrival = v; },
+  set chatLastInteractionAt(v){ chatLastInteractionAt = v; },
+  get selectedId(){ return selectedId; },
+  set sessions(v){ sessions = v; },
+  set selectSession(v){ selectSession = v; },
+  set selectedBoard(v){ selectedBoard = v; },
+  get chatFollowTimer(){ return chatFollowTimer; },
   updateChatMenu, chatMenuKeydown, chatHistoryKeydown, filterChatCommands, formatChatModel, formatChatTokens,
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
@@ -802,6 +812,291 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
     delete window.speechSynthesis;
     check('no toggle in a browser without speech', T.chatAutoReadControl() === null);
     window.speechSynthesis = saved;
+  }
+
+  console.log('follow (#1507)');
+  {
+    T.chatViewFlag = true;
+    T.setChatViewActive(true);
+    const followSessions = ['FA', 'FB', 'FC', 'FD', 'FX', 'FY'].map((id) => ({ id, name: id, status: 'active' }));
+    T.sessions = followSessions;
+    // selectSession as far as Chat is concerned (the real one also repaints the
+    // sidebar and terminal, which jsdom can't): bind the session, apply Chat.
+    const switches = [];
+    T.selectSession = (id) => { switches.push(id); T.selectedId = id; T.applyChatView(); };
+    const go = (id) => { T.selectedId = id; T.applyChatView(); }; // a manual switch
+    let cur = 1;
+    const reply = (text) => ({ kind: 'assistant', text });
+    const first = (events) => T.applyChatPage(T.chatState, { supported: true, reset: true, cursor: cur++,
+      path: '/f-' + T.chatState.sessionId, terminal_id: 'T-F', agent_kind: 'claude-code', events });
+    const next = (events) => T.applyChatPage(T.chatState, { supported: true, reset: false, cursor: cur++, events });
+    const chip = (text) => [...doc.querySelectorAll('#chat-log .chat-assistant')]
+      .find((b) => b.querySelector('.chat-msg-body').textContent.trim() === text).querySelector('.chat-msg-listen');
+    const reset = () => { synth.queue.length = 0; synth.spoken.length = 0; };
+    const idle = () => { T.chatLastInteractionAt = 0; };
+    const input = doc.getElementById('chat-input');
+    T.setChatAutoRead(false);
+    T.stopChatSpeech();
+    go('FA');
+    first([reply('A backlog.')]);
+    reset();
+
+    check('off by default (nothing stored)', T.chatFollow === false
+      && window.localStorage.getItem('crow.chat.follow') === null);
+    const header = doc.getElementById('detail-header');
+    try { T.renderHeader({ id: 'FA', name: 'FA', status: 'active' }); } catch (_) { /* unrelated rows */ }
+    const pills = [...header.querySelectorAll('.detail-top > button')].map((b) => b.id);
+    check('the Follow pill sits right after Auto-read in the header',
+      pills.indexOf('chat-follow') === pills.indexOf('chat-auto-read') + 1 && pills.indexOf('chat-auto-read') >= 0);
+    const ctl = header.querySelector('#chat-follow');
+    check('…unpressed, labelled Follow', ctl && ctl.getAttribute('aria-pressed') === 'false'
+      && /Follow/.test(ctl.textContent));
+
+    T.chatSpeechUnlocked = true;
+    ctl.click();
+    check('turning it on presses it and stores it', T.chatFollow === true
+      && ctl.getAttribute('aria-pressed') === 'true' && window.localStorage.getItem('crow.chat.follow') === '1');
+    check('…muted while Auto-read is off', ctl.classList.contains('dormant'));
+    T.emitEvent('taskComplete', 'FB');
+    check('with Auto-read off, an event switches nothing', T.chatFollowQueue.length === 0 && switches.length === 0);
+
+    header.querySelector('#chat-auto-read').click();
+    check('turning Auto-read on wakes Follow', T.chatAutoRead === true && !ctl.classList.contains('dormant'));
+    reset();
+
+    T.emitEvent('checksFailing', 'FB');
+    T.emitEvent('changesRequested', 'FB');
+    T.emitEvent('reviewRequested', 'FB');
+    check('checks, changes requested and reviews are not followed', T.chatFollowQueue.length === 0);
+    T.emitEvent('taskComplete', 'FA');
+    check('the selected session is not followed (auto-read hears it)', T.chatFollowQueue.length === 0);
+    T.emitEvent('taskComplete', 'NOPE');
+    check('an unknown session is not followed', T.chatFollowQueue.length === 0);
+    T.emitEvent('taskComplete', 'FB');
+    T.emitEvent('agentWaiting', 'FB');
+    check('done or needs-you for another session is queued once', T.chatFollowQueue.length === 1
+      && T.chatFollowQueue[0] === 'FB' && switches.length === 0);
+
+    T.chatLastInteractionAt = Date.now();
+    T.tryChatFollow();
+    check('no switch right after the user touches the page', switches.length === 0 && T.chatFollowQueue.length === 1);
+    idle();
+    input.value = 'half a thought';
+    T.tryChatFollow();
+    check('no switch while the composer holds a draft', switches.length === 0 && T.chatFollowQueue.length === 1);
+    input.value = '';
+    let hidden = true;
+    Object.defineProperty(doc, 'hidden', { configurable: true, get: () => hidden });
+    T.tryChatFollow();
+    check('no switch while the tab is hidden', switches.length === 0);
+    hidden = false;
+    doc.dispatchEvent(new window.Event('visibilitychange'));
+    T.tryChatFollow();
+    check('…nor right after coming back to it', switches.length === 0);
+    idle();
+    const sw = doc.getElementById('session-switcher');
+    sw.hidden = false;
+    T.tryChatFollow();
+    check('no switch while the session switcher is open', switches.length === 0);
+    sw.hidden = true;
+    T.tryChatFollow();
+    check('…the held switch goes once the guard clears', JSON.stringify(switches) === '["FB"]'
+      && T.selectedId === 'FB' && T.chatFollowQueue.length === 0 && T.chatFollowArrival === 'FB');
+
+    first([reply('B older.'), { kind: 'user', text: 'ok' }, reply('B latest.')]);
+    check('on arrival, the latest reply is read (and only that one)',
+      JSON.stringify(synth.spoken) === '["B latest."]' && chip('B latest.').classList.contains('speaking')
+      && T.chatFollowArrival === null);
+    synth.endAll();
+    first([reply('B older.'), reply('B latest.')]);
+    check('…once: a later reset page for it reads nothing', synth.spoken.length === 1);
+    next([reply('B live.')]);
+    check('…and new replies are read as usual after', synth.spoken[synth.spoken.length - 1] === 'B live.');
+
+    // B's live reply is playing: C then D finish.
+    T.emitEvent('taskComplete', 'FC');
+    T.emitEvent('agentWaiting', 'FD');
+    T.emitEvent('taskComplete', 'FC');
+    T.tryChatFollow();
+    check('a playing reply holds the switch; finishers queue oldest first',
+      JSON.stringify(switches) === '["FB"]' && JSON.stringify([...T.chatFollowQueue]) === '["FC","FD"]');
+    let c0 = synth.cancels;
+    synth.endAll();
+    check('when the reply ends, the next session is followed (no cancel)',
+      JSON.stringify(switches) === '["FB","FC"]' && T.selectedId === 'FC' && synth.cancels === c0);
+    T.tryChatFollow();
+    check('…and the one after waits for its first page', JSON.stringify(switches) === '["FB","FC"]');
+    first([reply('C reply.')]);
+    check('C is read on arrival', synth.spoken[synth.spoken.length - 1] === 'C reply.');
+    synth.endAll();
+    check('…then D is followed', T.selectedId === 'FD');
+    first([]);
+    check('a first page with no reply reads nothing and frees the flag',
+      T.chatFollowArrival === null && synth.spoken[synth.spoken.length - 1] === 'C reply.');
+
+    // A Follow switch whose first page fails: the flag clears and the next
+    // pending session is followed, rather than waiting for some later event.
+    T.emitEvent('taskComplete', 'FA');
+    T.emitEvent('taskComplete', 'FB');
+    idle();
+    T.tryChatFollow();
+    check('(setup) A is followed, B waits', T.selectedId === 'FA' && T.chatFollowArrival === 'FA'
+      && JSON.stringify([...T.chatFollowQueue]) === '["FB"]');
+    T.chatState.inflight = false; // its real fetch (a never-answering stub) is abandoned
+    let failOnce = true;
+    T.rpc = () => (failOnce ? (failOnce = false, Promise.reject(new Error('transcript gone'))) : pending());
+    await T.refreshChat();
+    check('a failed first page frees the flag and follows the next session at once',
+      T.selectedId === 'FB' && T.chatFollowArrival === 'FB' && T.chatFollowQueue.length === 0
+      && switches[switches.length - 1] === 'FB');
+    T.rpc = pending;
+    first([reply('B after a failed A.')]);
+    check('…and that session is read on arrival', synth.spoken[synth.spoken.length - 1] === 'B after a failed A.');
+    synth.endAll();
+
+    reset();
+    T.chatFollowArrival = 'FX'; // a Follow switch to X is in flight…
+    go('FY');                   // …and the user picks Y first
+    first([reply('Y backlog.')]);
+    check('a manual switch drops the one-shot and reads nothing already there',
+      synth.spoken.length === 0 && T.chatFollowArrival === null);
+    go('FX');
+    first([reply('X backlog.')]);
+    check('…nor does a manual switch (or a notification click) to the target', synth.spoken.length === 0);
+    T.chatState = null;
+    go('FX'); // a reload: a fresh state with no Follow switch behind it
+    first([reply('X backlog.')]);
+    check('a reload reads nothing already there', synth.spoken.length === 0);
+
+    next([reply('X live.')]);
+    T.emitEvent('taskComplete', 'FA');
+    T.emitEvent('taskComplete', 'FB');
+    chip('X live.').click(); // Stop
+    check('Stop drops the pending switches, and Follow stays on',
+      T.chatFollowQueue.length === 0 && T.chatFollow === true && T.selectedId === 'FX');
+    synth.endAll();
+    T.tryChatFollow();
+    check('…so nothing is followed after it', T.selectedId === 'FX');
+
+    T.emitEvent('taskComplete', 'FA');
+    ctl.click(); // Follow off
+    check('Follow off cancels pending switches', T.chatFollowQueue.length === 0 && T.chatFollow === false
+      && window.localStorage.getItem('crow.chat.follow') === '0');
+    T.emitEvent('taskComplete', 'FA');
+    check('…and follows nothing new', T.chatFollowQueue.length === 0);
+    ctl.click(); // on
+    T.emitEvent('taskComplete', 'FA');
+    T.setChatAutoRead(false);
+    check('Auto-read off cancels pending switches', T.chatFollowQueue.length === 0
+      && ctl.classList.contains('dormant'));
+    T.setChatAutoRead(true);
+
+    T.emitEvent('taskComplete', 'FA');
+    T.setChatViewActive(false);
+    T.applyChatView();
+    check('switching to the terminal cancels pending switches', T.chatFollowQueue.length === 0);
+    T.emitEvent('taskComplete', 'FA');
+    check('…and nothing is followed from Terminal', T.chatFollowQueue.length === 0);
+    T.setChatViewActive(true);
+    // The exits that bypass applyChatView (#1488) drop waiting switches
+    // themselves, with no later tryChatFollow needed to notice.
+    const exitCancels = (name, exit) => {
+      T.selectedBoard = null;
+      T.sessions = followSessions; // expiry clears the page's session list
+      go('FX');
+      T.emitEvent('taskComplete', 'FA');
+      const queued = T.chatFollowQueue.length === 1;
+      const n = switches.length;
+      try { exit(); } catch (_) { /* unrelated repaint in jsdom */ }
+      check(name + ' drops waiting switches at once', queued && T.chatFollowQueue.length === 0
+        && !T.chatFollowTimer && switches.length === n);
+    };
+    exitCancels('the empty-detail state', () => T.showEmptyDetail('Select a session'));
+    exitCancels('session expiry (CROW-1460 scrim)', () => T.clearPageDataOnExpiry());
+    exitCancels('opening a board (never pulled off a board)', () => T.selectBoard('tickets'));
+    T.sessions = followSessions; // expiry cleared the page's session list
+    T.emitEvent('taskComplete', 'FA');
+    check('…and nothing is followed from a board', T.chatFollowQueue.length === 0);
+    try { T.selectBoard('grid'); } catch (_) { /* unrelated repaint in jsdom */ }
+    T.emitEvent('taskComplete', 'FA');
+    check('…or from the grid', T.chatFollowQueue.length === 0);
+
+    T.selectedBoard = null;
+    go('FX');
+    T.chatSpeechUnlocked = false; // a reload with both on, before the first tap
+    T.emitEvent('taskComplete', 'FA');
+    check('before the first tap, nothing is followed (its reply could not be read)',
+      T.chatFollowQueue.length === 0);
+    T.chatSpeechUnlocked = true;
+
+    // The production pump, on fake timers (the file stubs setTimeout to a
+    // no-op): emit → settle → switch, then a manual switch before the target's
+    // first page lands must not orphan the rest of the queue.
+    {
+      const timers = new Map();
+      let nextTimer = 1;
+      const realST = window.setTimeout;
+      const realCT = window.clearTimeout;
+      window.setTimeout = (fn, ms) => { timers.set(nextTimer, fn); return nextTimer++; };
+      window.clearTimeout = (id) => { timers.delete(id); };
+      const fire = () => {
+        const due = [...timers.values()];
+        timers.clear();
+        for (const fn of due) { try { fn(); } catch (_) { /* unrelated jsdom repaint */ } }
+      };
+      try {
+        go('FA');
+        first([reply('A again.')]);
+        reset();
+        idle();
+        T.emitEvent('taskComplete', 'FB');
+        T.emitEvent('taskComplete', 'FC');
+        check('(pump) nothing switches before the settle delay', T.selectedId === 'FA' && T.chatFollowTimer !== null);
+        fire();
+        check('the settle timer follows the oldest session', T.selectedId === 'FB' && T.chatFollowArrival === 'FB'
+          && JSON.stringify([...T.chatFollowQueue]) === '["FC"]');
+        check('…and leaves a watchdog for the rest of the queue', T.chatFollowTimer !== null);
+        go('FA'); // the user picks A before B's first page lands
+        T.chatLastInteractionAt = Date.now(); // …with a click
+        check('a manual switch drops the pending arrival', T.chatFollowArrival === null);
+        fire();
+        check('the watchdog holds while the user has just acted', T.selectedId === 'FA'
+          && T.chatFollowQueue.length === 1 && T.chatFollowTimer !== null);
+        idle();
+        fire();
+        check('…then follows the next session, with no other event to pump it',
+          T.selectedId === 'FC' && T.chatFollowArrival === 'FC' && T.chatFollowQueue.length === 0);
+        first([reply('C via the watchdog.')]);
+        check('…and reads it on arrival', synth.spoken[synth.spoken.length - 1] === 'C via the watchdog.');
+        T.stopChatSpeech();
+        fire();
+        check('an empty queue leaves no timer behind', T.chatFollowTimer === null && timers.size === 0);
+      } finally {
+        window.setTimeout = realST;
+        window.clearTimeout = realCT;
+      }
+    }
+
+    const realSet = window.Storage.prototype.setItem;
+    window.Storage.prototype.setItem = () => { throw new Error('blocked'); };
+    let threw = false;
+    try { T.setChatFollow(false); } catch (_) { threw = true; }
+    window.Storage.prototype.setItem = realSet;
+    check('blocked storage never throws', !threw && T.chatFollow === false);
+    check('…and the stored value is read inside try/catch, so blocked storage on load means off',
+      fs.readFileSync(WEB + 'chat.js', 'utf8').includes(
+        "try { chatFollow = localStorage.getItem(CHAT_FOLLOW_KEY) === '1'; } catch (_) { /* private mode */ }"));
+
+    T.setChatViewActive(false);
+    check('no Follow pill in terminal mode', T.chatFollowControl() === null);
+    T.setChatViewActive(true);
+    const saved = window.speechSynthesis;
+    delete window.speechSynthesis;
+    check('no Follow pill in a browser without speech', T.chatFollowControl() === null);
+    window.speechSynthesis = saved;
+    T.setChatAutoRead(false);
+    T.stopChatSpeech();
+    T.sessions = [];
   }
 
   const css = fs.readFileSync(WEB + 'app.css', 'utf8');

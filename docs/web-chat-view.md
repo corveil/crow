@@ -53,6 +53,20 @@ Platform limits:
 - **Locked screen or background tab.** Speech stops when the screen locks or the browser goes to the background. Chat also stops polling while the tab is hidden, so nothing new arrives. When you come back, the next poll brings everything that arrived meanwhile, and those replies are read in order. Tap Stop to skip them.
 - **One speech queue.** Spoken notifications (Settings → Notifications) share the browser's one speech queue. A notification that arrives during a reply waits until that reply ends, and Stop also drops a notification queued behind it.
 
+### Follow
+
+Auto-read only hears the session you're looking at. **Follow**, right after **Auto-read** in the header, fills that gap: when another session finishes or needs you, Chat switches to it and reads its latest reply. It is off by default, kept per browser (in `localStorage`) like Auto-read, and shows under the same conditions. It does nothing while Auto-read is off; the pill then shows a dashed outline.
+
+- **What it follows.** A session finishing its turn, or waiting on you (the **Task complete** and **Agent waiting** notifications). Not failing checks, requested changes, review requests or automation events. The session you're already on is never "followed": Auto-read reads it.
+- **Only from a session's Chat.** Follow never pulls you off a board, the grid or the terminal. Opening one of those drops any switch that was waiting.
+- **One reply at a time.** If a reply is playing (read automatically or by Listen), the switch waits until it ends. Sessions that finish meanwhile are followed in the order they finished, each once.
+- **It reads the reply it came for, once.** The switch reads that session's latest reply, then later replies as they arrive. Switching session yourself, clicking a notification, opening Chat or reloading still reads nothing that's already there.
+- **It doesn't interrupt you.** No switch while the composer holds unsent text, within 5 seconds of a key press, tap, click or scroll, or while a dialog, Settings or the session switcher is open. The switch goes once that clears.
+- **Stop drops the waiting switches.** Tap Stop on the playing reply and the sessions waiting their turn aren't followed. Follow stays on, so the next session to finish is. Turning Follow or Auto-read off drops them too.
+- With spoken notifications on, you hear "crow 1078 is done" first, then the reply.
+
+Follow has Auto-read's platform limits. It does nothing until the page has had its first tap (turning Follow on counts), because the reply it switched for couldn't be read. It doesn't switch while the tab is hidden; a waiting switch goes when you come back and the page has been left alone for 5 seconds. And it can't wake a locked phone.
+
 ## `/` menu (Claude Code)
 
 Type `/` at the start of the composer to pick a skill or command. Use ↑/↓ to move, Enter or Tab to pick, and Esc to close; on a phone, tap an entry. Picking inserts `/name ` and nothing else. Claude Code expands it when the message arrives in the terminal, exactly as if you had typed it there. Claude expands one skill per message.

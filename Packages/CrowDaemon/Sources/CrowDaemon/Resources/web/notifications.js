@@ -607,6 +607,9 @@ function emitEvent(event, key, detail) {
   if (!spoke || (N && N.chimeBeforeVoice)) playEventSound(event, key);
   showEventNotification(event, key, detail);
   recordNotification(event, key, detail);
+  // Chat Follow (#1507, chat.js) switches to a session that finished or needs
+  // you, after this event's spoken line is queued.
+  if (typeof chatFollowEvent === 'function') chatFollowEvent(event, key);
 }
 
 // --- Notification center: history + unread counter (CROW-909) ---------------

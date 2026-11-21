@@ -2033,6 +2033,9 @@ select.text-prompt-input { cursor: pointer; }
   padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
 }
 .chat-auto-read.active { background: var(--accent-soft); color: var(--accent); }
+/* Follow (#1507, chatFollowControl) shares the pill; on but waiting for
+   Auto-read, it reads as pressed yet muted. */
+.chat-follow.dormant { background: transparent; color: var(--text-muted); border-style: dashed; }
 
 #chat-view { display: none; }
 #app.chat-active #tabbar,
