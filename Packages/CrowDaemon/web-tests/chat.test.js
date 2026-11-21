@@ -212,9 +212,10 @@ fB.querySelector('.chat-code-copy').click();
 check('fallback code Copy is the block body', copied.pop() === 'make test');
 T.chatMd = T.buildChatMarkdown();
 
-console.log('listen and select');
-check('no Listen when speechSynthesis is missing (jsdom has none)',
-  !log.querySelector('.chat-msg-listen') && !!log.querySelector('.chat-msg-select'));
+console.log('listen');
+check('no Listen when speechSynthesis is missing (jsdom has none)', !log.querySelector('.chat-msg-listen'));
+check('bubbles have no Select chip (#1509)', !log.querySelector('.chat-msg-select')
+  && [...log.querySelectorAll('.chat-msg-actions')].every((a) => a.children.length === 1));
 // A fake speechSynthesis with a real queue: cancel() errors every queued
 // utterance ('canceled'), endAll() plays the queue to the end.
 const synth = {
@@ -238,8 +239,11 @@ const listenA = lA.querySelector('.chat-msg-actions > .chat-msg-listen');
 const listenB = lB.querySelector('.chat-msg-listen');
 check('every assistant bubble gets Listen', listenA && listenB);
 check('user bubbles get no Listen', !log.querySelector('.chat-user .chat-msg-listen'));
-check('Listen and Select add no text to the message (selection / Copy stay clean)',
-  lA.querySelector('.chat-msg-body').textContent === lA.textContent && !/Listen|Select/.test(lA.textContent));
+check('Listen adds no text to the message (selection / Copy stay clean)',
+  lA.querySelector('.chat-msg-body').textContent === lA.textContent && !/Listen/.test(lA.textContent));
+check('assistant bubbles carry only Copy and Listen (no Select, #1509)',
+  [...lA.querySelector('.chat-msg-actions').children].map((c) => c.className).join('|')
+    === 'chat-chip chat-copy chat-msg-copy|chat-chip chat-msg-listen');
 listenA.click();
 check('Listen speaks the rendered text: no markdown, code block replaced, URL read as host',
   JSON.stringify(synth.spoken) === JSON.stringify(
@@ -288,14 +292,6 @@ check('a run-on sentence is cut at spaces', runChunks.length === 3
 listenA.click();
 check('a long reply queues every chunk at once (inside the tap, for iOS)', synth.queue.length === 6);
 T.stopChatSpeech();
-
-const selA = lA.querySelector('.chat-msg-select');
-selA.click();
-const sel = window.getSelection();
-check('Select selects exactly the bubble body', sel.rangeCount === 1
-  && sel.getRangeAt(0).startContainer === lA.querySelector('.chat-msg-body')
-  && sel.toString() === lA.querySelector('.chat-msg-body').textContent);
-sel.removeAllRanges();
 
 delete window.speechSynthesis;
 T.applyChatPage(st, { supported: true, reset: true, cursor: 6, path: '/u.jsonl', events: [

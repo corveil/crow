@@ -567,9 +567,9 @@ function formatChatDuration(ms) {
 
 // A message bubble: the rendered markdown in .chat-msg-body, plus a row of
 // chips (.chat-msg-actions): Copy hands back the *source* markdown
-// (CROW-1392), Listen reads the rendered text aloud (assistant only), Select
-// selects the body (#1488). The chips' labels are CSS content (no text nodes)
-// and user-select:none, so they never land in a hand-made selection or in
+// (CROW-1392) and Listen reads the rendered text aloud (assistant only,
+// #1488). The chips' labels are CSS content (no text nodes) and
+// user-select:none, so they never land in a hand-made selection or in
 // textContent.
 function chatBubble(role, text) {
   const src = text || '';
@@ -582,7 +582,6 @@ function chatBubble(role, text) {
   const actions = el('div', 'chat-msg-actions');
   actions.appendChild(chatCopyButton('chat-chip chat-copy chat-msg-copy', 'Copy message as markdown', () => src));
   if (role === 'assistant' && chatSpeechSupported()) actions.appendChild(chatListenButton(body));
-  actions.appendChild(chatSelectButton(body));
   b.appendChild(actions);
   // Desktop right-click, like the terminal's menu. Not on touch: Android fires
   // contextmenu for the long press that starts a text selection. Checked per
@@ -621,24 +620,6 @@ function chatCopyButton(className, label, getText) {
       btn.classList.remove('copied');
       btn.setAttribute('aria-label', label);
     }, 1500);
-  };
-  return btn;
-}
-
-// Select (#1488): select exactly the bubble's rendered body, for ⌘C or macOS
-// "Speak selection" (⌥Esc). Shown on `pointer: fine` only (app.css): iOS
-// often won't offer its Copy / Speak menu for a selection made by script.
-function chatSelectButton(body) {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'chat-chip chat-msg-select';
-  btn.title = 'Select message text';
-  btn.setAttribute('aria-label', 'Select message text');
-  btn.onclick = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const sel = window.getSelection && window.getSelection();
-    if (sel) sel.selectAllChildren(body);
   };
   return btn;
 }
