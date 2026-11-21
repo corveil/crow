@@ -455,9 +455,12 @@ async function refreshChat() {
     applyChatPage(st, res || {});
   } catch (e) {
     if (chatState !== st) return;
-    // A Follow switch whose page failed reads nothing, rather than holding
-    // every later switch behind it.
-    if (chatFollowArrival === st.sessionId) chatFollowArrival = null;
+    // A Follow switch whose page failed reads nothing, and the next pending
+    // switch is tried, rather than every later one waiting behind it.
+    if (chatFollowArrival === st.sessionId) {
+      chatFollowArrival = null;
+      if (chatFollowQueue.length) tryChatFollow();
+    }
     st.reason = (e && e.message) || 'Could not read the transcript.';
     renderChatStatus();
   } finally {

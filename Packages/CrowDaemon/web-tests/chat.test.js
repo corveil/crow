@@ -13,7 +13,7 @@ const epilogue = `
   setChatAutoRead, chatAutoReadControl, chatAutoReadQueue,
   get chatAutoRead(){ return chatAutoRead; },
   set chatSpeechUnlocked(v){ chatSpeechUnlocked = v; },
-  setChatFollow, chatFollowControl, chatFollowQueue, tryChatFollow, emitEvent, renderHeader,
+  setChatFollow, chatFollowControl, chatFollowQueue, tryChatFollow, emitEvent, renderHeader, refreshChat,
   get chatFollow(){ return chatFollow; },
   get chatFollowArrival(){ return chatFollowArrival; },
   set chatFollowArrival(v){ chatFollowArrival = v; },
@@ -932,6 +932,26 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
     check('a first page with no reply reads nothing and frees the flag',
       T.chatFollowArrival === null && synth.spoken[synth.spoken.length - 1] === 'C reply.');
 
+    // A Follow switch whose first page fails: the flag clears and the next
+    // pending session is followed, rather than waiting for some later event.
+    T.emitEvent('taskComplete', 'FA');
+    T.emitEvent('taskComplete', 'FB');
+    idle();
+    T.tryChatFollow();
+    check('(setup) A is followed, B waits', T.selectedId === 'FA' && T.chatFollowArrival === 'FA'
+      && JSON.stringify([...T.chatFollowQueue]) === '["FB"]');
+    T.chatState.inflight = false; // its real fetch (a never-answering stub) is abandoned
+    let failOnce = true;
+    T.rpc = () => (failOnce ? (failOnce = false, Promise.reject(new Error('transcript gone'))) : pending());
+    await T.refreshChat();
+    check('a failed first page frees the flag and follows the next session at once',
+      T.selectedId === 'FB' && T.chatFollowArrival === 'FB' && T.chatFollowQueue.length === 0
+      && switches[switches.length - 1] === 'FB');
+    T.rpc = pending;
+    first([reply('B after a failed A.')]);
+    check('…and that session is read on arrival', synth.spoken[synth.spoken.length - 1] === 'B after a failed A.');
+    synth.endAll();
+
     reset();
     T.chatFollowArrival = 'FX'; // a Follow switch to X is in flight…
     go('FY');                   // …and the user picks Y first
@@ -982,7 +1002,7 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
     idle();
     T.tryChatFollow();
     check('a board opened meanwhile cancels it (never pulled off a board)',
-      T.chatFollowQueue.length === 0 && switches[switches.length - 1] === 'FD');
+      T.chatFollowQueue.length === 0 && switches[switches.length - 1] === 'FB');
     T.emitEvent('taskComplete', 'FA');
     check('…and nothing is followed from a board', T.chatFollowQueue.length === 0);
     try { T.selectBoard('grid'); } catch (_) { /* unrelated repaint in jsdom */ }
