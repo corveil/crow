@@ -970,8 +970,27 @@ public final class SessionHookState {
     /// Kept across relaunches: it answers "did my text get through", which a
     /// relaunch doesn't change. In memory only.
     public var lastPromptAt: Date?
+    /// When Crow itself typed `/compact` into this agent (CROW-1493,
+    /// pre-expiry compaction). The `PostCompact` that follows is Crow's doing,
+    /// not a sign the session outgrew its ticket, so it is not counted against
+    /// the efficiency grade (ADR 0008). In memory only.
+    public var crowCompactionRequestedAt: Date?
 
     public init() {}
+
+    /// How long after Crow sends `/compact` a `PostCompact` is still taken as
+    /// its result. A compaction of a very large context takes about a minute;
+    /// this leaves room for a slow one without excusing the operator's next.
+    public static let crowCompactionWindow: TimeInterval = 15 * 60
+
+    /// True when a `PostCompact` at `date` answers Crow's own `/compact`, and
+    /// clears the request so only one compaction is excused per send.
+    public func consumeCrowCompactionRequest(at date: Date = Date()) -> Bool {
+        guard let requested = crowCompactionRequestedAt else { return false }
+        crowCompactionRequestedAt = nil
+        let elapsed = date.timeIntervalSince(requested)
+        return elapsed >= 0 && elapsed <= Self.crowCompactionWindow
+    }
 
     /// Hook events that mark a prompt the agent accepted (CROW-1475).
     public static let promptSubmitEventName = "UserPromptSubmit"

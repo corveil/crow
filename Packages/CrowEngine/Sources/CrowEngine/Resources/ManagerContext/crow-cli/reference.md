@@ -10,7 +10,7 @@ crow new-session --name "feature-name"          → {"session_id":"<uuid>","name
 crow rename-session --session <uuid> "new-name" → {"session_id":"...","name":"..."}
 crow select-session --session <uuid>            → {"session_id":"..."}
 crow list-sessions                              → {"sessions":[...]}
-crow get-session --session <uuid>               → {id, name, status, ticket_url, agent_state, last_prompt_at, agent_terminal_id, ..., agent_conversations:[{id, agent_kind, started_at, last_active_at}]}
+crow get-session --session <uuid>               → {id, name, status, ticket_url, agent_state, last_prompt_at, agent_terminal_id, ..., agent_conversations:[{id, agent_kind, started_at, last_active_at}], context:{tokens, max_tokens, idle_seconds, cache_ttl_seconds, cache_expired, large, compacted_at, …}|null}
 crow find-session --agent-session <id|prefix|transcript path> → {session_id, name, status, kind, agent_kind, conversation:{…}}  agent conversation id → Crow session
 crow wait --session <uuid> --until idle|working|waiting_permission|starting|exited [--timeout 60] → blocks; errors on exit/timeout
 crow set-status --session <uuid> active|paused|inReview|completed|archived
@@ -444,7 +444,7 @@ crow mcp token revoke --id <uuid> | --name N                  → {"revoked":tru
 Settings → Automation as a CLI verb. Every `set` flag is a patch; passing none is an error.
 
 ```
-crow automation get                                                     → {"automation":{toggles, auto_respond, defaults, config_readable}}
+crow automation get                                                     → {"automation":{toggles, auto_respond, context_compaction, defaults, config_readable}}
 crow automation set [--remote-control-enabled true|false]
                     [--manager-auto-permission-mode true|false]         → needs `crow restart-manager`; returns "manager_restart_required"
                     [--review-auto-permission-mode true|false]
@@ -457,7 +457,11 @@ crow automation set [--remote-control-enabled true|false]
                     [--respond-to-changes-requested true|false]
                     [--respond-to-failed-checks true|false]
                     [--auto-re-request-review true|false]
-                    [--auto-rebase-and-resolve-conflicts true|false]    → {"automation":{...},"restart_required":false,"manager_restart_required":bool}
+                    [--auto-rebase-and-resolve-conflicts true|false]
+                    [--auto-compact true|false]                         → /compact idle, large Claude Code sessions before their cache expires
+                    [--auto-compact-min-context-tokens N]               → 10000–10000000, default 200000
+                    [--auto-compact-idle-minutes N]                     → 1–1440, default 50
+                                                                        → {"automation":{...},"restart_required":false,"manager_restart_required":bool}
 ```
 
 Booleans take an explicit `true`/`false` — a bare flag can't express "leave alone", and six of these default to **on** (`manager`/`review`/`jobs` auto permission mode, `attribution-trailers`, `respond-to-changes-requested`, `auto-re-request-review`). `--jobs-auto-permission-mode` lives here even though the web UI puts it under the Jobs tab, so all five permission modes read and write as one group.
@@ -465,6 +469,8 @@ Booleans take an explicit `true`/`false` — a bare flag can't express "leave al
 `--auto-re-request-review` (CROW-921) is the one auto-respond toggle that types nothing into a terminal: when a changes-requested PR's fix has landed and no review request is pending, the daemon runs `gh pr edit --add-reviewer` itself. That's deliberate — the PRs it rescues are exactly the ones no prompt can reach.
 
 Everything applies within ~1 board poll (no `crowd` restart) — permission modes and `--remote-control-enabled` to newly launched sessions, `--attribution-trailers` to newly created worktrees. `--manager-auto-permission-mode` is the exception: it's baked into the Manager terminal's stored command, so a change returns `manager_restart_required: true` and needs `crow restart-manager`.
+
+`--auto-compact` (CROW-1493, off by default) types `/compact` into a Claude Code session whose `context.tokens` (see `get-session`) is at least the threshold, once it has been idle `--auto-compact-idle-minutes` since its last model call and while its prompt cache is still warm. It never sends into a session whose `agent_state` isn't `idle` or whose composer holds unsent text. Compaction keeps a summary, not the conversation, so the agent loses detail; see `docs/context-compaction.md`.
 
 The Automation tab's three board-filter lists are `AppConfig.defaults` fields, so **`crow defaults set` writes them** (above) — one writer, one set of list semantics. `crow automation get` echoes them read-only under `defaults`, including the derived `effective_exclude_review_repos` (the global list unioned with every workspace's own, which is what the review board actually filters on), so the tab still reads as a whole from one call.
 

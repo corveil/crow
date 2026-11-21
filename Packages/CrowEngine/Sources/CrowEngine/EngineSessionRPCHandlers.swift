@@ -62,8 +62,17 @@ func makeEngineSessionHandlers(
             // with it off there is no context, no ledger read and no
             // `recording` field. Loaded off the main actor.
             let recDevRoot = ConfigStore.loadDevRoot()
-            let recording = await RecordingStatusJSON.Context.load(
-                devRoot: recDevRoot, config: recDevRoot.flatMap { ConfigStore.loadConfig(devRoot: $0) })
+            let recConfig = recDevRoot.flatMap { ConfigStore.loadConfig(devRoot: $0) }
+            let recording = await RecordingStatusJSON.Context.load(devRoot: recDevRoot, config: recConfig)
+            // Context size (CROW-1493): the source needs AppState, the
+            // transcript read must stay off the MainActor (#892).
+            let contextSource = await MainActor.run {
+                capturedAppState.sessions.first(where: { $0.id == id })
+                    .flatMap { SessionContextReport.source(for: $0, appState: capturedAppState) }
+            }
+            let contextHit = contextSource.flatMap { SessionContextReport.snapshot(for: $0) }
+            let largeThreshold = (recConfig?.contextCompaction ?? ContextCompactionSettings())
+                .effectiveMinContextTokens
             return try await MainActor.run {
                 guard let s = capturedAppState.sessions.first(where: { $0.id == id }) else {
                     throw RPCError.applicationError("Session not found")
@@ -133,6 +142,10 @@ func makeEngineSessionHandlers(
                     // (CROW-1476), so a conversation id in a gateway log or a
                     // transcript file name maps back here. Ids and times only.
                     "agent_conversations": AgentConversationRPC.conversationsJSON(s),
+                    // Context size and cache state from the latest model call in
+                    // that conversation's transcript (CROW-1493). Numbers and
+                    // times only, no transcript text.
+                    "context": SessionContextReport.json(contextHit, largeThreshold: largeThreshold),
                 ]
                 // Did the agent's traffic reach the gateway, and has its
                 // transcript reached Corveil? Base URL, key ids/names, org names

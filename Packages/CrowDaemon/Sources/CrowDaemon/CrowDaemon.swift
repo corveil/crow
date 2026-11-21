@@ -486,7 +486,8 @@ public enum CrowDaemon {
             + "autoMergeWatcherEnabled=\(cfg?.autoMergeWatcherEnabled ?? false) "
             + "autoCreateWatcherEnabled=\(cfg?.autoCreateWatcherEnabled ?? false) "
             + "respondToChangesRequested=\(cfg?.autoRespond.respondToChangesRequested ?? false) "
-            + "autoRebaseAndResolveConflicts=\(cfg?.autoRespond.autoRebaseAndResolveConflicts ?? false)")
+            + "autoRebaseAndResolveConflicts=\(cfg?.autoRespond.autoRebaseAndResolveConflicts ?? false) "
+            + "autoCompact=\(cfg?.contextCompaction.autoCompact ?? false)")
 
         // Scheduled jobs (CROW-317) — run them headless too. `JobScheduler.start()`
         // uses a `RunLoop.main` Timer the daemon lacks, so build it here and drive
@@ -512,6 +513,23 @@ public enum CrowDaemon {
             return scheduler
         }
         if let jobScheduler { startJobPoll(scheduler: jobScheduler) }
+
+        // Pre-expiry compaction (CROW-1493): types `/compact` into large, idle
+        // Claude Code sessions while their prompt cache is still warm. Needs a
+        // pane to type into, so tmux-only like the jobs above; the setting is
+        // re-read every tick and the whole pass is a no-op while it's off (the
+        // default).
+        if sessionService != nil {
+            let autoCompact = await MainActor.run {
+                AutoCompactController(
+                    appState: appState,
+                    settingsProvider: {
+                        ConfigStore.loadConfig(devRoot: options.devRoot)?.contextCompaction
+                            ?? ContextCompactionSettings()
+                    })
+            }
+            startAutoCompactPoll(controller: autoCompact)
+        }
 
         // Upstream version check (CROW-938): compare the stamped build SHA against
         // corveil/crow main. Runs on a long interval and caches the result in

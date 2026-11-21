@@ -1190,6 +1190,10 @@ button.scratch-link:hover { border-color: var(--blue); }
 .session-row.status-accent { border-left-width: 3px; padding-left: 8px; }
 .row-lead { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
 .row-trail { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+/* Context size (CROW-1493): muted until it passes the large threshold. */
+.ctx-badge { font-size: 10px; line-height: 1; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ctx-badge.ctx-large { color: var(--orange); }
+.ctx-badge.ctx-cold { font-weight: 600; }
 .dot.glow { box-shadow: 0 0 5px 0 currentColor; }
 .rc-glyph { color: var(--accent); display: inline-flex; align-items: center; flex: 0 0 auto; }
 /* Recording indicator (debug mode, CROW-1423): gateway + transcript-upload glyphs. */

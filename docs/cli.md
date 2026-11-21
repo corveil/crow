@@ -341,7 +341,7 @@ config_readable is false when config.json exists but could not be decoded — th
 Change the automation settings.
 
 ```
-crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--review-in-progress-label <review-in-progress-label>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>] [--auto-re-request-review <auto-re-request-review>]
+crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--review-in-progress-label <review-in-progress-label>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>] [--auto-re-request-review <auto-re-request-review>] [--auto-compact <auto-compact>] [--auto-compact-min-context-tokens <auto-compact-min-context-tokens>] [--auto-compact-idle-minutes <auto-compact-idle-minutes>]
 ```
 
 Only the flags you pass change; at least one is required.
@@ -349,6 +349,8 @@ Only the flags you pass change; at least one is required.
 Everything here is live within about one board poll (~60s) — the daemon re-reads config.json rather than holding a snapshot, so no crowd restart is needed. The permission modes and --remote-control-enabled apply to newly launched sessions, and --attribution-trailers to newly created worktrees; running sessions and existing worktrees are untouched.
 
 --manager-auto-permission-mode is the one exception: it is baked into the Manager terminal's stored command, so it needs `crow restart-manager` (or an app relaunch) to take effect. A change to it returns "manager_restart_required": true.
+
+--auto-compact sends /compact into idle Claude Code sessions whose context is at least --auto-compact-min-context-tokens, once they have been idle --auto-compact-idle-minutes and while their prompt cache is still warm. Compaction keeps a summary, not the conversation: the agent loses detail. See docs/context-compaction.md.
 
 The tab's three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos) are `AppConfig.defaults` fields, so they belong to `crow defaults set` — one writer, one set of semantics. `crow automation get` echoes them read-only for context.
 
@@ -367,6 +369,9 @@ The tab's three board-filter lists (excluded review repos, ignored review labels
 | `--respond-to-failed-checks` | `<respond-to-failed-checks>` | no | Type a fix-it instruction into the session when CI checks fail (true or false) |
 | `--auto-rebase-and-resolve-conflicts` | `<auto-rebase-and-resolve-conflicts>` | no | Rebase onto the base branch and force-with-lease push on conflict (true or false) |
 | `--auto-re-request-review` | `<auto-re-request-review>` | no | Re-request review once a changes-requested PR's findings are addressed (true or false) |
+| `--auto-compact` | `<auto-compact>` | no | Type /compact into large, idle Claude Code sessions before their prompt cache expires. Compaction loses detail (true or false) |
+| `--auto-compact-min-context-tokens` | `<auto-compact-min-context-tokens>` | no | Context size, in tokens, that counts as large (10000-10000000) |
+| `--auto-compact-idle-minutes` | `<auto-compact-idle-minutes>` | no | Minutes since the session's last model call before it is compacted (1-1440) |
 
 ---
 

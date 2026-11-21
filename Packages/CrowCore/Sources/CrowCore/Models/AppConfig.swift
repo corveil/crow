@@ -46,6 +46,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// plain shells, and forwarded notches-per-notch on agent surfaces.
     public var terminal: TerminalSettings
     public var autoRespond: AutoRespondSettings
+    /// Context-size threshold and the opt-in pre-expiry `/compact`
+    /// (CROW-1493). See ``ContextCompactionSettings``.
+    public var contextCompaction: ContextCompactionSettings
     /// When true, `setup.sh` writes a per-worktree `.claude/settings.local.json`
     /// that overrides Claude Code's `attribution.commit` to include the crow
     /// session UUID alongside the standard `Co-Authored-By: Claude` trailer.
@@ -207,6 +210,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         telemetry: TelemetryConfig = TelemetryConfig(),
         terminal: TerminalSettings = TerminalSettings(),
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
+        contextCompaction: ContextCompactionSettings = ContextCompactionSettings(),
         attributionTrailers: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
         autoCreateWatcherEnabled: Bool = false,
@@ -240,6 +244,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.telemetry = telemetry
         self.terminal = terminal
         self.autoRespond = autoRespond
+        self.contextCompaction = contextCompaction
         self.attributionTrailers = attributionTrailers
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
@@ -276,6 +281,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         telemetry = try container.decodeIfPresent(TelemetryConfig.self, forKey: .telemetry) ?? TelemetryConfig()
         terminal = try container.decodeIfPresent(TerminalSettings.self, forKey: .terminal) ?? TerminalSettings()
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
+        contextCompaction = try container.decodeIfPresent(
+            ContextCompactionSettings.self, forKey: .contextCompaction) ?? ContextCompactionSettings()
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
         autoCreateWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCreateWatcherEnabled) ?? false
@@ -340,7 +347,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, chatView, debugMode, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, mcpOAuthGrants, logSync, corveilConnection, webDefaultSkin
+        case workspaces, defaults, notifications, sidebar, switcher, chatView, debugMode, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, contextCompaction, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, mcpOAuthGrants, logSync, corveilConnection, webDefaultSkin
     }
 
     /// Resolve the agent that should drive a newly-created session of the

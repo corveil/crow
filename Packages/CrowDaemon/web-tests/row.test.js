@@ -321,5 +321,24 @@ const card = T.reviewCard({
 const cardBadge = card.querySelector('.reviewing-badge');
 check('review card names who is reviewing', cardBadge && cardBadge.textContent === 'being reviewed by @ada');
 
+console.log('\nContext badge (CROW-1493):');
+const ctxBadgeOf = (context, overrides) => render({ has_pr: false }, { context, ...(overrides || {}) }).row.querySelector('.ctx-badge');
+check('no badge without a context', !ctxBadgeOf(null) && !ctxBadgeOf(undefined));
+let cb = ctxBadgeOf({ tokens: 42000, max_tokens: 1000000, large: false, cache_expired: false, idle_seconds: 120, cache_ttl_seconds: 3600 });
+check('small context reads in k, muted', cb && cb.textContent === '42k' && !cb.classList.contains('ctx-large'));
+check('badge sits on the top line', cb && !!cb.closest('.row-trail'));
+check('tooltip says how long the cache stays warm', cb && cb.title.includes('warm for about 58m'));
+cb = ctxBadgeOf({ tokens: 512000, large: true, cache_expired: false, idle_seconds: 60, cache_ttl_seconds: 3600 });
+check('large warm context is amber without "cold"', cb && cb.textContent === '512k' && cb.classList.contains('ctx-large') && !cb.classList.contains('ctx-cold'));
+cb = ctxBadgeOf({ tokens: 1250000, large: true, cache_expired: true, idle_seconds: 7200, cache_ttl_seconds: 3600 });
+check('large expired context says cold in its text (no hover on a phone)', cb && cb.textContent === '1.3M · cold' && cb.classList.contains('ctx-cold'));
+check('aria-label carries the rebuild warning', cb && cb.getAttribute('aria-label').includes('re-writes the whole context'));
+cb = ctxBadgeOf({ tokens: 30000, large: false, cache_expired: true, idle_seconds: 7200, cache_ttl_seconds: 3600 });
+check('a small cold context is not flagged cold', cb && cb.textContent === '30k');
+cb = ctxBadgeOf({ tokens: null, large: false, compacted_at: '2026-11-20T10:00:00Z' });
+check('compacted with unknown size reads "compacted"', cb && cb.textContent === 'compacted');
+cb = ctxBadgeOf({ tokens: 700000, large: true, cache_expired: true }, { kind: 'manager' });
+check('Manager rows show it too', !!cb);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

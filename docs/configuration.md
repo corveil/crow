@@ -426,7 +426,7 @@ Changes take effect on next app launch — the Manager's stored command is rebui
 
 ## Automation
 
-The thirteen booleans behind **Settings → Automation**, editable there or from the CLI (`crow automation get|set` — see the [CLI reference](cli-reference.md#automation-commands)). Nine are top-level keys in `{devRoot}/.claude/config.json`; four live under `autoRespond`.
+The settings behind **Settings → Automation**, editable there or from the CLI (`crow automation get|set` — see the [CLI reference](cli-reference.md#automation-commands)). Most are top-level booleans in `{devRoot}/.claude/config.json`; the auto-respond toggles live under `autoRespond`, and context compaction under `contextCompaction`.
 
 | Key                                          | Default | Applies to                                                       |
 | -------------------------------------------- | ------- | ---------------------------------------------------------------- |
@@ -443,12 +443,17 @@ The thirteen booleans behind **Settings → Automation**, editable there or from
 | `autoRespond.respondToFailedChecks`          | `false` | Failed CI checks                                                  |
 | `autoRespond.autoRebaseAndResolveConflicts`  | `false` | Conflicted PRs (rebase + `--force-with-lease` push)              |
 | `autoRespond.autoReRequestReview`            | `true`  | Changes-requested PRs whose fix has landed (re-adds the reviewers) |
+| `contextCompaction.autoCompact`              | `false` | Idle, large Claude Code sessions (types `/compact` before the prompt cache expires) |
+| `contextCompaction.minContextTokens`         | `200000` | Which sessions count as large (compaction, and the sidebar's context badge) |
+| `contextCompaction.idleMinutes`              | `50`    | How long after its last model call a session is compacted          |
 
 **Live — no `crowd` restart.** The daemon re-reads `config.json` rather than holding a snapshot: `applyConfigToAppState` runs each board tick, the watcher gates are closures that reload config on every call, and `AutoRespondCoordinator` takes a settings closure. So a change is picked up within about a minute. The "applies to" column is about *scope*, not latency — a permission-mode change reaches the next session you launch, not the ones already running.
 
-Six of the thirteen default to **on**, which is why `crow automation set` takes explicit `true`/`false` values rather than bare flags: a bare-flag design could never turn one off.
+Six of the booleans default to **on**, which is why `crow automation set` takes explicit `true`/`false` values rather than bare flags: a bare-flag design could never turn one off.
 
 **Hand-editing note.** `autoRebaseAndResolveConflicts` replaced a pre-CROW-551 top-level `autoRebaseWatcherEnabled`. That legacy key is still honored on read as a one-way opt-in (a stored `true` forces the new field on) but is dropped on the next write, so an opt-out through Settings or the CLI sticks. If you are editing the file by hand, delete the legacy key rather than setting it to `false`.
+
+**Context compaction loses detail.** `contextCompaction.autoCompact` trades the agent's full conversation for a summary to avoid paying for a large cache rebuild later. Read [Context size and compaction](context-compaction.md) before turning it on.
 
 The Automation tab also carries three board-filter lists (`defaults.excludeReviewRepos`, `defaults.ignoreReviewLabels`, `defaults.excludeTicketRepos`). Those live in the `defaults` block above and are written by `crow defaults set`; `crow automation get` echoes them read-only alongside the derived `effective_exclude_review_repos`. The tab's `managerGateway` and `jiraCredential` blocks are documented elsewhere on this page.
 

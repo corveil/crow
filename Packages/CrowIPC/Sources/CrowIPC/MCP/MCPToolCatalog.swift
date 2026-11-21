@@ -593,6 +593,8 @@ public enum MCPToolCatalog {
         "attention_since", "is_explore",
         // Readiness for input (CROW-1475).
         "agent_state", "last_prompt_at", "agent_terminal_id",
+        // Context size and cache state (CROW-1493).
+        "context",
     ]
 
     /// Every `list-tickets` field except `body`.

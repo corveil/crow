@@ -908,8 +908,8 @@ public enum ParityLedger {
 
         // MARK: Automation toggles (web Settings tab + `crow automation`)
 
-        // Covered since CROW-812 (#884): `crow automation get` reads all thirteen
-        // and `crow automation set` patches them. Neither method is on
+        // Covered since CROW-812 (#884): `crow automation get` reads every row
+        // below and `crow automation set` patches them. Neither method is on
         // `RPCWebSocketHandler.localOnlyDenial`, so an authenticated remote
         // `/rpc` peer can write these fields too — deliberately, because that
         // same peer already reaches every one of them through the whole-blob
@@ -931,6 +931,10 @@ public enum ParityLedger {
         .field("autoRespond.respondToFailedChecks", read: "automation get", write: "automation set"),
         .field("autoRespond.autoRebaseAndResolveConflicts", read: "automation get", write: "automation set"),
         .field("autoRespond.autoReRequestReview", read: "automation get", write: "automation set"),
+        // Context size + pre-expiry compaction (CROW-1493), the same tab and verbs.
+        .field("contextCompaction.autoCompact", read: "automation get", write: "automation set"),
+        .field("contextCompaction.minContextTokens", read: "automation get", write: "automation set"),
+        .field("contextCompaction.idleMinutes", read: "automation get", write: "automation set"),
 
         // Terminal wheel-scroll tuning (CROW-835), CLI-covered since CROW-1085.
         .field("terminal.wheelScrollLines", read: "terminal get", write: "terminal set"),
