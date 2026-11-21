@@ -945,7 +945,8 @@ function setChatAutoReadState(btn) {
 //   CHAT_FOLLOW_IDLE_MS of a key, tap, click or scroll in the page (or of
 //   coming back to the tab). The switch is retried when the guard clears.
 // - Stop on the playing reply drops the pending switches (Follow stays on);
-//   so do Follow off, Auto-read off, and leaving Chat.
+//   so do Follow off, Auto-read off, and leaving Chat (applyChatView, plus the
+//   exits that bypass it: selectBoard, showEmptyDetail, session expiry).
 // ---------------------------------------------------------------------------
 const CHAT_FOLLOW_KEY = 'crow.chat.follow';
 // No switch within this long of the user touching the page.
@@ -1033,6 +1034,13 @@ function tryChatFollow() {
     if (typeof sessions !== 'undefined' && !sessions.some((s) => s.id === id)) continue;
     chatFollowArrival = id;
     selectSession(id);
+    // Watchdog for the rest of the queue: the first page normally pumps it
+    // (consumeChatFollowArrival, or refreshChat's catch), but a page that never
+    // lands for this switch (a manual switch drops the arrival, and the late
+    // page is discarded) must not orphan it. While the arrival is pending the
+    // retry just holds; once it clears, the next session is followed after the
+    // usual guards (a manual switch is itself an interaction).
+    if (chatFollowQueue.length) scheduleChatFollow(CHAT_FOLLOW_RETRY_MS);
     return;
   }
 }

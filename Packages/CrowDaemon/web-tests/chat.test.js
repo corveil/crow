@@ -22,6 +22,7 @@ const epilogue = `
   set sessions(v){ sessions = v; },
   set selectSession(v){ selectSession = v; },
   set selectedBoard(v){ selectedBoard = v; },
+  get chatFollowTimer(){ return chatFollowTimer; },
   updateChatMenu, chatMenuKeydown, chatHistoryKeydown, filterChatCommands, formatChatModel, formatChatTokens,
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
@@ -817,7 +818,8 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
   {
     T.chatViewFlag = true;
     T.setChatViewActive(true);
-    T.sessions = ['FA', 'FB', 'FC', 'FD', 'FX', 'FY'].map((id) => ({ id, name: id, status: 'active' }));
+    const followSessions = ['FA', 'FB', 'FC', 'FD', 'FX', 'FY'].map((id) => ({ id, name: id, status: 'active' }));
+    T.sessions = followSessions;
     // selectSession as far as Chat is concerned (the real one also repaints the
     // sidebar and terminal, which jsdom can't): bind the session, apply Chat.
     const switches = [];
@@ -996,13 +998,23 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
     T.emitEvent('taskComplete', 'FA');
     check('…and nothing is followed from Terminal', T.chatFollowQueue.length === 0);
     T.setChatViewActive(true);
-    go('FX');
-    T.emitEvent('taskComplete', 'FA');
-    try { T.selectBoard('tickets'); } catch (_) { /* unrelated repaint in jsdom */ }
-    idle();
-    T.tryChatFollow();
-    check('a board opened meanwhile cancels it (never pulled off a board)',
-      T.chatFollowQueue.length === 0 && switches[switches.length - 1] === 'FB');
+    // The exits that bypass applyChatView (#1488) drop waiting switches
+    // themselves, with no later tryChatFollow needed to notice.
+    const exitCancels = (name, exit) => {
+      T.selectedBoard = null;
+      T.sessions = followSessions; // expiry clears the page's session list
+      go('FX');
+      T.emitEvent('taskComplete', 'FA');
+      const queued = T.chatFollowQueue.length === 1;
+      const n = switches.length;
+      try { exit(); } catch (_) { /* unrelated repaint in jsdom */ }
+      check(name + ' drops waiting switches at once', queued && T.chatFollowQueue.length === 0
+        && !T.chatFollowTimer && switches.length === n);
+    };
+    exitCancels('the empty-detail state', () => T.showEmptyDetail('Select a session'));
+    exitCancels('session expiry (CROW-1460 scrim)', () => T.clearPageDataOnExpiry());
+    exitCancels('opening a board (never pulled off a board)', () => T.selectBoard('tickets'));
+    T.sessions = followSessions; // expiry cleared the page's session list
     T.emitEvent('taskComplete', 'FA');
     check('…and nothing is followed from a board', T.chatFollowQueue.length === 0);
     try { T.selectBoard('grid'); } catch (_) { /* unrelated repaint in jsdom */ }
@@ -1016,6 +1028,54 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
     check('before the first tap, nothing is followed (its reply could not be read)',
       T.chatFollowQueue.length === 0);
     T.chatSpeechUnlocked = true;
+
+    // The production pump, on fake timers (the file stubs setTimeout to a
+    // no-op): emit → settle → switch, then a manual switch before the target's
+    // first page lands must not orphan the rest of the queue.
+    {
+      const timers = new Map();
+      let nextTimer = 1;
+      const realST = window.setTimeout;
+      const realCT = window.clearTimeout;
+      window.setTimeout = (fn, ms) => { timers.set(nextTimer, fn); return nextTimer++; };
+      window.clearTimeout = (id) => { timers.delete(id); };
+      const fire = () => {
+        const due = [...timers.values()];
+        timers.clear();
+        for (const fn of due) { try { fn(); } catch (_) { /* unrelated jsdom repaint */ } }
+      };
+      try {
+        go('FA');
+        first([reply('A again.')]);
+        reset();
+        idle();
+        T.emitEvent('taskComplete', 'FB');
+        T.emitEvent('taskComplete', 'FC');
+        check('(pump) nothing switches before the settle delay', T.selectedId === 'FA' && T.chatFollowTimer !== null);
+        fire();
+        check('the settle timer follows the oldest session', T.selectedId === 'FB' && T.chatFollowArrival === 'FB'
+          && JSON.stringify([...T.chatFollowQueue]) === '["FC"]');
+        check('…and leaves a watchdog for the rest of the queue', T.chatFollowTimer !== null);
+        go('FA'); // the user picks A before B's first page lands
+        T.chatLastInteractionAt = Date.now(); // …with a click
+        check('a manual switch drops the pending arrival', T.chatFollowArrival === null);
+        fire();
+        check('the watchdog holds while the user has just acted', T.selectedId === 'FA'
+          && T.chatFollowQueue.length === 1 && T.chatFollowTimer !== null);
+        idle();
+        fire();
+        check('…then follows the next session, with no other event to pump it',
+          T.selectedId === 'FC' && T.chatFollowArrival === 'FC' && T.chatFollowQueue.length === 0);
+        first([reply('C via the watchdog.')]);
+        check('…and reads it on arrival', synth.spoken[synth.spoken.length - 1] === 'C via the watchdog.');
+        T.stopChatSpeech();
+        fire();
+        check('an empty queue leaves no timer behind', T.chatFollowTimer === null && timers.size === 0);
+      } finally {
+        window.setTimeout = realST;
+        window.clearTimeout = realCT;
+      }
+    }
 
     const realSet = window.Storage.prototype.setItem;
     window.Storage.prototype.setItem = () => { throw new Error('blocked'); };

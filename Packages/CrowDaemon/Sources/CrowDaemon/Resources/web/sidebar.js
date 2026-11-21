@@ -89,6 +89,7 @@ function clearPageDataOnExpiry() {
   if (typeof stopChatPoll === 'function') stopChatPoll();
   // Don't keep reading a reply aloud behind the expiry scrim (#1488).
   if (typeof stopChatSpeech === 'function') stopChatSpeech();
+  if (typeof cancelChatFollow === 'function') cancelChatFollow(); // #1507
   if (typeof chatState !== 'undefined') chatState = null;
   ['sidebar', 'board', 'detail-header', 'detail-artifacts', 'detail-recordings', 'tabbar', 'chat-view']
     .forEach((id) => { const n = document.getElementById(id); if (n) n.textContent = ''; });
@@ -834,6 +835,7 @@ function showEmptyDetail(msg, opts) {
   selectedId = null;
   selectedBoard = null;
   if (typeof stopChatSpeech === 'function') stopChatSpeech(); // #1488
+  if (typeof cancelChatFollow === 'function') cancelChatFollow(); // #1507
   terminals = [];
   activeTerminal = null;
   // CROW-979: the ↻ that was spinning belonged to the session we just dropped, and
