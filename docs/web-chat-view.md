@@ -48,7 +48,7 @@ Each message has a few small buttons. On a desktop they sit beside the message a
 
 Platform limits:
 
-- **A tap first.** Browsers don't speak for a page you haven't touched since it loaded, and iOS Safari is stricter: it ignores speech until one has started from a tap. Turning auto-read on is that tap, and so is Listen. After a reload with auto-read already on, the first tap anywhere on the page unlocks it. Until then replies are not read.
+- **A tap first.** Browsers don't speak for a page you haven't touched since it loaded, and iOS Safari is stricter: it ignores speech until one has started from a tap. Turning auto-read on is that tap, and so is Listen. After a reload with auto-read already on, the first tap anywhere on the page unlocks it. A reply that arrives before that tap stays quiet (tap its Listen to hear it); the next one after it is read.
 - **Locked screen or background tab.** Speech stops when the screen locks or the browser goes to the background. Chat also stops polling while the tab is hidden, so nothing new arrives. When you come back, the next poll brings everything that arrived meanwhile, and those replies are read in order. Tap Stop to skip them.
 - **One speech queue.** Spoken notifications (Settings → Notifications) share the browser's one speech queue. A notification that arrives during a reply waits until that reply ends, and Stop also drops a notification queued behind it.
 

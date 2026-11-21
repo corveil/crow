@@ -778,10 +778,18 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
     reset();
     T.setChatAutoRead(true);
     T.chatSpeechUnlocked = false; // a reload with auto-read already on
+    page2([reply('Before any tap.')]);
+    check('after a reload with it on, a reply before the first tap is not started (no stuck run)',
+      synth.spoken.length === 0 && T.chatAutoReadQueue.length === 0
+      && !chip('Before any tap.').classList.contains('speaking'));
     doc.body.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
     doc.body.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-    check('after a reload with it on, the first tap anywhere unlocks speech (once)',
+    check('…the first tap anywhere unlocks speech (once)',
       synth.queue.length === 1 && synth.queue[0].volume === 0);
+    page2([reply('After the tap.')]);
+    check('…and the next reply after it is read', synth.spoken[synth.spoken.length - 1] === 'After the tap.'
+      && !synth.spoken.includes('Before any tap.'));
+    T.stopChatSpeech();
     reset();
 
     const realSet = window.Storage.prototype.setItem;

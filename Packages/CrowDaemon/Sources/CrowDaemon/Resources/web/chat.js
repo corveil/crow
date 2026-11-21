@@ -862,8 +862,12 @@ function setChatAutoRead(on) {
 }
 
 // A new reply landed on a live poll: speak it now, or after the one playing.
+// Not before the page is unlocked: iOS can ignore a gesture-less speak()
+// without an `end` or `error`, which would leave the run (and its Stop chip)
+// stuck and every later reply queued behind it. A reply that lands before the
+// first tap stays quiet; the next one after it is read.
 function queueChatAutoRead(bubble) {
-  if (!chatAutoRead || !chatSpeechSupported()) return;
+  if (!chatAutoRead || !chatSpeechUnlocked || !chatSpeechSupported()) return;
   const btn = bubble.querySelector('.chat-msg-listen');
   if (!btn) return;
   chatAutoReadQueue.push(btn);
