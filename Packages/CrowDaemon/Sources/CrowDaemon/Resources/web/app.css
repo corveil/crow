@@ -1334,8 +1334,26 @@ button.scratch-link:hover { border-color: var(--blue); }
 .app-cover[hidden] { display: none; }
 body.app-covered #statusbar { z-index: 2600; }
 #conn-cover .scrim-title { color: var(--text-primary); }
-/* The particle crow above "Disconnected" (CROW-1471). */
+/* The pulsing particle ball above "Disconnected" (CROW-1471, CROW-1517). */
 .conn-cover-brand { width: 96px; height: 96px; margin: 0 auto 14px; }
+/* Its fallback until the WebGL ball draws, and for good without WebGL: a dot
+   that beats with the status bar's conn-dot (1.1 s, opacity 1 → 0.3), swelling
+   as it brightens. Colors are the brandmark palette's top stops
+   (brand-particles.js PALETTES), following the setting via data-brand-color. */
+.conn-cover-dot {
+  --brand-dot: #DDC482;
+  position: absolute; inset: 0; margin: auto;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: radial-gradient(circle, var(--brand-dot) 0 36%, color-mix(in srgb, var(--brand-dot) 35%, transparent) 60%, transparent 71%);
+  animation: conn-ball-pulse 1.1s ease-in-out infinite;
+}
+:root[data-brand-color="pink"] .conn-cover-dot { --brand-dot: #FF4AA2; }
+.brand-mark.live > .conn-cover-dot { visibility: hidden; animation: none; }
+@keyframes conn-ball-pulse {
+  0%, 100% { opacity: 1; transform: scale(1.08); }
+  50% { opacity: 0.3; transform: scale(0.9); }
+}
+@media (prefers-reduced-motion: reduce) { .conn-cover-dot { animation: none; } }
 .scrim-card {
   width: min(360px, 92vw);
   text-align: center;

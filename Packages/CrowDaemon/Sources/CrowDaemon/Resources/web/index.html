@@ -87,10 +87,12 @@
        reconnects. #statusbar is lifted above it so the state stays readable. -->
   <div id="conn-cover" class="app-cover" hidden>
     <div class="scrim-card" role="status" aria-live="polite">
-      <!-- CROW-1471: the particle crow. In the markup, not built on demand: crowd
-           is unreachable while this shows, so the /brand.svg fallback and the
-           WebGL mark (brand-particles.js) both have to exist from boot. -->
-      <div class="conn-cover-brand brand-mark" id="conn-cover-brand" aria-hidden="true"><img src="/brand.svg" alt=""></div>
+      <!-- CROW-1471/1517: a pulsing ball of particles, held on the sphere so it
+           never forms the crow. In the markup, not built on demand: crowd is
+           unreachable while this shows, so the WebGL mark (brand-particles.js)
+           and its fallback both have to exist from boot. The fallback is a CSS
+           pulsing dot, not /brand.svg: no WebGL must not mean a formed crow. -->
+      <div class="conn-cover-brand brand-mark" id="conn-cover-brand" data-brand-mode="pulse" aria-hidden="true"><span class="conn-cover-dot"></span></div>
       <div class="scrim-title">Disconnected</div>
       <div class="scrim-msg">Reconnecting to Crow…</div>
     </div>
