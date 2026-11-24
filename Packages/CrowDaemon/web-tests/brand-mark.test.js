@@ -1,6 +1,7 @@
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
-const { loadClientSource } = require('./load-client');
+const fs = require('fs');
+const { WEB, loadClientSource } = require('./load-client');
 
 // CROW-1469: the animated particle crow (brand-particles.js) in the sidebar and
 // the empty state. Runs the REAL classic client under jsdom with a fake WebGL
@@ -12,8 +13,9 @@ const { loadClientSource } = require('./load-client');
 // - prefers-reduced-motion paints one still, formed frame and stops the loop;
 // - marks hold their first frame until the configured color is known;
 // - no WebGL → no canvas, the /brand.svg <img> stays;
-// - the Disconnected cover's mark (CROW-1471) mounts at boot and replays its
-//   formation on each appearance, on the same WebGL context.
+// - the Disconnected cover's mark (CROW-1471) mounts at boot and, on each
+//   appearance, pulses as a ball of particles that never forms the crow
+//   (CROW-1517), on the same WebGL context.
 
 const epilogue = `
 ;globalThis.__t = {
@@ -49,9 +51,13 @@ function recorder(log, label) {
   return make();
 }
 
-const COVER = `<div id="conn-cover" class="app-cover" hidden><div class="scrim-card">
-  <div class="conn-cover-brand brand-mark" id="conn-cover-brand" aria-hidden="true"><img src="/brand.svg" alt=""></div>
-  <div class="scrim-title">Disconnected</div></div></div>`;
+// The shipped #conn-cover markup, so the fixture can't drift from index.html.
+const COVER = (() => {
+  const html = fs.readFileSync(WEB + 'index.html', 'utf8');
+  const m = html.match(/<div id="conn-cover"[\s\S]*?<div class="scrim-title">Disconnected<\/div>/);
+  if (!m) { console.log('FATAL: #conn-cover markup not found in index.html'); process.exit(2); }
+  return m[0].replace(/<!--[\s\S]*?-->/g, '') + '</div></div>';
+})();
 
 function boot({ webgl = true, reducedMotion = false, emptyState = true, cover = false } = {}) {
   const dom = new JSDOM(
@@ -104,11 +110,17 @@ function boot({ webgl = true, reducedMotion = false, emptyState = true, cover = 
   const T = ctx.__t;
   if (!T) { console.log('FATAL: epilogue did not run'); process.exit(2); }
   const runFrames = (now) => { const fs = frames.splice(0); for (const f of fs) f(now); return fs.length; };
+  // Cover runs: detach the sidebar mark the boot paint built, so the loop skips
+  // it and every recorded draw is the cover's.
+  if (cover) { const side = window.document.querySelector('#brand-img'); if (side) side.remove(); }
   return { window, T, gl, contexts, frames, runFrames, setReduced, brand: window.crowBrand };
 }
 
 const morphValues = (gl) => gl
   .filter(([, k, a]) => k === 'uniform1f' && a[0] && a[0].uniform === 'uMorph')
+  .map(([, , a]) => a[1]);
+const uniformValues = (gl, name) => gl
+  .filter(([, k, a]) => k === 'uniform1f' && a[0] && a[0].uniform === name)
   .map(([, , a]) => a[1]);
 const draws = (gl) => gl.filter(([, k]) => k === 'drawArrays').length;
 
@@ -249,56 +261,90 @@ function finish() {
     check('fallback img still recolors', host.querySelector('img').getAttribute('src') === '/brand.svg?color=pink');
   }
 
-  console.log('\nDisconnected cover: mounted at boot, replays on every appearance (CROW-1471):');
+  console.log('\nDisconnected cover: mounted at boot, pulses as a ball on every appearance (CROW-1517):');
   {
-    // No empty state, and the sidebar's mark (if the boot paint built one) is
-    // detached, so the loop skips it: every recorded draw is the cover's.
+    // No empty state, and boot() detached the sidebar's mark: every recorded
+    // draw is the cover's.
     const b = boot({ cover: true, emptyState: false });
     const baseline = boot({ emptyState: false }).contexts.webgl;
     const doc = b.window.document;
     const cover = doc.getElementById('conn-cover');
     const host = doc.getElementById('conn-cover-brand');
-    check('mounted at boot while the cover is hidden: one context, canvas + /brand.svg fallback',
+    check('mounted at boot while the cover is hidden: one context, canvas + CSS dot fallback, no crow img',
       cover.hidden && b.contexts.webgl === baseline + 1 && !!host.querySelector('canvas')
-      && host.querySelector('img').getAttribute('src') === '/brand.svg');
+      && !!host.querySelector('.conn-cover-dot') && !host.querySelector('img'));
     b.brand.setColor('gold');
     b.runFrames(1000);
+    check('a frame drawn before any pulse() is already the ball (morph 0), not a forming crow',
+      morphValues(b.gl).length > 0 && morphValues(b.gl).every((v) => v === 0));
     let cycles = 0;
+    const allMorph = [];
     for (let i = 0; i < 3; i++) {
       b.gl.length = 0;
       const t = b.window.performance.now();
       b.T.cover(true);
       const first = morphValues(b.gl);
-      if (!cover.hidden && first.length === 1 && first[0] === 0) cycles++;
-      b.gl.length = 0;
-      b.runFrames(t + 300 + 1200);
-      const mid = morphValues(b.gl);
-      b.gl.length = 0;
-      b.runFrames(t + 300 + 2400 + 50);
-      const done = morphValues(b.gl);
-      if (mid.some((v) => v > 0 && v < 1) && done.includes(1)) cycles++;
+      if (!cover.hidden && first.length === 1 && first[0] === 0
+          && uniformValues(b.gl, 'uPulse')[0] === 0) cycles++; // painted at once, beat restarted
+      allMorph.push(...first);
+      const beats = [], amps = [];
+      for (const dt of [150, 400, 700, 1300, 2400, 3700]) {
+        b.gl.length = 0;
+        b.runFrames(t + dt);
+        allMorph.push(...morphValues(b.gl));
+        beats.push(...uniformValues(b.gl, 'uPulse'));
+        amps.push(...uniformValues(b.gl, 'uPulseAmp'));
+      }
+      if (new Set(beats).size === beats.length && beats.length === 6
+          && amps.every((v) => v > 0) && b.frames.length === 1) cycles++;
       b.T.cover(false);
     }
-    check('each appearance paints the sphere at once (morph 0), then forms the crow — 3 of 3', cycles === 6);
+    check('each appearance paints the ball at once and restarts the beat, then keeps beating — 3 of 3', cycles === 6);
+    check('it never forms the crow: uMorph stays 0 across every frame',
+      allMorph.length > 0 && allMorph.every((v) => v === 0));
     check('3 disconnects later: no new context, still one canvas', b.contexts.webgl === baseline + 1
       && host.querySelectorAll('canvas').length === 1);
     b.gl.length = 0;
     b.T.cover(false);
-    check('a re-sync while already hidden does not replay', morphValues(b.gl).length === 0);
+    check('a re-sync while already hidden does not restart', draws(b.gl) === 0);
     b.T.cover(true);
+    b.runFrames(b.window.performance.now() + 500);
     b.gl.length = 0;
     b.T.cover(true);
-    check('a re-sync while already shown does not replay', morphValues(b.gl).length === 0);
+    check('a re-sync while already shown does not restart', draws(b.gl) === 0);
     b.gl.length = 0;
     b.brand.setColor('pink');
-    check('pink: cover palette re-uploaded and its fallback img pinned to ?color=pink',
+    check('pink: the ball\'s palette is re-uploaded with the pink ramp',
       b.gl.filter(([, k]) => k === 'bufferSubData').length === b.contexts.webgl
-      && host.querySelector('img').getAttribute('src') === '/brand.svg?color=pink');
-    check('replay() of an unmounted host or null is a no-op',
-      (b.brand.replay(doc.createElement('div')), b.brand.replay(null), true));
+      && b.window.document.documentElement.getAttribute('data-brand-color') === 'pink');
+    check('pulse()/replay() of an unmounted host or null is a no-op',
+      (b.brand.pulse(doc.createElement('div')), b.brand.pulse(null),
+       b.brand.replay(doc.createElement('div')), b.brand.replay(null), true));
   }
 
-  console.log('\nDisconnected cover with reduced motion: a still, formed crow:');
+  console.log('\nreplay() still forms the crow, and pulse() takes any mark to the ball:');
+  {
+    const b = boot({ cover: true, emptyState: false });
+    const host = b.window.document.getElementById('conn-cover-brand');
+    b.brand.setColor('gold');
+    b.runFrames(1000);
+    const t = b.window.performance.now();
+    b.gl.length = 0;
+    b.brand.replay(host);
+    b.runFrames(t + 300 + 1200);
+    const mid = morphValues(b.gl).some((v) => v > 0 && v < 1);
+    b.gl.length = 0;
+    b.runFrames(t + 300 + 2400 + 50);
+    check('replay() on the cover\'s mark forms sphere → crow', mid && morphValues(b.gl).includes(1));
+    check('the crow does not beat (uPulseAmp 0)', uniformValues(b.gl, 'uPulseAmp').every((v) => v === 0));
+    b.gl.length = 0;
+    b.brand.pulse(host);
+    b.runFrames(t + 4000);
+    check('pulse() puts it back on the sphere', morphValues(b.gl).every((v) => v === 0)
+      && uniformValues(b.gl, 'uPulseAmp').some((v) => v > 0));
+  }
+
+  console.log('\nDisconnected cover with reduced motion: a still sphere:');
   {
     const b = boot({ cover: true, emptyState: false, reducedMotion: true });
     b.brand.setColor('gold');
@@ -307,20 +353,55 @@ function finish() {
     b.T.cover(true);
     b.runFrames(2000);
     const vals = morphValues(b.gl);
-    check('drawn formed (morph 1), never the sphere or mid-formation',
-      vals.length > 0 && vals.every((v) => v === 1));
+    check('drawn as the sphere (morph 0), never the crow', vals.length > 0 && vals.every((v) => v === 0));
+    check('and still: no beat (uPulseAmp 0, uPulse 0)',
+      uniformValues(b.gl, 'uPulseAmp').every((v) => v === 0) && uniformValues(b.gl, 'uPulse').every((v) => v === 0));
     check('no loop left running', b.frames.length === 0);
+    b.T.cover(false);
+    b.gl.length = 0;
+    b.T.cover(true);
+    check('a second appearance paints exactly one still frame', draws(b.gl) === 1
+      && morphValues(b.gl)[0] === 0 && b.runFrames(3000) <= 1 && b.frames.length === 0);
   }
 
-  console.log('\nDisconnected cover without WebGL: the boot-time fallback img:');
+  console.log('\nReduced motion turned on while the ball pulses keeps the sphere:');
+  {
+    const b = boot({ cover: true, emptyState: false });
+    b.brand.setColor('gold');
+    b.runFrames(1000);
+    b.T.cover(true);
+    b.runFrames(b.window.performance.now() + 500);
+    b.setReduced(true);
+    b.gl.length = 0;
+    b.runFrames(b.window.performance.now() + 900);
+    const vals = morphValues(b.gl);
+    check('next frame is the still sphere (morph 0), not the crow', vals.length > 0 && vals.every((v) => v === 0)
+      && uniformValues(b.gl, 'uPulseAmp').every((v) => v === 0));
+    check('and the loop stops', b.frames.length === 0);
+  }
+
+  console.log('\nDisconnected cover without WebGL: a CSS pulsing dot, no crow:');
   {
     const b = boot({ cover: true, emptyState: false, webgl: false });
     const host = b.window.document.getElementById('conn-cover-brand');
-    check('no context, no canvas; the /brand.svg img is in place from boot',
-      b.contexts.webgl === 0 && !host.querySelector('canvas')
-      && host.querySelector('img').getAttribute('src') === '/brand.svg');
+    check('no context, no canvas', b.contexts.webgl === 0 && !host.querySelector('canvas'));
+    check('the CSS dot is the fallback; no crow img to break or show',
+      !!host.querySelector('.conn-cover-dot') && !host.querySelector('img'));
     b.T.cover(true);
-    check('the cover still shows (replay is a no-op)', !b.window.document.getElementById('conn-cover').hidden);
+    check('the cover still shows (pulse is a no-op)', !b.window.document.getElementById('conn-cover').hidden);
+    b.brand.setColor('gold');
+    b.brand.setColor('pink');
+    check('pink reaches the dot\'s CSS hook', b.window.document.documentElement.getAttribute('data-brand-color') === 'pink');
+    const css = fs.readFileSync(WEB + 'app.css', 'utf8');
+    const dotRule = (css.match(/\n\.conn-cover-dot\s*\{([^}]*)\}/) || [])[1] || '';
+    const kf = (css.match(/@keyframes conn-ball-pulse\s*\{([\s\S]*?)\n\}/) || [])[1] || '';
+    check('app.css animates the dot on the conn-dot beat (1.1 s, opacity 1 → 0.3)',
+      /animation:\s*conn-ball-pulse 1\.1s/.test(dotRule) && /opacity:\s*1\b/.test(kf) && /opacity:\s*0\.3\b/.test(kf)
+      && /animation:\s*conn-pulse 1\.1s/.test(css));
+    check('app.css follows the pink setting', /:root\[data-brand-color="pink"\] \.conn-cover-dot\s*\{[^}]*--brand-dot/.test(css));
+    check('app.css stills the dot under prefers-reduced-motion',
+      /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.conn-cover-dot\s*\{\s*animation:\s*none/.test(css));
+    check('app.css hides the dot once the WebGL ball is live', /\.brand-mark\.live > \.conn-cover-dot\s*\{[^}]*visibility:\s*hidden/.test(css));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

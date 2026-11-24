@@ -87,7 +87,9 @@ The model and validator are `WebSkin` in CrowCore.
 
 The brand primitives at the top of `theme.css` (`--ink-*`, `--plum-900`,
 `--pink*`, `--paper*`, `--brand-text`) are constants the Corveil palette is
-built from, not skin tokens. Fonts are set through `fonts`, not as tokens.
+built from, not skin tokens. `--brandmark-gold` and `--brandmark-pink` are the
+particle brandmark's colors, which follow the brandmark setting rather than the
+skin. Fonts are set through `fonts`, not as tokens.
 
 | Group | Tokens |
 |---|---|

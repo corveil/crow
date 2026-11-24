@@ -112,8 +112,9 @@ function syncDisconnectCover() {
   if (cover) {
     const appearing = cover.hidden && disconnectCoverShown;
     cover.hidden = !disconnectCoverShown;
-    // CROW-1471: each appearance re-forms the particle crow from the sphere.
-    if (appearing && window.crowBrand) window.crowBrand.replay(document.getElementById('conn-cover-brand'));
+    // CROW-1471/1517: each appearance restarts the pulsing particle ball. It
+    // never forms the crow: a finished crow reads as "all fine".
+    if (appearing && window.crowBrand) window.crowBrand.pulse(document.getElementById('conn-cover-brand'));
   }
   const covered = disconnectCoverShown || sessionDead;
   // inert: no focus, typing or clicks reach the hidden content (a focused

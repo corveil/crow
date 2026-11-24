@@ -15,11 +15,16 @@
 // - mount(host) is idempotent per host. The sidebar is rebuilt wholesale by
 //   renderSidebar(), so sidebar.js keeps one host node and re-appends it rather
 //   than mounting a new canvas (and a new WebGL context) on every render.
-// - replay(host) re-runs a mounted mark's formation in place; the Disconnected
-//   cover (CROW-1471) mounts at boot and replays on every appearance.
+// - replay(host) re-runs a mounted mark's formation in place.
+// - pulse(host) holds a mark on the sphere instead (CROW-1517): it spins slowly
+//   and beats, never forming the crow. The Disconnected cover (CROW-1471) is a
+//   pulse mark (data-brand-mode="pulse" in index.html), mounted at boot and
+//   restarted on every appearance: a formed crow reads as "all fine", a beating
+//   ball as "trying to come back".
 // - One requestAnimationFrame loop drives every mark. It only runs while some
 //   mark is on screen (IntersectionObserver) and stops itself otherwise.
-// - prefers-reduced-motion: the formed crow, drawn once, no loop.
+// - prefers-reduced-motion: the formed crow (a pulse mark: the still sphere),
+//   drawn once, no loop.
 // - setColor('gold'|'pink') recolors in place: the WebGL palette, the fallback
 //   imgs, the SVG favicon and any other `img[data-brand-static]`.
 (function () {
@@ -33,6 +38,15 @@
   const OPTS = { fill: 0.92, px: 0.30, min: 0.12, max: 0.75, minOp: 0.65, maxOp: 1, amp: 0.03, sway: 0.25 };
   const CROW_SCALE = 2.6, SPHERE_R = 2.5, FOV = 60;
   const INTRO_DELAY_MS = 300, INTRO_MS = 2400;
+  // Pulse mode (CROW-1517). One beat per 1.1 s, the period of the status bar's
+  // disconnected dot (app.css conn-pulse), so the two read as one signal. The
+  // ball swells and shrinks by PULSE_AMP and dims to 1 - PULSE_DIM at its
+  // smallest. PULSE_WAVE offsets each dot's beat by its height, so the swell
+  // rolls up the sphere instead of the whole ball strobing at once. The camera
+  // sits BALL_ZOOM further back than for the crow: the sphere is as wide as the
+  // bird and would clip at the top of its swell.
+  const PULSE_MS = 1100, PULSE_AMP = 0.09, PULSE_DIM = 0.45, PULSE_WAVE = 0.35;
+  const BALL_ZOOM = 1.6, BALL_TILT = 0.35, BALL_SPIN = 0.35;
 
   const marks = new Set();
   let raf = 0;
@@ -51,8 +65,9 @@
   function motionOK() { return !(motionQuery && motionQuery.matches); }
   if (motionQuery && motionQuery.addEventListener) {
     // Settle any formation in flight: turning reduced motion on mid-intro must
-    // land on the formed crow, not freeze a half-formed one.
-    motionQuery.addEventListener('change', () => { for (const m of marks) { m.anim = null; m.morph = 1; } kick(); });
+    // land on the formed crow, not freeze a half-formed one. A pulse mark has
+    // no formation; draw() keeps it on the sphere.
+    motionQuery.addEventListener('change', () => { for (const m of marks) { if (!m.pulsing) { m.anim = null; m.morph = 1; } } kick(); });
   }
 
   function hash(i, salt, k) { const x = Math.sin((i + 1) * 12.9898 + salt * 78.233 + k * 37.719) * 43758.5453; return x - Math.floor(x); }
@@ -97,11 +112,17 @@
   const VERT = [
     'attribute vec3 aFrom; attribute vec3 aTo; attribute float aSize; attribute float aPhase; attribute float aFreq; attribute float aOpacity; attribute vec3 aColor;',
     'uniform mat4 uP; uniform mat4 uMV; uniform float uTime; uniform float uMorph; uniform float uMin; uniform float uMax; uniform float uAmp; uniform float uPx;',
+    // CROW-1517 pulse: uPulse is the beat phase (radians), uPulseAmp its depth
+    // (0 for the crow, so the beat is a no-op there). Each dot's beat lags by
+    // its height (uPulseWave); the swell scales it out and brightens it.
+    'uniform float uPulse; uniform float uPulseAmp; uniform float uPulseDim; uniform float uPulseWave;',
     'varying float vO; varying vec3 vC;',
     'void main(){ vec3 p = mix(aFrom, aTo, uMorph);',
+    ' float beat = sin(uPulse - aFrom.y * uPulseWave);',
+    ' p *= 1.0 + uPulseAmp * beat;',
     ' p += vec3(sin(uTime*aFreq+aPhase), cos(uTime*aFreq*0.7+aPhase*1.3), sin(uTime*aFreq*0.5+aPhase*0.8)) * uAmp;',
     ' vec4 mv = uMV * vec4(p,1.0); gl_PointSize = mix(uMin,uMax,aSize) * (uPx / max(0.001,-mv.z));',
-    ' gl_Position = uP * mv; vO = aOpacity; vC = aColor; }',
+    ' gl_Position = uP * mv; vO = aOpacity * (1.0 - uPulseDim * (0.5 - 0.5 * beat)); vC = aColor; }',
   ].join('\n');
   const FRAG = 'precision mediump float; uniform sampler2D uS; varying float vO; varying vec3 vC; void main(){ vec4 t = texture2D(uS, gl_PointCoord); gl_FragColor = vec4(vC, t.a*vO); }';
 
@@ -149,7 +170,7 @@
       this.col = new Float32Array(n * 3);
       this.loc = {};
       for (const a of ['aFrom', 'aTo', 'aSize', 'aPhase', 'aFreq', 'aOpacity', 'aColor']) this.loc[a] = gl.getAttribLocation(pr, a);
-      for (const u of ['uP', 'uMV', 'uTime', 'uMorph', 'uMin', 'uMax', 'uAmp', 'uPx', 'uS']) this.loc[u] = gl.getUniformLocation(pr, u);
+      for (const u of ['uP', 'uMV', 'uTime', 'uMorph', 'uMin', 'uMax', 'uAmp', 'uPx', 'uS', 'uPulse', 'uPulseAmp', 'uPulseDim', 'uPulseWave']) this.loc[u] = gl.getUniformLocation(pr, u);
       const buf = (data, attr, sz) => {
         const bb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bb); gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
         gl.enableVertexAttribArray(this.loc[attr]); gl.vertexAttribPointer(this.loc[attr], sz, gl.FLOAT, false, 0, 0); return bb;
@@ -165,8 +186,11 @@
       gl.uniform1i(this.loc.uS, 0);
       gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE); gl.clearColor(0, 0, 0, 0);
       gl.uniform1f(this.loc.uMin, OPTS.min); gl.uniform1f(this.loc.uMax, OPTS.max);
+      gl.uniform1f(this.loc.uPulseWave, PULSE_WAVE);
 
       this.morph = 1; this.anim = null; this.introPending = true;
+      this.pulsing = false; this.beat0 = 0;
+      if (host.getAttribute('data-brand-mode') === 'pulse') this.holdSphere(0);
       this.visible = !('IntersectionObserver' in window); // assume on screen without IO
       this.sized = false;
       cv.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lose(); });
@@ -217,6 +241,15 @@
       gl.bindBuffer(gl.ARRAY_BUFFER, this.bCol); gl.bufferSubData(gl.ARRAY_BUFFER, 0, col);
     }
 
+    // Pulse mode: park the dots on the sphere (morph 0, aFrom = sphere) and
+    // start the beat from `now`. There is no formation to run.
+    holdSphere(now) {
+      const gl = this.gl;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.bFrom); gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.spherePos);
+      this.pulsing = true; this.beat0 = now;
+      this.morph = 0; this.anim = null; this.introPending = false;
+    }
+
     // Morph sphere → crow after `delay` ms (the site's quintic ease).
     formFromSphere(now, delay) {
       const gl = this.gl;
@@ -239,13 +272,27 @@
         }
       }
       const t = now * 0.001;
-      const ry = motion ? Math.sin(t * 0.25) * OPTS.sway + (1 - this.morph) * 1.4 : 0;
-      const rx = motion ? Math.sin(t * 0.1) * 0.08 : 0;
+      let ry, rx, z = this.camZ, beat = 0, beatAmp = 0;
+      if (this.pulsing) {
+        // The ball: slow spin, a fixed tilt so it reads as a sphere, and the
+        // beat. Reduced motion: the same ball, still and unbeating.
+        this.morph = 0;
+        z *= BALL_ZOOM;
+        ry = motion ? t * BALL_SPIN : 0;
+        rx = BALL_TILT;
+        if (motion) { beat = ((now - this.beat0) / PULSE_MS) * Math.PI * 2; beatAmp = PULSE_AMP; }
+      } else {
+        ry = motion ? Math.sin(t * 0.25) * OPTS.sway + (1 - this.morph) * 1.4 : 0;
+        rx = motion ? Math.sin(t * 0.1) * 0.08 : 0;
+      }
       gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.uniformMatrix4fv(this.loc.uMV, false, modelView(this.camZ, ry, rx));
+      gl.uniformMatrix4fv(this.loc.uMV, false, modelView(z, ry, rx));
       gl.uniform1f(this.loc.uTime, motion ? t : 0);
       gl.uniform1f(this.loc.uMorph, this.morph);
       gl.uniform1f(this.loc.uAmp, motion ? OPTS.amp : 0);
+      gl.uniform1f(this.loc.uPulse, beat);
+      gl.uniform1f(this.loc.uPulseAmp, beatAmp);
+      gl.uniform1f(this.loc.uPulseDim, beatAmp ? PULSE_DIM : 0);
       gl.drawArrays(gl.POINTS, 0, this.n);
       if (!this.host.classList.contains('live')) this.host.classList.add('live');
     }
@@ -283,16 +330,30 @@
   }
 
   // Start the sphere → crow formation over on `host`'s existing mark: same
-  // canvas, same WebGL context. The Disconnected cover (CROW-1471) calls it
-  // each time it appears. Call it once the host is displayed: it paints the
-  // opening frame at once, so the first composite can't flash the formed crow
-  // the canvas still held from when it was hidden. Reduced motion paints the
-  // formed crow instead (draw() skips the intro).
+  // canvas, same WebGL context. Call it once the host is displayed: it paints
+  // the opening frame at once, so the first composite can't flash whatever the
+  // canvas still held from when it was hidden. Reduced motion paints the
+  // formed crow instead (draw() skips the intro). Takes a pulse mark back to
+  // the crow.
   function replay(host) {
     const m = host ? byHost.get(host) : null;
     if (!m || !m.gl) return;
+    m.pulsing = false;
     m.anim = null; m.morph = 1; m.introPending = true; m.sized = false;
     if (colorKnown && m.host.isConnected) m.draw(performance.now(), motionOK());
+    kick();
+  }
+
+  // Hold `host`'s existing mark on the sphere and (re)start its beat, on the
+  // same canvas and WebGL context (CROW-1517). The Disconnected cover calls it
+  // each time it appears; like replay(), call it once the host is displayed so
+  // the stale canvas never composites. Reduced motion paints one still sphere.
+  function pulse(host) {
+    const m = host ? byHost.get(host) : null;
+    if (!m || !m.gl) return;
+    const now = performance.now();
+    m.holdSphere(now); m.sized = false;
+    if (colorKnown && m.host.isConnected) m.draw(now, motionOK());
     kick();
   }
 
@@ -303,6 +364,8 @@
     color = next;
     colorKnown = true;
     if (!changed) return;
+    // For CSS that follows the setting: the Disconnected cover's no-WebGL dot.
+    document.documentElement.setAttribute('data-brand-color', color);
     for (const m of marks) if (m.gl) m.setPalette(color);
     const src = srcFor(color);
     for (const im of document.querySelectorAll('img[data-brand-static]')) {
@@ -319,6 +382,7 @@
   window.crowBrand = {
     mount,
     replay,
+    pulse,
     setColor,
     color: () => color,
     // The /brand.svg URL for the current color, for imgs made after boot.
@@ -328,6 +392,8 @@
   // The empty-state and Disconnected-cover marks ship in index.html; the
   // sidebar's is built by sidebar.js. The cover's mounts now, while crowd is
   // reachable: its WebGL context exists from boot, and while the cover is
-  // hidden the IntersectionObserver keeps it out of the loop.
+  // hidden the IntersectionObserver keeps it out of the loop. Its
+  // data-brand-mode="pulse" makes it a ball from the start, so even a first
+  // frame drawn before pulse() never forms the crow.
   for (const host of document.querySelectorAll('#empty-brand, #conn-cover-brand')) mount(host);
 })();

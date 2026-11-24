@@ -74,6 +74,11 @@
   --paper: #FFFFFF;
   --paper-soft: #FAF9F5;
   --brand-text: #FFF7FB;
+  /* The particle brandmark's top stops (brand-particles.js PALETTES), for CSS
+     that stands in for it: the Disconnected cover's no-WebGL dot (CROW-1517).
+     They follow the brandmark color setting, not the skin. */
+  --brandmark-gold: #DDC482;
+  --brandmark-pink: #FF4AA2;
 
   --font-ui: "IBM Plex Sans", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
