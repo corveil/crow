@@ -122,7 +122,6 @@ fi
 for placeholder in \
     "{{CROW_REVIEW_VERDICT_RULE}}" \
     "{{CROW_REVIEW_GRADING_GUIDANCE}}" \
-    "{{CROW_REVIEW_VERDICT_TABLE}}" \
     "{{CROW_REVIEW_VERDICT_NOTES}}" \
     "{{CROW_REVIEW_WORKSPACE_INSTRUCTIONS}}"; do
     require "skills/crow-review-pr/SKILL.md" "$placeholder"
@@ -167,6 +166,28 @@ for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.templa
         'any(. == "CI Gate")' \
         'gh label create "ci:full" --repo "$REPO"' \
         'gh pr edit "$PR" --add-label "ci:full"'
+done
+
+# CROW-1511: Step 3 spends the review on finding defects (three likeliest
+# production failures, checked), states findings rather than fixes, and
+# re-reviews the whole diff fresh. A finding disputed for two rounds goes to a
+# human through `crow:needs-human` (Step 5d). The static Summary Table legend is
+# gone; its placeholder must not come back.
+# shellcheck disable=SC2016  # the commands are literal needles, not expansion
+for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.template; do
+    require "$f" \
+        "three likeliest ways this change fails in production" \
+        "### Failure modes checked" \
+        "**State findings, not fixes:**" \
+        "patches, diffs or code blocks of the fix" \
+        "**whole PR diff**, as if you were seeing it for the first time" \
+        "### Step 5d: Add \`crow:needs-human\` after a hand-off (CROW-1511)" \
+        'gh label create "crow:needs-human" --repo "$REPO"' \
+        'gh pr edit "$PR" --add-label "crow:needs-human"'
+    if grep -Fq "### Summary Table" "$f" || grep -Fq "{{CROW_REVIEW_VERDICT_TABLE}}" "$f"; then
+        echo "DRIFT: $f still renders the Summary Table legend (CROW-1511)" >&2
+        fail=1
+    fi
 done
 
 # CROW-960: `gh pr checkout` restores attacker-controlled harness config into

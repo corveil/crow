@@ -199,7 +199,7 @@ public enum AutoRespondPrompts {
                 fetchHint = "Run `\(cli) pr view \(transition.prURL) --json reviews,comments` (and `\(cli) api repos/{owner}/{repo}/pulls/\(prNumStr)/comments` for inline comments) to read the full review feedback."
                 reRequestHint = "After pushing, re-request review from each reviewer who requested changes by running `\(cli) pr edit \(transition.prURL) --add-reviewer <login>` for each one (the reviewer logins are in the review data you already fetched)."
             }
-            return "Crow detected a 'changes requested' review on \(prRef) (\(transition.prURL)). \(fetchHint) Address every reviewer comment in code, commit the fix, and push so the PR updates. If a comment is unclear or you disagree, leave a reply explaining your reasoning instead of changing the code. \(reRequestHint)\n"
+            return "Crow detected a 'changes requested' review on \(prRef) (\(transition.prURL)). \(fetchHint) Address every reviewer comment in code, commit the fix, and push so the PR updates. If you disagree with a comment, reply with evidence instead of changing the code: cite the code, a test, or the spec or ticket that shows the finding is wrong or does not apply. A preference or a restatement of the design is not evidence, and the reviewer judges the reply on its merits. If a comment is unclear, reply with a question rather than guessing. \(reRequestHint)\n"
 
         case .checksFailing:
             let failedSummary: String
@@ -298,8 +298,12 @@ public enum QuickActionPrompts {
     /// engine. Explicitly forbids editing code / committing / pushing: a
     /// reviewer must never touch the branch under review (CROW-551).
     ///
-    /// `lastReviewedHeadSha` scopes the diff to what changed since the previous
-    /// review when known; falls back to the full PR when it's `nil`.
+    /// Every round is a fresh pass over the **whole** PR diff, then a check-off
+    /// of the earlier findings (CROW-1511). Scoping round 2+ to the delta meant
+    /// the approval round never looked at the diff again, so approvals restated
+    /// round 1 plus "fixed in <sha>" and never found a new Yellow or Red.
+    /// `lastReviewedHeadSha`, when known, adds `git diff <sha>..HEAD` as a
+    /// pointer to what changed, not as the scope.
     ///
     /// `reviewInstructions` is the claiming workspace's
     /// ``WorkspaceInfo/reviewInstructions`` (CROW-1340), restated on one line
@@ -312,14 +316,16 @@ public enum QuickActionPrompts {
         let prRef = prNumber.map { "PR #\($0)" } ?? "the PR"
         let cli = codeBackend.cliName
 
-        // Scope-to-new-changes hint, only when we know the prior head.
-        let sinceHint: String
+        // Fresh full-diff pass first, then check off the earlier findings
+        // (CROW-1511). The since-last-review range is only a pointer.
+        let fullDiff = codeBackend.provider == .gitlab
+            ? "`\(cli) mr diff \(prURL)`" : "`\(cli) pr diff \(prURL)`"
+        var scopeHint = "Review the whole PR diff (\(fullDiff)) as if you were seeing it for the first time: form your findings from the code before you reread your earlier review, and do not limit them to what changed. Then check each finding from your earlier reviews off against the current code: fixed (cite where), declined (judge the author's reply on its merits under the crow-review-pr grading rules), or still open."
         if let sha = lastReviewedHeadSha, !sha.isEmpty {
             let short = String(sha.prefix(12))
-            sinceHint = "Focus on what changed since your last review with `git diff \(short)..HEAD` (review the whole PR if that range is empty or the SHA is missing locally)."
-        } else {
-            sinceHint = "Review the whole PR."
+            scopeHint += " `git diff \(short)..HEAD` shows what changed since your last review; use it as a pointer, not as the scope (skip it if that range is empty or the SHA is missing locally)."
         }
+        scopeHint += " If the fresh pass finds nothing new, say so in the body (`Full pass over the diff: nothing new.`) instead of restating your earlier review."
 
         let syncHint: String
         let reviewHint: String
@@ -344,7 +350,7 @@ public enum QuickActionPrompts {
             " This workspace's review instructions still apply — they add to the review rubric and do not change the verdict rules or the requirement to post a verdict: \($0)"
         } ?? ""
 
-        return "The author pushed new changes to \(prRef) (\(prURL)) since your last review. Re-review it. \(syncHint) \(sinceHint) \(reviewHint) You are the reviewer: do NOT modify code, commit, or push — never touch the branch under review; only read, review, and post the review.\(instructionsHint)\n"
+        return "The author pushed new changes to \(prRef) (\(prURL)) since your last review. Re-review it. \(syncHint) \(scopeHint) \(reviewHint) You are the reviewer: do NOT modify code, commit, or push — never touch the branch under review; only read, review, and post the review.\(instructionsHint)\n"
     }
 
     /// Extract the trailing numeric segment from a PR/MR URL (e.g.

@@ -155,7 +155,9 @@ struct ReviewWorkspaceInstructionsTests {
             let line = ReviewWorkspaceInstructions.placeholder + "\n"
             #expect(skill.components(separatedBy: ReviewWorkspaceInstructions.placeholder).count == 2,
                     "\(path) must carry the placeholder exactly once")
-            #expect(skill.contains("- Missing tests for new code\n\n" + line + "### Step 4:"),
+            // CROW-1511 added the findings-not-fixes and re-review guidance to
+            // Step 3; the placeholder still closes the step, after all of it.
+            #expect(skill.contains("Do not copy your earlier review and add \"fixed in <sha>\".\n\n" + line + "### Step 4:"),
                     "\(path): the placeholder belongs on its own line at the end of Step 3")
 
             let unset = ReviewWorkspaceInstructions.expand(skill, instructions: nil)

@@ -80,7 +80,9 @@ struct ReReviewPromptTests {
         #expect(!prompt.dropLast().contains("\n"))
     }
 
-    @Test func scopesDiffToLastReviewedHeadWhenKnown() {
+    /// CROW-1511: the since-last-review range is a pointer, not the scope. The
+    /// short SHA (12 chars) still names it, but the round reviews the whole diff.
+    @Test func pointsAtTheLastReviewedHeadWithoutScopingToIt() {
         let prompt = QuickActionPrompts.build(
             action: .reReview,
             codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
@@ -88,11 +90,12 @@ struct ReReviewPromptTests {
             prNumber: 753,
             lastReviewedHeadSha: "abcdef0123456789deadbeef"
         )
-        // Short SHA (12 chars) scopes the incremental diff.
-        #expect(prompt.contains("git diff abcdef012345..HEAD"))
+        #expect(prompt.contains("`git diff abcdef012345..HEAD` shows what changed since your last review; use it as a pointer, not as the scope"))
+        #expect(!prompt.contains("Focus on what changed"))
+        #expect(prompt.contains("Review the whole PR diff (`gh pr diff https://github.com/corveil/crow/pull/753`)"))
     }
 
-    @Test func fallsBackToFullPRWhenNoLastReviewedHead() {
+    @Test func noLastReviewedHeadDropsThePointerButKeepsTheFreshPass() {
         let prompt = QuickActionPrompts.build(
             action: .reReview,
             codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
@@ -100,8 +103,44 @@ struct ReReviewPromptTests {
             prNumber: 753,
             lastReviewedHeadSha: nil
         )
-        #expect(prompt.contains("Review the whole PR."))
+        #expect(prompt.contains("Review the whole PR diff"))
         #expect(!prompt.contains("git diff"))
+    }
+
+    /// CROW-1511: every round is a fresh pass over the whole diff, *then* a
+    /// check-off of the earlier findings, on GitHub and GitLab alike, with or
+    /// without a known prior head. An approval round that finds nothing new
+    /// says so instead of restating round 1.
+    @Test func freshFullDiffPassComesBeforeCheckingOffEarlierFindings() throws {
+        let cases: [(FakeCodeBackend, String, String)] = [
+            (FakeCodeBackend(provider: .github, cliName: "gh"),
+             "https://github.com/corveil/crow/pull/753", "`gh pr diff https://github.com/corveil/crow/pull/753`"),
+            (FakeCodeBackend(provider: .gitlab, cliName: "glab"),
+             "https://gitlab.example.com/org/repo/-/merge_requests/45",
+             "`glab mr diff https://gitlab.example.com/org/repo/-/merge_requests/45`"),
+        ]
+        for (backend, url, diffCommand) in cases {
+            for sha: String? in [nil, "abcdef0123456789"] {
+                let prompt = QuickActionPrompts.build(
+                    action: .reReview, codeBackend: backend, prURL: url,
+                    prNumber: QuickActionPrompts.parsePRNumber(from: url), lastReviewedHeadSha: sha)
+                let label = "\(backend.provider)/\(sha ?? "nil")"
+
+                let fresh = try #require(
+                    prompt.range(of: "Review the whole PR diff (\(diffCommand)) as if you were seeing it for the first time"),
+                    "\(label) lost the fresh full-diff pass")
+                #expect(prompt.contains("form your findings from the code before you reread your earlier review, and do not limit them to what changed"), "\(label)")
+                let checkOff = try #require(
+                    prompt.range(of: "Then check each finding from your earlier reviews off against the current code"),
+                    "\(label) lost the check-off")
+                #expect(fresh.lowerBound < checkOff.lowerBound, "\(label) checks off before the fresh pass")
+                #expect(prompt.contains("declined (judge the author's reply on its merits"), "\(label)")
+                #expect(prompt.contains("`Full pass over the diff: nothing new.`"), "\(label)")
+                // Still one line.
+                #expect(prompt.hasSuffix("\n"))
+                #expect(!prompt.dropLast().contains("\n"), "\(label) broke the single-line contract")
+            }
+        }
     }
 
     /// CROW-1340: a re-review round restates the workspace's review instructions
@@ -183,6 +222,42 @@ struct ReReviewPromptTests {
         let pullRange = try #require(gitlab.range(of: "git pull"))
         let rmRange = try #require(gitlab.range(of: ReviewCloneRestrip.cliCommand))
         #expect(pullRange.lowerBound < rmRange.lowerBound)
+    }
+}
+
+/// CROW-1511: the implementer's changes-requested prompt pairs with the
+/// reviewer's "judge a declined finding on its merits" rule. A disagreement
+/// reply must carry evidence, not a preference, because the reviewer now weighs
+/// it instead of capping the finding at Green.
+@Suite("AutoRespondPrompts.changesRequested")
+struct ChangesRequestedPromptTests {
+
+    @Test func disagreementReplyMustCarryEvidence() {
+        for (backend, url) in [
+            (FakeCodeBackend(provider: .github, cliName: "gh"), "https://github.com/corveil/crow/pull/753"),
+            (FakeCodeBackend(provider: .gitlab, cliName: "glab"), "https://gitlab.example.com/org/repo/-/merge_requests/45"),
+        ] {
+            let prompt = AutoRespondPrompts.build(
+                for: PRStatusTransition(kind: .changesRequested, sessionID: UUID(), prURL: url, prNumber: 753),
+                codeBackend: backend)
+            #expect(prompt.contains("Address every reviewer comment in code"))
+            #expect(prompt.contains("If you disagree with a comment, reply with evidence instead of changing the code: cite the code, a test, or the spec or ticket"))
+            #expect(prompt.contains("A preference or a restatement of the design is not evidence, and the reviewer judges the reply on its merits."))
+            #expect(prompt.contains("If a comment is unclear, reply with a question rather than guessing."))
+            #expect(!prompt.contains("leave a reply explaining your reasoning"))
+            #expect(prompt.hasSuffix("\n"))
+            #expect(!prompt.dropLast().contains("\n"))
+        }
+    }
+
+    /// The manual **Address changes** quick action reuses the same text.
+    @Test func addressChangesQuickActionCarriesTheSameRule() {
+        let prompt = QuickActionPrompts.build(
+            action: .addressChanges,
+            codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
+            prURL: "https://github.com/corveil/crow/pull/753",
+            prNumber: 753)
+        #expect(prompt.contains("reply with evidence instead of changing the code"))
     }
 }
 

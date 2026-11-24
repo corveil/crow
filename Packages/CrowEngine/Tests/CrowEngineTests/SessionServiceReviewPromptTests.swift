@@ -42,10 +42,6 @@ struct SessionServiceReviewPromptTests {
 
     \(ReviewVerdictPolicy.gradingGuidancePlaceholder)
 
-    | Color  | Meaning      | Verdict effect            |
-    |--------|--------------|---------------------------|
-    \(ReviewVerdictPolicy.tablePlaceholder)
-
     \(ReviewVerdictPolicy.notesPlaceholder)
     """
 
@@ -316,7 +312,7 @@ struct SessionServiceReviewPromptTests {
 
             #expect(prompt.contains("any Red finding"), "\(agentKind.rawValue) lost the policy")
             #expect(!prompt.contains("any Red **or** any Yellow finding"))
-            #expect(prompt.contains("| Yellow | Should fix   | Approve allowed           |"))
+            #expect(prompt.contains("Yellow and Green findings do not gate the verdict."))
             // Q4: relaxing Yellow must not stop it being reported.
             #expect(prompt.contains("Report every one of them in the review body"))
             // The policy must not cost us the existing substitutions.
@@ -326,10 +322,11 @@ struct SessionServiceReviewPromptTests {
         }
     }
 
-    /// CROW-986: the grading-guidance rules bound the *grade*, not the *gate*, so
-    /// they must reach the agent through every inline branch and read identically
-    /// under any workspace policy. Assert the built prompt carries all three rules
-    /// for both the default (Red+Yellow) and a relaxed (Red-only) workspace.
+    /// CROW-986 / CROW-1511: the grading-guidance rules bound the *grade*, not the
+    /// *gate*, so they must reach the agent through every inline branch and read
+    /// identically under any workspace policy. Assert the built prompt carries all
+    /// three rules for both the default (Red+Yellow) and a relaxed (Red-only)
+    /// workspace, and that the declined-finding Green cap is gone.
     @Test func buildReviewPromptCarriesTheGradingGuidanceForEveryPolicy() {
         for blocking in [ReviewSeverity.defaultBlocking, [.red]] {
             let body = ReviewVerdictPolicy.expand(Self.policyFixtureSkillBody, blocking: blocking)
@@ -346,10 +343,15 @@ struct SessionServiceReviewPromptTests {
 
                 #expect(prompt.contains("An accepted risk is not a blocker."),
                         "\(agentKind.rawValue)/\(blocking) lost the accepted-risk rule")
-                #expect(prompt.contains("Do not re-block a declined finding."),
+                #expect(prompt.contains("Judge a declined finding on its merits."),
                         "\(agentKind.rawValue)/\(blocking) lost the declined-finding rule")
-                #expect(prompt.contains("Grade against the diff, not the roadmap."),
-                        "\(agentKind.rawValue)/\(blocking) lost the grade-against-the-diff rule")
+                #expect(prompt.contains("`crow:needs-human`"),
+                        "\(agentKind.rawValue)/\(blocking) lost the two-round hand-off to a human")
+                #expect(prompt.contains("Grade by the consequence if this merges as-is."),
+                        "\(agentKind.rawValue)/\(blocking) lost the consequence principle")
+                #expect(!prompt.contains("Do not re-block a declined finding."),
+                        "\(agentKind.rawValue)/\(blocking) still caps a declined finding at Green")
+                #expect(!prompt.contains("Grade against the diff, not the roadmap."))
                 // No verdict-family placeholder may survive expansion.
                 #expect(!prompt.contains("{{CROW_REVIEW_"))
             }
