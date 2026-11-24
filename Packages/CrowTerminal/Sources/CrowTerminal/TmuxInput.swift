@@ -251,6 +251,25 @@ extension TmuxBackend {
         }
     }
 
+    /// Type `text` literally into terminal `id`'s pane (`send-keys -l`), after
+    /// cancelling copy-mode. Keystrokes, not a paste: for a TUI text field
+    /// that is answered key by key, like the `AskUserQuestion` picker's
+    /// `Type something` row (CROW-1512).
+    public func sendLiteral(id: UUID, text: String) throws {
+        guard let windowIndex = bindings[id] else {
+            throw TmuxBackendError.unknownTerminal(id)
+        }
+        do {
+            let ctrl = try ensureRunningServer()
+            let target = "\(ctrl.sessionName):\(windowIndex)"
+            try ctrl.cancelCopyModeIfActive(target: target)
+            try ctrl.sendLiteral(target: target, text: text)
+        } catch {
+            reportIfTimeout(error)
+            throw error
+        }
+    }
+
     /// Direction for `searchInScrollback`. `backward` walks toward older
     /// output (the common case for Cmd+F on terminal history); `forward`
     /// walks toward newer output.

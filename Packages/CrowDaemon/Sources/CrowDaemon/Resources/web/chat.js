@@ -491,6 +491,9 @@ function applyChatPage(st, res) {
   }
   if (res.path) st.path = res.path;
   if (typeof res.cursor === 'number') st.cursor = res.cursor;
+  // Question cards note the page they were drawn on, to tell a result that
+  // came later (answered in the terminal) from one already in the backlog.
+  st.pageSeq = (st.pageSeq || 0) + 1;
   const events = res.events || [];
   if (log && events.length) {
     const pinned = res.reset || chatNearBottom(log);
@@ -526,6 +529,12 @@ function appendChatEvent(st, log, ev) {
       log.appendChild(bubble);
       break;
     case 'tool_call': {
+      if (isChatQuestionEvent(ev)) {
+        const card = chatQuestionCard(st, ev);
+        log.appendChild(card);
+        if (ev.tool_id) st.toolNodes.set(ev.tool_id, card);
+        break;
+      }
       const d = document.createElement('details');
       d.className = 'chat-tool';
       const sum = document.createElement('summary');
@@ -539,6 +548,18 @@ function appendChatEvent(st, log, ev) {
     }
     case 'tool_result': {
       const host = ev.tool_id && st.toolNodes.get(ev.tool_id);
+      if (host && host.classList.contains('chat-question')) {
+        closeChatQuestionCard(st, host, ev);
+        st.toolNodes.delete(ev.tool_id);
+        break;
+      }
+      if (!host && Array.isArray(ev.questions) && ev.questions.length) {
+        // A question whose call fell before the tail window: read-only.
+        const card = chatQuestionCard(st, { tool_id: ev.tool_id, questions: ev.questions });
+        log.appendChild(card);
+        closeChatQuestionCard(st, card, ev);
+        break;
+      }
       const pre = appendLinkified(el('pre', 'chat-tool-result' + (ev.is_error ? ' error' : '')), ev.text || '(no output)');
       if (host) {
         host.appendChild(pre);
@@ -1014,6 +1035,9 @@ function chatFollowHold() {
   if (chatSending) return 'sending';
   const input = document.getElementById('chat-input');
   if (input && input.value && input.value.trim()) return 'draft';
+  // A half-answered question card is a draft too; one being sent is a send.
+  const q = chatQuestionHold();
+  if (q) return q;
   if (Date.now() - chatLastInteractionAt < CHAT_FOLLOW_IDLE_MS) return 'interaction';
   // Something on top of the session: a prompt or modal, Settings, the switcher.
   if (document.querySelector('.text-prompt-backdrop, .modal-dialog-backdrop')) return 'modal';
@@ -1168,6 +1192,12 @@ function renderChatStatus(stArg) {
     status.classList.add('warn');
     return;
   }
+  // An open question card: the agent is waiting on the operator, not working.
+  if (chatQuestionPending(st)) {
+    status.appendChild(el('span', null, 'Waiting for your answer'));
+    status.classList.add('waiting');
+    return;
+  }
   // No structured "busy" signal reaches the browser yet, so infer it: anything
   // after the last turn end means the agent is mid-turn.
   if (st.lastKind && st.lastKind !== 'turn_end') {
@@ -1207,6 +1237,315 @@ async function sendChatMessage() {
     chatSending = false;
     renderChatStatus();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Question cards (CROW-1512). A Claude `AskUserQuestion` call arrives with its
+// questions parsed (`ev.questions`, ChatTranscript.swift) and renders as a
+// card: radio buttons for a single-select question, checkboxes for a
+// multi-select one, an Other field each, and one Submit. Submit sends
+// `answer-question`, which types the answers into the TUI picker (the picker
+// stays the source of truth) or, when the picker doesn't respond as expected,
+// dismisses it and sends them as a message. The card stays locked until the
+// tool_result arrives, which turns it read-only with the answers. A result for
+// a question the card never sent means it was answered in the terminal.
+//
+// What the operator has picked is kept per session and call
+// (chatQuestionDrafts), so a session switch or a page reset redraws the card
+// as it was, and a half-filled card holds Follow like a composer draft.
+// ---------------------------------------------------------------------------
+// `${sessionId}:${toolId}` → [{ selected: [optionIndex], otherOn, other }]
+const chatQuestionDrafts = new Map();
+// Keys with an `answer-question` in flight.
+const chatQuestionSending = new Set();
+// Keys answered from Chat: 'picker' | 'fallback'.
+const chatQuestionSent = new Map();
+
+function isChatQuestionEvent(ev) {
+  return ev.tool_name === 'AskUserQuestion' && Array.isArray(ev.questions) && ev.questions.length > 0;
+}
+
+function chatQuestionKey(sessionId, toolId) {
+  return sessionId + ':' + (toolId || '');
+}
+
+function chatQuestionDraft(key, questions) {
+  let d = chatQuestionDrafts.get(key);
+  if (!d || d.length !== questions.length) {
+    d = questions.map(() => ({ selected: [], otherOn: false, other: '' }));
+    chatQuestionDrafts.set(key, d);
+  }
+  return d;
+}
+
+// The draft as `answer-question` answers, or null while a question is unanswered.
+function chatQuestionAnswers(questions, draft) {
+  const out = [];
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+    const d = draft[i];
+    const other = d.otherOn ? d.other.replace(/\s+/g, ' ').trim() : '';
+    if (d.otherOn && !other) return null;
+    if (q.multi_select) {
+      if (!d.selected.length && !other) return null;
+      out.push(other ? { selected: d.selected.slice().sort(), other } : { selected: d.selected.slice().sort() });
+    } else {
+      if (other) out.push({ selected: [], other });
+      else if (d.selected.length === 1) out.push({ selected: d.selected.slice() });
+      else return null;
+    }
+  }
+  return out;
+}
+
+function chatQuestionTouched(draft) {
+  return draft.some((d) => d.selected.length || (d.otherOn && d.other.trim()) || d.other.trim());
+}
+
+function chatQuestionCard(st, ev) {
+  const key = chatQuestionKey(st.sessionId, ev.tool_id);
+  const card = el('div', 'chat-question pending');
+  card.setAttribute('role', 'group');
+  card.setAttribute('aria-label', 'Question from the agent');
+  card.dataset.key = key;
+  card.dataset.page = String(st.pageSeq || 0);
+  card._questions = ev.questions;
+  const head = el('div', 'chat-question-head');
+  head.appendChild(icon('comment', 12));
+  head.appendChild(el('span', null, ev.questions.length > 1 ? 'The agent has questions' : 'The agent has a question'));
+  card.appendChild(head);
+  const draft = chatQuestionDraft(key, ev.questions);
+  const body = el('div', 'chat-question-body');
+  ev.questions.forEach((q, i) => body.appendChild(chatQuestionFieldset(card, key, q, i, draft)));
+  card.appendChild(body);
+  const actions = el('div', 'chat-question-actions');
+  const submit = el('button', 'chat-question-submit', 'Submit');
+  submit.type = 'button';
+  submit.onclick = () => submitChatQuestion(st, card);
+  const note = el('span', 'chat-question-note');
+  note.setAttribute('role', 'status');
+  actions.appendChild(submit);
+  actions.appendChild(note);
+  card.appendChild(actions);
+  updateChatQuestionCard(card);
+  return card;
+}
+
+function chatQuestionFieldset(card, key, q, i, draft) {
+  const fs = el('fieldset', 'chat-q');
+  const legend = el('legend', 'chat-q-legend');
+  if (q.header) legend.appendChild(el('span', 'chat-q-chip', q.header));
+  legend.appendChild(el('span', 'chat-q-text', q.question));
+  fs.appendChild(legend);
+  if (q.multi_select) fs.appendChild(el('div', 'chat-q-hint', 'Pick any'));
+  const type = q.multi_select ? 'checkbox' : 'radio';
+  const name = 'chat-q-' + key + '-' + i;
+  const d = draft[i];
+  const inputs = [];
+  q.options.forEach((opt, j) => {
+    const row = el('label', 'chat-q-opt');
+    const input = document.createElement('input');
+    input.type = type;
+    input.name = name;
+    input.checked = d.selected.includes(j);
+    input.onchange = () => {
+      if (q.multi_select) {
+        d.selected = input.checked ? d.selected.concat([j]) : d.selected.filter((x) => x !== j);
+      } else if (input.checked) {
+        d.selected = [j];
+        d.otherOn = false;
+      }
+      syncChatQuestionInputs(inputs, otherBox, d);
+      updateChatQuestionCard(card);
+    };
+    inputs.push(input);
+    row.appendChild(input);
+    const text = el('span', 'chat-q-opt-text');
+    text.appendChild(el('span', 'chat-q-label', opt.label));
+    if (opt.description) text.appendChild(el('span', 'chat-q-desc', opt.description));
+    row.appendChild(text);
+    fs.appendChild(row);
+  });
+  // Other: the TUI's "Type something" row. Typing selects it.
+  const otherRow = el('label', 'chat-q-opt chat-q-other');
+  const otherBox = document.createElement('input');
+  otherBox.type = type;
+  otherBox.name = name;
+  otherBox.checked = d.otherOn;
+  otherBox.setAttribute('aria-label', 'Other');
+  const field = document.createElement('input');
+  field.type = 'text';
+  field.className = 'chat-q-other-input';
+  field.placeholder = 'Other…';
+  field.setAttribute('aria-label', 'Other answer: ' + q.question);
+  field.maxLength = 2000;
+  field.value = d.other;
+  otherBox.onchange = () => {
+    d.otherOn = otherBox.checked;
+    if (!q.multi_select && d.otherOn) d.selected = [];
+    syncChatQuestionInputs(inputs, otherBox, d);
+    updateChatQuestionCard(card);
+    if (d.otherOn && !field.value) { try { field.focus({ preventScroll: true }); } catch (_) { field.focus(); } }
+  };
+  field.oninput = () => {
+    d.other = field.value;
+    if (field.value.trim() && !d.otherOn) {
+      d.otherOn = true;
+      if (!q.multi_select) d.selected = [];
+    }
+    syncChatQuestionInputs(inputs, otherBox, d);
+    updateChatQuestionCard(card);
+  };
+  // Enter in the field never submits a half-filled card by accident.
+  field.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault();
+      const btn = card.querySelector('.chat-question-submit');
+      if (btn && !btn.disabled) btn.click();
+    }
+  };
+  otherRow.appendChild(otherBox);
+  otherRow.appendChild(field);
+  fs.appendChild(otherRow);
+  return fs;
+}
+
+function syncChatQuestionInputs(inputs, otherBox, d) {
+  inputs.forEach((input, j) => { input.checked = d.selected.includes(j); });
+  otherBox.checked = d.otherOn;
+}
+
+// Submit is enabled once every question has an answer and nothing is in flight.
+function updateChatQuestionCard(card) {
+  if (!card.classList.contains('pending')) return;
+  const key = card.dataset.key;
+  const draft = chatQuestionDrafts.get(key);
+  const sending = chatQuestionSending.has(key);
+  const sent = chatQuestionSent.has(key);
+  const locked = sending || sent;
+  const ready = !!draft && !!chatQuestionAnswers(card._questions, draft);
+  const submit = card.querySelector('.chat-question-submit');
+  if (submit) {
+    submit.disabled = locked || !ready;
+    submit.textContent = sending ? 'Sending…' : 'Submit';
+  }
+  for (const input of card.querySelectorAll('input')) input.disabled = locked;
+  card.classList.toggle('locked', locked);
+  const note = card.querySelector('.chat-question-note');
+  if (note && locked) {
+    note.classList.remove('error');
+    note.textContent = sending ? 'Answering in the terminal…'
+      : chatQuestionSent.get(key) === 'fallback'
+        ? 'The picker didn’t respond as expected, so it was dismissed and your answers were sent as a message.'
+        : 'Answered. Waiting for the agent…';
+  }
+}
+
+async function submitChatQuestion(st, card) {
+  const key = card.dataset.key;
+  const toolId = key.slice(key.indexOf(':') + 1);
+  const draft = chatQuestionDrafts.get(key);
+  const answers = draft && chatQuestionAnswers(card._questions, draft);
+  if (!answers || chatQuestionSending.has(key) || chatQuestionSent.has(key)) return;
+  const sid = st.sessionId;
+  chatQuestionSending.add(key);
+  updateChatQuestionCard(card);
+  renderChatStatus();
+  let res = null;
+  let err = null;
+  try {
+    res = await rpc('answer-question', { session_id: sid, tool_id: toolId, answers });
+  } catch (e) {
+    err = e;
+  }
+  chatQuestionSending.delete(key);
+  if (!err) chatQuestionSent.set(key, res && res.delivered === 'fallback' ? 'fallback' : 'picker');
+  // The card may have been redrawn (a poll reset, a session switch and back).
+  const live = chatQuestionCardFor(key) || card;
+  updateChatQuestionCard(live);
+  if (err) {
+    const note = live.querySelector('.chat-question-note');
+    if (note) {
+      note.textContent = 'Not sent: ' + ((err && err.message) || err);
+      note.classList.add('error');
+    }
+  } else if (chatState && chatState.sessionId === sid) {
+    // The result lands within a beat; don't wait for the poll.
+    setTimeout(refreshChat, 400);
+  }
+  renderChatStatus();
+}
+
+function chatQuestionCardFor(key) {
+  const log = document.getElementById('chat-log');
+  if (!log) return null;
+  for (const c of log.querySelectorAll('.chat-question')) if (c.dataset.key === key) return c;
+  return null;
+}
+
+// The tool_result arrived: the card turns read-only with the answers.
+function closeChatQuestionCard(st, card, ev) {
+  const key = card.dataset.key;
+  const sent = chatQuestionSent.get(key);
+  const answeredLater = Number(card.dataset.page) !== (st.pageSeq || 0);
+  let state;
+  if (sent === 'fallback') state = 'Sent as a message';
+  else if (ev.is_error) state = 'Declined';
+  else if (sent) state = 'Answered from Chat';
+  else if (answeredLater) state = 'Answered in terminal';
+  else state = 'Answered';
+  chatQuestionDrafts.delete(key);
+  chatQuestionSending.delete(key);
+  chatQuestionSent.delete(key);
+  card.classList.remove('pending', 'locked');
+  card.classList.add('answered');
+  if (ev.is_error && sent !== 'fallback') card.classList.add('declined');
+  const questions = card._questions || ev.questions || [];
+  const answers = ev.answers || {};
+  const body = el('div', 'chat-question-body');
+  for (const q of questions) {
+    const row = el('div', 'chat-q chat-q-done');
+    const legend = el('div', 'chat-q-legend');
+    if (q.header) legend.appendChild(el('span', 'chat-q-chip', q.header));
+    legend.appendChild(el('span', 'chat-q-text', q.question));
+    row.appendChild(legend);
+    const a = answers[q.question];
+    if (a) row.appendChild(el('div', 'chat-q-answer', '→ ' + a));
+    body.appendChild(row);
+  }
+  const head = card.querySelector('.chat-question-head');
+  card.innerHTML = '';
+  if (head) {
+    const badge = el('span', 'chat-question-state', state);
+    head.appendChild(badge);
+    card.appendChild(head);
+  }
+  card.appendChild(body);
+}
+
+// A question card still waiting for its result in this session's log.
+function chatQuestionPending(st) {
+  if (!st || chatState !== st) return false;
+  const log = document.getElementById('chat-log');
+  return !!(log && log.querySelector('.chat-question.pending'));
+}
+
+// chatFollowHold: a half-answered card holds Follow like a draft; one being
+// sent like a send.
+function chatQuestionHold() {
+  const st = chatState;
+  if (!st) return null;
+  const prefix = st.sessionId + ':';
+  for (const key of chatQuestionSending) if (key.startsWith(prefix)) return 'sending';
+  const log = document.getElementById('chat-log');
+  if (!log) return null;
+  for (const card of log.querySelectorAll('.chat-question.pending')) {
+    const key = card.dataset.key;
+    if (chatQuestionSent.has(key)) continue;
+    const d = chatQuestionDrafts.get(key);
+    if (d && chatQuestionTouched(d)) return 'draft';
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

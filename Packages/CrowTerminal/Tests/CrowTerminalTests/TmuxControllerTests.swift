@@ -359,4 +359,12 @@ struct TmuxControllerArgumentTests {
         #expect(args.contains("-p"))
         #expect(args == ["paste-buffer", "-p", "-b", "crow-buf", "-t", "crow:3"])
     }
+
+    /// CROW-1512: the question card's free text is typed, not pasted. `-l`
+    /// keeps `Enter` / `C-c` as words, `--` keeps a leading `-` from being
+    /// read as a flag.
+    @Test func sendLiteralArgumentsTypeTheTextVerbatim() {
+        let args = TmuxController.sendLiteralArguments(target: "crow:3", text: "-x Enter")
+        #expect(args == ["send-keys", "-t", "crow:3", "-l", "--", "-x Enter"])
+    }
 }

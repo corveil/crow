@@ -358,6 +358,10 @@ struct ParityGateTests {
     /// — is what makes adding one a deliberate, visible act instead of a single
     /// `.noCLI(…)` row lost among 85.
     static let knownWriteExemptions: Set<String> = [
+        // CROW-1512: the web Chat question card types into Claude's picker; in
+        // a terminal the operator answers the picker itself. A `crow` verb (a
+        // Manager answering a work session's question) is possible later.
+        "answer-question",
         "batch-start-review",
         "run-job",
         "run-setup",

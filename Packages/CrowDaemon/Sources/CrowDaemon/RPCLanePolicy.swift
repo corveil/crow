@@ -88,6 +88,9 @@ enum RPCLanePolicy {
         "relaunch-agent": .on("session_id"),
         "rename-terminal": .on("session_id"),
         "send": .on("session_id"),
+        // Presses keys in the session's agent pane, then may `send` a message:
+        // the same lane as `send`, so the two never interleave (CROW-1512).
+        "answer-question": .on("session_id"),
         // These two carry only a `terminal_id`.
         "launch-agent": .on("terminal_id"),
         "retry-readiness": .on("terminal_id"),

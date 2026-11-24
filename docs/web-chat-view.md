@@ -19,7 +19,19 @@ Once it's on, switch with the **Terminal | Chat** toggle in the session header. 
 | Codex | Supported (messages and tools; context meter from the rollout) |
 | Others | "Not supported yet"; use the terminal |
 
-Transcripts never contain permission prompts. When the agent is waiting for approval, answer it in the terminal.
+Transcripts never contain permission prompts. When the agent is waiting for approval, answer it in the terminal. Claude's `AskUserQuestion` is the exception: see [Questions](#questions-claude-code).
+
+## Questions (Claude Code)
+
+When a Claude session asks you something with `AskUserQuestion`, Chat shows a question card instead of a tool row: each question with its header, radio buttons for a pick-one question, checkboxes for a pick-any one, each option's description under it, and an **Other** field per question (the terminal's "Type something"). Typing in Other selects it. **Submit** is enabled once every question has an answer.
+
+- **Delivery.** The terminal's question picker is what the agent is waiting on, and it stays the source of truth. Submit sends `answer-question`; `crowd` reads the questions from the transcript (not from the browser) and types the answers into the picker one key at a time, capturing the pane after each key to check it did what it should: a digit picks a single-select option or toggles a multi-select one, the Other text is typed (never pasted, never read as key names), and the last Enter submits. Nothing is pressed until the picker for that very question is on screen.
+- **Fallback.** If the picker doesn't respond as expected (a Claude Code version that draws it differently, a key that didn't land), `crowd` presses Esc to dismiss it and sends your answers as a message, one `Header: answer` line per question. The card says so. If the picker isn't on screen at all, nothing is pressed and the card shows why, so you can answer in the terminal.
+- **One submit.** The card locks after Submit until the agent's answer record arrives, or an error comes back (then you can try again). It stays locked across polls and session switches.
+- **Answered.** When the result arrives, the card turns read-only with your answers: **Answered from Chat**, **Answered in terminal** (you used the picker instead), **Sent as a message** (the fallback), or **Declined** (the picker was dismissed). Past questions (after a reload or a session switch) open read-only with their answers.
+- **Follow** treats a half-filled card like an unsent message and doesn't switch away from it.
+
+The key map was recorded against Claude Code 2.1.331 (`AskUserQuestionPicker`).
 
 ## Copy and Listen
 

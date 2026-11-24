@@ -31,6 +31,7 @@ const epilogue = `
   selectBoard, showEmptyDetail, clearPageDataOnExpiry,
   applyChatView, setChatViewActive, chatHeaderMeter, chatToggleControl, onChatConfigLoaded,
   insertChatText, chatDrafts,
+  chatQuestionDrafts, chatQuestionSending, chatQuestionSent, chatQuestionHold, chatFollowHold,
   set chatViewFlag(v){ uiConfig.chatViewEnabled = v; },
   set rpc(v){ rpc = v; },
   set copyToClipboard(v){ copyToClipboard = v; },
@@ -1147,6 +1148,132 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
   T.chatViewFlag = true;
   T.onChatConfigLoaded();
   check('turning it back on restores the sticky Chat mode', app.classList.contains('chat-active'));
+
+  // -------------------------------------------------------------------------
+  console.log('question cards (CROW-1512)');
+  {
+    const QS = 'QQQQQQQQ-QQQQ-QQQQ-QQQQ-QQQQQQQQQQQQ';
+    T.selectedId = QS;
+    const qst = T.newChatState(QS);
+    T.chatState = qst;
+    const qlog = doc.getElementById('chat-log');
+    const questions = [
+      { question: 'Which color?', header: 'Color', multi_select: false,
+        options: [{ label: 'Red', description: 'warm' }, { label: 'Blue', description: 'cool' }] },
+      { question: 'Which toppings?', header: 'Toppings', multi_select: true,
+        options: [{ label: 'Cheese', description: 'dairy' }, { label: 'Olives', description: '' }] },
+    ];
+    T.applyChatPage(qst, { supported: true, reset: true, cursor: 10, path: '/q.jsonl', terminal_id: 'TERM',
+      events: [{ kind: 'tool_call', tool_name: 'AskUserQuestion', tool_id: 'tq1', text: 'Which color? (+1 more)', questions }] });
+    const card = qlog.querySelector('.chat-question');
+    check('a pending question renders expanded, not as a <details> row',
+      card && card.classList.contains('pending') && !qlog.querySelector('details.chat-tool'));
+    const sets = card.querySelectorAll('fieldset.chat-q');
+    check('one fieldset per question, header chip and text', sets.length === 2
+      && sets[0].querySelector('.chat-q-chip').textContent === 'Color'
+      && sets[0].querySelector('.chat-q-text').textContent === 'Which color?');
+    check('single-select is radios, multi-select is checkboxes',
+      sets[0].querySelectorAll('input[type=radio]').length === 3
+      && sets[1].querySelectorAll('input[type=checkbox]').length === 3);
+    check('descriptions show under their labels', sets[0].querySelector('.chat-q-desc').textContent === 'warm');
+    check('each question has an Other field', card.querySelectorAll('.chat-q-other-input').length === 2);
+    check('status says the agent waits for an answer', doc.getElementById('chat-status').classList.contains('waiting')
+      && !doc.getElementById('chat-status').classList.contains('busy'));
+    const submit = card.querySelector('.chat-question-submit');
+    check('Submit starts disabled', submit.disabled === true);
+
+    const pick = (input) => { input.checked = true; input.dispatchEvent(new window.Event('change')); };
+    pick(sets[0].querySelectorAll('input[type=radio]')[1]);
+    check('Submit waits for every question', submit.disabled === true);
+    check('a half-filled card holds Follow like a draft', T.chatQuestionHold() === 'draft');
+    const other = sets[1].querySelector('.chat-q-other-input');
+    other.value = 'Ham';
+    other.dispatchEvent(new window.Event('input'));
+    check('typing in Other selects it', sets[1].querySelectorAll('input[type=checkbox]')[2].checked === true);
+    check('Submit enables once all are answered', submit.disabled === false);
+
+    // A redraw (page reset) restores what was picked.
+    T.applyChatPage(qst, { supported: true, reset: true, cursor: 10, path: '/q.jsonl', terminal_id: 'TERM',
+      events: [{ kind: 'tool_call', tool_name: 'AskUserQuestion', tool_id: 'tq1', text: '', questions }] });
+    const card2 = qlog.querySelector('.chat-question');
+    check('a redrawn card keeps the picks', card2 !== card
+      && card2.querySelectorAll('fieldset.chat-q')[0].querySelectorAll('input[type=radio]')[1].checked
+      && card2.querySelector('.chat-q-other-input').value === ''
+      && card2.querySelectorAll('.chat-q-other-input')[1].value === 'Ham');
+
+    let release;
+    const qcalls = [];
+    T.rpc = (m, p) => { qcalls.push([m, p]); return new Promise((r) => { release = r; }); };
+    const submit2 = card2.querySelector('.chat-question-submit');
+    submit2.click();
+    check('Submit sends answer-question with indices and Other text', qcalls.length === 1
+      && qcalls[0][0] === 'answer-question' && qcalls[0][1].tool_id === 'tq1' && qcalls[0][1].session_id === QS
+      && JSON.stringify(qcalls[0][1].answers) === JSON.stringify([{ selected: [1] }, { selected: [], other: 'Ham' }]));
+    check('the card locks while it sends', submit2.disabled === true
+      && [...card2.querySelectorAll('input')].every((i) => i.disabled));
+    check('a send in flight holds Follow', T.chatQuestionHold() === 'sending');
+    submit2.disabled = false; submit2.click();
+    check('no double submit', qcalls.length === 1);
+    release({ delivered: 'picker' });
+    await new Promise((r) => setImmediate(r));
+    check('after a send the card stays locked until the result', submit2.disabled === true
+      && card2.classList.contains('pending') && T.chatQuestionHold() === null);
+
+    T.applyChatPage(qst, { supported: true, reset: false, cursor: 20, events: [
+      { kind: 'tool_result', tool_id: 'tq1', text: 'The user answered: …',
+        answers: { 'Which color?': 'Blue', 'Which toppings?': 'Ham' } },
+    ] });
+    check('the result turns the card read-only with the answers', card2.classList.contains('answered')
+      && !card2.querySelector('input') && card2.querySelectorAll('.chat-q-answer')[0].textContent === '→ Blue'
+      && card2.querySelector('.chat-question-state').textContent === 'Answered from Chat');
+    check('nothing pending: status no longer waits', !doc.getElementById('chat-status').classList.contains('waiting'));
+
+    // Answered in the terminal: a later page closes a card Chat never sent.
+    T.applyChatPage(qst, { supported: true, reset: false, cursor: 30, events: [
+      { kind: 'tool_call', tool_name: 'AskUserQuestion', tool_id: 'tq2', text: '', questions: [questions[0]] } ] });
+    const card3 = qlog.querySelectorAll('.chat-question')[1];
+    pick(card3.querySelectorAll('input[type=radio]')[0]);
+    T.applyChatPage(qst, { supported: true, reset: false, cursor: 40, events: [
+      { kind: 'tool_result', tool_id: 'tq2', text: 'ok', answers: { 'Which color?': 'Red' } } ] });
+    check('a terminal answer closes the card and says so', card3.classList.contains('answered')
+      && card3.querySelector('.chat-question-state').textContent === 'Answered in terminal'
+      && T.chatQuestionHold() === null);
+
+    // Declined, and a send that failed.
+    T.applyChatPage(qst, { supported: true, reset: false, cursor: 50, events: [
+      { kind: 'tool_call', tool_name: 'AskUserQuestion', tool_id: 'tq3', text: '', questions: [questions[0]] } ] });
+    const card4 = qlog.querySelectorAll('.chat-question')[2];
+    pick(card4.querySelectorAll('input[type=radio]')[0]);
+    T.rpc = async () => { throw new Error('The question isn’t open in the terminal.'); };
+    card4.querySelector('.chat-question-submit').click();
+    await new Promise((r) => setImmediate(r));
+    check('a failed send unlocks the card and shows why',
+      card4.querySelector('.chat-question-submit').disabled === false
+      && /Not sent: The question/.test(card4.querySelector('.chat-question-note').textContent));
+    T.applyChatPage(qst, { supported: true, reset: false, cursor: 60, events: [
+      { kind: 'tool_result', tool_id: 'tq3', text: 'The user doesn’t want to proceed', is_error: true } ] });
+    check('a declined question reads Declined', card4.classList.contains('declined')
+      && card4.querySelector('.chat-question-state').textContent === 'Declined');
+
+    // History: call and result on one backlog page render read-only at once.
+    T.applyChatPage(qst, { supported: true, reset: true, cursor: 70, path: '/q.jsonl', events: [
+      { kind: 'tool_call', tool_name: 'AskUserQuestion', tool_id: 'tq1', text: '', questions },
+      { kind: 'tool_result', tool_id: 'tq1', text: 'ok', answers: { 'Which color?': 'Blue', 'Which toppings?': 'Cheese, Ham' } },
+    ] });
+    const hist = qlog.querySelector('.chat-question');
+    check('history renders read-only with its answers', hist.classList.contains('answered')
+      && !hist.querySelector('input') && hist.querySelector('.chat-question-state').textContent === 'Answered'
+      && hist.querySelectorAll('.chat-q-answer')[1].textContent === '→ Cheese, Ham');
+    // A result whose call fell before the tail window still draws its card.
+    T.applyChatPage(qst, { supported: true, reset: true, cursor: 80, path: '/q.jsonl', events: [
+      { kind: 'tool_result', tool_id: 'tq9', text: 'ok', questions: [questions[0]], answers: { 'Which color?': 'Red' } } ] });
+    check('an orphan result with questions renders a read-only card',
+      qlog.querySelectorAll('.chat-question.answered').length === 1 && !qlog.querySelector('details.chat-tool'));
+    // Other tools are untouched.
+    T.applyChatPage(qst, { supported: true, reset: true, cursor: 90, path: '/q.jsonl', events: [
+      { kind: 'tool_call', tool_name: 'AskUserQuestion', tool_id: 'x', text: '{"questions":…' } ] });
+    check('an AskUserQuestion without parsed questions stays a tool row', !!qlog.querySelector('details.chat-tool'));
+  }
 
   if (failed) { console.log(failed + ' failed'); process.exit(1); }
   console.log('all passed');

@@ -27,10 +27,20 @@ public struct ChatEvent: Sendable, Equatable {
     public var timestamp: String?
     /// `.turnEnd` only, when the harness recorded it.
     public var durationMs: Int?
+    /// Claude's `AskUserQuestion` (CROW-1512): the questions, on the
+    /// `.toolCall`, so Chat can render a question card instead of the raw
+    /// input JSON. On the `.toolResult` too when the harness recorded them
+    /// there, so a result whose call fell before the tail window still renders.
+    public var questions: [ChatQuestion]?
+    /// The `AskUserQuestion` result's answers, question text → answer (a
+    /// multi-select's labels comma-joined, as Claude Code records them). Nil
+    /// for a declined question; `isError` is set then.
+    public var answers: [String: String]?
 
     public init(
         kind: Kind, text: String, toolName: String? = nil, toolID: String? = nil,
-        isError: Bool = false, timestamp: String? = nil, durationMs: Int? = nil
+        isError: Bool = false, timestamp: String? = nil, durationMs: Int? = nil,
+        questions: [ChatQuestion]? = nil, answers: [String: String]? = nil
     ) {
         self.kind = kind
         self.text = text
@@ -39,6 +49,66 @@ public struct ChatEvent: Sendable, Equatable {
         self.isError = isError
         self.timestamp = timestamp
         self.durationMs = durationMs
+        self.questions = questions
+        self.answers = answers
+    }
+}
+
+/// One question of a Claude `AskUserQuestion` call (CROW-1512).
+public struct ChatQuestion: Sendable, Equatable {
+    public struct Option: Sendable, Equatable {
+        public var label: String
+        public var description: String
+
+        public init(label: String, description: String = "") {
+            self.label = label
+            self.description = description
+        }
+    }
+
+    public var question: String
+    public var header: String
+    public var multiSelect: Bool
+    public var options: [Option]
+
+    public init(question: String, header: String, multiSelect: Bool, options: [Option]) {
+        self.question = question
+        self.header = header
+        self.multiSelect = multiSelect
+        self.options = options
+    }
+
+    /// The tool's name in Claude Code transcripts and hooks.
+    public static let toolName = "AskUserQuestion"
+    /// The tool schema allows 1–4 questions of 2–4 options. Anything past
+    /// these caps is dropped rather than drawn: the input is model-written.
+    static let maxQuestions = 8
+    static let maxOptions = 8
+
+    /// `input.questions` of an `AskUserQuestion` tool_use (or the
+    /// `toolUseResult.questions` echo). Nil when there is no usable question.
+    public static func parse(_ raw: Any?) -> [ChatQuestion]? {
+        guard let list = raw as? [[String: Any]] else { return nil }
+        let qs: [ChatQuestion] = list.prefix(maxQuestions).compactMap { q in
+            guard let text = q["question"] as? String,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            let options: [Option] = ((q["options"] as? [[String: Any]]) ?? []).prefix(maxOptions).compactMap { o in
+                guard let label = o["label"] as? String, !label.isEmpty else { return nil }
+                return Option(label: label, description: o["description"] as? String ?? "")
+            }
+            guard !options.isEmpty else { return nil }
+            return ChatQuestion(
+                question: text, header: q["header"] as? String ?? "",
+                multiSelect: q["multiSelect"] as? Bool ?? false, options: options)
+        }
+        return qs.isEmpty ? nil : qs
+    }
+
+    /// The call's one-line text: the first question, not the input JSON.
+    public static func summary(_ qs: [ChatQuestion]) -> String {
+        guard let first = qs.first else { return "" }
+        let more = qs.count > 1 ? " (+\(qs.count - 1) more)" : ""
+        return ChatTranscript.clip(first.question, ChatTranscript.maxToolInputChars) + more
     }
 }
 
@@ -224,15 +294,24 @@ public enum ChatTranscript {
             if let text = message["content"] as? String {
                 appendClaudeUserText(text, ts: ts, to: &out)
             } else if let blocks = message["content"] as? [[String: Any]] {
+                // `toolUseResult` is the record's structured result, so it can
+                // only be read for a record carrying one tool_result.
+                let single = blocks.filter { $0["type"] as? String == "tool_result" }.count == 1
                 for block in blocks {
                     switch block["type"] as? String {
                     case "tool_result":
                         let isError = block["is_error"] as? Bool ?? false
-                        out.append(ChatEvent(
+                        var event = ChatEvent(
                             kind: .toolResult,
                             text: clip(contentText(block["content"]), maxToolResultChars),
                             toolID: block["tool_use_id"] as? String,
-                            isError: isError, timestamp: ts))
+                            isError: isError, timestamp: ts)
+                        if single, !isError, let r = obj["toolUseResult"] as? [String: Any],
+                           let answers = r["answers"] as? [String: Any] {
+                            event.answers = answers.compactMapValues { $0 as? String }
+                            event.questions = ChatQuestion.parse(r["questions"])
+                        }
+                        out.append(event)
                     case "text":
                         appendClaudeUserText(block["text"] as? String ?? "", ts: ts, to: &out)
                     case "image":
@@ -252,10 +331,14 @@ public enum ChatTranscript {
                     if !text.isEmpty { out.append(ChatEvent(kind: .assistant, text: text, timestamp: ts)) }
                 case "tool_use":
                     let name = block["name"] as? String ?? "tool"
+                    let questions = name == ChatQuestion.toolName
+                        ? ChatQuestion.parse((block["input"] as? [String: Any])?["questions"]) : nil
                     out.append(ChatEvent(
                         kind: .toolCall,
-                        text: toolInputSummary(name: name, input: block["input"]),
-                        toolName: name, toolID: block["id"] as? String, timestamp: ts))
+                        text: questions.map(ChatQuestion.summary)
+                            ?? toolInputSummary(name: name, input: block["input"]),
+                        toolName: name, toolID: block["id"] as? String, timestamp: ts,
+                        questions: questions))
                 default:
                     // `thinking` is persisted as an empty string plus a signature.
                     break
