@@ -5,7 +5,7 @@ import Foundation
 /// The taxonomy is fixed at three levels. Which of them *gate the verdict* is
 /// per-workspace configuration (``WorkspaceInfo/reviewBlockingSeverities``);
 /// renaming a level or adding a fourth is deliberately out of scope, because the
-/// skill's required output format and summary table both assume exactly these.
+/// skill's required output format and grading guidance both assume exactly these.
 public enum ReviewSeverity: String, Codable, Sendable, CaseIterable {
     case red
     case yellow
@@ -25,28 +25,24 @@ public enum ReviewSeverity: String, Codable, Sendable, CaseIterable {
         allCases.filter(severities.contains)
     }
 
-    /// Capitalized label as it appears in the skill body and the summary table.
+    /// Capitalized label as it appears in the skill body.
     public var displayName: String {
         rawValue.prefix(1).uppercased() + rawValue.dropFirst()
-    }
-
-    /// The "Meaning" column of the skill's summary table.
-    public var meaning: String {
-        switch self {
-        case .red: return "Must fix"
-        case .yellow: return "Should fix"
-        case .green: return "Consider"
-        }
     }
 }
 
 /// Renders a workspace's review-verdict policy into the bundled `crow-review-pr`
 /// SKILL body (CROW-963).
 ///
-/// The skill carries four placeholders — the Step 5 verdict rule, the grading
-/// guidance that bounds the severity a finding may be assigned, the summary
-/// table's data rows, and the two reinforcing bullets under Important Notes. All
-/// must agree, or the agent is handed a brief that contradicts itself.
+/// The skill carries three placeholders — the Step 5 verdict rule, the grading
+/// guidance that bounds the severity a finding may be assigned, and the two
+/// reinforcing bullets under Important Notes. All must agree, or the agent is
+/// handed a brief that contradicts itself.
+///
+/// CROW-1511 dropped the fourth, the static `### Summary Table` legend
+/// (`{{CROW_REVIEW_VERDICT_TABLE}}`): it repeated the verdict rule in every
+/// posted review. The body's `**Recommendation:**` line, with its Red / Yellow /
+/// Green counts, still carries the verdict, and Step 5a still checks it.
 ///
 /// **Advisory, not enforcement.** The review agent invokes `gh pr review` itself;
 /// Crow never sees the call and cannot check the posted verdict against the
@@ -61,12 +57,11 @@ public enum ReviewVerdictPolicy {
 
     public static let rulePlaceholder = "{{CROW_REVIEW_VERDICT_RULE}}"
     public static let gradingGuidancePlaceholder = "{{CROW_REVIEW_GRADING_GUIDANCE}}"
-    public static let tablePlaceholder = "{{CROW_REVIEW_VERDICT_TABLE}}"
     public static let notesPlaceholder = "{{CROW_REVIEW_VERDICT_NOTES}}"
 
     // MARK: - Expansion
 
-    /// Substitute the four verdict placeholders for `blocking`.
+    /// Substitute the three verdict placeholders for `blocking`.
     ///
     /// Idempotent: a body with no placeholders left (already expanded, or the
     /// test-environment stub from `Scaffolder.bundledReviewSkill()`) passes
@@ -80,7 +75,6 @@ public enum ReviewVerdictPolicy {
         return body
             .replacingOccurrences(of: rulePlaceholder, with: ruleBlock(blocking: canonical))
             .replacingOccurrences(of: gradingGuidancePlaceholder, with: gradingGuidanceBlock)
-            .replacingOccurrences(of: tablePlaceholder, with: tableRows(blocking: canonical))
             .replacingOccurrences(of: notesPlaceholder, with: notesBullets(blocking: canonical))
     }
 
@@ -125,18 +119,6 @@ public enum ReviewVerdictPolicy {
         """
     }
 
-    /// The summary table's three data rows (header and separator stay static in
-    /// the skill). Column widths match the checked-in table: 6 / 12 / 26.
-    ///
-    /// A non-blocking severity reads `Approve allowed`, never anything suggesting
-    /// it may be dropped — the finding is still reported either way.
-    public static func tableRows(blocking: [ReviewSeverity]) -> String {
-        ReviewSeverity.allCases.map { severity in
-            let effect = blocking.contains(severity) ? "Request changes" : "Approve allowed"
-            return "| \(pad(severity.displayName, 6)) | \(pad(severity.meaning, 12)) | \(pad(effect, 26))|"
-        }.joined(separator: "\n")
-    }
-
     /// The two reinforcing bullets under Important Notes. Fully generated — the
     /// default set falls out of the same code path, byte-identical.
     public static func notesBullets(blocking: [ReviewSeverity]) -> String {
@@ -169,41 +151,50 @@ public enum ReviewVerdictPolicy {
     Yellow findings are "should fix" — the implementing agent will address them as soon as it sees the request-changes verdict, so rejecting on Yellow lands them in the same round trip instead of a follow-up. Comment-only reviews remain forbidden; if uncertain, request changes.
     """
 
-    /// Grading discipline (CROW-986). Bounds the *severity a finding may be
-    /// assigned* — a separate axis from which severities gate the verdict, so this
-    /// text is constant and renders identically for every workspace policy.
+    /// Grading discipline (CROW-986, reworked by CROW-1511). Bounds the
+    /// *severity a finding may be assigned* — a separate axis from which
+    /// severities gate the verdict, so this text is constant and renders
+    /// identically for every workspace policy.
     ///
-    /// Without it, the verdict gate has no terminating condition when a Yellow
-    /// finding is a risk the author has consciously accepted: one judgment call is
-    /// enough to reject, and a competent review of a non-trivial diff almost always
-    /// surfaces one. These three rules give the reviewer a way to say "your call,
-    /// approved" by capping such findings at Green, which the default and red-only
-    /// policies treat as non-blocking.
-    ///
-    /// The third rule ("grade against the diff, not the roadmap") also carries the
-    /// CROW-1062 reconciliation: an *architectural* mismatch — a change that
-    /// reinvents an existing pathway, misreads the current control flow, or assumes
-    /// a behavior the codebase already has — is a defect in the shape of what is
-    /// written, so it stays gradeable at Yellow/Red rather than being waved through
-    /// as a future refactor. That is the grade-side counterpart to the Step 3
-    /// "Architecture & Existing Patterns" study the skill body now requires.
-    ///
-    /// **The cross-tenant floor (CROW-1321) comes before all three caps.** In
+    /// **The cross-tenant floor (CROW-1321) comes first.** In
     /// corveil/corveil#620 a reviewer wrote "Org A's keyword/regex rules apply to
     /// Org B's traffic", capped it at Green under the accepted-risk rule, and
     /// approved; the bug later blocked every tenant's gateway traffic
-    /// (corveil/corveil#4191). The caps are right for a judgment call and wrong
-    /// for a tenant boundary, so a cross-tenant finding is Red, the caps say they
-    /// do not apply to it, and the only way it merges is the deferral bar — an open
-    /// issue, a `DEFERRED(#N)` marker, and an ADR exception row, each checked by
-    /// the reviewer. This is the generic form of corveil ADR 0093 invariant 10;
-    /// repo-specific tenancy rules arrive through each repo's own `CLAUDE.md`.
+    /// (corveil/corveil#4191). The rules below it are right for a judgment call
+    /// and wrong for a tenant boundary, so a cross-tenant finding is Red, each
+    /// rule says it does not apply to it, and the only way it merges is the
+    /// deferral bar — an open issue, a `DEFERRED(#N)` marker, and an ADR
+    /// exception row, each checked by the reviewer. This is the generic form of
+    /// corveil ADR 0093 invariant 10; repo-specific tenancy rules arrive through
+    /// each repo's own `CLAUDE.md`.
+    ///
+    /// **Every other finding is graded by one principle: the consequence if the
+    /// PR merges as-is.** CROW-1511 replaced the old "grade against the diff, not
+    /// the roadmap" cap with it. The principle still carries the CROW-1062
+    /// reconciliation: an *architectural* mismatch — a change that reinvents an
+    /// existing pathway, misreads the current control flow, or assumes a
+    /// behavior the codebase already has — is a defect in the shape of what is
+    /// written, gradeable at Yellow/Red rather than waved through as a future
+    /// refactor.
+    ///
+    /// **An accepted risk is still not a blocker** (CROW-986). The CROW-1511
+    /// triage kept it on purpose; without it the verdict gate has no terminating
+    /// condition when a finding is a risk the author has consciously documented.
+    ///
+    /// **A declined finding is judged on its merits** (CROW-1511). The old rule
+    /// capped any finding the author "answered with a rationale" at Green, and
+    /// the implementer prompt told the agent to reply instead of changing code
+    /// when it disagreed, so one reply waived a real defect: the CROW-1511 audit
+    /// found approvals citing the rule for an unscoped existence check, a
+    /// destructive data loss, and waived "Done when" items. The reviewer now
+    /// evaluates the reply. What keeps the loop terminating is the two-round
+    /// hand-off to a human (`crow:needs-human`), not a cap.
     public static let gradingGuidanceBlock = """
     Grading discipline — the rules below bound the **severity you may assign** to a finding. They hold no matter which severities gate the verdict above, because they are about how to grade, not about what blocks.
 
     The cross-tenant floor comes first. It sets a minimum grade, and none of the rules after it can lower it:
 
-    - **Cross-tenant effect or exposure is always Red.** A tenant is whatever the repo isolates customers by — an org, workspace, account or team. *Cross-tenant effect* means one tenant's config or data changes another tenant's requests, responses, records, limits, availability or costs. *Cross-tenant exposure* means one tenant can read another tenant's config or data, directly or through an error, a log line, a listing or a count. A finding of either is **Red** — never Yellow, never Green. The accepted-risk, declined-finding and grade-against-the-diff rules below **do not apply** to it: a PR that documents the hazard, calls it defense-in-depth or lower priority, or defers it in prose has not accepted the risk, and an author's reply declining the finding does not lower it. The only way such a finding merges is the deferral bar.
+    - **Cross-tenant effect or exposure is always Red.** A tenant is whatever the repo isolates customers by — an org, workspace, account or team. *Cross-tenant effect* means one tenant's config or data changes another tenant's requests, responses, records, limits, availability or costs. *Cross-tenant exposure* means one tenant can read another tenant's config or data, directly or through an error, a log line, a listing or a count. A finding of either is **Red** — never Yellow, never Green. The consequence, accepted-risk and declined-finding rules below **do not apply** to it: a PR that documents the hazard, calls it defense-in-depth or lower priority, or defers it in prose has not accepted the risk, and an author's reply declining the finding does not lower it. The only way such a finding merges is the deferral bar.
     - **Deferral bar.** A cross-tenant finding may merge as deferred only when all of these exist, and you have checked each one yourself rather than taking the PR's word for it:
       - an **open** tracking issue — check with `gh issue view <N> --json state`; an issue this PR closes does not count;
       - a `// DEFERRED(#N):` marker at the site, naming that issue (in the file's own comment syntax);
@@ -216,14 +207,15 @@ public enum ReviewVerdictPolicy {
       3. Is any org argument dropped, Nil, or optional?
       4. Does a test pin cross-org behavior?
 
-      A "yes" to question 2 is a cross-tenant finding. So is a "yes" to question 3, unless you cite the code that rejects the missing org or fails closed. In a repo with no tenancy, or a diff that touches no tenant-scoped code, the section reads `n/a — <why>`. A repo's own tenancy rules (its `CLAUDE.md`, a tenant-isolation ADR) apply on top of this floor: they can add to it, never lower it.
+      A "yes" to question 2 is a cross-tenant finding. So is a "yes" to question 3, unless you cite the code that rejects the missing org or fails closed. In a repo with no tenancy, or a diff that touches no tenant-scoped code, the section is the single line `n/a — <why>`, without the four questions. A repo's own tenancy rules (its `CLAUDE.md`, a tenant-isolation ADR) apply on top of this floor: they can add to it, never lower it.
 
-    The three rules below cap a finding's severity. A cross-tenant finding is exempt from all three:
+    The three rules below grade every other finding. A cross-tenant finding is exempt from all three:
 
+    - **Grade by the consequence if this merges as-is.** Ask what goes wrong if the PR merges exactly as written, and grade that, not how confident or polite the PR is, and not what the author intends to do later. **Red**: merging breaks something — wrong results, lost or corrupted data, a security hole, a crash, an outage — unless the finding is cross-tenant, which is **Red** under the floor above whatever this rule suggests. **Yellow**: it works on the main path, but what is written has a real defect — a missed edge case, an error swallowed, new behavior with no test, a "Done when" item of the ticket it closes left unmet, or the wrong shape for this codebase. The wrong shape is a defect in what is written: a change that reinvents a pathway the codebase already has, misreads the current control flow, or assumes a behavior the system already provides may be graded **Yellow** or **Red**, not waved through as a future refactor. **Green**: nothing goes wrong if it merges — a style point, a clearer name, an improvement you would like to see later — and never a cross-tenant finding. Grade the code that is written, not the roadmap; study the surrounding architecture before you decide whether a mismatch is a defect or a future improvement.
     - **An accepted risk is not a blocker.** A hazard the PR explicitly documents and consciously accepts is at most **Green** — except a cross-tenant finding, which stays **Red** under the floor above. When the diff is correct and the only disagreement is whether to accept a risk the author has already called out, and that risk is not cross-tenant, the acceptance is the author's decision to make — state your view in the body and let the verdict follow the grade, rather than blocking on it. A cross-tenant risk is never the author's to accept: it stays **Red**, and the verdict follows the floor.
-    - **Do not re-block a declined finding.** A finding you raised in an earlier round that the author has answered with a rationale — rather than a code change — may be restated at most as **Green**, unless it is a cross-tenant finding, which stays **Red** until it is fixed or clears the deferral bar. Re-raising a finding that is not cross-tenant at a blocking severity round after round is not permitted. If you remain unconvinced on a finding that is not cross-tenant, leave it Green and, if it is worth tracking, file a follow-up issue instead of holding up the PR. A declined cross-tenant finding is restated at **Red** every round until it is fixed or clears the deferral bar — a follow-up issue on its own is not a deferral.
-    - **Grade against the diff, not the roadmap.** Severity measures a defect in what is written. "The code is correct, but a hazard it identifies is left unenforced" is **Green** — not Yellow or Red — unless the unenforced hazard is cross-tenant, which is **Red** under the floor above. A future improvement you would like to see is not a defect in this change. But building the wrong *shape* is a defect in what is written: a change that reinvents a pathway the codebase already has, misreads the current control flow, or assumes a behavior the system already provides may be graded **Yellow** or **Red**, not waved through as a future refactor. Study the surrounding architecture before you decide which of the two this is.
+    - **Judge a declined finding on its merits.** When the author answers a finding you raised in an earlier round with a reply instead of a code change, the reply is an argument, not a waiver: check it against the code. If it holds — it cites code, a test or a spec that shows the finding is wrong or does not apply — drop the finding or lower its grade and say in the body why it holds, unless it is a cross-tenant finding, which stays **Red** whatever the reply says until it is fixed or clears the deferral bar. If the reply does not hold, keep the grade and say why not, with `file:line` or test evidence. A preference, a restatement of the design, or a promised follow-up is not evidence and does not change the grade. After **two** rounds of disagreement on the same finding (you kept it, the author declined it again), stop re-blocking it on your own judgment — unless it is a cross-tenant finding, which is restated at **Red** every round until it is fixed or clears the deferral bar, because a follow-up issue on its own is not a deferral. To hand a finding that is not cross-tenant to a human: list it under **Needs a human** in the review body with each side's case in one line, add the `crow:needs-human` label (Step 5d), and take it out of the verdict by recording it as **Green (needs a human)** — the label, not your verdict, now holds it for a human.
     """
+
 
     // MARK: - Helpers
 
@@ -234,9 +226,5 @@ public enum ReviewVerdictPolicy {
         guard let last = names.last else { return "" }
         guard names.count > 1 else { return last }
         return names.dropLast().joined(separator: ", ") + separator + last
-    }
-
-    private static func pad(_ text: String, _ width: Int) -> String {
-        text.count >= width ? text : text + String(repeating: " ", count: width - text.count)
     }
 }

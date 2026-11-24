@@ -25,12 +25,6 @@ struct ReviewVerdictPolicyTests {
     Yellow findings are "should fix" — the implementing agent will address them as soon as it sees the request-changes verdict, so rejecting on Yellow lands them in the same round trip instead of a follow-up. Comment-only reviews remain forbidden; if uncertain, request changes.
     """
 
-    private static let goldenTable = """
-    | Red    | Must fix     | Request changes           |
-    | Yellow | Should fix   | Request changes           |
-    | Green  | Consider     | Approve allowed           |
-    """
-
     private static let goldenNotes = """
     - Use `--approve` only when findings are entirely Green or empty (no Red, no Yellow).
     - Use `--request-changes` when there is any Red or Yellow finding.
@@ -42,23 +36,8 @@ struct ReviewVerdictPolicyTests {
         #expect(ReviewVerdictPolicy.ruleBlock(blocking: ReviewSeverity.defaultBlocking) == Self.goldenRule)
     }
 
-    @Test func defaultPolicyRendersTodaysExactSummaryTable() {
-        #expect(ReviewVerdictPolicy.tableRows(blocking: ReviewSeverity.defaultBlocking) == Self.goldenTable)
-    }
-
     @Test func defaultPolicyRendersTodaysExactImportantNotes() {
         #expect(ReviewVerdictPolicy.notesBullets(blocking: ReviewSeverity.defaultBlocking) == Self.goldenNotes)
-    }
-
-    /// The table's three columns are 6 / 12 / 26 wide in the checked-in skill.
-    /// A policy that changed a row's width would leave the rendered markdown
-    /// table ragged against its static header and separator.
-    @Test func everyPolicyRendersRowsAtTheCheckedInColumnWidth() {
-        for blocking in [[ReviewSeverity.red], ReviewSeverity.defaultBlocking, ReviewSeverity.allCases] {
-            for row in ReviewVerdictPolicy.tableRows(blocking: blocking).split(separator: "\n") {
-                #expect(row.count == 53, "row \(row) is \(row.count) chars, expected 53")
-            }
-        }
     }
 
     // MARK: - Non-default policies
@@ -66,17 +45,16 @@ struct ReviewVerdictPolicyTests {
     @Test func redOnlyPolicyDiffersFromTheDefaultInEveryBlock() {
         let redOnly = [ReviewSeverity.red]
         #expect(ReviewVerdictPolicy.ruleBlock(blocking: redOnly) != Self.goldenRule)
-        #expect(ReviewVerdictPolicy.tableRows(blocking: redOnly) != Self.goldenTable)
         #expect(ReviewVerdictPolicy.notesBullets(blocking: redOnly) != Self.goldenNotes)
     }
 
-    /// The whole point of the setting: Yellow stops gating the verdict. It must
-    /// read `Approve allowed`, and Red must be untouched.
+    /// The whole point of the setting: Yellow stops gating the verdict, and Red
+    /// still does. CROW-1511 dropped the summary table that used to carry this,
+    /// so it is asserted on the rule block the agent actually applies.
     @Test func redOnlyPolicyReleasesYellowButNotRed() {
-        let rows = ReviewVerdictPolicy.tableRows(blocking: [.red])
-        #expect(rows.contains("| Red    | Must fix     | Request changes           |"))
-        #expect(rows.contains("| Yellow | Should fix   | Approve allowed           |"))
-        #expect(rows.contains("| Green  | Consider     | Approve allowed           |"))
+        let rule = ReviewVerdictPolicy.ruleBlock(blocking: [.red])
+        #expect(rule.contains("**Request Changes** (`--request-changes`): any Red finding."))
+        #expect(rule.contains("Yellow and Green findings do not gate the verdict."))
     }
 
     /// Q4 of the ticket: a finding that stops gating the verdict must still be
@@ -109,8 +87,10 @@ struct ReviewVerdictPolicyTests {
     /// stored `[yellow, red]` must render exactly like the default.
     @Test func policyRenderingIsIndependentOfInputOrder() {
         #expect(ReviewVerdictPolicy.ruleBlock(blocking: [.yellow, .red]) == Self.goldenRule)
-        #expect(ReviewVerdictPolicy.tableRows(blocking: [.green, .red]) ==
-                ReviewVerdictPolicy.tableRows(blocking: [.red, .green]))
+        #expect(ReviewVerdictPolicy.ruleBlock(blocking: [.green, .red]) ==
+                ReviewVerdictPolicy.ruleBlock(blocking: [.red, .green]))
+        #expect(ReviewVerdictPolicy.notesBullets(blocking: [.green, .red]) ==
+                ReviewVerdictPolicy.notesBullets(blocking: [.red, .green]))
     }
 
     // MARK: - Expansion
@@ -119,7 +99,6 @@ struct ReviewVerdictPolicyTests {
         let body = [
             ReviewVerdictPolicy.rulePlaceholder,
             ReviewVerdictPolicy.gradingGuidancePlaceholder,
-            ReviewVerdictPolicy.tablePlaceholder,
             ReviewVerdictPolicy.notesPlaceholder,
         ].joined(separator: "\n\n")
         for blocking in [[ReviewSeverity.red], ReviewSeverity.defaultBlocking, ReviewSeverity.allCases] {
@@ -137,8 +116,6 @@ struct ReviewVerdictPolicyTests {
         let body = """
         \(ReviewVerdictPolicy.rulePlaceholder)
 
-        \(ReviewVerdictPolicy.tablePlaceholder)
-
         \(ReviewVerdictPolicy.notesPlaceholder)
         """
         let once = ReviewVerdictPolicy.expand(body, blocking: [.red])
@@ -155,7 +132,7 @@ struct ReviewVerdictPolicyTests {
 
     // MARK: - The bundled skill actually carries the placeholders
 
-    /// Both halves of the skill must carry all three placeholders, or the policy
+    /// Both halves of the skill must carry every placeholder, or the policy
     /// silently stops reaching the agent for whichever build reads that half
     /// (dev reads `skills/`, release reads `Resources/*.template`). The shell
     /// gate `check-workspace-custom-instructions.sh` asserts this too; this is
@@ -184,11 +161,13 @@ struct ReviewVerdictPolicyTests {
         for placeholder in [
             ReviewVerdictPolicy.rulePlaceholder,
             ReviewVerdictPolicy.gradingGuidancePlaceholder,
-            ReviewVerdictPolicy.tablePlaceholder,
             ReviewVerdictPolicy.notesPlaceholder,
         ] {
             #expect(skill.contains(placeholder), "SKILL.md lost \(placeholder)")
         }
+        // CROW-1511: the static Summary Table legend and its placeholder are gone.
+        #expect(!skill.contains("{{CROW_REVIEW_VERDICT_TABLE}}"))
+        #expect(!skill.contains("### Summary Table"))
     }
 
     /// End-to-end on the real skill: the default expansion reproduces the exact
@@ -208,14 +187,16 @@ struct ReviewVerdictPolicyTests {
 
         let asDefault = ReviewVerdictPolicy.expand(skill, blocking: ReviewSeverity.defaultBlocking)
         #expect(asDefault.contains(Self.goldenRule))
-        #expect(asDefault.contains(Self.goldenTable))
         #expect(asDefault.contains(Self.goldenNotes))
         // CROW-986: the real skill carries the grading placeholder and expands it.
         #expect(asDefault.contains("An accepted risk is not a blocker."))
 
         let asRedOnly = ReviewVerdictPolicy.expand(skill, blocking: [.red])
         #expect(!asRedOnly.contains(Self.goldenRule))
-        #expect(asRedOnly.contains("| Yellow | Should fix   | Approve allowed           |"))
+        #expect(asRedOnly.contains("Yellow and Green findings do not gate the verdict."))
+        // The verdict still lands in the Recommendation line Step 5a checks.
+        #expect(asRedOnly.contains("**Recommendation:** [Approve | Request Changes] — driven by [N Red, M Yellow, K Green] findings."))
+        #expect(!asRedOnly.contains("### Summary Table"))
     }
 
     // MARK: - Severity model
@@ -232,15 +213,67 @@ struct ReviewVerdictPolicyTests {
 
     // MARK: - Grading guidance (CROW-986)
 
-    /// The grading block carries all three loop-breaking rules that let a review
-    /// of a documented, accepted risk terminate in an approval.
-    @Test func gradingGuidanceCarriesTheThreeLoopBreakingRules() {
+    /// CROW-1511: the grading block carries three rules for findings that are
+    /// not cross-tenant — the consequence principle, the accepted-risk rule
+    /// (kept verbatim in triage), and judging a declined finding on its merits.
+    /// The two rules it replaced must be gone.
+    @Test func gradingGuidanceCarriesTheThreeGradingRules() {
         let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
-        #expect(guidance.contains("An accepted risk is not a blocker."))
-        #expect(guidance.contains("Do not re-block a declined finding."))
-        #expect(guidance.contains("Grade against the diff, not the roadmap."))
-        // Each rule caps the finding at Green rather than dropping it.
+        #expect(guidance.contains(Self.consequenceRule))
+        #expect(guidance.contains(Self.acceptedRiskRule))
+        #expect(guidance.contains(Self.declinedRule))
+        // An accepted risk is still capped at Green rather than dropped.
         #expect(guidance.contains("at most **Green**"))
+
+        #expect(!guidance.contains("Do not re-block a declined finding."))
+        #expect(!guidance.contains("Grade against the diff, not the roadmap."))
+        #expect(!guidance.contains("restated at most as **Green**"))
+    }
+
+    /// The triage dropped "only a human can accept a risk": the accepted-risk
+    /// rule ships byte-for-byte as CROW-986/CROW-1321 left it.
+    @Test func acceptedRiskRuleIsUnchanged() throws {
+        let line = try #require(Self.ruleLine(Self.acceptedRiskRule, in: ReviewVerdictPolicy.gradingGuidanceBlock))
+        #expect(line == "- **An accepted risk is not a blocker.** A hazard the PR explicitly documents and consciously accepts is at most **Green** — except a cross-tenant finding, which stays **Red** under the floor above. When the diff is correct and the only disagreement is whether to accept a risk the author has already called out, and that risk is not cross-tenant, the acceptance is the author's decision to make — state your view in the body and let the verdict follow the grade, rather than blocking on it. A cross-tenant risk is never the author's to accept: it stays **Red**, and the verdict follows the floor.")
+    }
+
+    /// CROW-1511: an author's reply no longer caps a finding at Green. The
+    /// reviewer checks the reply against the code, keeps the grade when it does
+    /// not hold, and asks for evidence rather than a preference.
+    @Test func declinedFindingIsJudgedOnItsMerits() throws {
+        let line = try #require(Self.ruleLine(Self.declinedRule, in: ReviewVerdictPolicy.gradingGuidanceBlock))
+        #expect(line.contains("the reply is an argument, not a waiver: check it against the code"))
+        #expect(line.contains("If it holds — it cites code, a test or a spec"))
+        #expect(line.contains("say in the body why it holds"))
+        #expect(line.contains("If the reply does not hold, keep the grade and say why not"))
+        #expect(line.contains("A preference, a restatement of the design, or a promised follow-up is not evidence"))
+    }
+
+    /// CROW-1511: what keeps a disputed finding from looping forever is a
+    /// two-round hand-off to a human, not a Green cap. The reviewer stops
+    /// re-blocking, labels the PR `crow:needs-human`, and says so in the body.
+    @Test func twoRoundsOfDisagreementHandTheFindingToAHuman() throws {
+        let line = try #require(Self.ruleLine(Self.declinedRule, in: ReviewVerdictPolicy.gradingGuidanceBlock))
+        #expect(line.contains("After **two** rounds of disagreement on the same finding"))
+        #expect(line.contains("stop re-blocking it on your own judgment"))
+        #expect(line.contains("add the `crow:needs-human` label (Step 5d)"))
+        #expect(line.contains("list it under **Needs a human** in the review body"))
+        // The cross-tenant finding is restated at Red every round instead.
+        #expect(line.contains("restated at **Red** every round until it is fixed or clears the deferral bar"))
+        #expect(line.contains("a follow-up issue on its own is not a deferral"))
+    }
+
+    /// CROW-1511: one principle — the consequence if this merges as-is — in
+    /// place of the "grade against the diff, not the roadmap" cap. Each grade
+    /// is defined by its consequence.
+    @Test func gradingGuidanceGradesByConsequenceIfMergedAsIs() throws {
+        let line = try #require(Self.ruleLine(Self.consequenceRule, in: ReviewVerdictPolicy.gradingGuidanceBlock))
+        #expect(line.contains("Ask what goes wrong if the PR merges exactly as written"))
+        #expect(line.contains("**Red**: merging breaks something"))
+        #expect(line.contains("**Yellow**: it works on the main path, but what is written has a real defect"))
+        #expect(line.contains("a \"Done when\" item of the ticket it closes left unmet"))
+        #expect(line.contains("**Green**: nothing goes wrong if it merges"))
+        #expect(line.contains("Grade the code that is written, not the roadmap"))
     }
 
     /// The guidance bounds the *grade*, not the *gate*: it must render identically
@@ -295,25 +328,22 @@ struct ReviewVerdictPolicyTests {
         }
     }
 
-    /// The grade-side reconciliation (CROW-1062): the third grading rule now carves
-    /// an architectural defect out of "roadmap", so a reviewer cannot cap a
-    /// reinvented-pathway finding at Green by calling it a future refactor. Adding
-    /// this must not disturb the three loop-breaking rule headers.
-    @Test func gradingGuidanceLetsArchitectureDefectsBlock() {
-        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
-        #expect(guidance.contains("may be graded **Yellow** or **Red**, not waved through as a future refactor."))
-        // The three loop-breakers survive unchanged.
-        #expect(guidance.contains("An accepted risk is not a blocker."))
-        #expect(guidance.contains("Do not re-block a declined finding."))
-        #expect(guidance.contains("Grade against the diff, not the roadmap."))
+    /// The grade-side reconciliation (CROW-1062), carried by the consequence
+    /// principle since CROW-1511: an architectural defect is not "roadmap", so a
+    /// reviewer cannot cap a reinvented-pathway finding at Green by calling it a
+    /// future refactor.
+    @Test func gradingGuidanceLetsArchitectureDefectsBlock() throws {
+        let line = try #require(Self.ruleLine(Self.consequenceRule, in: ReviewVerdictPolicy.gradingGuidanceBlock))
+        #expect(line.contains("a change that reinvents a pathway the codebase already has"))
+        #expect(line.contains("may be graded **Yellow** or **Red**, not waved through as a future refactor."))
     }
 
     // MARK: - Cross-tenant Red floor (CROW-1321)
 
     private static let floorRule = "**Cross-tenant effect or exposure is always Red.**"
+    private static let consequenceRule = "**Grade by the consequence if this merges as-is.**"
     private static let acceptedRiskRule = "**An accepted risk is not a blocker.**"
-    private static let declinedRule = "**Do not re-block a declined finding.**"
-    private static let gradeAgainstDiffRule = "**Grade against the diff, not the roadmap.**"
+    private static let declinedRule = "**Judge a declined finding on its merits.**"
 
     /// The bullet that opens with `header`, up to the end of its line. Each
     /// grading rule is one line, so a carve-out asserted here sits in the rule
@@ -334,7 +364,7 @@ struct ReviewVerdictPolicyTests {
         #expect(guidance.contains("*Cross-tenant exposure* means one tenant can read another tenant's config or data"))
         #expect(guidance.contains("A finding of either is **Red** — never Yellow, never Green."))
         #expect(guidance.contains(
-            "The accepted-risk, declined-finding and grade-against-the-diff rules below **do not apply** to it"))
+            "The consequence, accepted-risk and declined-finding rules below **do not apply** to it"))
     }
 
     /// The floor has to be read before the caps, or an agent applying the
@@ -342,7 +372,7 @@ struct ReviewVerdictPolicyTests {
     @Test func crossTenantFloorPrecedesEveryCap() throws {
         let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
         let floor = try #require(guidance.range(of: Self.floorRule))
-        for cap in [Self.acceptedRiskRule, Self.declinedRule, Self.gradeAgainstDiffRule] {
+        for cap in [Self.consequenceRule, Self.acceptedRiskRule, Self.declinedRule] {
             let capRange = try #require(guidance.range(of: cap), "lost \(cap)")
             #expect(floor.lowerBound < capRange.lowerBound, "\(cap) precedes the cross-tenant floor")
         }
@@ -361,8 +391,8 @@ struct ReviewVerdictPolicyTests {
         let declined = try #require(Self.ruleLine(Self.declinedRule, in: guidance))
         #expect(declined.contains("unless it is a cross-tenant finding, which stays **Red**"))
 
-        let gradeAgainstDiff = try #require(Self.ruleLine(Self.gradeAgainstDiffRule, in: guidance))
-        #expect(gradeAgainstDiff.contains("unless the unenforced hazard is cross-tenant, which is **Red**"))
+        let consequence = try #require(Self.ruleLine(Self.consequenceRule, in: guidance))
+        #expect(consequence.contains("unless the finding is cross-tenant, which is **Red** under the floor above"))
     }
 
     /// A carve-out in a cap's first sentence does not qualify the sentences after
@@ -372,9 +402,13 @@ struct ReviewVerdictPolicyTests {
     /// cross-tenant finding.
     @Test func everyStandDownClauseInACapCarvesOutCrossTenantFindings() throws {
         let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
-        let standDownMarkers = ["Green", "rather than blocking", "instead of holding up", "not permitted"]
+        let standDownMarkers = [
+            "Green", "rather than blocking", "instead of holding up", "not permitted",
+            // CROW-1511: the declined-finding rule's ways of standing down.
+            "drop the finding", "lower its grade", "stop re-blocking", "needs-human",
+        ]
 
-        for cap in [Self.acceptedRiskRule, Self.declinedRule, Self.gradeAgainstDiffRule] {
+        for cap in [Self.consequenceRule, Self.acceptedRiskRule, Self.declinedRule] {
             let line = try #require(Self.ruleLine(cap, in: guidance))
             let clauses = line
                 .replacingOccurrences(of: "; ", with: ". ")
@@ -412,6 +446,8 @@ struct ReviewVerdictPolicyTests {
             #expect(guidance.contains(question), "lost checklist question \(question)")
         }
         #expect(guidance.contains("`n/a — <why>`"))
+        // CROW-1511: an n/a section is one line, not four answered questions.
+        #expect(guidance.contains("the section is the single line `n/a — <why>`, without the four questions"))
         // Generic: repo rules stack on the floor, never under it.
         #expect(guidance.contains("they can add to it, never lower it"))
     }
@@ -445,5 +481,82 @@ struct ReviewVerdictPolicyTests {
             // Step 4b's unverified-Red downgrade must not become a back door.
             #expect(expanded.contains("its absence is the verification — the finding stays **Red**"))
         }
+    }
+
+    // MARK: - Finding defects, not grading or format (CROW-1511)
+
+    private static func realSkill() throws -> String {
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            let candidate = dir.appendingPathComponent("skills/crow-review-pr/SKILL.md")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        throw CocoaError(.fileNoSuchFile)
+    }
+
+    /// Step 3 names the three likeliest production failures and checks each,
+    /// states findings without writing the fix, and makes a re-review a fresh
+    /// pass over the whole diff before the earlier findings are checked off.
+    /// Static prose, so pinned on the expanded real skill under every policy.
+    @Test func expandedSkillSpendsStepThreeOnFindingDefects() throws {
+        let skill = try Self.realSkill()
+        for blocking in [ReviewSeverity.defaultBlocking, [.red], ReviewSeverity.allCases] {
+            let expanded = ReviewVerdictPolicy.expand(skill, blocking: blocking)
+            // Adversarial step.
+            #expect(expanded.contains("Name the **three likeliest ways this change fails in production**"))
+            #expect(expanded.contains("A failure mode you could not check is a finding, not a pass."))
+            #expect(expanded.contains("### Failure modes checked"))
+            // Findings, not fixes.
+            #expect(expanded.contains("**State findings, not fixes:**"))
+            #expect(expanded.contains("Add at most one line of direction."))
+            #expect(expanded.contains("patches, diffs or code blocks of the fix;"))
+            #expect(expanded.contains("step-by-step change lists;"))
+            #expect(expanded.contains("product decisions that belong to the ticket owner"))
+            #expect(expanded.contains("predictions about your next verdict (\"I'd expect to approve once…\")."))
+            // Fresh re-review.
+            #expect(expanded.contains("Do the full review above on the **whole PR diff**, as if you were seeing it for the first time."))
+            #expect(expanded.contains("Check each earlier finding off against the current code"))
+            #expect(expanded.contains("Do not copy your earlier review and add \"fixed in <sha>\"."))
+        }
+    }
+
+    /// PR #1514 review: reading the earlier reviews before the fresh pass is the
+    /// anchoring the re-review rule removes. Step 2 must not fetch them, and the
+    /// fetch must come after the fresh-pass step, as in `reReviewPrompt`. The
+    /// inline-comments call takes the PR number, never a literal placeholder.
+    @Test func earlierReviewsAreReadOnlyAfterTheFreshPass() throws {
+        let skill = try Self.realSkill()
+        let step2 = try #require(skill.range(of: "### Step 2: Gather PR Information"))
+        let step3 = try #require(skill.range(of: "### Step 3: Review the Code"))
+        let fetch = try #require(skill.range(of: "gh pr view \"$PR\" --json reviews,comments"))
+        let freshPass = try #require(skill.range(of: "Do the full review above on the **whole PR diff**"))
+
+        #expect(skill[step2.upperBound..<step3.lowerBound].contains("Do **not** read the PR's earlier reviews yet."))
+        #expect(step3.lowerBound < fetch.lowerBound, "Step 2 still fetches the earlier reviews")
+        #expect(freshPass.lowerBound < fetch.lowerBound, "earlier reviews are read before the fresh pass")
+        #expect(skill.contains("gh api \"repos/{owner}/{repo}/pulls/$PR_NUMBER/comments\""))
+        #expect(!skill.contains("<PR number>"))
+    }
+
+    /// The template trims what repeats every review: no Summary Table, a
+    /// one-line Tenant effect when tenancy is n/a (Step 5a still requires the
+    /// section), optional Strengths. A disputed finding gets its own section and
+    /// the `crow:needs-human` step.
+    @Test func expandedSkillTrimsTheFixedTemplateSections() throws {
+        let skill = try Self.realSkill()
+        let expanded = ReviewVerdictPolicy.expand(skill, blocking: ReviewSeverity.defaultBlocking)
+        #expect(!expanded.contains("### Summary Table"))
+        #expect(!expanded.contains("| Color  | Meaning"))
+        #expect(expanded.contains("this section is one line, `n/a — <why>`, with no checklist"))
+        #expect(expanded.contains("**No section** ⇒ do not post."))
+        #expect(expanded.contains("- **Strengths:** [optional — only when something is worth calling out]"))
+        #expect(!expanded.contains("**Strengths:**\n- [Positive security aspects]"))
+        #expect(expanded.contains("### Needs a human (only when a finding is handed off)"))
+        #expect(expanded.contains("### Step 5d: Add `crow:needs-human` after a hand-off (CROW-1511)"))
+        #expect(expanded.contains("gh label create \"crow:needs-human\" --repo \"$REPO\""))
+        #expect(expanded.contains("gh pr edit \"$PR\" --add-label \"crow:needs-human\""))
     }
 }

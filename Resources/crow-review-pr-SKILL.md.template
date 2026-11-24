@@ -67,6 +67,8 @@ Get the PR details including title, description, and changed files:
 gh pr view "$PR" --json title,body,headRefName,baseRefName,additions,deletions,changedFiles,files
 ```
 
+Do **not** read the PR's earlier reviews yet. On a re-review you read them only after your fresh pass (see **Re-reviews** in Step 3), so they cannot anchor your findings.
+
 ### Step 3: Review the Code
 
 **Architecture & Existing Patterns (study this before scoring the diff):**
@@ -82,6 +84,10 @@ A PR can be correct in isolation yet wrong for the codebase — it reinvents a p
   - Misunderstands the current control flow and builds the wrong shape because of it.
 
 These are defects in **this change**, not future improvements — grade them **Yellow** (should-fix) or **Red** (must-fix), never Green "consider later." A forced redesign or a reject is in scope when the approach cannot be made to fit an existing pattern.
+
+**Failure modes (do this before the checklist below):**
+
+Name the **three likeliest ways this change fails in production**, given what it does, the inputs it receives, the state it touches and what calls it. Check each one against the code or a test, and record the result: **ruled out** (cite the `file:line` or test that rules it out) or **a finding**. A failure mode you could not check is a finding, not a pass. The review body lists all three under `### Failure modes checked`.
 
 Then read all changed files in the PR. For each file, analyze:
 
@@ -101,6 +107,46 @@ Then read all changed files in the PR. For each file, analyze:
 - Race conditions
 - API design issues
 - Missing tests for new code
+
+**State findings, not fixes:**
+
+Each finding gives three things:
+
+- **The defect**: what is wrong.
+- **The evidence**: `file:line`, a repro, or the test that fails or is missing.
+- **The expected behavior**: what correct looks like.
+
+Add at most one line of direction. Do **not** write:
+
+- patches, diffs or code blocks of the fix;
+- step-by-step change lists;
+- product decisions that belong to the ticket owner (if the ticket is ambiguous, name the open question instead);
+- predictions about your next verdict ("I'd expect to approve once…").
+
+The implementer owns the fix. A review that writes the fix stops being an independent check on it.
+
+**Re-reviews:**
+
+When the PR already has a review from you (a re-review round), review it fresh first, then check off your earlier findings:
+
+1. Do the full review above on the **whole PR diff**, as if you were seeing it for the first time. Form your findings from the code before you reread your earlier review, and do not limit them to what changed since then.
+2. Only now read your earlier reviews and the author's replies. Run each command on its own, and set `PR_NUMBER` to the number the first command prints:
+
+   ```bash
+   gh pr view "$PR" --json number --jq .number
+   ```
+
+   ```bash
+   gh pr view "$PR" --json reviews,comments
+   ```
+
+   ```bash
+   gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/comments"
+   ```
+
+3. Check each earlier finding off against the current code: **fixed** (cite where), **declined** (judge the author's reply under "Judge a declined finding on its merits", counting the rounds of disagreement from these threads), or **still open**.
+
+If the fresh pass finds nothing new, say so (`Full pass over the diff: nothing new.`). Do not copy your earlier review and add "fixed in <sha>".
 
 {{CROW_REVIEW_WORKSPACE_INSTRUCTIONS}}
 ### Step 4: Run Static Analysis
@@ -164,22 +210,25 @@ Draft the review using this format:
 - [Architecture findings, if any — with file references and severity. State when the PR reinvents an existing path, over-engineers, assumes a behavior the codebase already has, or misreads the current control flow.]
 
 ### Tenant effect
-- [Required in every review. Answer the four tenant-effect checklist questions from Grading discipline, one line each with `file:line` or test evidence, then list each cross-tenant finding as **Red** or as **Deferred (#N)** with the deferral-bar items you checked. Write `n/a — <why>` only when the repo has no tenancy or the diff touches no tenant-scoped code.]
+- [Required in every review. When the repo has no tenancy or the diff touches no tenant-scoped code, this section is one line, `n/a — <why>`, with no checklist. Otherwise answer the four tenant-effect checklist questions from Grading discipline, one line each with `file:line` or test evidence, then list each cross-tenant finding as **Red** or as **Deferred (#N)** with the deferral-bar items you checked.]
+
+### Failure modes checked
+1. [Likeliest production failure — ruled out by `file:line` / test, or → finding]
+2. [...]
+3. [...]
 
 ### Security Review
-**Strengths:**
-- [Positive security aspects]
-
-**Concerns:**
-- [Security issues found]
+- [Security findings: defect, evidence, expected behavior]
+- **Strengths:** [optional — only when something is worth calling out]
 
 ### Code Quality
-- [Code quality issues]
+- [Code quality findings: defect, evidence, expected behavior]
 
-### Summary Table
-| Color  | Meaning      | Verdict effect            |
-|--------|--------------|---------------------------|
-{{CROW_REVIEW_VERDICT_TABLE}}
+### Earlier findings (re-reviews only)
+- [Each finding from your earlier reviews: **fixed** (where), **rationale accepted** (why it holds), **still open** (why the reply does not hold), or **needs a human** (see below)]
+
+### Needs a human (only when a finding is handed off)
+- [Finding — reviewer's case in one line; author's case in one line. Added `crow:needs-human`.]
 
 **Recommendation:** [Approve | Request Changes] — driven by [N Red, M Yellow, K Green] findings.
 
@@ -282,6 +331,26 @@ gh pr edit "$PR" --add-label "ci:full"
 ```
 
 If creating or adding the label fails for a reason other than the label already existing, report the failure and leave the approval in place. A missing `ci:full` keeps the fail-closed `CI Gate` red.
+
+### Step 5d: Add `crow:needs-human` after a hand-off (CROW-1511)
+
+Run this step only when the posted review lists a finding under **Needs a human**: you and the author disagreed on it for two rounds, and the finding is not cross-tenant (see "Judge a declined finding on its merits"). It runs after either verdict. `--no-post` / `--dry-run` skips it.
+
+Resolve the PR's repo, ensure the label there, then add it. Each of these is its own Bash call, and `REPO` is the `owner/repo` the first command prints. `gh label create` failing because the label already exists counts as success; go on to the add.
+
+```bash
+gh pr view "$PR" --json url --jq '(.url | split("/"))[3:5] | join("/")'
+```
+
+```bash
+gh label create "crow:needs-human" --repo "$REPO" --color D93F0B --description "A reviewer and the author disagree on a finding; a human decides"
+```
+
+```bash
+gh pr edit "$PR" --add-label "crow:needs-human"
+```
+
+If creating or adding the label fails for any other reason, report the failure. The review body still names the finding under **Needs a human**.
 
 ### Important Notes
 
