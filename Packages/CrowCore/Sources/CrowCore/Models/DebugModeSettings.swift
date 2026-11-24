@@ -9,6 +9,9 @@ import Foundation
 /// - **Sidebar recording indicator**: the per-session gateway and transcript
 ///   glyphs, and the Corveil request-log verification behind the gateway
 ///   glyph (a log read every log-sync tick, ~5 min).
+/// - **Sidebar context badge** (CROW-1515): the per-session context size
+///   (e.g. `704k · cold`) from `list-sessions` `context`. Only the badge is
+///   gated; the `context` field and `AutoCompactPolicy` work either way.
 ///
 /// A new debug feature reads `enabled` rather than adding its own top-level
 /// toggle, so the About screen stays the one place to turn them on.

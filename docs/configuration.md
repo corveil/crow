@@ -444,7 +444,7 @@ The settings behind **Settings → Automation**, editable there or from the CLI 
 | `autoRespond.autoRebaseAndResolveConflicts`  | `false` | Conflicted PRs (rebase + `--force-with-lease` push)              |
 | `autoRespond.autoReRequestReview`            | `true`  | Changes-requested PRs whose fix has landed (re-adds the reviewers) |
 | `contextCompaction.autoCompact`              | `false` | Idle, large Claude Code sessions (types `/compact` before the prompt cache expires) |
-| `contextCompaction.minContextTokens`         | `200000` | Which sessions count as large (compaction, and the sidebar's context badge) |
+| `contextCompaction.minContextTokens`         | `200000` | Which sessions count as large (compaction, and the sidebar's debug-mode context badge) |
 | `contextCompaction.idleMinutes`              | `50`    | How long after its last model call a session is compacted          |
 
 **Live — no `crowd` restart.** The daemon re-reads `config.json` rather than holding a snapshot: `applyConfigToAppState` runs each board tick, the watcher gates are closures that reload config on every call, and `AutoRespondCoordinator` takes a settings closure. So a change is picked up within about a minute. The "applies to" column is about *scope*, not latency — a permission-mode change reaches the next session you launch, not the ones already running.
@@ -497,7 +497,7 @@ Three top-level blocks in `{devRoot}/.claude/config.json`, editable from **Setti
 
 | Key       | Default | Range   | Description                                                                 |
 | --------- | ------- | ------- | --------------------------------------------------------------------------- |
-| `enabled` | `false` | boolean | Turns on the sidebar recording indicator: per-session gateway and transcript glyphs, plus a Corveil request-log read (at most every 5 min) to verify gateway traffic. Off: no glyphs, no `recording` field on `list-sessions` / `get-session`, no request-log reads |
+| `enabled` | `false` | boolean | Turns on the sidebar recording indicator (per-session gateway and transcript glyphs, plus a Corveil request-log read, at most every 5 min, to verify gateway traffic) and the sidebar [context badge](context-compaction.md) (e.g. `704k · cold`). Off: no glyphs, no context badge, no `recording` field on `list-sessions` / `get-session`, no request-log reads. The `context` field and context compaction work either way |
 
 The **recording indicator** answers "is Corveil recording this session?" on every sidebar row. Hover a glyph for the reason, request count, when it was last seen and the org names, or tap it on a phone to expand the same text under the row. The same data is on `list-sessions` / `get-session` as `recording`: base URLs, key ids and names, org names and text only, never a header or a key.
 
