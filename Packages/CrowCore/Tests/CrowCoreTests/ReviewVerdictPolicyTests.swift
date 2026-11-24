@@ -518,9 +518,27 @@ struct ReviewVerdictPolicyTests {
             #expect(expanded.contains("predictions about your next verdict (\"I'd expect to approve once…\")."))
             // Fresh re-review.
             #expect(expanded.contains("Do the full review above on the **whole PR diff**, as if you were seeing it for the first time."))
-            #expect(expanded.contains("Then check each earlier finding off against the current code"))
+            #expect(expanded.contains("Check each earlier finding off against the current code"))
             #expect(expanded.contains("Do not copy your earlier review and add \"fixed in <sha>\"."))
         }
+    }
+
+    /// PR #1514 review: reading the earlier reviews before the fresh pass is the
+    /// anchoring the re-review rule removes. Step 2 must not fetch them, and the
+    /// fetch must come after the fresh-pass step, as in `reReviewPrompt`. The
+    /// inline-comments call takes the PR number, never a literal placeholder.
+    @Test func earlierReviewsAreReadOnlyAfterTheFreshPass() throws {
+        let skill = try Self.realSkill()
+        let step2 = try #require(skill.range(of: "### Step 2: Gather PR Information"))
+        let step3 = try #require(skill.range(of: "### Step 3: Review the Code"))
+        let fetch = try #require(skill.range(of: "gh pr view \"$PR\" --json reviews,comments"))
+        let freshPass = try #require(skill.range(of: "Do the full review above on the **whole PR diff**"))
+
+        #expect(skill[step2.upperBound..<step3.lowerBound].contains("Do **not** read the PR's earlier reviews yet."))
+        #expect(step3.lowerBound < fetch.lowerBound, "Step 2 still fetches the earlier reviews")
+        #expect(freshPass.lowerBound < fetch.lowerBound, "earlier reviews are read before the fresh pass")
+        #expect(skill.contains("gh api \"repos/{owner}/{repo}/pulls/$PR_NUMBER/comments\""))
+        #expect(!skill.contains("<PR number>"))
     }
 
     /// The template trims what repeats every review: no Summary Table, a

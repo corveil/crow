@@ -67,15 +67,7 @@ Get the PR details including title, description, and changed files:
 gh pr view "$PR" --json title,body,headRefName,baseRefName,additions,deletions,changedFiles,files
 ```
 
-If the PR already has reviews, read them and the author's replies too. You need them for **Re-reviews** below and to count rounds under "Judge a declined finding on its merits". Run each command on its own:
-
-```bash
-gh pr view "$PR" --json reviews,comments
-```
-
-```bash
-gh api "repos/{owner}/{repo}/pulls/<PR number>/comments"
-```
+Do **not** read the PR's earlier reviews yet. On a re-review you read them only after your fresh pass (see **Re-reviews** in Step 3), so they cannot anchor your findings.
 
 ### Step 3: Review the Code
 
@@ -138,7 +130,21 @@ The implementer owns the fix. A review that writes the fix stops being an indepe
 When the PR already has a review from you (a re-review round), review it fresh first, then check off your earlier findings:
 
 1. Do the full review above on the **whole PR diff**, as if you were seeing it for the first time. Form your findings from the code before you reread your earlier review, and do not limit them to what changed since then.
-2. Then check each earlier finding off against the current code: **fixed** (cite where), **declined** (judge the author's reply under "Judge a declined finding on its merits"), or **still open**.
+2. Only now read your earlier reviews and the author's replies. Run each command on its own, and set `PR_NUMBER` to the number the first command prints:
+
+   ```bash
+   gh pr view "$PR" --json number --jq .number
+   ```
+
+   ```bash
+   gh pr view "$PR" --json reviews,comments
+   ```
+
+   ```bash
+   gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/comments"
+   ```
+
+3. Check each earlier finding off against the current code: **fixed** (cite where), **declined** (judge the author's reply under "Judge a declined finding on its merits", counting the rounds of disagreement from these threads), or **still open**.
 
 If the fresh pass finds nothing new, say so (`Full pass over the diff: nothing new.`). Do not copy your earlier review and add "fixed in <sha>".
 
