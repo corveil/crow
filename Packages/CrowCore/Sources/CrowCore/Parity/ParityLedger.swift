@@ -250,6 +250,13 @@ public enum ParityLedger {
             Feeds the web Chat view's composer `/` menu (skills, slash commands, \
             built-ins). In a terminal, Claude Code's own `/` menu already lists them.
             """),
+        .write(
+            "answer-question",
+            noCLI: """
+            The web Chat view's question card (CROW-1512): types the operator's \
+            answers to a Claude `AskUserQuestion` into the TUI picker. In a \
+            terminal the operator answers the picker itself.
+            """),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),
         .write("relaunch-agent", cli: "relaunch-agent"),

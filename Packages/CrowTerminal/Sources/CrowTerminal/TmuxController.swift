@@ -425,6 +425,19 @@ public struct TmuxController: Sendable {
         try run(["send-keys", "-t", target] + keys)
     }
 
+    /// `tmux send-keys -t <target> -l -- <text>`: types `text` literally, so a
+    /// word like `Enter` or `C-c` is never read as a key name. For answering a
+    /// TUI text field key by key, where a bracketed paste is not what the
+    /// field expects (CROW-1512).
+    public func sendLiteral(target: String, text: String) throws {
+        try run(Self.sendLiteralArguments(target: target, text: text))
+    }
+
+    /// The argv `sendLiteral` runs. Split out so a test can pin `-l --`.
+    static func sendLiteralArguments(target: String, text: String) -> [String] {
+        ["send-keys", "-t", target, "-l", "--", text]
+    }
+
     public func deleteBuffer(name: String) {
         _ = try? run(["delete-buffer", "-b", name])
     }

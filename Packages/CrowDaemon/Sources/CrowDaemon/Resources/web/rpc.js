@@ -48,6 +48,9 @@ const RPC_TIMEOUTS_MS = {
   'get-state': 60000,
   'mark-issue-done': 60000,
   'add-merge-label': 60000,
+  // Types a question card's answers into the picker key by key, checking the
+  // screen after each one (CROW-1512). No CLI twin.
+  'answer-question': 60000,
   // 16 capture-pane snapshots for the session grid (CROW-1153).
   'list-session-terminal-snapshots': 45000,
 };

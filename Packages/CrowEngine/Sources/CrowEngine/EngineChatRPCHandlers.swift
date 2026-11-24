@@ -8,10 +8,17 @@ import Foundation
 ///   events (`ChatTranscript`), tailed by byte cursor, plus context usage.
 /// - `list-chat-commands` — the composer's `/` menu (`ChatCommandCatalog`).
 ///
-/// Both are read-only: the agent keeps running in tmux and input still goes
-/// through `send`.
+/// - `answer-question` — the Chat question card's answers to a Claude
+///   `AskUserQuestion`, typed into the TUI picker (`AskUserQuestionDriver`).
+///
+/// The first two are read-only. Input still goes through the terminal: `send`
+/// for messages, and `answer-question` only presses keys in the picker that is
+/// already waiting (or, as a fallback, dismisses it and sends a message).
 @MainActor
-func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handler] {
+func makeEngineChatHandlers(
+    appState: AppState, questionIO: AskUserQuestionDriver.IO = .live,
+    transcriptRoots: HarnessTranscriptLocator.Roots = .live
+) -> [String: CommandRouter.Handler] {
     let capturedAppState = appState
     let handlers: [String: CommandRouter.Handler] = [
         "get-session-transcript": { @Sendable params in
@@ -28,7 +35,7 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
             ]
             // File I/O stays off the MainActor (#892).
             guard let source = HarnessTranscriptLocator.chatSource(
-                kind: ctx.kind, conversationID: ctx.conversationID, cwd: ctx.cwd) else {
+                kind: ctx.kind, conversationID: ctx.conversationID, cwd: ctx.cwd, roots: transcriptRoots) else {
                 let known = ctx.kind == .claudeCode || ctx.kind == .codex
                 base["supported"] = .bool(known)
                 base["events"] = .array([])
@@ -80,8 +87,70 @@ func makeEngineChatHandlers(appState: AppState) -> [String: CommandRouter.Handle
                 }),
             ]
         },
+
+        "answer-question": { @Sendable params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                  let toolID = params["tool_id"]?.stringValue, !toolID.isEmpty,
+                  case .array(let rawAnswers)? = params["answers"] else {
+                throw RPCError.invalidParams("session_id, tool_id and answers required")
+            }
+            let answers = try rawAnswers.map(parseQuestionAnswer)
+            let ctx = try await MainActor.run { try chatContext(capturedAppState, id) }
+            guard ctx.kind == .claudeCode else {
+                throw RPCError.applicationError("Only Claude sessions ask questions this way.")
+            }
+            guard let terminalID = ctx.terminalID else {
+                throw RPCError.applicationError("This session has no agent terminal.")
+            }
+            // The questions come from the transcript, not the client: the keys
+            // are planned against what the agent actually asked. File I/O stays
+            // off the MainActor (#892).
+            guard let source = HarnessTranscriptLocator.chatSource(
+                kind: ctx.kind, conversationID: ctx.conversationID, cwd: ctx.cwd, roots: transcriptRoots) else {
+                throw RPCError.applicationError("No transcript found for this session.")
+            }
+            let page = try ChatTranscript.read(path: source.path, format: source.format, cursor: nil)
+            if page.events.contains(where: { $0.kind == .toolResult && $0.toolID == toolID }) {
+                throw RPCError.applicationError("This question was already answered.")
+            }
+            guard let call = page.events.last(where: { $0.kind == .toolCall && $0.toolID == toolID }),
+                  let questions = call.questions else {
+                throw RPCError.applicationError("That question isn't in the session's transcript.")
+            }
+            if let problem = AskUserQuestionPicker.validate(answers, for: questions) {
+                throw RPCError.invalidParams(problem)
+            }
+            do {
+                switch try await AskUserQuestionDriver.answer(
+                    terminalID: terminalID, questions: questions, answers: answers, io: questionIO) {
+                case .picker:
+                    return ["delivered": .string("picker")]
+                case .fallback(let reason):
+                    return ["delivered": .string("fallback"), "reason": .string(reason)]
+                }
+            } catch let failure as AskUserQuestionDriver.Failure {
+                throw RPCError.applicationError(failure.message)
+            }
+        },
     ]
     return handlers
+}
+
+/// One entry of `answer-question`'s `answers`: `{selected: [Int], other: String?}`.
+private func parseQuestionAnswer(_ v: JSONValue) throws -> AskUserQuestionPicker.Answer {
+    guard case .object(let o) = v else { throw RPCError.invalidParams("each answer must be an object") }
+    var selected: [Int] = []
+    if case .array(let items)? = o["selected"] {
+        for item in items {
+            guard let i = item.intValue else { throw RPCError.invalidParams("selected holds option indices") }
+            selected.append(i)
+        }
+    }
+    let other = o["other"]?.stringValue
+    if let other, other.count > AskUserQuestionPicker.maxOtherChars * 2 {
+        throw RPCError.invalidParams("other is too long")
+    }
+    return AskUserQuestionPicker.Answer(selected: selected, other: other)
 }
 
 private struct ChatContext {
@@ -135,5 +204,16 @@ private func eventJSON(_ e: ChatEvent) -> JSONValue {
     if e.isError { o["is_error"] = .bool(true) }
     if let v = e.timestamp { o["ts"] = .string(v) }
     if let v = e.durationMs { o["duration_ms"] = .int(v) }
+    if let qs = e.questions { o["questions"] = .array(qs.map(questionJSON)) }
+    if let a = e.answers { o["answers"] = .object(a.mapValues { .string($0) }) }
     return .object(o)
+}
+
+private func questionJSON(_ q: ChatQuestion) -> JSONValue {
+    .object([
+        "question": .string(q.question),
+        "header": .string(q.header),
+        "multi_select": .bool(q.multiSelect),
+        "options": .array(q.options.map { .object(["label": .string($0.label), "description": .string($0.description)]) }),
+    ])
 }
