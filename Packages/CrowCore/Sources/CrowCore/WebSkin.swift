@@ -86,6 +86,7 @@ public struct WebSkin: Codable, Equatable, Sendable {
     public static let brandPrimitives: Set<String> = [
         "--ink-900", "--ink-850", "--plum-900", "--pink", "--pink-bright", "--pink-deep",
         "--paper", "--paper-soft", "--brand-text", "--font-ui", "--font-mono",
+        "--brandmark-gold", "--brandmark-pink",
     ]
 
     public enum ValidationError: Error, Equatable, CustomStringConvertible {
