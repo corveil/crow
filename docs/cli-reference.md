@@ -482,7 +482,7 @@ crow ui set --debug-mode true
 | `--hide-session-details` | no¹      | `true` or `false` — hide ticket title and repo/branch sidebar lines |
 | `--brandmark-color`      | no¹      | `gold` (default) or `pink` — color of the particle crow brandmark; connected browsers recolor it in place, and `/brand.svg` (favicon, login card) serves the new color |
 | `--chat-view`            | no¹      | `true` or `false` — show the experimental [web Chat view](web-chat-view.md) toggle in session headers (default `false`) |
-| `--debug-mode`           | no¹      | `true` or `false` — debug mode: diagnostic features, today the sidebar recording indicator (default `false`) |
+| `--debug-mode`           | no¹      | `true` or `false` — debug mode: diagnostic features, today the sidebar recording indicator and context badge (default `false`) |
 
 ¹ At least one flag is required (the switcher flags are listed in [`cli.md`](cli.md)).
 

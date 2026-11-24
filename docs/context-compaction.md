@@ -42,7 +42,7 @@ A week of Crow sessions measured in CROW-1493: cache rebuilds after idle were ab
 
 It is read from the transcript the agent already writes, with the same usage rules as the [Chat view](web-chat-view.md)'s context meter, and found by the conversation id Crow records from the agent's hooks (`agent_conversations`). Claude Code and Codex only. Until the agent's first hook reports an id, `context` is `null`: Crow doesn't guess at the newest transcript in the directory, which could be a sibling conversation's. A transcript is re-read only when its size or modification time changed since the last poll.
 
-The sidebar shows the same number on each session row: muted while small, amber once `large`. A large session whose cache has likely expired reads `512k · cold`, in the text and not only in the tooltip, because the web UI is often used from a phone. Hover (or a screen reader) gives the full numbers and how long the cache stays warm.
+With [debug mode](configuration.md#telemetry-cleanup--ui) on (Settings → About, `crow ui set --debug-mode true`; off by default), the sidebar shows the same number on each session row: muted while small, amber once `large`. A large session whose cache has likely expired reads `512k · cold`, in the text and not only in the tooltip, because the web UI is often used from a phone. Hover (or a screen reader) gives the full numbers and how long the cache stays warm.
 
 Crow shows token counts, not dollars. The repo has no price table to take prices from, and a wrong price shown in the UI is worse than none.
 

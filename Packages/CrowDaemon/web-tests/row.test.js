@@ -15,6 +15,7 @@ const epilogue = `
   ICONS,
   set live(v){ liveById = v; },
   set hideDetails(v){ uiConfig.hideSessionDetails = v; },
+  set debugMode(v){ uiConfig.debugMode = v; },
 };
 `;
 const appjs = loadClientSource() + epilogue;
@@ -323,6 +324,12 @@ check('review card names who is reviewing', cardBadge && cardBadge.textContent =
 
 console.log('\nContext badge (CROW-1493):');
 const ctxBadgeOf = (context, overrides) => render({ has_pr: false }, { context, ...(overrides || {}) }).row.querySelector('.ctx-badge');
+// A debug-mode feature (CROW-1515): hidden while debug mode is off (the default).
+T.debugMode = false;
+check('debug mode off: no badge, even for a large cold context',
+  !ctxBadgeOf({ tokens: 704000, max_tokens: 1000000, large: true, cache_expired: true, idle_seconds: 7200, cache_ttl_seconds: 3600 })
+  && !ctxBadgeOf({ tokens: 42000, large: false }) && !ctxBadgeOf({ tokens: null, compacted_at: '2026-11-20T10:00:00Z' }));
+T.debugMode = true;
 check('no badge without a context', !ctxBadgeOf(null) && !ctxBadgeOf(undefined));
 let cb = ctxBadgeOf({ tokens: 42000, max_tokens: 1000000, large: false, cache_expired: false, idle_seconds: 120, cache_ttl_seconds: 3600 });
 check('small context reads in k, muted', cb && cb.textContent === '42k' && !cb.classList.contains('ctx-large'));
@@ -339,6 +346,7 @@ cb = ctxBadgeOf({ tokens: null, large: false, compacted_at: '2026-11-20T10:00:00
 check('compacted with unknown size reads "compacted"', cb && cb.textContent === 'compacted');
 cb = ctxBadgeOf({ tokens: 700000, large: true, cache_expired: true }, { kind: 'manager' });
 check('Manager rows show it too', !!cb);
+T.debugMode = false;
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

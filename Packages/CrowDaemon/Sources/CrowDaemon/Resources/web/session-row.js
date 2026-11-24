@@ -37,8 +37,10 @@ function formatIdle(seconds) {
 // null when the transcript gave none. Amber once it's past the large threshold
 // (`contextCompaction.minContextTokens`). A large context whose prompt cache has
 // likely expired also reads "cold" in the text itself, not just the tooltip:
-// the web UI is driven from a phone, where there is no hover.
+// the web UI is driven from a phone, where there is no hover. A debug-mode
+// feature (CROW-1515): null unless debug mode is on (Settings → About).
 function contextBadge(s) {
+  if (!uiConfig.debugMode) return null;
   const c = s.context;
   if (!c || (c.tokens == null && !c.compacted_at)) return null;
   const cold = c.large && c.cache_expired === true;
