@@ -28,6 +28,11 @@ enum AskUserQuestionDriver {
         var sleep: @Sendable (TimeInterval) async -> Void
         var now: @Sendable () -> Date
 
+        /// Visible rows only. A picker taller than the pane leaves older
+        /// frames in the scrollback (CROW-1519): the TUI never rewrites
+        /// lines that scrolled off, so scrollback would show a stale tab
+        /// bar, question or checkbox. The reader matches a cut frame from
+        /// what is in view instead.
         static let live = IO(
             capture: { TmuxBackend.shared.captureVisibleText(id: $0) },
             pressKey: { try TmuxBackend.shared.sendKeys(id: $0, keys: [$1]) },

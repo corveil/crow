@@ -33,6 +33,21 @@ import Foundation
 ///   submits. A lone single-select question submits on its pick.
 /// - Esc dismisses the picker (the tool result is the "doesn't want to
 ///   proceed" rejection).
+/// - A question that wraps is drawn behind a `│ ` gutter. A multi-select
+///   question that isn't the last one says `Next` where the last says `Submit`.
+///
+/// A picker taller than the pane (CROW-1519, recorded on 2.1.331 at 80×24):
+/// Claude Code draws the bottom of the frame and puts `↑ N more lines` above
+/// the footer. The tab bar, the question text and the first option rows are
+/// above the top row. The scrollback can't stand in for them, because the TUI
+/// never rewrites lines that scrolled off. After a toggle they still show the
+/// old checkbox, and after the next question they still show the previous
+/// question's tab bar and text. So only the visible rows are read. A cut
+/// frame is matched to its question by the `Chat about this` row's number
+/// (options + 2), the visible option labels and any visible question text.
+/// A digit still picks an option that is out of view. A multi-select
+/// question whose rows are out of view can't be checked, so it fails (and
+/// the driver falls back).
 public enum AskUserQuestionPicker {
     /// The operator's answer to one question: indices into its options, and
     /// the free text typed in its `Type something` row.
@@ -117,26 +132,77 @@ public enum AskUserQuestionPicker {
 
     // MARK: - Reading the screen
 
-    /// Read a plain-text capture of the pane's visible rows.
+    /// Read a plain-text capture of the pane's visible rows (no scrollback:
+    /// see the type's notes on tall pickers).
     public static func read(_ capture: String, questions: [ChatQuestion]) -> Screen {
         let lines = capture.components(separatedBy: "\n")
-        guard let bar = lines.lastIndex(where: { isTabBar($0, questions: questions) }) else { return .absent }
+        guard let bar = lines.lastIndex(where: { isTabBar($0, questions: questions) }) else {
+            return readCut(lines, questions: questions)
+        }
         let region = Array(lines[(bar + 1)...])
         if region.contains(where: { $0.trimmingCharacters(in: .whitespaces) == "Review your answers" }) {
-            let submit = region.first { squash($0).hasSuffix("1.Submitanswers") }
-            guard let submit else { return .unrecognized }
-            let warned = region.contains { $0.contains("Some questions are unanswered") }
-            return .review(cursorOnSubmit: submit.contains(cursorGlyph), allAnswered: !warned)
+            return readReview(region)
         }
         guard region.contains(where: { $0.contains("Esc to cancel") }) else { return .unrecognized }
         // The question text runs from the tab bar to the first numbered row,
         // wrapped to the pane width; compare with all whitespace removed.
-        guard let firstRow = region.firstIndex(where: { parseRow($0) != nil && parseRow($0)?.number != nil })
+        guard let firstRow = region.firstIndex(where: { parseRow($0)?.number != nil })
         else { return .unrecognized }
-        let asked = squash(region[..<firstRow].joined(separator: " "))
-        guard let index = questions.firstIndex(where: { squash($0.question) == asked }) else { return .unrecognized }
+        let asked = questionText(region[..<firstRow])
+        guard let index = questions.firstIndex(where: { questionText([$0.question]) == asked }) else { return .unrecognized }
         let rows = region[firstRow...].compactMap(parseRow)
         return .question(index: index, rows: rows)
+    }
+
+    private static func readReview(_ region: [String]) -> Screen {
+        let submit = region.first { squash($0).hasSuffix("1.Submitanswers") }
+        guard let submit else { return .unrecognized }
+        let warned = region.contains { $0.contains("Some questions are unanswered") }
+        return .review(cursorOnSubmit: submit.contains(cursorGlyph), allAnswered: !warned)
+    }
+
+    /// No tab bar of this call on screen: either no picker, another call's
+    /// picker, or this call's picker cut at the top by a short pane.
+    static func readCut(_ lines: [String], questions: [ChatQuestion]) -> Screen {
+        // Another picker's tab bar is on screen: not this call.
+        if lines.contains(where: looksLikeTabBar) { return .absent }
+        // The review step draws no footer. Cut at the top, its title (and the
+        // unanswered warning under it) may be out of view.
+        if lines.contains(where: { squash($0).hasSuffix("1.Submitanswers") }),
+           lines.contains(where: { squash($0).hasSuffix("2.Cancel") }) {
+            let region = lines.lastIndex(where: { squash($0).hasSuffix("1.Submitanswers") })
+                .map { Array(lines[..<($0 + 1)]) } ?? lines
+            guard region.contains(where: { $0.trimmingCharacters(in: .whitespaces) == "Review your answers" })
+            else { return .unrecognized }
+            return readReview(region)
+        }
+        guard let footer = lines.lastIndex(where: { $0.contains("Esc to cancel") }) else { return .absent }
+        let region = Array(lines[..<footer])
+        guard let firstRow = region.firstIndex(where: { parseRow($0)?.number != nil }) else { return .absent }
+        let rows = region[firstRow...].compactMap(parseRow)
+        let numbered = rows.compactMap { r in r.number.map { ($0, r.text) } }
+        // Every question picker ends in `N. Chat about this`, N = options + 2.
+        // A permission prompt (also `Esc to cancel`) has no such row.
+        guard let chat = numbered.last, chat.1 == "Chat about this", chat.0 >= 3 else { return .absent }
+        let n = chat.0 - 2
+        guard numbered.allSatisfy({ $0.0 >= 1 && $0.0 <= n + 2 }) else { return .unrecognized }
+        let options = numbered.filter { $0.0 <= n }
+        // Question text in view (gutter lines above the first row) must be
+        // the end of the question.
+        let gutter = region[..<firstRow].filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("│") }
+        let shown = questionText(gutter)
+        guard !options.isEmpty || !shown.isEmpty else { return .unrecognized }
+        let matches = questions.indices.filter { i in
+            let q = questions[i]
+            guard q.options.count == n else { return false }
+            guard shown.isEmpty || questionText([q.question]).hasSuffix(shown) else { return false }
+            return options.allSatisfy { labelMatches($0.1, q.options[$0.0 - 1].label) }
+        }
+        switch matches.count {
+        case 0: return .absent
+        case 1: return .question(index: matches[0], rows: rows)
+        default: return .unrecognized
+        }
     }
 
     /// The tab bar names the questions' headers behind a `☐` / `☒` box.
@@ -151,6 +217,29 @@ public enum AskUserQuestionPicker {
         }
     }
 
+    /// Any picker's tab bar: `←  ☐ …  →`, or a lone question's ` ☐ Header`.
+    static func looksLikeTabBar(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("←") && t.hasSuffix("→") { return t.contains("☐ ") || t.contains("☒ ") }
+        return t.hasPrefix("☐ ") || t.hasPrefix("☒ ")
+    }
+
+    /// Question text as drawn, wrapped and behind a `│` gutter, or as asked:
+    /// whitespace and gutter bars removed.
+    static func questionText<S: Sequence>(_ lines: S) -> String where S.Element: StringProtocol {
+        squash(lines.joined(separator: " ")).replacingOccurrences(of: "│", with: "")
+    }
+
+    /// An option row shows its label, or the start of a long one (cut with
+    /// `…` or wrapped onto the next line).
+    static func labelMatches(_ shown: String, _ label: String) -> Bool {
+        var s = squash(shown)
+        if s.hasSuffix("…") { s.removeLast() }
+        let l = squash(label)
+        guard !s.isEmpty else { return l.isEmpty }
+        return l.hasPrefix(s)
+    }
+
     static func parseRow(_ line: String) -> Row? {
         var s = Substring(line)
         let indent = s.prefix(while: { $0 == " " }).count
@@ -160,8 +249,12 @@ public enum AskUserQuestionPicker {
             isCursor = true
             s = s.dropFirst().drop(while: { $0 == " " })
         }
-        if s.trimmingCharacters(in: .whitespaces) == "Submit" {
-            return Row(number: nil, isCursor: isCursor, checked: nil, text: "Submit")
+        // A multi-select question's own `Submit` row (`Next` when more
+        // questions follow), indented like the option text (5), not like a
+        // description (9).
+        let bare = s.trimmingCharacters(in: .whitespaces)
+        if (bare == "Submit" || bare == "Next") && (isCursor || indent <= 6) {
+            return Row(number: nil, isCursor: isCursor, checked: nil, text: bare)
         }
         // Rows start at column 0 (`❯ 1.`) or 2 (`  1.`); descriptions are
         // indented 5 or more, so one that starts with `3. ` is not a row.
@@ -263,7 +356,12 @@ public enum AskUserQuestionPicker {
         let want = Set(a.selected)
         // 1. Make every option row match, one toggle at a time.
         for i in 0..<n {
-            guard let row = rows.first(where: { $0.number == i + 1 }), let checked = row.checked else {
+            guard let row = rows.first(where: { $0.number == i + 1 }) else {
+                // Above the top row of a picker taller than the pane: its
+                // checkbox can't be read, so it can't be set safely.
+                return .fail("Option \(i + 1) is out of view in the terminal.")
+            }
+            guard let checked = row.checked else {
                 return .fail("Option \(i + 1) has no checkbox on screen.")
             }
             if checked != want.contains(i) {

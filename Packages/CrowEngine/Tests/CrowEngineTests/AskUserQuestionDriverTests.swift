@@ -41,6 +41,9 @@ struct AskUserQuestionDriverTests {
         var dropKey: String?
         /// Above the picker, as in the pane.
         var above = "❯ please ask me\n────"
+        /// Rows in the pane. A taller frame shows only its bottom, with
+        /// `↑ N more lines` over the footer, as Claude Code draws it (CROW-1519).
+        var paneHeight: Int?
 
         init(_ questions: [ChatQuestion], open: Bool = true) {
             self.questions = questions
@@ -123,6 +126,16 @@ struct AskUserQuestionDriverTests {
         }
 
         func render() -> String {
+            var lines = frame().components(separatedBy: "\n")
+            guard let height = paneHeight, lines.count > height else { return lines.joined(separator: "\n") }
+            let cut = lines.count - height
+            if let footer = lines.lastIndex(where: { $0.contains("Esc to cancel") }), footer > 0 {
+                lines[footer - 1] = " ↑ \(cut) more lines"
+            }
+            return lines.suffix(height).joined(separator: "\n")
+        }
+
+        private func frame() -> String {
             if closed { return above + "\n⏺ done\n❯ \n" }
             var out = [above, ""]
             let lone = questions.count == 1 && !questions[0].multiSelect
@@ -200,6 +213,26 @@ struct AskUserQuestionDriverTests {
         p.state[0].checked = [1]
         #expect(try await run(p, [Answer(selected: [0])]) == .picker)
         #expect(p.answers == ["Which toppings?": "Cheese"])
+    }
+
+    @Test("a single-select picker taller than the pane is answered from its visible rows")
+    func tallSingleSelect() async throws {
+        let p = FakePicker([Self.color, Self.pet])
+        p.paneHeight = 10 // Red (row 1), the tab bars and the questions are out of view
+        let out = try await run(p, [Answer(selected: [0]), Answer(selected: [1])])
+        #expect(out == .picker)
+        #expect(p.answers == ["Which color?": "Red", "Which pet?": "Dog"])
+        #expect(p.keys == ["1", "2", "Enter"])
+    }
+
+    @Test("a multi-select picker with rows out of view falls back instead of failing as not open")
+    func tallMultiSelect() async throws {
+        let p = FakePicker([Self.toppings])
+        p.paneHeight = 8 // rows 1 and 2 are out of view, so their boxes can't be read
+        let out = try await run(p, [Answer(selected: [0, 2])])
+        #expect(out == .fallback(reason: "Option 1 is out of view in the terminal."))
+        #expect(p.keys == ["Escape"])
+        #expect(p.pasted == ["Toppings: Cheese, Basil\n"])
     }
 
     @Test("no picker on screen: nothing is pressed and the call fails")
