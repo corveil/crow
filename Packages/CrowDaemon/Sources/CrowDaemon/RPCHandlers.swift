@@ -54,6 +54,9 @@ func makeCommandRouter(
     // touch the user's Application Support; production passes `.live`.
     skinSources: WebSkinSources = WebSkinSources(),
     tuiRecorder: TuiRecorder? = nil,
+    // The Agent SDK chat spike (CROW-1524, ADR 0033). Nil = off; its RPCs are
+    // registered either way and answer `enabled: false`.
+    agentSDKSpike: AgentSDKSpike? = nil,
     // The auto-review watcher and `start-review` must share this chain.
     // A second instance lets a manual start race an auto kickoff (CROW-406)
     // and hides a wedged auto queue behind a still-working RPC (CROW-1323).
@@ -112,5 +115,6 @@ func makeCommandRouter(
     handlers.merge(makeBackfillHandlers(devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeTuiHandlers(appState: appState, tuiRecorder: tuiRecorder)) { existing, _ in existing }
     handlers.merge(makeReviewHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
+    handlers.merge(makeAgentSDKSpikeHandlers(appState: appState, spike: agentSDKSpike)) { existing, _ in existing }
     return CommandRouter(handlers: handlers, fallback: fallback)
 }

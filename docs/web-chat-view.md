@@ -33,6 +33,18 @@ When a Claude session asks you something with `AskUserQuestion`, Chat shows a qu
 
 The key map was recorded against Claude Code 2.1.331 (`AskUserQuestionPicker`).
 
+## Agent SDK spike (developers only)
+
+A throwaway spike ([ADR 0033](adr/0033-agent-sdk-chat-typescript-sidecar.md), crow#1524) runs a Claude conversation on the Claude Agent SDK instead of the terminal. It is off unless `crowd` starts with `CROW_AGENT_SDK_SPIKE` set to the sidecar directory (see [`spikes/agent-sdk-sidecar/README.md`](../spikes/agent-sdk-sidecar/README.md)). With it on, the header toggle reads **Terminal | Chat | SDK** once Chat has been opened (that first open is when the browser asks `crowd` whether the spike is on). SDK mode works like this:
+
+- **A separate conversation.** It is a separate Claude conversation in the session's worktree, run by a Node sidecar that `crowd` supervises. The terminal agent and its transcript are untouched.
+- **Streaming.** Replies stream in as they are written.
+- **Approvals and questions.** Tool approvals get an **Allow / Deny** card. `AskUserQuestion` gets the question card, answered through the SDK rather than by typing into a picker.
+- **Interrupt and End.** **Interrupt** stops the current turn. **End** stops the sidecar, and the next message resumes the same SDK conversation.
+- **Where it runs.** Claude sessions only, and not review sessions.
+
+The events live in `crowd`'s memory, so a `crowd` restart starts a fresh log. The SDK still writes its own transcript under `~/.claude/projects/`, which `claude --resume <id>` opens in a terminal (hover the conversation notice for the id).
+
 ## Copy and Listen
 
 Each message has one or two small buttons. On a desktop they sit beside the message and show when you hover over it. On a phone they sit under the text. Their labels are never part of a text selection or of what Copy copies.

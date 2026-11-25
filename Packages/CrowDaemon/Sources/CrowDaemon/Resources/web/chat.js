@@ -26,9 +26,12 @@ let chatWasShown = false;
 // draft (and a Send) over to the wrong agent.
 const chatDrafts = new Map();
 
-function newChatState(sessionId) {
+function newChatState(sessionId, sdk) {
   return {
     sessionId,
+    // Agent SDK spike mode (chat-sdk.js, ADR 0033): events come from the
+    // session's SDK sidecar instead of the terminal agent's transcript.
+    sdk: !!sdk,
     path: null,
     cursor: null,
     terminalId: null,
@@ -65,6 +68,11 @@ function chatViewEnabled() {
 // loading, so an enabled install doesn't flash the terminal first.
 function chatViewNotDisabled() {
   return !(typeof uiConfig !== 'undefined' && uiConfig.chatViewEnabled === false);
+}
+
+// The Agent SDK spike (chat-sdk.js) owns this Chat view right now.
+function chatSdkMode() {
+  return typeof sdkChatShown === 'function' && sdkChatShown();
 }
 
 // What the URL and the view should show right now.
@@ -113,18 +121,35 @@ function chatToggleControl() {
   const wrap = el('div', 'view-toggle');
   wrap.setAttribute('role', 'group');
   wrap.setAttribute('aria-label', 'Session view');
-  const mk = (label, iconName, on) => {
+  // A third segment, SDK, only while crowd runs the Agent SDK spike (ADR 0033).
+  const sdkOffered = typeof sdkChatAvailable === 'function' && sdkChatAvailable();
+  const mode = !chatViewActive ? 'terminal' : (sdkOffered && chatSdkMode() ? 'sdk' : 'chat');
+  const mk = (label, iconName, target, title) => {
+    const on = mode === target;
     const b = el('button', 'view-toggle-btn' + (on ? ' active' : ''), '');
     b.type = 'button';
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (title) b.title = title;
     b.appendChild(icon(iconName, 12));
     b.appendChild(el('span', null, label));
-    b.onclick = (ev) => { ev.stopPropagation(); if (!on) toggleChatView(); };
+    b.onclick = (ev) => { ev.stopPropagation(); if (!on) setChatViewMode(target); };
     return b;
   };
-  wrap.appendChild(mk('Terminal', 'terminal', !chatViewActive));
-  wrap.appendChild(mk('Chat', 'comment', chatViewActive));
+  wrap.appendChild(mk('Terminal', 'terminal', 'terminal'));
+  wrap.appendChild(mk('Chat', 'comment', 'chat'));
+  if (sdkOffered) {
+    wrap.appendChild(mk('SDK', 'bolt', 'sdk', 'Agent SDK spike: a separate Claude conversation in this worktree'));
+  }
   return wrap;
+}
+
+// terminal | chat | sdk. Chat and SDK share the chat route and view.
+function setChatViewMode(target) {
+  if (typeof setSdkChatMode === 'function') setSdkChatMode(target === 'sdk');
+  if ((target !== 'terminal') !== chatViewActive) { toggleChatView(); return; }
+  applyChatView();
+  const s = sessions.find((x) => x.id === selectedId);
+  if (s) renderHeader(s);
 }
 
 // Called from selectSession (after the session is bound) and on toggle.
@@ -144,15 +169,20 @@ function applyChatView() {
   }
   const entering = !chatWasShown;
   chatWasShown = true;
+  // Ask once whether crowd runs the Agent SDK spike (chat-sdk.js); the header
+  // gains an SDK segment when it does. Never asked while Chat stays closed.
+  if (typeof probeSdkChat === 'function') probeSdkChat();
   ensureChatDom();
-  const switched = !chatState || chatState.sessionId !== selectedId;
+  const sdk = chatSdkMode();
+  // Switching between the transcript and the SDK source redraws like a session switch.
+  const switched = !chatState || chatState.sessionId !== selectedId || chatState.sdk !== sdk;
   if (switched) {
     stopChatSpeech();
     // Only the switch Follow made reads the backlog; any other switch drops it.
     if (chatFollowArrival !== selectedId) chatFollowArrival = null;
     const input = document.getElementById('chat-input');
     if (input && chatState) chatDrafts.set(chatState.sessionId, input.value);
-    chatState = newChatState(selectedId);
+    chatState = newChatState(selectedId, sdk);
     clearChatLog();
     if (input) {
       input.value = chatDrafts.get(selectedId) || '';
@@ -299,7 +329,7 @@ function onChatPaste(e) {
 function chatCanAttach() {
   const input = document.getElementById('chat-input');
   return !!(selectedId && chatState && chatState.sessionId === selectedId
-    && chatState.terminalId && input && !input.disabled);
+    && (chatState.sdk || chatState.terminalId) && input && !input.disabled);
 }
 
 async function attachChatFiles(files) {
@@ -445,6 +475,16 @@ async function refreshChat() {
   const st = chatState;
   if (!st || st.inflight) return;
   st.inflight = true;
+  if (st.sdk) {
+    try {
+      await refreshSdkChat(st);
+    } catch (e) {
+      if (chatState === st) { st.reason = (e && e.message) || 'Could not read the SDK conversation.'; renderChatStatus(); }
+    } finally {
+      st.inflight = false;
+    }
+    return;
+  }
   try {
     const params = { session_id: st.sessionId };
     if (st.cursor != null) params.cursor = st.cursor;
@@ -925,7 +965,7 @@ for (const type of ['click', 'touchend', 'keydown']) {
 // The header toggle, beside Terminal | Chat. Shown in Chat only, and only in a
 // browser that can speak.
 function chatAutoReadControl() {
-  if (!chatViewEnabled() || !chatViewActive || !chatSpeechSupported()) return null;
+  if (!chatViewEnabled() || !chatViewActive || !chatSpeechSupported() || chatSdkMode()) return null;
   const btn = el('button', 'chat-auto-read', '');
   btn.type = 'button';
   btn.id = 'chat-auto-read';
@@ -1090,7 +1130,7 @@ function setChatFollow(on) {
 
 // The header toggle, right after Auto-read, under the same conditions.
 function chatFollowControl() {
-  if (!chatViewEnabled() || !chatViewActive || !chatSpeechSupported()) return null;
+  if (!chatViewEnabled() || !chatViewActive || !chatSpeechSupported() || chatSdkMode()) return null;
   const btn = el('button', 'chat-auto-read chat-follow', '');
   btn.type = 'button';
   btn.id = 'chat-follow';
@@ -1182,7 +1222,8 @@ function renderChatStatus(stArg) {
   status.textContent = '';
   const send = document.getElementById('chat-send');
   const input = document.getElementById('chat-input');
-  const hasTarget = !!(st && st.terminalId);
+  // The SDK spike's target is the session's sidecar, which crowd starts on demand.
+  const hasTarget = !!(st && (st.sdk ? st.supported : st.terminalId));
   if (send) send.disabled = !hasTarget || chatSending;
   if (input) input.disabled = !hasTarget;
   if (!st) return;
@@ -1196,6 +1237,7 @@ function renderChatStatus(stArg) {
   if (chatQuestionPending(st)) {
     status.appendChild(el('span', null, 'Waiting for your answer'));
     status.classList.add('waiting');
+    if (st.sdk && typeof sdkChatStatusActions === 'function') sdkChatStatusActions(st, status);
     return;
   }
   // No structured "busy" signal reaches the browser yet, so infer it: anything
@@ -1205,22 +1247,28 @@ function renderChatStatus(stArg) {
     status.appendChild(el('span', null, 'Working…'));
     status.classList.add('busy');
   }
+  if (st.sdk && typeof sdkChatStatusActions === 'function') sdkChatStatusActions(st, status);
 }
 
 async function sendChatMessage() {
   const input = document.getElementById('chat-input');
   const st = chatState;
-  if (!input || !st || !st.terminalId || chatSending) return;
+  if (!input || !st || !(st.sdk || st.terminalId) || chatSending) return;
   const text = input.value.replace(/\s+$/, '');
   if (!text) return;
   chatSending = true;
   renderChatStatus();
   try {
-    // Trailing newline = Enter after the bracketed paste (TmuxInput.sendText).
-    // `raw`: send the text as typed. Without it, `send` rewrites a literal
-    // `\n` / `\t` (the `crow send` convention) and pasted code changes (#1437).
-    // A failed delivery rejects, so the text stays in the composer.
-    await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n', raw: true });
+    if (st.sdk) {
+      // The SDK spike (chat-sdk.js): to the session's sidecar, not the terminal.
+      await sendSdkChatMessage(st, text);
+    } else {
+      // Trailing newline = Enter after the bracketed paste (TmuxInput.sendText).
+      // `raw`: send the text as typed. Without it, `send` rewrites a literal
+      // `\n` / `\t` (the `crow send` convention) and pasted code changes (#1437).
+      // A failed delivery rejects, so the text stays in the composer.
+      await rpc('send', { session_id: st.sessionId, terminal_id: st.terminalId, text: text + '\n', raw: true });
+    }
     input.value = '';
     autosizeChatInput(input);
     closeChatMenu();

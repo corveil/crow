@@ -583,6 +583,20 @@ public enum CrowDaemon {
         let soundLibrary = CustomSoundLibrary.live
         let skinSources = WebSkinSources(
             webDir: options.webDir, store: .live, devRoot: options.devRoot)
+        // THROWAWAY SPIKE (CROW-1524, ADR 0033): Web Chat on the Claude Agent
+        // SDK. Off unless CROW_AGENT_SDK_SPIKE names the sidecar directory.
+        let sdkSpike = AgentSDKSpikeConfig.resolve(
+            env: ProcessInfo.processInfo.environment,
+            findExecutable: { ShellEnvironment.shared.findExecutable($0) })
+        if let problem = sdkSpike.problem { log("WARNING: Agent SDK spike off: \(problem)") }
+        let agentSDKSpike: AgentSDKSpike? = sdkSpike.config.map { config in
+            log("Agent SDK spike ON: \(config.sidecarScript) (node \(config.nodePath), claude \(config.claudePath ?? "bundled"))")
+            return AgentSDKSpike(
+                config: config,
+                launcher: AgentSDKProcessSidecar.launcher(config: config),
+                push: { frame in await eventHub.broadcast(frame) })
+        }
+
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, tracker: tracker,
@@ -592,6 +606,7 @@ public enum CrowDaemon {
             soundLibrary: soundLibrary,
             skinSources: skinSources,
             tuiRecorder: tuiRecorder,
+            agentSDKSpike: agentSDKSpike,
             reviewSerializer: reviewSerializer,
             fallback: engineFallback)
 

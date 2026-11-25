@@ -69,3 +69,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0030 | [Codex routes through the workspace gateway, opt-in per gateway](./0030-codex-through-the-workspace-gateway.md) | Accepted | 2026-11-04 |
 | 0031 | [Observations are diagnosed in Crow before they become tickets](./0031-observations-are-diagnosed-before-they-become-tickets.md) | Accepted | 2026-11-09 |
 | 0032 | [The Manager context is a slim core; the CLI reference loads on demand](./0032-slim-manager-context-on-demand-cli-reference.md) | Accepted | 2026-11-11 |
+| 0033 | [Crow chat on the Claude Agent SDK runs in a TypeScript sidecar that crowd supervises](./0033-agent-sdk-chat-typescript-sidecar.md) | Proposed | 2026-11-25 |

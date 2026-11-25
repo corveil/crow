@@ -27,6 +27,7 @@ Architectural decisions live in [`docs/adr/`](docs/adr/). Read [`docs/adr/README
 - `Packages/`: the Swift packages. `CrowDaemon` is `crowd` (RPC server; web UI assets under `Sources/CrowDaemon/Resources/web`), `CrowCLI` is `crow`, `CrowEngine` is the headless session engine and the `Scaffolder`, and `CrowClaude`, `CrowCodex`, `CrowCursor` and the rest are the per-harness adapters.
 - `crow-desktop/`: the Tauri shell that runs `crowd` as a sidecar ([ADR 0024](docs/adr/0024-tauri-sidecar-app.md)).
 - `skills/` and `Resources/*.template`: the bundled skills scaffolded into `{devRoot}/.claude/skills/`.
+- `spikes/`: throwaway spikes behind flags, deleted when their ADR is decided (the Agent SDK chat sidecar, [ADR 0033](docs/adr/0033-agent-sdk-chat-typescript-sidecar.md)).
 - `docs/`: user and developer docs. `docs/cli.md` is generated (`make docs`); `docs/cli-reference.md` is the hand-written guide.
 
 ## Adding or changing a `crow` verb
