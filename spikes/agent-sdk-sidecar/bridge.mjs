@@ -16,8 +16,54 @@
 //
 // `query` is injected so the tests can drive the bridge with a fake.
 
+import { randomUUID } from 'node:crypto';
+
 const MAX_TOOL_INPUT = 300;   // ChatTranscript.maxToolInputChars
 const MAX_TOOL_RESULT = 2000; // ChatTranscript.maxToolResultChars
+
+// crowd may itself run under a Claude Code session (a developer running a dev
+// build from an agent). These name *that* session; the child CLI must not
+// think it is nested inside it.
+export const INHERITED_SESSION_VARS = [
+  'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_CHILD_NOTES_DIR', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_PID',
+];
+
+/**
+ * The `query()` options for one Crow session (the bridge adds `canUseTool`
+ * and `includePartialMessages`).
+ *
+ * - The terminal agent's prompt, settings, CLAUDE.md and skills: the
+ *   `claude_code` preset and the user/project/local sources. `local` is what
+ *   carries Crow's gateway env (`env` in .claude/settings.local.json).
+ * - **No hooks.** `local` also carries Crow's hooks, which name the Crow
+ *   session; `hook-event` would record this SDK conversation's id as the
+ *   session's `harnessConversationID` (latest wins) and repoint Chat, Manager
+ *   resume and handoff at it. `disableAllHooks` in the flag-settings tier (the
+ *   CLI's `--settings`, above local) turns off user, project and local hooks
+ *   for this run only. Managed-policy hooks still run.
+ * - `permissionMode: 'default'`: omitted, the SDK starts in the settings'
+ *   `defaultMode` or `auto`, which would approve most calls without asking.
+ * - The operator's own `claude` instead of the SDK's ~384 MB per-platform
+ *   binary (the SDK is installed with --omit=optional).
+ */
+export function sidecarOptions({ cwd, claude, resume, model, env }) {
+  const childEnv = { ...env };
+  for (const k of INHERITED_SESSION_VARS) delete childEnv[k];
+  const options = {
+    cwd,
+    env: childEnv,
+    systemPrompt: { type: 'preset', preset: 'claude_code' },
+    settingSources: ['user', 'project', 'local'],
+    settings: { disableAllHooks: true },
+    permissionMode: 'default',
+  };
+  if (claude) options.pathToClaudeCodeExecutable = claude;
+  if (resume) options.resume = resume;
+  if (model) options.model = model;
+  return options;
+}
 
 /** A single-consumer async queue: the SDK's streaming-input prompt. */
 export function createInputQueue() {
@@ -126,6 +172,9 @@ export function createBridge({ query, emit, options = {} }) {
   let input = null;
   // request_id → { resolve, kind, input, questions }
   const pending = new Map();
+  // Request ids are unique per bridge, so an answer meant for a sidecar that
+  // has since been replaced can never match its successor's request.
+  const requestPrefix = randomUUID().slice(0, 8);
   let nextRequest = 1;
   let q = null;
   let turnStartedAt = null;
@@ -142,7 +191,7 @@ export function createBridge({ query, emit, options = {} }) {
   }
 
   async function canUseTool(toolName, toolInput, opts = {}) {
-    const requestId = 'r' + (nextRequest++);
+    const requestId = requestPrefix + '-' + (nextRequest++);
     const toolId = opts.toolUseID || null;
     return new Promise((resolve) => {
       if (toolName === 'AskUserQuestion') {

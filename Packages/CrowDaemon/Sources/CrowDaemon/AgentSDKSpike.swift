@@ -121,8 +121,10 @@ actor AgentSDKSpike {
     private let pushes: AsyncStream<String>.Continuation
     private var logs: [UUID: Log] = [:]
     private var handles: [UUID: AgentSDKSidecarHandle] = [:]
-    /// Bumped per launch, so a dead sidecar's late output can't land in its successor's log.
+    /// Bumped per launch and per End, so a stopped or dead sidecar's late
+    /// output can't land in its successor's log.
     private var generations: [UUID: Int] = [:]
+    private var reaper: Task<Void, Never>?
 
     init(
         config: AgentSDKSpikeConfig?,
@@ -185,8 +187,8 @@ actor AgentSDKSpike {
         case "interrupt":
             guard handles[session] != nil else { throw AgentSDKSpikeError.notRunning }
         case "stop":
-            guard let handle = handles.removeValue(forKey: session) else { throw AgentSDKSpikeError.notRunning }
-            handle.stop()
+            guard handles[session] != nil else { throw AgentSDKSpikeError.notRunning }
+            end(session, reason: "ended")
             return
         default:
             throw AgentSDKSpikeError.badCommand("unknown op \(op)")
@@ -246,6 +248,31 @@ actor AgentSDKSpike {
         append(session, event)
     }
 
+    /// End a session's sidecar now, without waiting for the process to exit.
+    /// The generation moves on, so anything the old sidecar still prints
+    /// (its last `resolved`, its exit) is dropped; nothing it asked stays
+    /// answerable; and browsers get `stopped` at once, which closes their
+    /// cards. Together with per-sidecar request ids, an answer can only reach
+    /// the request its card was drawn for (review of #1525).
+    private func end(_ session: UUID, reason: String) {
+        guard let handle = handles.removeValue(forKey: session) else { return }
+        generations[session, default: 0] += 1
+        handle.stop()
+        logs[session, default: Log()].running = false
+        logs[session]?.pending.removeAll()
+        append(session, ["kind": .string("stopped"), "reason": .string(reason)])
+    }
+
+    /// Stop the sidecars of sessions that may no longer run one (deleted,
+    /// completed, archived), and forget the logs of sessions that are gone.
+    func prune(running live: Set<UUID>, existing: Set<UUID>) {
+        for id in Array(handles.keys) where !live.contains(id) { end(id, reason: "session closed") }
+        for id in Array(logs.keys) where !existing.contains(id) && handles[id] == nil {
+            logs[id] = nil
+            generations[id] = nil
+        }
+    }
+
     func exited(session: UUID, generation: Int, status: Int32) {
         guard generations[session] == generation else { return }
         handles[session] = nil
@@ -268,8 +295,23 @@ actor AgentSDKSpike {
 
     /// Stop every sidecar (daemon shutdown).
     func stopAll() {
-        for handle in handles.values { handle.stop() }
-        handles.removeAll()
+        for id in Array(handles.keys) { end(id, reason: "crowd stopped") }
+    }
+
+    /// Every 30 seconds, stop the sidecars of sessions that no longer exist or
+    /// were completed or archived. `sessions` reads the live session list.
+    func startReaper(
+        every interval: Duration = .seconds(30),
+        sessions: @escaping @Sendable () async -> (running: Set<UUID>, existing: Set<UUID>)
+    ) {
+        guard reaper == nil else { return }
+        reaper = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                let current = await sessions()
+                await self?.prune(running: current.running, existing: current.existing)
+            }
+        }
     }
 
     static func seq(of event: JSONValue) -> Int? {

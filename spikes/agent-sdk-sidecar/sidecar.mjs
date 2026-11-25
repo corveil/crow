@@ -15,7 +15,7 @@
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { createBridge } from './bridge.mjs';
+import { createBridge, sidecarOptions } from './bridge.mjs';
 
 const { values: args } = parseArgs({
   options: {
@@ -31,35 +31,10 @@ if (!args.cwd) {
   process.exit(2);
 }
 
-// crowd may itself run under a Claude Code session (a developer running a dev
-// build from an agent). These name *that* session; the child CLI must not
-// think it is nested inside it.
-const INHERITED_SESSION_VARS = [
-  'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
-  'CLAUDE_CODE_CHILD_NOTES_DIR', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
-  'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_PID',
-];
-const env = { ...process.env };
-for (const k of INHERITED_SESSION_VARS) delete env[k];
-
-const options = {
-  cwd: args.cwd,
-  env,
-  // The same prompt, settings, CLAUDE.md, skills and hooks the terminal agent
-  // gets. `local` is what carries Crow's gateway env (ANTHROPIC_BASE_URL /
-  // ANTHROPIC_CUSTOM_HEADERS in .claude/settings.local.json) — and Crow's hooks.
-  systemPrompt: { type: 'preset', preset: 'claude_code' },
-  settingSources: ['user', 'project', 'local'],
-  // Omitted, the SDK starts in `auto` (or the settings' defaultMode), which
-  // would approve most calls without asking. The spike wants to see the asks.
-  permissionMode: 'default',
-  stderr: (data) => process.stderr.write(data),
-};
-// Reuse the operator's own `claude` (Crow already requires it) instead of the
-// SDK's ~384 MB per-platform native binary, installed with --omit=optional.
-if (args.claude) options.pathToClaudeCodeExecutable = args.claude;
-if (args.resume) options.resume = args.resume;
-if (args.model) options.model = args.model;
+const options = sidecarOptions({
+  cwd: args.cwd, claude: args.claude, resume: args.resume, model: args.model, env: process.env,
+});
+options.stderr = (data) => process.stderr.write(data);
 
 function emit(event) {
   process.stdout.write(JSON.stringify(event) + '\n');

@@ -258,9 +258,70 @@ struct AgentSDKSpikeTests {
         #expect(fake.sent.last == ["op": .string("interrupt")])
         try await spike.input(session: session, cwd: "/w", command: ["op": .string("stop")])
         #expect(fake.stopped)
+        #expect(await kinds(spike.page(session: session, after: nil).events) == ["stopped"])
         await #expect(throws: AgentSDKSpikeError.notRunning) {
             try await spike.input(session: session, cwd: "/w", command: ["op": .string("stop")])
         }
+    }
+
+    @Test("End invalidates the old sidecar at once: no stale answer reaches its successor")
+    func endThenRestart() async throws {
+        let (spike, launches, _) = make()
+        let session = UUID()
+        try await spike.input(session: session, cwd: "/w", command: ["op": .string("message"), "text": .string("one")])
+        let first = try #require(launches.last)
+        first.say(#"{"kind":"ready","sdk_session_id":"sdk-3"}"#)
+        first.say(#"{"kind":"permission","request_id":"aaaa-1","tool_name":"Bash","text":"rm -rf build"}"#)
+        try await until("pending") { await spike.page(session: session, after: nil).pending == ["aaaa-1"] }
+
+        // End while the approval is waiting: closed now, not when the process exits.
+        try await spike.input(session: session, cwd: "/w", command: ["op": .string("stop")])
+        #expect(first.stopped)
+        let ended = await spike.page(session: session, after: nil)
+        #expect(!ended.running)
+        #expect(ended.pending.isEmpty)
+        #expect(kinds(ended.events).last == "stopped")
+        #expect(ended.events.last?.objectValue?["reason"] == .string("ended"))
+
+        // A message before the old process has gone: a new sidecar, resuming.
+        try await spike.input(session: session, cwd: "/w", command: ["op": .string("message"), "text": .string("two")])
+        let second = try #require(launches.last)
+        #expect(launches.all.count == 2 && second.launch.resume == "sdk-3")
+        second.say(#"{"kind":"permission","request_id":"bbbb-1","tool_name":"Write","text":"/w/x"}"#)
+        try await until("new pending") { await spike.page(session: session, after: nil).pending == ["bbbb-1"] }
+
+        // The stale card's answer is refused; the old sidecar's late output is dropped.
+        await #expect(throws: AgentSDKSpikeError.notPending("aaaa-1")) {
+            try await spike.input(session: session, cwd: "/w", command: [
+                "op": .string("respond"), "request_id": .string("aaaa-1"), "behavior": .string("allow")])
+        }
+        #expect(second.sent.count == 1) // only the message reached the new sidecar
+        let before = await spike.page(session: session, after: nil).cursor
+        first.say(#"{"kind":"resolved","request_id":"aaaa-1","behavior":"cancelled"}"#)
+        first.exit(0)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let after = await spike.page(session: session, after: nil)
+        #expect(after.cursor == before)
+        #expect(after.running && after.pending == ["bbbb-1"])
+    }
+
+    @Test("Sidecars of closed sessions are stopped, and gone sessions forgotten")
+    func prune() async throws {
+        let (spike, launches, _) = make()
+        let keep = UUID(), closed = UUID(), gone = UUID()
+        for id in [keep, closed, gone] {
+            try await spike.input(session: id, cwd: "/w", command: ["op": .string("message"), "text": .string("x")])
+        }
+        await spike.prune(running: [keep], existing: [keep, closed])
+        #expect(launches.all.map(\.stopped) == [false, true, true])
+        #expect(await spike.page(session: keep, after: nil).running)
+        let closedPage = await spike.page(session: closed, after: nil)
+        #expect(!closedPage.running)
+        #expect(closedPage.events.last?.objectValue?["reason"] == .string("session closed"))
+        // The deleted session's log goes with its sidecar; the closed one's stays.
+        await spike.prune(running: [keep], existing: [keep, closed])
+        #expect(await spike.page(session: gone, after: nil).events.isEmpty)
+        #expect(await !spike.page(session: closed, after: nil).events.isEmpty)
     }
 
     @Test("Bad commands and a disabled spike are refused without launching")

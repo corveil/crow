@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createBridge, createInputQueue, toolInputSummary, normalizeQuestions, validateAnswers, contentText,
+  sidecarOptions, INHERITED_SESSION_VARS,
 } from './bridge.mjs';
 
 const QUESTION_INPUT = {
@@ -198,4 +199,43 @@ test('helpers match the transcript reader', async () => {
   const got = [];
   for await (const v of q) got.push(v);
   assert.deepEqual(got, [1, 2]);
+});
+
+test('the options match the terminal agent but run no hooks', () => {
+  const env = { PATH: '/bin', ANTHROPIC_BASE_URL: 'https://gw', CLAUDE_CODE_SESSION_ID: 'parent', CLAUDECODE: '1' };
+  const o = sidecarOptions({ cwd: '/w', claude: '/bin/claude', resume: 'sdk-1', env });
+  assert.deepEqual(o.systemPrompt, { type: 'preset', preset: 'claude_code' });
+  assert.deepEqual(o.settingSources, ['user', 'project', 'local']);
+  // Crow's hooks (in settings.local.json) would repoint the session's
+  // harnessConversationID at this conversation: off for the SDK child.
+  assert.deepEqual(o.settings, { disableAllHooks: true });
+  assert.equal(o.permissionMode, 'default');
+  assert.equal(o.pathToClaudeCodeExecutable, '/bin/claude');
+  assert.equal(o.resume, 'sdk-1');
+  assert.equal(o.env.ANTHROPIC_BASE_URL, 'https://gw');
+  for (const k of INHERITED_SESSION_VARS) assert.equal(k in o.env, false);
+  assert.equal(env.CLAUDECODE, '1'); // the parent env is not mutated
+  const bare = sidecarOptions({ cwd: '/w', env: {} });
+  assert.equal('pathToClaudeCodeExecutable' in bare, false);
+  assert.equal('resume' in bare, false);
+});
+
+test('request ids never repeat across sidecars', async () => {
+  const ids = [];
+  for (let i = 0; i < 2; i++) {
+    const events = [];
+    const query = ({ prompt, options }) => (async function* () {
+      for await (const _ of prompt) {
+        options.canUseTool('Write', { file_path: '/a' }, { signal: new AbortController().signal, toolUseID: 't' });
+        yield { type: 'system', subtype: 'init', session_id: 's' };
+        await new Promise(() => {}); // park, like a turn waiting on the operator
+      }
+    })();
+    const bridge = createBridge({ query, emit: (e) => events.push(e) });
+    bridge.handle({ op: 'message', text: 'x' });
+    await until(events, (es) => es.some((e) => e.kind === 'permission'));
+    ids.push(events.find((e) => e.kind === 'permission').request_id);
+  }
+  assert.notEqual(ids[0], ids[1]);
+  assert.match(ids[0], /^[0-9a-f]{8}-1$/);
 });

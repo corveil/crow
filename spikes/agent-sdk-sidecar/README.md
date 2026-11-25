@@ -12,7 +12,9 @@ crow#1524, [ADR 0033](../../docs/adr/0033-agent-sdk-chat-typescript-sidecar.md).
   - The kinds Chat already renders: `user`, `assistant`, `tool_call`, `tool_result`, `turn_end`, `notice`.
   - New for the spike: `ready`, `delta`, `permission`, `question`, `resolved`, `error`, `exit`, `command_error`.
 
-`bridge.mjs` holds all the logic: SDK messages to events, `canUseTool` to `permission` / `question` and back. `sidecar.mjs` is the stdio entry point.
+`bridge.mjs` holds all the logic: the `query()` options, SDK messages to events, and `canUseTool` to `permission` / `question` and back. `sidecar.mjs` is the stdio entry point.
+
+The options match the terminal agent (the `claude_code` prompt; user, project and local settings) with one exception: **hooks are off** (`settings: {disableAllHooks: true}`). Crow's hooks live in the worktree's `settings.local.json` and name the Crow session, so an SDK turn would otherwise repoint the session's recorded conversation at the SDK one. Request ids are unique per sidecar.
 
 ## Run it
 

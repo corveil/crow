@@ -596,6 +596,14 @@ public enum CrowDaemon {
                 launcher: AgentSDKProcessSidecar.launcher(config: config),
                 push: { frame in await eventHub.broadcast(frame) })
         }
+        // A deleted, completed or archived session's sidecar is stopped.
+        await agentSDKSpike?.startReaper(sessions: {
+            await MainActor.run {
+                let all = appState.sessions
+                return (running: Set(all.filter { $0.status != .completed && $0.status != .archived }.map(\.id)),
+                        existing: Set(all.map(\.id)))
+            }
+        })
 
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
@@ -765,6 +773,7 @@ public enum CrowDaemon {
 
         log("HTTP/WS listening on http://\(options.host):\(options.httpPort) (terminal at /)")
         try await app.runService()
+        await agentSDKSpike?.stopAll()
         #if canImport(Network)
         // Close the OTLP listener and the SQLite handle before we exit or re-exec —
         // the re-exec'd image binds the same port and opens the same db file (#772).

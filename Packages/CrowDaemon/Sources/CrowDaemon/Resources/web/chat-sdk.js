@@ -19,9 +19,17 @@ let sdkChatProbing = false;
 let sdkChatModeOn = false;
 try { sdkChatModeOn = localStorage.getItem('crow.chat.sdk') === '1'; } catch (_) { /* private mode */ }
 
-// True when the toggle can offer SDK mode.
+// Where the spike can run: Claude sessions, not review clones (crowd refuses
+// the rest). SDK mode is one per-browser preference, so it must not follow
+// the operator into a Codex or review session where every send would fail.
+function sdkChatSupportedFor(sessionId) {
+  const s = typeof sessions !== 'undefined' && sessions.find((x) => x.id === sessionId);
+  return !!s && s.agent_kind === 'claude-code' && s.kind !== 'review';
+}
+
+// True when the toggle can offer SDK mode for the selected session.
 function sdkChatAvailable() {
-  return sdkChatEnabled === true;
+  return sdkChatEnabled === true && sdkChatSupportedFor(selectedId);
 }
 
 // Chat is showing the SDK conversation (not the transcript).

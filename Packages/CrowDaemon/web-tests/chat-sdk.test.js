@@ -71,6 +71,13 @@ const labels = (wrap) => Array.from(wrap.querySelectorAll('.view-toggle-btn')).m
   T.chatViewFlag = true;
   T.sessions = [];
   T.selectedId = SID;
+  const CODEX = 'CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC';
+  const REVIEW = 'DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD';
+  const claudeSessions = [
+    { id: SID, agent_kind: 'claude-code', kind: 'work' },
+    { id: CODEX, agent_kind: 'codex', kind: 'work' },
+    { id: REVIEW, agent_kind: 'claude-code', kind: 'review' },
+  ];
   T.chatMd = T.buildChatMarkdown();
 
   console.log('toggle');
@@ -83,11 +90,22 @@ const labels = (wrap) => Array.from(wrap.querySelectorAll('.view-toggle-btn')).m
   T.sdkChatEnabled = null;
   reply = (m) => (m === 'get-sdk-chat-events' ? { enabled: true } : {});
   await T.probeSdkChat();
-  check('spike on: an SDK segment', labels(T.chatToggleControl()).join('|') === 'Terminal|Chat|SDK');
+  check('spike on, unknown session: no SDK segment', labels(T.chatToggleControl()).join('|') === 'Terminal|Chat');
+  T.sessions = claudeSessions;
+  check('spike on, Claude work session: an SDK segment', labels(T.chatToggleControl()).join('|') === 'Terminal|Chat|SDK');
   T.setChatViewActive(true);
   T.setSdkChatMode(true);
   const active = T.chatToggleControl().querySelector('.view-toggle-btn.active');
   check('SDK segment is the active one', active && active.textContent === 'SDK' && T.sdkChatShown());
+  // The preference is per browser; it must not carry SDK mode into sessions the spike refuses.
+  for (const [id, what] of [[CODEX, 'Codex'], [REVIEW, 'review']]) {
+    T.selectedId = id;
+    const segs = labels(T.chatToggleControl()).join('|');
+    const on = T.chatToggleControl().querySelector('.view-toggle-btn.active');
+    check(what + ' session: plain Chat, no SDK segment', !T.sdkChatShown() && segs === 'Terminal|Chat'
+      && on && on.textContent === 'Chat');
+  }
+  T.selectedId = SID;
 
   console.log('events');
   T.ensureChatDom();
