@@ -11,6 +11,7 @@ const epilogue = `
   newChatState, ensureChatDom, buildChatMarkdown, chatToggleControl, sendChatMessage, renderChatStatus,
   probeSdkChat, applySdkChatPage, onSdkChatEvent, sdkAnswers, setSdkChatMode, sdkChatShown,
   get sdkChatEnabled(){ return sdkChatEnabled; },
+  set sdkChatProbeFailedAt(v){ sdkChatProbeFailedAt = v; },
   set sdkChatEnabled(v){ sdkChatEnabled = v; },
   set chatMd(v){ chatMd = v; },
   set selectedId(v){ selectedId = v; },
@@ -82,6 +83,15 @@ const labels = (wrap) => Array.from(wrap.querySelectorAll('.view-toggle-btn')).m
 
   console.log('toggle');
   check('two segments before the probe', labels(T.chatToggleControl()).join('|') === 'Terminal|Chat');
+  // A probe that fails (socket reconnecting) settles nothing: asked again later.
+  reply = () => { throw new Error('rpc: connection closed'); };
+  await T.probeSdkChat();
+  check('a failed probe leaves the answer unknown', T.sdkChatEnabled === null);
+  const before = calls.length;
+  await T.probeSdkChat();
+  check('no retry storm within the backoff', calls.length === before);
+  T.sdkChatProbeFailedAt = 0;
+  calls.length = 0;
   reply = (m) => (m === 'get-sdk-chat-events' ? { enabled: false } : {});
   await T.probeSdkChat();
   check('spike off: still two segments', T.sdkChatEnabled === false

@@ -16,6 +16,9 @@
 // null until probed; then whether crowd runs the spike.
 let sdkChatEnabled = null;
 let sdkChatProbing = false;
+// When the last probe failed (Date.now()); retried no sooner than this after.
+let sdkChatProbeFailedAt = 0;
+const SDK_CHAT_PROBE_RETRY_MS = 10000;
 let sdkChatModeOn = false;
 try { sdkChatModeOn = localStorage.getItem('crow.chat.sdk') === '1'; } catch (_) { /* private mode */ }
 
@@ -43,14 +46,18 @@ function setSdkChatMode(on) {
 }
 
 // Ask crowd once whether the spike is on; repaint the header when it is.
+// Only an answer settles it. A failed call (the socket reconnecting as Chat
+// opens) leaves it unknown, and a later Chat open asks again. The page comes
+// from the same crowd, so "method not found" can't be the reason.
 async function probeSdkChat() {
   if (sdkChatEnabled !== null || sdkChatProbing) return;
+  if (Date.now() - sdkChatProbeFailedAt < SDK_CHAT_PROBE_RETRY_MS) return;
   sdkChatProbing = true;
   try {
     const res = await rpc('get-sdk-chat-events', {});
     sdkChatEnabled = !!(res && res.enabled);
   } catch (_) {
-    sdkChatEnabled = false; // an older crowd without the method
+    sdkChatProbeFailedAt = Date.now();
   } finally {
     sdkChatProbing = false;
   }

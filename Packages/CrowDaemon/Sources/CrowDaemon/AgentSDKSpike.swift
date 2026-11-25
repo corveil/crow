@@ -30,7 +30,8 @@ struct AgentSDKSpikeConfig: Sendable, Equatable {
     static func resolve(
         env: [String: String],
         findExecutable: (String) -> String?,
-        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        listDirectory: (String) -> [String] = { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] }
     ) -> (config: AgentSDKSpikeConfig?, problem: String?) {
         guard let raw = env[envKey]?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
             return (nil, nil)
@@ -43,7 +44,23 @@ struct AgentSDKSpikeConfig: Sendable, Equatable {
         guard let node else {
             return (nil, "\(envKey) is set but no `node` was found (set \(nodeEnvKey))")
         }
-        return (AgentSDKSpikeConfig(sidecarScript: script, nodePath: node, claudePath: findExecutable("claude")), nil)
+        let claude = findExecutable("claude")
+        // Without the operator's `claude`, the SDK needs its own per-platform
+        // binary, which the documented `npm install --omit=optional` skips.
+        // Refuse here rather than fail on the first message.
+        if claude == nil && !bundledClaudeInstalled(sidecarDir: (script as NSString).deletingLastPathComponent,
+                                                    listDirectory: listDirectory) {
+            return (nil, "\(envKey) is set but no `claude` is on PATH and the SDK's bundled binary isn't installed "
+                + "(install Claude Code, or run `npm install` without --omit=optional)")
+        }
+        return (AgentSDKSpikeConfig(sidecarScript: script, nodePath: node, claudePath: claude), nil)
+    }
+
+    /// The SDK's optional per-platform package (`@anthropic-ai/claude-agent-sdk-<os>-<arch>`).
+    static func bundledClaudeInstalled(sidecarDir: String, listDirectory: (String) -> [String]) -> Bool {
+        let scope = ((sidecarDir as NSString).appendingPathComponent("node_modules") as NSString)
+            .appendingPathComponent("@anthropic-ai")
+        return listDirectory(scope).contains { $0.hasPrefix("claude-agent-sdk-") }
     }
 }
 
@@ -66,6 +83,8 @@ protocol AgentSDKSidecarHandle: Sendable {
     func send(_ line: String) throws
     /// Close stdin (the sidecar shuts down on EOF), then terminate it.
     func stop()
+    /// Wait until the process has exited, terminating it after `timeout`.
+    func waitForExit(timeout: Duration) async
 }
 
 /// Starts a sidecar. Injected so tests never spawn a process.
@@ -124,7 +143,11 @@ actor AgentSDKSpike {
     /// Bumped per launch and per End, so a stopped or dead sidecar's late
     /// output can't land in its successor's log.
     private var generations: [UUID: Int] = [:]
+    /// Sidecars ended but maybe not yet exited. The next start for the session
+    /// waits for its exit, so two CLIs never write one SDK transcript.
+    private var stopping: [UUID: AgentSDKSidecarHandle] = [:]
     private var reaper: Task<Void, Never>?
+    static let exitWait: Duration = .seconds(8)
 
     init(
         config: AgentSDKSpikeConfig?,
@@ -166,7 +189,7 @@ actor AgentSDKSpike {
                 throw AgentSDKSpikeError.badCommand("text required")
             }
             line["text"] = .string(text)
-            if handles[session] == nil { try start(session: session, cwd: cwd) }
+            if handles[session] == nil { try await start(session: session, cwd: cwd) }
         case "respond":
             guard let id = command["request_id"]?.stringValue, !id.isEmpty else {
                 throw AgentSDKSpikeError.badCommand("request_id required")
@@ -197,7 +220,15 @@ actor AgentSDKSpike {
         try handle.send(Self.encode(.object(line)))
     }
 
-    private func start(session: UUID, cwd: String) throws {
+    private func start(session: UUID, cwd: String) async throws {
+        // After End, the old sidecar may still be closing its `claude` (it
+        // waits for the query to finish). Resuming the same SDK session before
+        // it exits would put two CLIs on one transcript. `sdk-chat-input` is
+        // laned per session, so no second start can slip in during the wait.
+        if let old = stopping.removeValue(forKey: session) {
+            await old.waitForExit(timeout: Self.exitWait)
+        }
+        guard handles[session] == nil else { return }
         let resume = logs[session]?.sdkSessionID
         let (handle, output) = try launcher(AgentSDKSidecarLaunch(sessionID: session, cwd: cwd, resume: resume))
         let generation = (generations[session] ?? 0) + 1
@@ -258,6 +289,7 @@ actor AgentSDKSpike {
         guard let handle = handles.removeValue(forKey: session) else { return }
         generations[session, default: 0] += 1
         handle.stop()
+        stopping[session] = handle
         logs[session, default: Log()].running = false
         logs[session]?.pending.removeAll()
         append(session, ["kind": .string("stopped"), "reason": .string(reason)])
@@ -275,6 +307,7 @@ actor AgentSDKSpike {
 
     func exited(session: UUID, generation: Int, status: Int32) {
         guard generations[session] == generation else { return }
+        stopping[session] = nil
         handles[session] = nil
         logs[session, default: Log()].running = false
         logs[session]?.pending.removeAll()
@@ -433,6 +466,17 @@ final class AgentSDKProcessSidecar: AgentSDKSidecarHandle, @unchecked Sendable {
     fileprivate func waitForExit() -> Int32 {
         process.waitUntilExit()
         return process.terminationStatus
+    }
+
+    func waitForExit(timeout: Duration) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while process.isRunning && clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        guard process.isRunning else { return }
+        process.terminate() // SIGTERM: the sidecar closes its query and exits
+        for _ in 0..<40 where process.isRunning { try? await Task.sleep(for: .milliseconds(50)) }
     }
 
     func send(_ line: String) throws {

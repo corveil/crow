@@ -590,7 +590,7 @@ public enum CrowDaemon {
             findExecutable: { ShellEnvironment.shared.findExecutable($0) })
         if let problem = sdkSpike.problem { log("WARNING: Agent SDK spike off: \(problem)") }
         let agentSDKSpike: AgentSDKSpike? = sdkSpike.config.map { config in
-            log("Agent SDK spike ON: \(config.sidecarScript) (node \(config.nodePath), claude \(config.claudePath ?? "bundled"))")
+            log("Agent SDK spike ON: \(config.sidecarScript) (node \(config.nodePath), claude \(config.claudePath ?? "bundled with the SDK"))")
             return AgentSDKSpike(
                 config: config,
                 launcher: AgentSDKProcessSidecar.launcher(config: config),

@@ -22,10 +22,13 @@ struct AgentSDKSpikeTests {
         private var _stopped = false
         let launch: AgentSDKSidecarLaunch
         let output: AsyncStream<AgentSDKSidecarOutput>.Continuation
+        let onWait: @Sendable () -> Void
 
-        init(launch: AgentSDKSidecarLaunch, output: AsyncStream<AgentSDKSidecarOutput>.Continuation) {
+        init(launch: AgentSDKSidecarLaunch, output: AsyncStream<AgentSDKSidecarOutput>.Continuation,
+             onWait: @escaping @Sendable () -> Void = {}) {
             self.launch = launch
             self.output = output
+            self.onWait = onWait
         }
 
         var sent: [[String: JSONValue]] {
@@ -37,6 +40,7 @@ struct AgentSDKSpikeTests {
 
         func send(_ line: String) throws { lock.withLock { _sent.append(line) } }
         func stop() { lock.withLock { _stopped = true } }
+        func waitForExit(timeout: Duration) async { onWait() }
 
         func say(_ json: String) { output.yield(.line(json)) }
         func exit(_ status: Int32) { output.yield(.exit(status)); output.finish() }
@@ -45,14 +49,20 @@ struct AgentSDKSpikeTests {
     final class Launches: @unchecked Sendable {
         private let lock = NSLock()
         private var _all: [FakeSidecar] = []
+        private var _log: [String] = []
         var all: [FakeSidecar] { lock.withLock { _all } }
         var last: FakeSidecar? { all.last }
+        /// "launch N" / "wait N", in order (N counts launches from 1).
+        var log: [String] { lock.withLock { _log } }
 
         var launcher: AgentSDKSidecarLauncher {
             { [self] launch in
                 let (stream, cont) = AsyncStream<AgentSDKSidecarOutput>.makeStream()
-                let fake = FakeSidecar(launch: launch, output: cont)
-                lock.withLock { _all.append(fake) }
+                let n = lock.withLock { _all.count + 1 }
+                let fake = FakeSidecar(launch: launch, output: cont, onWait: { [self] in
+                    lock.withLock { _log.append("wait \(n)") }
+                })
+                lock.withLock { _all.append(fake); _log.append("launch \(n)") }
                 return (fake, stream)
             }
         }
@@ -115,6 +125,20 @@ struct AgentSDKSpikeTests {
         let script = AgentSDKSpikeConfig.resolve(
             env: ["CROW_AGENT_SDK_SPIKE": "/elsewhere/run.mjs"], findExecutable: { _ in "/n" }, fileExists: { _ in true })
         #expect(script.config?.sidecarScript == "/elsewhere/run.mjs")
+
+        // No `claude` on PATH: only on when the SDK's own binary is installed.
+        let nodeOnly: (String) -> String? = { $0 == "node" ? "/n" : nil }
+        let neither = AgentSDKSpikeConfig.resolve(
+            env: ["CROW_AGENT_SDK_SPIKE": "/spike"], findExecutable: nodeOnly, fileExists: { _ in true },
+            listDirectory: { _ in ["claude-agent-sdk", "sdk"] })
+        #expect(neither.config == nil)
+        #expect(neither.problem?.contains("no `claude`") == true)
+        var listed: [String] = []
+        let bundled = AgentSDKSpikeConfig.resolve(
+            env: ["CROW_AGENT_SDK_SPIKE": "/spike"], findExecutable: nodeOnly, fileExists: { _ in true },
+            listDirectory: { listed.append($0); return ["claude-agent-sdk", "claude-agent-sdk-darwin-arm64"] })
+        #expect(bundled.config?.claudePath == nil && bundled.config?.nodePath == "/n")
+        #expect(listed == ["/spike/node_modules/@anthropic-ai"])
     }
 
     @Test("Sidecar arguments carry the cwd, the operator's claude and a resume id")
@@ -241,6 +265,7 @@ struct AgentSDKSpikeTests {
         let second = try #require(launches.last)
         #expect(launches.all.count == 2)
         #expect(second.launch.resume == "sdk-7")
+        #expect(launches.log == ["launch 1", "launch 2"]) // it already exited: nothing to wait for
         // Late output from the dead sidecar can't land in the new log.
         await spike.ingest(session: session, generation: 1, line: #"{"kind":"assistant","text":"ghost"}"#)
         let resumed = await spike.page(session: session, after: nil)
@@ -283,10 +308,12 @@ struct AgentSDKSpikeTests {
         #expect(kinds(ended.events).last == "stopped")
         #expect(ended.events.last?.objectValue?["reason"] == .string("ended"))
 
-        // A message before the old process has gone: a new sidecar, resuming.
+        // A message before the old process has gone: crowd waits for it to
+        // exit, then starts a new sidecar that resumes the same SDK session.
         try await spike.input(session: session, cwd: "/w", command: ["op": .string("message"), "text": .string("two")])
         let second = try #require(launches.last)
         #expect(launches.all.count == 2 && second.launch.resume == "sdk-3")
+        #expect(launches.log == ["launch 1", "wait 1", "launch 2"])
         second.say(#"{"kind":"permission","request_id":"bbbb-1","tool_name":"Write","text":"/w/x"}"#)
         try await until("new pending") { await spike.page(session: session, after: nil).pending == ["bbbb-1"] }
 
@@ -405,6 +432,24 @@ struct AgentSDKSpikeTests {
         #expect(got.last == .exit(3))
         // The child exited on its own: a write now is EPIPE, thrown, not a SIGPIPE.
         #expect(throws: (any Error).self) { try handle.send("late") }
+    }
+
+    @Test("A sidecar that won't exit is terminated after the wait")
+    func waitForExitTerminates() async throws {
+        let dir = NSTemporaryDirectory() + "crow-sdk-hang-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let script = dir + "/hang.sh"
+        try "trap '' HUP; sleep 30\n".write(toFile: script, atomically: true, encoding: .utf8)
+        let config = AgentSDKSpikeConfig(sidecarScript: script, nodePath: "/bin/sh", claudePath: nil)
+        let (handle, output) = try AgentSDKProcessSidecar.start(
+            config: config, launch: AgentSDKSidecarLaunch(sessionID: UUID(), cwd: dir, resume: nil))
+        let started = ContinuousClock.now
+        await handle.waitForExit(timeout: .milliseconds(200))
+        #expect(ContinuousClock.now - started < .seconds(5))
+        var last: AgentSDKSidecarOutput?
+        for await item in output { last = item }
+        #expect(last == .exit(SIGTERM))
     }
 
     /// One real turn: node + `spikes/agent-sdk-sidecar` + the Agent SDK + the

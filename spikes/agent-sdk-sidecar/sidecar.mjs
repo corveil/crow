@@ -62,7 +62,9 @@ async function shutdown(code) {
   closing = true;
   bridge.close();
   const done = bridge.done;
-  if (done) await Promise.race([done, new Promise((r) => setTimeout(r, 3000))]);
+  // Wait for the query, so its `claude` has exited before we do (crowd waits
+  // for our exit before resuming the same SDK session).
+  if (done) await Promise.race([done, new Promise((r) => setTimeout(r, 5000))]);
   process.exit(code);
 }
 rl.on('close', () => shutdown(0));

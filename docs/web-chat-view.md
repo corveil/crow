@@ -41,7 +41,7 @@ A throwaway spike ([ADR 0033](adr/0033-agent-sdk-chat-typescript-sidecar.md), cr
 - **One shared folder.** The SDK writes its transcript into the same `~/.claude/projects/` folder as the terminal agent. A session with no recorded conversation id yet falls back to that folder's newest transcript in Chat, which can be the SDK's.
 - **Streaming.** Replies stream in as they are written.
 - **Approvals and questions.** Tool approvals get an **Allow / Deny** card. `AskUserQuestion` gets the question card, answered through the SDK rather than by typing into a picker.
-- **Interrupt and End.** **Interrupt** stops the current turn. **End** stops the sidecar at once and closes any waiting card; the next message resumes the same SDK conversation. Closing, completing or archiving the session stops its sidecar within 30 seconds.
+- **Interrupt and End.** **Interrupt** stops the current turn. **End** stops the sidecar at once and closes any waiting card; the next message waits for the old sidecar to finish exiting (a few seconds at most), then resumes the same SDK conversation. Closing, completing or archiving the session stops its sidecar within 30 seconds.
 - **Where it runs.** Claude sessions only, and not review sessions. The SDK choice is remembered per browser, but it only applies where the spike runs; elsewhere Chat shows the transcript as usual.
 
 The events live in `crowd`'s memory, so a `crowd` restart starts a fresh log. The SDK still writes its own transcript under `~/.claude/projects/`, which `claude --resume <id>` opens in a terminal (hover the conversation notice for the id).
