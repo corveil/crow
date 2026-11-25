@@ -33,6 +33,19 @@ When a Claude session asks you something with `AskUserQuestion`, Chat shows a qu
 
 The key map was recorded against Claude Code 2.1.331 (`AskUserQuestionPicker`).
 
+## Agent SDK spike (developers only)
+
+A throwaway spike ([ADR 0033](adr/0033-agent-sdk-chat-typescript-sidecar.md), crow#1524) runs a Claude conversation on the Claude Agent SDK instead of the terminal. It is off unless `crowd` starts with `CROW_AGENT_SDK_SPIKE` set to the sidecar directory (see [`spikes/agent-sdk-sidecar/README.md`](../spikes/agent-sdk-sidecar/README.md)). With it on, the header toggle reads **Terminal | Chat | SDK** once Chat has been opened (that first open is when the browser asks `crowd` whether the spike is on). SDK mode works like this:
+
+- **A separate conversation.** It is a separate Claude conversation in the session's worktree, run by a Node sidecar that `crowd` supervises. The terminal agent keeps running. Hooks are off in the SDK conversation (user, project and Crow's own), so SDK turns don't change the session's conversation pointer, status or notifications in Crow.
+- **One shared folder.** The SDK writes its transcript into the same `~/.claude/projects/` folder as the terminal agent. A session with no recorded conversation id yet falls back to that folder's newest transcript in Chat, which can be the SDK's.
+- **Streaming.** Replies stream in as they are written.
+- **Approvals and questions.** Tool approvals get an **Allow / Deny** card. `AskUserQuestion` gets the question card, answered through the SDK rather than by typing into a picker.
+- **Interrupt and End.** **Interrupt** stops the current turn. **End** stops the sidecar at once and closes any waiting card; the next message waits for the old sidecar to finish exiting (a few seconds at most), then resumes the same SDK conversation. Closing, completing or archiving the session stops its sidecar within 30 seconds.
+- **Where it runs.** Claude sessions only, and not review sessions. The SDK choice is remembered per browser, but it only applies where the spike runs; elsewhere Chat shows the transcript as usual.
+
+The events live in `crowd`'s memory, so a `crowd` restart starts a fresh log. The SDK still writes its own transcript under `~/.claude/projects/`, which `claude --resume <id>` opens in a terminal (hover the conversation notice for the id).
+
 ## Copy and Listen
 
 Each message has one or two small buttons. On a desktop they sit beside the message and show when you hover over it. On a phone they sit under the text. Their labels are never part of a text selection or of what Copy copies.

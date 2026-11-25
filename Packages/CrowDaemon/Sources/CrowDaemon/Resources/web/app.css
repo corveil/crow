@@ -2215,6 +2215,22 @@ select.text-prompt-input { cursor: pointer; }
   .chat-question-submit { padding: 10px 20px; font-size: 15px; }
 }
 .chat-status.waiting { color: var(--accent); }
+/* Agent SDK spike (chat-sdk.js, ADR 0033). Throwaway: delete with the spike. */
+.chat-msg.sdk-streaming .chat-msg-body { white-space: pre-wrap; }
+.chat-msg.sdk-streaming .chat-msg-body::after {
+  content: '▍'; margin-left: 1px; color: var(--accent);
+  animation: sdk-caret 1s steps(2, start) infinite;
+}
+@keyframes sdk-caret { to { visibility: hidden; } }
+.chat-question-submit.sdk-deny {
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.chat-question-submit.sdk-deny:hover { color: var(--text-primary); }
+.sdk-approval-input { max-height: 220px; }
+.chat-notice.error { color: var(--red); }
+.sdk-chat-action { margin-left: 8px; }
+.sdk-chat-intro { max-width: min(560px, 90%); text-align: center; }
 .chat-turn-end, .chat-notice {
   align-self: center;
   font-size: 11px; color: var(--text-muted);

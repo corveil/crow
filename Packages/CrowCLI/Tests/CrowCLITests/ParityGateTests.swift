@@ -363,6 +363,9 @@ struct ParityGateTests {
         // Manager answering a work session's question) is possible later.
         "answer-question",
         "batch-start-review",
+        // CROW-1524: the Agent SDK chat spike (ADR 0033), behind an env flag.
+        // Deleted with the spike, or given a verb by the follow-up epic.
+        "sdk-chat-input",
         "run-job",
         "run-setup",
         "set-config",

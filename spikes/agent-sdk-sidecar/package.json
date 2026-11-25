@@ -1,0 +1,15 @@
+{
+  "name": "crow-agent-sdk-sidecar",
+  "version": "0.0.0",
+  "private": true,
+  "description": "THROWAWAY SPIKE (CROW-1524, ADR 0033): runs one Crow session's chat turns on the Claude Agent SDK and speaks NDJSON to crowd over stdio.",
+  "type": "module",
+  "engines": { "node": ">=18.14.0" },
+  "scripts": {
+    "start": "node sidecar.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.332"
+  }
+}

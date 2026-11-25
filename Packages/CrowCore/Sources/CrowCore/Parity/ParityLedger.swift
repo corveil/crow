@@ -257,6 +257,23 @@ public enum ParityLedger {
             answers to a Claude `AskUserQuestion` into the TUI picker. In a \
             terminal the operator answers the picker itself.
             """),
+        // THROWAWAY SPIKE (CROW-1524, ADR 0033): Web Chat on the Claude Agent
+        // SDK, off unless crowd starts with CROW_AGENT_SDK_SPIKE. Delete both
+        // rows with the spike.
+        .read(
+            "get-sdk-chat-events",
+            noCLI: """
+            Feeds the web Chat view's Agent SDK spike (chat-sdk.js): one session's \
+            SDK conversation as chat events. A throwaway spike behind an env flag; \
+            the conversation's transcript is on disk like any Claude session's.
+            """),
+        .write(
+            "sdk-chat-input",
+            noCLI: """
+            The web Chat view's Agent SDK spike: sends a message, a tool approval or \
+            a question answer to the session's SDK sidecar. A throwaway spike behind \
+            an env flag; it is deleted, not given a verb, if the ADR says no.
+            """),
         .write("close-terminal", cli: "close-terminal"),
         .write("recreate-terminal", cli: "recreate-terminal"),
         .write("relaunch-agent", cli: "relaunch-agent"),
