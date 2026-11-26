@@ -511,6 +511,45 @@ deliberate, documented gaps (full grid in the
 > decision.
 > `--dangerously-skip-permissions` stays unused.
 
+> **Amendment (2026-11-25, CROW-1523):** Claude Code **2.1.327** changed what
+> counts as inside a working directory, and made
+> `permissions.blockReadsOutsideWorkingDirectories` ask about (and in auto
+> mode deny) more Bash commands. It also announced that an upcoming release
+> removes auto mode's local-classifier fallback. Re-checked on **2.1.332** with
+> a PTY pass in a private tmux server. Hooks were off, so no Crow session state
+> moved. The pass covered a `.job` worktree, a review clone under
+> `{devRoot}/crow-reviews/` and the Manager `{devRoot}`:
+>
+> 1. **Crow's defaults: no new ask or deny.** Read-tool calls on a sibling
+>    checkout, `$TMPDIR` and `$HOME` were accepted by the mode itself. In the
+>    Manager, the scaffolded bare `Read` allow accepted them. An outside
+>    `cat`, a `$TMPDIR` Write and `git -C <sibling>` were classifier or
+>    allow-rule accepts.
+> 2. **The CROW-1176 prompt is once per host.** The binary shows it only to an
+>    interactive auto-mode session whose `~/.claude.json` lacks
+>    `hasSeenAutoModeOutsideReadPrompt`. Allowing it sets that flag for every
+>    later session. Blocking it denies the call **and persists
+>    `blockReadsOutsideWorkingDirectories: true` to `~/.claude/settings.json`**.
+>    So one unattended session per host can stall on it, not every session.
+>    The first-time dialog wasn't redrawn live (the flag was already set, and
+>    a fresh config dir isn't signed in), and Crow doesn't flip the user's
+>    global flag to force it.
+> 3. **With the block setting on, change 2 is a new stall.** Read-tool calls
+>    outside are denied, and Crow's bare `Read` allow doesn't override that.
+>    Bash commands that name an outside path (`cat $HOME/…`,
+>    `cat $TMPDIR/…`, `git -C <sibling>`) get an ask dialog, even over a
+>    `Bash(git:*)` allow rule. With the operator's Claude sandbox on, `gh`
+>    can't read `~/.config/gh`. Crow can't pre-answer this honestly. The
+>    brittle-reject flags stay rejected, and so does any edit of the user's
+>    setting. The scoped follow-up warns when the setting is on
+>    ([#1527](https://github.com/corveil/crow/issues/1527)).
+> 4. **The fallback removal hasn't shipped** through 2.1.332. The CROW-1426
+>    `=0` re-check stays open until it does. 2.1.332 sessions behind Corveil
+>    still show server-classifier accepts.
+>
+> No launch change. `--permission-mode auto` stays the Claude Auto-permission
+> path, ⚠️ with the residuals above.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -690,10 +729,14 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   `codex_hooks`→`hooks`
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
   Claude's recap subagent (**≥ 2.1.108**), Claude's extra-workdir auto-mode
-  Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall; no silent bypass;
-  `--permission-prompts none` declined CROW-1215), Claude's gateway auto-mode
+  Read prompt (**≥ 2.1.257**, CROW-1176 — auto can stall, once per host; no
+  silent bypass; `--permission-prompts none` declined CROW-1215; with
+  `blockReadsOutsideWorkingDirectories` on, outside-path Bash asks ≥ 2.1.327,
+  CROW-1523), Claude's gateway auto-mode
   server check (**≥ 2.1.319**, CROW-1426 — no local fallback; Corveil forwards
-  it; gateway launch lines pin `CLAUDE_CODE_AUTO_MODE_SERVER=1`), Cursor `--auto-review`
+  it; gateway launch lines pin `CLAUDE_CODE_AUTO_MODE_SERVER=1`; `=0` re-check
+  pending the announced fallback removal, last checked 2.1.332 in CROW-1523),
+  Cursor `--auto-review`
   (documented run mode; declined CROW-1345 — approval-card stall, loses to a
   persisted Run Everything), Antigravity Auto mode (`agy` ≥ 1.3.5 via
   `--settings`, not `--mode`; wired CROW-1427),
