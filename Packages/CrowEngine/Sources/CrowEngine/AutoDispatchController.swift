@@ -170,12 +170,31 @@ public final class AutoDispatchController {
     }
 
     /// Route one batch. Internal for tests.
+    ///
+    /// Each request is tagged with its own workspace (``workspace(for:config:)``),
+    /// and a cold primary's dispatches stay inside that workspace: one spare or
+    /// fresh Manager per workspace, never one workspace's Manager for another's
+    /// issue. A tagged Manager uses its workspace's gateway and log sync, so
+    /// crossing workspaces would send one tenant's work through another's.
     func route(_ batch: [Request]) async -> [Dispatch] {
         let config = configProvider()
         let threshold = (config?.contextCompaction ?? ContextCompactionSettings()).effectiveMinContextTokens
         let primarySession = appState.sessions.first { $0.id == AppState.managerSessionID }
-        let spareSession = currentSpare()
-        let sources = [primarySession, spareSession].compactMap { session in
+
+        // Group by workspace, in arrival order. A nil key: none resolves.
+        var groups: [(workspaceID: UUID?, requests: [Request])] = []
+        for request in batch {
+            let id = config.flatMap { workspace(for: request, config: $0) }
+            if let i = groups.firstIndex(where: { $0.workspaceID == id }) {
+                groups[i].requests.append(request)
+            } else {
+                groups.append((id, [request]))
+            }
+        }
+        var spares: [UUID: Session] = [:]
+        for case let id? in groups.map(\.workspaceID) { spares[id] = currentSpare(workspaceID: id) }
+
+        let sources = ([primarySession] + spares.values.map { Optional($0) }).compactMap { session in
             session.flatMap { SessionContextReport.source(for: $0, appState: appState) }
         }
         let snapshots = sources.isEmpty ? [:] : await snapshotProvider(sources)
@@ -187,41 +206,48 @@ public final class AutoDispatchController {
         }
 
         let primaryWarmth = warmth(primarySession?.id)
-        let spare = spareSession.map { session in
-            AutoDispatchRouting.Spare(
-                id: session.id, warmth: warmth(session.id),
-                agentState: AgentReadiness.state(
-                    AgentStateReport.inputs(for: session, appState: appState, paneCommands: io.paneCommands()),
-                    now: at))
+        guard primaryWarmth?.coldAndLarge == true else {
+            return [sendLines(batch, to: AppState.managerSessionID, target: .primary)]
         }
-        let target = AutoDispatchRouting.target(primary: primaryWarmth, spare: spare)
         let why = snapshots[AppState.managerSessionID].map { snap in
             "tokens \(snap.0.tokens ?? 0), idle \(Int(snap.0.idleSeconds(now: at) ?? 0))s"
         } ?? ""
+        let paneCommands = io.paneCommands()
 
-        switch target {
-        case .primary:
-            return [sendLines(batch, to: AppState.managerSessionID, target: .primary)]
-        case .spare(let id):
-            CrowLog.automation("crow:auto: primary Manager is cold and large (\(why)); routing \(batch.count) dispatch(es) to \(spareSession?.name ?? id.uuidString)")
-            return [sendLines(batch, to: id, target: target)]
-        case .fresh:
-            guard let config, let workspaceID = workspaceForFresh(batch, config: config) else {
-                CrowLog.automation("crow:auto: primary Manager is cold and large (\(why)) but no workspace resolves for a new Manager; using the primary")
-                return [sendLines(batch, to: AppState.managerSessionID, target: .primary)]
+        var out: [Dispatch] = []
+        for (workspaceID, requests) in groups {
+            guard let workspaceID else {
+                CrowLog.automation("crow:auto: primary Manager is cold and large (\(why)) but no workspace resolves for \(requests.map(\.url).joined(separator: " ")); using the primary")
+                out.append(sendLines(requests, to: AppState.managerSessionID, target: .primary))
+                continue
             }
-            var out: [Dispatch] = []
-            for explore in [false, true] {
-                let group = batch.filter { $0.explore == explore }
-                guard !group.isEmpty else { continue }
-                let urls = group.map(\.url)
-                let name = Self.freshName(existing: Set(appState.managerSessions.map(\.name)))
-                let id = io.createManager(name, Self.freshPrompt(launchCommand(urls, explore)), workspaceID)
-                CrowLog.automation("crow:auto: primary Manager is cold and large (\(why)); started \(name) for \(urls.joined(separator: " "))")
-                out.append(Dispatch(requests: group, target: .fresh, sessionID: id))
+            let spareSession = spares[workspaceID]
+            let spare = spareSession.map { session in
+                AutoDispatchRouting.Spare(
+                    id: session.id, warmth: warmth(session.id),
+                    agentState: AgentReadiness.state(
+                        AgentStateReport.inputs(for: session, appState: appState, paneCommands: paneCommands),
+                        now: at))
             }
-            return out
+            switch AutoDispatchRouting.target(primary: primaryWarmth, spare: spare) {
+            case .primary:
+                out.append(sendLines(requests, to: AppState.managerSessionID, target: .primary))
+            case .spare(let id):
+                CrowLog.automation("crow:auto: primary Manager is cold and large (\(why)); routing \(requests.count) dispatch(es) to \(spareSession?.name ?? id.uuidString)")
+                out.append(sendLines(requests, to: id, target: .spare(id)))
+            case .fresh:
+                for explore in [false, true] {
+                    let group = requests.filter { $0.explore == explore }
+                    guard !group.isEmpty else { continue }
+                    let urls = group.map(\.url)
+                    let name = Self.freshName(existing: Set(appState.managerSessions.map(\.name)))
+                    let id = io.createManager(name, Self.freshPrompt(launchCommand(urls, explore)), workspaceID)
+                    CrowLog.automation("crow:auto: primary Manager is cold and large (\(why)); started \(name) for \(urls.joined(separator: " "))")
+                    out.append(Dispatch(requests: group, target: .fresh, sessionID: id))
+                }
+            }
         }
+        return out
     }
 
     /// Type one launch line per request into `sessionID`'s agent pane, as the
@@ -243,25 +269,25 @@ public final class AutoDispatchController {
         return Dispatch(requests: batch, target: target, sessionID: sessionID)
     }
 
-    /// The newest live extra Manager named like ``spareName``.
-    private func currentSpare() -> Session? {
+    /// The newest live extra Manager named like ``spareName`` and tagged with
+    /// `workspaceID`. A human-made Manager of the same name in that workspace
+    /// would be picked too; the name is the only marker, so it survives a
+    /// `crowd` restart.
+    private func currentSpare(workspaceID: UUID) -> Session? {
         appState.managerSessions
             .filter { $0.id != AppState.managerSessionID && Self.isSpareName($0.name) }
+            .filter { $0.managerWorkspaceTag == workspaceID }
             .filter { $0.status != .completed && $0.status != .archived }
             .max { $0.createdAt < $1.createdAt }
     }
 
-    /// `defaults.managerWorkspace`, else the workspace that claims the first
-    /// issue's repo. Nil when neither resolves: every extra Manager needs one
-    /// (CROW-1386).
-    private func workspaceForFresh(_ batch: [Request], config: AppConfig) -> UUID? {
-        if let id = try? ManagerWorkspaceTag.resolve(requested: nil, config: config).workspaceID {
-            return id
-        }
-        let claimed = batch.lazy.compactMap { config.workspace(forRepoSlug: $0.repo) }.first
-        return claimed.flatMap {
-            try? ManagerWorkspaceTag.resolve(requested: nil, context: $0.id.uuidString, config: config).workspaceID
-        }
+    /// The workspace a request's Manager is tagged with, in
+    /// ``ManagerWorkspaceTag``'s order: the workspace that claims the issue's
+    /// repo (context), else `defaults.managerWorkspace`. Nil when neither
+    /// resolves: every extra Manager needs one (CROW-1386).
+    private func workspace(for request: Request, config: AppConfig) -> UUID? {
+        let claimed = config.workspace(forRepoSlug: request.repo)?.id.uuidString
+        return try? ManagerWorkspaceTag.resolve(requested: nil, context: claimed, config: config).workspaceID
     }
 
     /// A fresh Manager's first prompt. It follows the workspace brief

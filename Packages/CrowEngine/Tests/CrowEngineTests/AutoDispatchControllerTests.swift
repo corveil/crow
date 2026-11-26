@@ -65,6 +65,11 @@ struct AutoDispatchRoutingTests {
 struct AutoDispatchControllerTests {
     let now = Date(timeIntervalSince1970: 2_000_000_000)
 
+    /// The default workspace; claims no repo.
+    let corveil = WorkspaceInfo(name: "corveil")
+    /// Claims `b/b`.
+    let radius = WorkspaceInfo(name: "radius", alwaysInclude: ["b/b"])
+
     final class Recorder {
         var sent: [(UUID, String)] = []
         var created: [(name: String, prompt: String, workspace: UUID)] = []
@@ -93,8 +98,8 @@ struct AutoDispatchControllerTests {
         appState.terminals[primary.id] = [terminal]
         configure(appState)
 
-        let workspace = WorkspaceInfo(name: "corveil")
-        var config = AppConfig(workspaces: [workspace])
+        let workspace = corveil
+        var config = AppConfig(workspaces: [corveil, radius])
         if defaultWorkspace { config.defaults.managerWorkspace = "corveil" }
         let recorder = Recorder()
         var snaps = extraSnapshots
@@ -114,7 +119,8 @@ struct AutoDispatchControllerTests {
                 paneCommands: { nil },
                 createManager: { name, prompt, workspaceID in
                     recorder.created.append((name, prompt, workspaceID))
-                    let session = Session(name: name, kind: .manager, agentKind: .claudeCode)
+                    var session = Session(name: name, kind: .manager, agentKind: .claudeCode)
+                    session.workspaceID = workspaceID
                     appState.sessions.append(session)
                     return session.id
                 }),
@@ -129,8 +135,58 @@ struct AutoDispatchControllerTests {
                        primaryTerminal: terminal, workspace: workspace)
     }
 
-    func request(_ n: Int, explore: Bool = false) -> AutoDispatchController.Request {
-        .init(url: "https://github.com/o/r/issues/\(n)", repo: "o/r", number: n, title: "t\(n)", explore: explore)
+    func request(_ n: Int, explore: Bool = false, repo: String = "o/r") -> AutoDispatchController.Request {
+        .init(url: "https://github.com/\(repo)/issues/\(n)", repo: repo, number: n, title: "t\(n)", explore: explore)
+    }
+
+    /// A live, idle `auto-dispatch` Manager tagged `workspaceID`.
+    @discardableResult
+    func addSpare(to appState: AppState, workspaceID: UUID) -> (Session, SessionTerminal) {
+        var spare = Session(name: "auto-dispatch", kind: .manager, agentKind: .claudeCode)
+        spare.harnessConversationID = "spare-conv"
+        spare.workspaceID = workspaceID
+        appState.sessions.append(spare)
+        let terminal = SessionTerminal(sessionID: spare.id, name: "auto-dispatch", cwd: "/dev", command: "claude")
+        appState.terminals[spare.id] = [terminal]
+        appState.terminalReadiness[terminal.id] = .agentLaunched
+        return (spare, terminal)
+    }
+
+    // MARK: Workspace isolation (review of #1530)
+
+    @Test func theIssuesClaimedWorkspaceBeatsTheDefault() async {
+        let f = fixture()
+        f.controller.enqueue(request(1, repo: "b/b"))
+        await f.controller.waitUntilDrained()
+        #expect(f.recorder.created.map(\.workspace) == [radius.id])
+    }
+
+    @Test func aBurstAcrossWorkspacesGetsOneManagerPerWorkspace() async {
+        let f = fixture()
+        f.controller.enqueue(request(1))
+        f.controller.enqueue(request(2, repo: "b/b"))
+        f.controller.enqueue(request(3))
+        await f.controller.waitUntilDrained()
+        #expect(f.recorder.created.map(\.workspace) == [corveil.id, radius.id])
+        #expect(f.recorder.routed.map { $0.requests.map(\.number) } == [[1, 3], [2]])
+    }
+
+    @Test func aSpareInAnotherWorkspaceIsNeverReused() async {
+        var spareTerminal: SessionTerminal?
+        let f = fixture { appState in spareTerminal = addSpare(to: appState, workspaceID: radius.id).1 }
+        f.controller.enqueue(request(1))  // o/r → the default, corveil
+        await f.controller.waitUntilDrained()
+        #expect(!f.recorder.sent.contains { $0.0 == spareTerminal?.id })
+        #expect(f.recorder.created.map(\.workspace) == [corveil.id])
+    }
+
+    @Test func withNoDefaultTheClaimedWorkspaceStillTagsTheManager() async {
+        let f = fixture(defaultWorkspace: false)
+        f.controller.enqueue(request(1, repo: "b/b"))
+        f.controller.enqueue(request(2))  // unclaimed, no default → primary
+        await f.controller.waitUntilDrained()
+        #expect(f.recorder.created.map(\.workspace) == [radius.id])
+        #expect(f.recorder.sent.map(\.0) == [f.primaryTerminal.id])
     }
 
     @Test func aWarmPrimaryGetsEveryLineAsBefore() async {
@@ -178,13 +234,8 @@ struct AutoDispatchControllerTests {
         var spareID = UUID()
         var spareTerminal: SessionTerminal?
         let f = fixture { appState in
-            var spare = Session(name: "auto-dispatch", kind: .manager, agentKind: .claudeCode)
-            spare.harnessConversationID = "spare-conv"
+            let (spare, terminal) = addSpare(to: appState, workspaceID: corveil.id)
             spareID = spare.id
-            appState.sessions.append(spare)
-            let terminal = SessionTerminal(sessionID: spare.id, name: "auto-dispatch", cwd: "/dev", command: "claude")
-            appState.terminals[spare.id] = [terminal]
-            appState.terminalReadiness[terminal.id] = .agentLaunched
             spareTerminal = terminal
         }
         f.controller.enqueue(request(7))
