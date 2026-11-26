@@ -444,7 +444,7 @@ The settings behind **Settings → Automation**, editable there or from the CLI 
 | `autoRespond.autoRebaseAndResolveConflicts`  | `false` | Conflicted PRs (rebase + `--force-with-lease` push)              |
 | `autoRespond.autoReRequestReview`            | `true`  | Changes-requested PRs whose fix has landed (re-adds the reviewers) |
 | `contextCompaction.autoCompact`              | `false` | Idle, large Claude Code sessions (types `/compact` before the prompt cache expires) |
-| `contextCompaction.minContextTokens`         | `200000` | Which sessions count as large (compaction, and the sidebar's debug-mode context badge) |
+| `contextCompaction.minContextTokens`         | `200000` | Which sessions count as large (compaction, the sidebar's debug-mode context badge, and `crow:auto` routing away from a cold primary Manager) |
 | `contextCompaction.idleMinutes`              | `50`    | How long after its last model call a session is compacted          |
 
 **Live — no `crowd` restart.** The daemon re-reads `config.json` rather than holding a snapshot: `applyConfigToAppState` runs each board tick, the watcher gates are closures that reload config on every call, and `AutoRespondCoordinator` takes a settings closure. So a change is picked up within about a minute. The "applies to" column is about *scope*, not latency — a permission-mode change reaches the next session you launch, not the ones already running.

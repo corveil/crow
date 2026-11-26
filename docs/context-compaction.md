@@ -78,7 +78,7 @@ Turn it on if your sessions are mostly long-lived Managers and work sessions tha
 | Key | Default | Meaning |
 | --- | ------- | ------- |
 | `contextCompaction.autoCompact` | `false` | Turn compaction on |
-| `contextCompaction.minContextTokens` | `200000` | Sessions at or above this size are compacted and shown as large (10,000–10,000,000) |
+| `contextCompaction.minContextTokens` | `200000` | Sessions at or above this size are compacted and shown as large (10,000–10,000,000). A large, cold primary Manager also sends `crow:auto` dispatches to an extra Manager ([automation](automation.md#211--auto-create-workspace-on-crowauto--crowexplore-label), CROW-1501) |
 | `contextCompaction.idleMinutes` | `50` | Minutes since the last model call before compacting (1–1,440) |
 
 With Claude Code's 1-hour cache, the default 50 minutes leaves ten minutes of margin. A session whose transcript records a 5-minute cache is only compacted if `idleMinutes` is under 5.
