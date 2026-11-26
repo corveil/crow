@@ -205,7 +205,9 @@ public struct OpenAICodexAgent: CodingAgent {
             // `Esc`. The startup-prompt watch answers `n` (start fresh), so a
             // restart still lands on a fresh composer (CROW-1425,
             // `CodexStartupNotices`). This applies to the `.job` / `.review`
-            // restarts below as well.
+            // restarts below as well. From 0.168.0 / 0.169.0 there is no
+            // notice: the resume errors and Codex exits 0 to the shell
+            // (CROW-1521; see `CodexThreadProvider`).
             // No env prefix (Codex has no OTEL equivalent), and no `--rc` —
             // Codex ships no such flag, so `remoteControlEnabled` never changes
             // the launch text even though `supportsRemoteControl` is `true`
