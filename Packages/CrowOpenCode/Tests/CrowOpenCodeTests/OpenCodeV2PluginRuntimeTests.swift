@@ -320,9 +320,10 @@ struct OpenCodeV2PluginRuntimeTests {
     }
 
     @Test func nonShellAndUnknownBackgroundKindsHoldDone() throws {
-        // `codemode` / `image` report back and wake the session; a kind added
-        // later is assumed to as well — never Stop on doubt.
-        for kind in ["codemode", "image", "something-new"] {
+        // `codemode` / `image` / `video` (2.4.0, CROW-1522) report back and
+        // wake the session; a kind added later is assumed to as well — never
+        // Stop on doubt.
+        for kind in ["codemode", "image", "video", "something-new"] {
             let names = try run(events: """
             [
               { type: "session.created", data: { sessionID: "ses_root" } },
@@ -413,6 +414,71 @@ struct OpenCodeV2PluginRuntimeTests {
             #expect(!names.contains("Stop"), "ending \(ending)")
             #expect(cardState(after: names) == .working)
         }
+    }
+
+    // MARK: - Automations (CROW-1522, OpenCode ≥ 2.4.0)
+
+    @Test func videoJobHoldsUntilItsNoticeWakesTheRoot() throws {
+        // 2.4.0's `generate_video` returns at once and runs as a background
+        // job; its completion notice wakes the root, and that turn's ending is
+        // the one `Stop`.
+        let names = try run(events: """
+        [
+          { type: "session.created", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [
+            { kind: "video", sessionID: "ses_root", path: "/tmp/videos/ses_root/vid_1.mp4" },
+          ] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        ]
+        """)
+        #expect(Array(names.prefix(4)) == ["SessionStart", "UserPromptSubmit", "UserPromptSubmit", "Stop"])
+        #expect(names.filter { $0 == "Stop" }.count == 1)
+    }
+
+    @Test func automationRunChildNeverHoldsTheRoot() throws {
+        // An automation's `{ subagent }` run is a `ses_aut_*` child of the
+        // creating session that reports to no one. The root's failed or
+        // interrupted ending (decided by child tracking, not the hook) must
+        // still be `Stop`: no report will ever wake the root to release it.
+        for ending in [
+            #"{ type: "session.execution.failed", data: { sessionID: "ses_root", error: { type: "x", message: "boom" } } }"#,
+            #"{ type: "session.execution.interrupted", data: { sessionID: "ses_root", reason: "user" } }"#,
+        ] {
+            let names = try run(events: """
+            [
+              { type: "session.created", data: { sessionID: "ses_root" } },
+              { type: "session.execution.started", data: { sessionID: "ses_root" } },
+              { type: "session.created", data: { sessionID: "ses_aut_01J_1", parentID: "ses_root" } },
+              { type: "session.execution.started", data: { sessionID: "ses_aut_01J_1" } },
+              \(ending),
+            ]
+            """)
+            #expect(names.filter { $0 == "Stop" }.count == 1, "ending \(ending)")
+            #expect(names.filter { $0 == "UserPromptSubmit" }.count == 1, "ending \(ending)")
+            #expect(cardState(after: names) == .done)
+        }
+    }
+
+    @Test func automationPromptAfterDoneReopensThenEndsAgain() throws {
+        // An automation that prompts the creating session wakes a root Crow
+        // already parked on `.done`. The plugin reports it as it is — a new
+        // turn, then a new ending — and does not hide the extra work.
+        let names = try run(events: """
+        [
+          { type: "session.created", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+          { type: "session.execution.started", data: { sessionID: "ses_root" } },
+          { hook: "experimental.idle", data: { sessionID: "ses_root", background: [] } },
+          { type: "session.execution.succeeded", data: { sessionID: "ses_root" } },
+        ]
+        """)
+        #expect(Array(names.prefix(5)) == ["SessionStart", "UserPromptSubmit", "Stop", "UserPromptSubmit", "Stop"])
     }
 
     @Test func malformedIdleReportFallsBackWithoutBreakingTheBridge() throws {
