@@ -518,7 +518,9 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
     ///     cleared on every `execution.started`, so only a report from *this*
     ///     execution counts. A fresh report decides a `succeeded`: any entry
     ///     other than `kind: "shell"` holds `Stop` (an unknown future kind holds
-    ///     too). Shells are excluded on purpose, like upstream's own TUI "done"
+    ///     too). That includes 2.4.0's `video` (CROW-1522): a video job is
+    ///     finite (the provider poll gives up 2h after submission), a restart
+    ///     re-tracks it, and its notice wakes the session. Shells are excluded on purpose, like upstream's own TUI "done"
     ///     (`feature-plugins/system/notifications.ts`): a dev server or watcher
     ///     never finishes, so counting it would hold the card on working forever.
     ///  2. **Tracked children (fallback, stable events only).** A child counts
@@ -527,7 +529,9 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
     ///     not report — `failed` and `interrupted` (the hook skips both; on
     ///     2.3.0 Escape no longer cancels children), a `succeeded` with no fresh
     ///     report (hook missing, renamed, or the plugin reloaded mid-turn) — and
-    ///     holds `Stop` while any tracked child is running.
+    ///     holds `Stop` while any tracked child is running. An automation's
+    ///     `ses_aut_*` run child is never tracked: it reports to no one, so
+    ///     nothing would release the hold (CROW-1522).
     ///
     /// A held ending emits nothing: the card stays where the turn left it
     /// (working, or `.waiting` on a child's permission prompt). The child's
@@ -660,9 +664,15 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
             const idleReports = new Map();
             // Shells never finish when they are a dev server or a watcher, so
             // they don't hold the card (upstream's own TUI "done" skips them
-            // too). Every other kind — subagent, codemode, image, or one added
-            // later — reports back and wakes the session.
+            // too). Every other kind — subagent, codemode, image, video (2.4.0,
+            // bounded by the provider's 2h deadline), or one added later —
+            // reports back and wakes the session.
             const holdsDone = (work) => !work || work.kind !== "shell";
+            // An automation's `{ subagent }` run (OpenCode >= 2.4.0) is a child
+            // `ses_aut_*` session that finishes quietly: it never reports to
+            // or wakes its parent (`Automation.isRunSession`). Counting it as
+            // running would hold a root ending that no later turn releases.
+            const automationRun = (id) => typeof id === "string" && id.startsWith("ses_aut_");
 
             // `experimental.idle` runs inside the drain just before a session
             // goes idle, before `session.execution.succeeded` is published. It
@@ -706,7 +716,7 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
                     roots.set(data.sessionID, false);
                     // A background subagent is working from creation: its own
                     // `execution.started` can trail the parent's ending.
-                    if (data.sessionID) runningChildren.add(data.sessionID);
+                    if (data.sessionID && !automationRun(data.sessionID)) runningChildren.add(data.sessionID);
                     break;
                   }
                   roots.set(data.sessionID, true);
@@ -719,7 +729,7 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
                   idleReports.delete(data.sessionID);
                   if (await isRoot(data.sessionID)) {
                     await emit(cwd, "UserPromptSubmit");
-                  } else if (data.sessionID) {
+                  } else if (data.sessionID && !automationRun(data.sessionID)) {
                     runningChildren.add(data.sessionID);
                   }
                   break;
