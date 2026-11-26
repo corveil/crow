@@ -241,6 +241,7 @@ The `crow send` command writes text to the terminal. Newlines in the text are co
 
 - `agent_state` (on `get-session` and `list-sessions`): `starting` (launched, no hook yet), `idle` (ready for input), `working`, `waiting_permission`, `exited`; `null` without an agent terminal. `last_prompt_at` is the last `UserPromptSubmit`.
 - After `create-manager` or a relaunch, don't sleep or grep transcripts: `crow wait --until idle`, or `crow send --wait-ready` to paste only once the agent is idle. `--wait-ack` reports whether the agent picked the text up (`accepted`), and exits non-zero with `accepted: false` on timeout. Both flags need `--terminal` to be `agent_terminal_id`.
+- Sending to the agent terminal of a session whose `context` is `large` and `cache_expired` still sends, then prints `crow: warning: sent into a cold session: …` on stderr with the token count (CROW-1499). stdout stays pure JSON. Before waking a big idle session, check `context` in `get-session` and ask whether the message is worth a full cache rebuild.
 
 ## Maintenance Commands
 

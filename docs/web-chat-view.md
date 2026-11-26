@@ -112,3 +112,9 @@ In Chat view, the session header's **Agent** row shows the model and how full it
 - **Used tokens** come from the latest main-conversation model call: `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`.
 - **The window** comes from Codex's own `model_context_window`, or from a small model table (`ChatContextWindow`). Every current Claude 5.x model reports 1,000,000 (checked against Claude Code's own `result.modelUsage[*].contextWindow`); Claude 3 and 4 models default to 200,000.
 - For a model the table doesn't know, the row shows "N tokens" with no percentage rather than guess.
+
+## Cold-cache notice
+
+When the session's context is large and its prompt cache has likely expired (`context.large` and `context.cache_expired` on [`list-sessions`](context-compaction.md#seeing-it)), a one-line amber notice sits above the composer: *Prompt cache expired (idle 3h 2m): the next message re-writes all 704k tokens of context.* Hover for the exact count and the cache lifetime. Sending a message rebuilds the whole context at the cache-write price instead of reading it at the cache-read price, so this is the moment to decide whether the message is worth it, or whether a fresh session would do.
+
+The notice only informs: **Send** works as always. It hides once you send, until the transcript records a newer model call, and it shows whether or not Debug mode is on (unlike the sidebar's context badge). Token counts only, no price (CROW-1499). It doesn't show in the Agent SDK spike, whose sidecar is a different conversation, or in the terminal, where keystrokes go straight to tmux.

@@ -232,6 +232,13 @@ function ensureChatDom() {
   status.id = 'chat-status';
   view.appendChild(status);
 
+  // Cold-cache notice (CROW-1499), right above the composer.
+  const cold = el('div', 'chat-cold');
+  cold.id = 'chat-cold';
+  cold.setAttribute('role', 'note');
+  cold.hidden = true;
+  view.appendChild(cold);
+
   const form = el('form', 'chat-composer');
   form.id = 'chat-composer';
   const input = document.createElement('textarea');
@@ -1226,6 +1233,7 @@ function renderChatStatus(stArg) {
   const hasTarget = !!(st && (st.sdk ? st.supported : st.terminalId));
   if (send) send.disabled = !hasTarget || chatSending;
   if (input) input.disabled = !hasTarget;
+  renderChatColdNotice(st);
   if (!st) return;
   renderChatMeta(st);
   if (!st.supported || (st.reason && st.cursor == null)) {
@@ -1274,6 +1282,9 @@ async function sendChatMessage() {
     closeChatMenu();
     pushChatHistory(st, text);
     st.histPos = null;
+    // The rebuild this message pays for is underway; the notice has said its piece.
+    const c = chatColdContext(st);
+    if (c) st.coldSentAt = c.last_request_at || '';
     chatDrafts.delete(st.sessionId);
     const log = document.getElementById('chat-log');
     if (log) log.scrollTop = log.scrollHeight;
@@ -1285,6 +1296,50 @@ async function sendChatMessage() {
     chatSending = false;
     renderChatStatus();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cold-cache notice (CROW-1499). A session whose context is large
+// (`context.large`) and whose prompt cache has likely expired
+// (`context.cache_expired`, both from `list-sessions`, CROW-1493) re-writes its
+// whole context on the next message instead of reading it from the cache. The
+// notice names the token count above the composer. It only informs: Send stays
+// one action. Token counts only, no price: the repo has no price table.
+//
+// Shown whatever Debug mode says, unlike the sidebar badge (CROW-1515): that
+// badge is diagnostics; this is the one moment the cost can still be avoided.
+// Not for the SDK spike, whose sidecar is a different conversation.
+// ---------------------------------------------------------------------------
+function chatColdContext(st) {
+  if (!st || st.sdk || typeof sessions === 'undefined' || !Array.isArray(sessions)) return null;
+  const s = sessions.find((x) => x.id === st.sessionId);
+  const c = s && s.context;
+  if (!c || c.large !== true || c.cache_expired !== true || c.tokens == null) return null;
+  return c;
+}
+
+function renderChatColdNotice(st) {
+  const box = document.getElementById('chat-cold');
+  if (!box) return;
+  const c = chatColdContext(st);
+  // After a send, stay quiet until the transcript records a newer model call:
+  // the session list lags the send by a poll or two.
+  const sent = c && st.coldSentAt != null && st.coldSentAt === (c.last_request_at || '');
+  if (!c || sent) {
+    box.hidden = true;
+    box.textContent = '';
+    return;
+  }
+  const idle = c.idle_seconds != null && typeof formatIdle === 'function'
+    ? ' (idle ' + formatIdle(c.idle_seconds) + ')' : '';
+  const text = 'Prompt cache expired' + idle + ': the next message re-writes all '
+    + formatChatTokens(c.tokens) + ' tokens of context.';
+  if (box.textContent !== text) box.textContent = text;
+  box.title = c.tokens.toLocaleString() + ' tokens'
+    + (c.max_tokens ? ' of ' + c.max_tokens.toLocaleString() : '')
+    + '. The cache lasts ' + (c.cache_ttl_seconds ? formatIdle(c.cache_ttl_seconds) : 'a while')
+    + ' after the last model call; past that, the whole context is written to it again.';
+  box.hidden = false;
 }
 
 // ---------------------------------------------------------------------------

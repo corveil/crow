@@ -154,7 +154,10 @@ public struct Send: ParsableCommand {
             on timeout. --wait-ack waits after the paste until the agent picks the text up \
             (agent_state moves to working, or last_prompt_at changes) and reports \
             "accepted"; it exits non-zero with "accepted": false on timeout. Both need \
-            --terminal to be the session's agent terminal (agent_terminal_id in get-session).
+            --terminal to be the session's agent terminal (agent_terminal_id in get-session). \
+            Sending to the agent terminal of a session whose context is large and whose prompt \
+            cache has expired (context.large and context.cache_expired in get-session) prints a \
+            warning on stderr; the text is still sent and stdout is unchanged.
             """)
     @Option(name: .long, help: "Session UUID") var session: String
     @Option(name: .long, help: "Terminal UUID") var terminal: String
@@ -191,11 +194,20 @@ public struct Send: ParsableCommand {
             }
             before = snap
         }
+        // Read before the send: once the agent starts the turn, the cache is
+        // being rebuilt and `context` stops reading cold. Best effort: a
+        // failed read never blocks the send, and a slow one waits 5s at most.
+        let contextSnap = before ?? (try? rpc(
+            "get-session", params: ["session_id": .string(session)], timeoutSeconds: 5
+        )).map(AgentWait.Snapshot.init)
         var result = try rpc("send", params: [
             "session_id": .string(session),
             "terminal_id": .string(terminal),
             "text": .string(text),
         ])
+        if let contextSnap, let message = ColdCacheWarning.message(for: contextSnap, terminal: terminal) {
+            warn(message)
+        }
         guard waitAck, let before else {
             printJSON(result)
             return

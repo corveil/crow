@@ -59,7 +59,7 @@ window.requestAnimationFrame = () => 0;
 const realGet = window.document.getElementById.bind(window.document);
 window.document.getElementById = (id) => realGet(id)
   || (['chat-view', 'chat-log', 'chat-status', 'chat-send', 'chat-input', 'chat-jump',
-    'chat-menu', 'chat-meta'].includes(id)
+    'chat-menu', 'chat-meta', 'chat-cold'].includes(id)
     ? null : window.document.createElement('div'));
 
 const ctx = dom.getInternalVMContext();
@@ -519,6 +519,60 @@ check('no driver UI is rendered', !doc.querySelector('[id="chat-driver"]') && !d
   check('a rebuilt header refills the meter from chat state', !rebuilt.hidden && rebuilt.textContent.includes('tokens'));
   check('model names', T.formatChatModel('claude-haiku-5-5') === 'Haiku 5.5' && T.formatChatModel('gpt-5.5') === 'gpt-5.5');
   check('token formatting', T.formatChatTokens(999) === '999' && T.formatChatTokens(1500) === '1.5k' && T.formatChatTokens(1000000) === '1M');
+
+  console.log('cold-cache notice (CROW-1499)');
+  {
+    const cold = doc.querySelector('[id="chat-cold"]');
+    const composer = doc.querySelector('[id="chat-composer"]');
+    check('notice sits right above the composer', cold && cold.nextElementSibling === composer);
+    const ctxOf = (over) => Object.assign({ tokens: 704312, max_tokens: 1000000, large: true,
+      cache_expired: true, idle_seconds: 3 * 3600 + 120, cache_ttl_seconds: 3600,
+      last_request_at: '2026-11-25T10:00:00Z' }, over);
+    const stc = T.newChatState('COLD-1');
+    T.chatState = stc;
+    const page = (n) => T.applyChatPage(stc, { supported: true, reset: n === 1, cursor: n, path: '/c.jsonl',
+      terminal_id: 'TERM', events: [] });
+    T.sessions = [{ id: 'COLD-1', context: ctxOf({}) }];
+    page(1);
+    check('large + expired shows the notice with the token count', !cold.hidden
+      && cold.textContent === 'Prompt cache expired (idle 3h 2m): the next message re-writes all 704k tokens of context.');
+    check('it does not block Send', doc.getElementById('chat-send').disabled === false);
+    T.sessions = [{ id: 'COLD-1', context: ctxOf({ cache_expired: false }) }];
+    page(2);
+    check('a warm cache hides it', cold.hidden && cold.textContent === '');
+    T.sessions = [{ id: 'COLD-1', context: ctxOf({ large: false, tokens: 42000 }) }];
+    page(3);
+    check('a small session never shows it', cold.hidden);
+    T.sessions = [{ id: 'COLD-1', context: ctxOf({ cache_expired: null }) }];
+    page(4);
+    check('an unknown cache state shows nothing', cold.hidden);
+    T.sessions = [{ id: 'COLD-1', context: null }];
+    page(5);
+    check('no context shows nothing', cold.hidden);
+    T.sessions = [{ id: 'OTHER', context: ctxOf({}) }];
+    page(6);
+    check('another session\'s context is not this one\'s', cold.hidden);
+    // A send pays the rebuild; the notice stays quiet until a newer call lands.
+    T.sessions = [{ id: 'COLD-1', context: ctxOf({}) }];
+    page(7);
+    calls.length = 0;
+    T.rpc = async (m, p) => { calls.push([m, p]); return {}; };
+    doc.getElementById('chat-input').value = 'go';
+    await T.sendChatMessage();
+    check('the send goes through as one action', calls.some(([m, p]) => m === 'send' && p.text === 'go\n'));
+    check('after sending, the notice hides', cold.hidden);
+    page(8);
+    check('…and stays hidden while the session list lags', cold.hidden);
+    T.sessions = [{ id: 'COLD-1', context: ctxOf({ last_request_at: '2026-11-25T15:00:00Z' }) }];
+    page(9);
+    check('a later expiry warns again', !cold.hidden);
+    const sdkSt = T.newChatState('COLD-1', true);
+    T.chatState = sdkSt;
+    T.applyChatPage(sdkSt, { supported: true, reset: true, cursor: 1, events: [] });
+    check('not for the SDK spike', cold.hidden);
+    T.sessions = [];
+    T.rpc = pending;
+  }
 
   console.log('file drop into the composer (#1390)');
   const uploads = [];
