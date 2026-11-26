@@ -270,4 +270,105 @@ struct CodexStartupNoticesTests {
         #expect(CodexStartupNotices.Screen.providerNotice.isLastStartupScreen)
         #expect(!CodexStartupNotices.Screen.modelMigration.isLastStartupScreen)
     }
+
+    // MARK: codex-cli 0.172.0 re-check (CROW-1521)
+    //
+    // Verbatim `capture-pane -p` captures from codex-cli 0.172.0 (TUI
+    // workspace on by default), inline (`--no-alt-screen`, `alternate_on=0`)
+    // in a private tmux server, scratch `CODEX_HOME`. Paths shortened.
+
+    /// The migration screen on a `.job`-shaped launch (`-a never -s
+    /// workspace-write` plus the eval'd prompt), 160 columns. Byte-identical
+    /// rows to 0.166.0, including at 50 columns and on `resume --last`.
+    static let migrationScreen0172 = """
+
+          Meet Crow New. It is better.
+
+        › 1. Try new model
+          2. Use existing model
+
+          enter/esc confirm · ⌃c quit
+
+
+
+
+
+        """
+
+    /// A running 0.172.0 session: the composer's hint row now carries the
+    /// workspace's `← for agents` and, because every Crow launch passes `-c`
+    /// (embedded mode), a startup-warning badge. Neither is a startup screen.
+    static let composer0172 = """
+          >_ OpenAI Codex (v0.172.0)
+             /tmp/repro/proj
+
+          Tip: Use the desktop app. Run codex app to open it. It installs automatically if needed.
+
+        › Job prompt: list files with ls && report.
+
+        • Reconnecting... waiting for network (5s • esc to interrupt)
+          └ Connection failed: error sending request
+
+        › Ask Codex to do anything
+
+          Crow Old default · /tmp/repro/proj · Job prompt: list files with ls && report.
+          ← for agents · ? for shortcuts                                                                                                       ⚠ 1 warning · f2 to view
+        """
+
+    /// The workspace's "Agent command center", opened by `←` on an empty
+    /// composer. Its `n new` / `enter open` keys must never be pressed by the
+    /// watch.
+    static let commandCenter0172 = """
+          Agent command center  Group: Project  g
+           All 1   Needs you 0   Working 1   Ready 0   Inactive 0                                                                                      tab/⇧tab filter
+          ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+              Tasks                                                                                   Status         Updated  │ Task details
+          /tmp/repro/proj/  1                                                                                                 │
+          › ● say hi                                                                                  Working        43s ago  │ say hi
+                                                                                                                              │ ● Working
+
+          ? help  esc back  ↑/↓ move  enter open  n new
+        """
+
+    @Test func migrationScreenUnchangedOn0172() {
+        #expect(CodexStartupNotices.response(toScreen: Self.migrationScreen0172)
+            == .answer(keys: ["2", "Enter"], screen: .modelMigration))
+    }
+
+    @Test func workspaceSurfacesOn0172AreIgnored() {
+        #expect(CodexStartupNotices.response(toScreen: Self.composer0172) == nil)
+        #expect(CodexStartupNotices.response(toScreen: Self.commandCenter0172) == nil)
+    }
+
+    /// From 0.168.0 (routing on) and 0.169.0 (routing off) a cross-provider
+    /// `resume --last` no longer opens the `🔒` notice. Codex prints the error
+    /// and exits 0, and the pane is back at the shell. The watch must not
+    /// press `n` (or anything) into that shell. Captures from 0.172.0.
+    @Test func crossProviderResumeErrorOn0168PlusIsNotAnswered() {
+        let routingOn = """
+              >_ OpenAI Codex (v0.172.0)
+                 /tmp/repro/proj
+
+              Resuming session…
+
+            › Error: Failed to resume session from /tmp/repro/home/sessions/2026/11/25/rollout-2026-11-25T19-58-02-01a2155c-095c-7030-b576-4624ddd8b77
+            b.jsonl: thread/resume failed during TUI bootstrap: thread/resume failed: failed to load configuration: Cannot change this thread's model provider from `dummy`
+            to `dummy2` on resume. (code -32600)
+            %
+            """
+        let routingOff = """
+              >_ OpenAI Codex (v0.172.0)
+                 /tmp/repro/proj2
+
+              Resuming session…
+
+            › Error: account/gatewayOAuth/read failed: This chat uses model provider “crow-corveil”, which is no longer configured. Restore this provider’s configuration to
+             continue. (code -32600), data: {"type":"modelProviderNotConfigured","modelProvider":"crow-corveil"}
+
+              ? for shortcuts
+            %
+            """
+        #expect(CodexStartupNotices.response(toScreen: routingOn) == nil)
+        #expect(CodexStartupNotices.response(toScreen: routingOff) == nil)
+    }
 }

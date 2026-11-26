@@ -46,6 +46,13 @@ import CrowCore
 /// 0.166 outcome, a fresh TUI (`CodexStartupNotices`, screen 3). One
 /// difference remains: 0.166 could fall back to an older same-provider thread
 /// in that cwd, and 0.167 starts fresh instead.
+///
+/// From 0.168.0 / 0.169.0 that recovery is gone (CROW-1521): a cross-provider
+/// resume fails before the notice ("Cannot change this thread's model
+/// provider", or `modelProviderNotConfigured`) and Codex exits 0 to the shell.
+/// The by-id gate here still prevents it for Managers. `resume --last` is
+/// ungated, so a restart after a routing toggle lands on a shell prompt until
+/// it gets the same gate.
 public enum CodexThreadProvider {
     /// Codex's built-in provider id, used when `config.toml` names none.
     /// Rollouts recorded without a `model_provider` override carry `"openai"`.

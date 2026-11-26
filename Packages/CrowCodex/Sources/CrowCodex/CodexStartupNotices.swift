@@ -46,6 +46,13 @@ import Foundation
 ///    TUI instead. The daemon answers `n` (start fresh), which restores that
 ///    outcome. `c` is not used: it fills the new composer with a draft built
 ///    from the old transcript, and a later `crow send` would be appended to it.
+///    **0.167.x only.** From 0.168.0 (provider override) and 0.169.0 (saved
+///    provider no longer configured) the resume fails before the notice:
+///    Codex prints the error and exits 0 to the shell, so there is nothing to
+///    answer (CROW-1521, `ConfigManager::load_for_resume` upstream).
+///
+/// Re-checked on 0.172.0 with the default-on TUI workspace (CROW-1521):
+/// screens 1 and 2 are unchanged, and the workspace draws nothing at startup.
 ///
 /// Every value here is free of `"`, because prompt-seeded launches sit inside
 /// `eval "…"` (`ShellLaunchArgs.evalPromptLaunch`).
