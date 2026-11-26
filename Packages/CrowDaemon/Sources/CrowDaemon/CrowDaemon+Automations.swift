@@ -139,23 +139,40 @@ extension CrowDaemon {
             appState.sessions.first(where: { $0.id == id })?.name ?? "session"
         }
 
-        // crow:auto — run /crow-workspace on the Manager for a newly-labeled
-        // assigned issue (the tracker strips the label after, so once-only).
+        // crow:auto — run /crow-workspace for a newly-labeled assigned issue
+        // (the tracker strips the label after, so once-only). Usually on the
+        // primary Manager; when its context is large and its prompt cache has
+        // expired, on an extra `auto-dispatch` Manager instead, so the dispatch
+        // doesn't pay to rebuild the primary's cache (CROW-1501).
+        let autoDispatch = AutoDispatchController(
+            appState: appState,
+            configProvider: { config() },
+            launchCommand: { urls, explore in workspaceLaunchCommand(urls: urls, explore: explore) },
+            io: AutoDispatchController.IO(
+                send: { terminal, text in TerminalRouter.send(terminal, text: text) },
+                paneCommands: { TerminalRouter.paneCurrentCommands() },
+                createManager: { name, prompt, workspaceID in
+                    sessionService.createManagerSession(
+                        name: name, cwd: devRoot, initialPrompt: prompt, workspaceID: workspaceID)
+                }),
+            onRouted: { dispatch in
+                // A dropped dispatch (no Manager terminal) announces nothing, as before.
+                guard let target = dispatch.sessionID else { return }
+                let onPrimary = target == AppState.managerSessionID
+                for request in dispatch.requests {
+                    // No session exists yet — key the notification on the issue URL.
+                    notify(.autoWorkspaceCreated, key: request.url,
+                           title: request.explore
+                            ? "Auto-creating exploration — \(request.repo)"
+                            : "Auto-creating workspace — \(request.repo)",
+                           body: "#\(request.number): \(request.title)"
+                            + (onPrimary ? "" : " (on \(sessionName(target)))"))
+                }
+            })
         tracker.onAutoCreateRequest = { issue, kind in
-            guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
-                log("crow:auto: Manager terminal not ready; dropped \(issue.url)")
-                return
-            }
-            TerminalRouter.send(
-                managerTerminal,
-                text: workspaceLaunchCommand(urls: [issue.url], explore: kind == .explore))
-            // No session exists yet — key the notification on the issue URL.
-            let exploring = kind == .explore
-            notify(.autoWorkspaceCreated, key: issue.url,
-                   title: exploring
-                    ? "Auto-creating exploration — \(issue.repo)"
-                    : "Auto-creating workspace — \(issue.repo)",
-                   body: "#\(issue.number): \(issue.title)")
+            autoDispatch.enqueue(.init(
+                url: issue.url, repo: issue.repo, number: issue.number, title: issue.title,
+                explore: kind == .explore))
         }
 
         // Auto-respond to PR transitions (changes-requested / checks-failing) and

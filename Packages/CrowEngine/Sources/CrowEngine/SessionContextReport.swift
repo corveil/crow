@@ -90,6 +90,30 @@ public enum SessionContextReport {
         return out
     }
 
+    /// The two flags automation gates on (CROW-1501), defined once so a gate
+    /// and the `context` JSON can't disagree.
+    public struct Warmth: Sendable, Equatable {
+        /// `cache_expired`: nil when the lifetime or last call is unknown.
+        public var cacheExpired: Bool?
+        /// `large`: tokens ≥ the configured threshold.
+        public var large: Bool
+
+        public init(cacheExpired: Bool?, large: Bool) {
+            self.cacheExpired = cacheExpired
+            self.large = large
+        }
+
+        /// The next message would re-write a large context at the cache-write
+        /// price. Unknown expiry counts as warm: a gate never acts on a guess.
+        public var coldAndLarge: Bool { cacheExpired == true && large }
+    }
+
+    /// `cache_expired` and `large` for a snapshot, nil when there is none.
+    public static func warmth(_ snap: ContextSnapshot?, largeThreshold: Int, now: Date = Date()) -> Warmth? {
+        guard let snap else { return nil }
+        return Warmth(cacheExpired: snap.cacheLikelyExpired(now: now), large: (snap.tokens ?? 0) >= largeThreshold)
+    }
+
     /// The JSON object, or `null` when nothing was found.
     ///
     /// - `tokens`: prompt tokens of the latest model call (after a compaction
@@ -104,7 +128,8 @@ public enum SessionContextReport {
     public static func json(
         _ hit: (ContextSnapshot, Located)?, largeThreshold: Int, now: Date = Date()
     ) -> JSONValue {
-        guard let snap = hit?.0 else { return .null }
+        guard let snap = hit?.0,
+              let warmth = warmth(snap, largeThreshold: largeThreshold, now: now) else { return .null }
         let fmt = ISO8601DateFormatter()
         func opt(_ v: Int?) -> JSONValue { v.map { .int($0) } ?? .null }
         return .object([
@@ -114,8 +139,8 @@ public enum SessionContextReport {
             "last_request_at": snap.lastRequestAt.map { .string(fmt.string(from: $0)) } ?? .null,
             "idle_seconds": opt(snap.idleSeconds(now: now).map { Int($0) }),
             "cache_ttl_seconds": opt(snap.cacheTTL.map { Int($0) }),
-            "cache_expired": snap.cacheLikelyExpired(now: now).map { .bool($0) } ?? .null,
-            "large": .bool((snap.tokens ?? 0) >= largeThreshold),
+            "cache_expired": warmth.cacheExpired.map { .bool($0) } ?? .null,
+            "large": .bool(warmth.large),
             "compacted_at": snap.compactedAt.map { .string(fmt.string(from: $0)) } ?? .null,
         ])
     }

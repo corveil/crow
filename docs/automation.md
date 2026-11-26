@@ -203,7 +203,7 @@ Off by default. Types `/compact` into a large, idle Claude Code session shortly 
 
 PR #312 gated the existing `crow:auto` label automation behind a single opt-in toggle. Off by default — typing `/crow-workspace` into the Manager terminal without an explicit opt-in is intrusive, and matches the precedent set by `crow:merge` auto-merge (#299).
 
-- **Auto-launch workspaces for `crow:auto` labeled issues** — when on, Crow watches assigned open issues each polling cycle. If one carries the `crow:auto` label, Crow sends `/crow-workspace <issue-url>` to the Manager terminal and strips the label so the trigger is one-shot. A `crow:explore` label on the same watcher sends `/crow-workspace --explore <issue-url>` instead (read/explain seed, no In Progress board move, no PR). If both labels are present, `crow:auto` wins and both are stripped. While off, the labels are intentionally left in place so a later opt-in still picks up the issue. Requires Crow (and the Manager) to be running.
+- **Auto-launch workspaces for `crow:auto` labeled issues** — when on, Crow watches assigned open issues each polling cycle. If one carries the `crow:auto` label, Crow sends `/crow-workspace <issue-url>` to the Manager terminal (or to an `auto-dispatch` Manager when the primary is cold and large, see #211 below) and strips the label so the trigger is one-shot. A `crow:explore` label on the same watcher sends `/crow-workspace --explore <issue-url>` instead (read/explain seed, no In Progress board move, no PR). If both labels are present, `crow:auto` wins and both are stripped. While off, the labels are intentionally left in place so a later opt-in still picks up the issue. Requires Crow (and the Manager) to be running.
 
 Backed by `AppConfig.autoCreateWatcherEnabled`. Issues in `excludeTicketRepos` are filtered before the toggle is consulted, so they remain ignored regardless of the setting.
 
@@ -261,6 +261,14 @@ Short descriptions of each shipped automation, in roughly the order they fire du
 ### #211 — Auto-create workspace on `crow:auto` / `crow:explore` label
 
 When an issue assigned to you carries the `crow:auto` label *and* the **Auto-launch workspaces** toggle is on (PR #312, off by default), the issue tracker auto-creates a workspace for it on the next polling cycle (every 60s). It picks the right repo, opens a worktree, captures ticket metadata, and launches Claude Code in plan mode with the issue context. A `crow:explore` label on the same watcher bootstraps an exploration session instead (CROW-1149): same worktree/session, read/explain seed prompt, no In Progress board move and no PR. If both labels are present, `crow:auto` wins and both are stripped. Issues in `excludeTicketRepos` are skipped. While the toggle is off the labels are left in place, so flipping it on later still picks up previously-labeled issues.
+
+**Which Manager runs it (CROW-1501).** The `/crow-workspace` line goes to the primary Manager, unless the primary's context is `large` and its prompt cache has expired (the `context` fields of `crow get-session`, see [Context size and compaction](context-compaction.md)). Then the dispatch would rebuild the primary's whole cache, and it needs none of that history, so Crow sends it to an extra Manager named `auto-dispatch` instead:
+
+- Each issue is tagged with a workspace in the usual extra-Manager order: the workspace that claims the issue's repo, else `defaults.managerWorkspace`. If neither exists, that issue goes to the primary as before. An `auto-dispatch` Manager only ever takes issues of its own workspace, because a tagged Manager uses that workspace's gateway and log sync.
+- An existing `auto-dispatch` Manager in that workspace (the newest one, if there are several) is reused while it is idle or working and not itself cold and large.
+- Otherwise Crow starts a new one (`auto-dispatch`, `auto-dispatch 2`, …) whose first prompt tells it to run the `/crow-workspace` line. Issues of one workspace labeled in the same polling cycle share one new Manager (`/crow-batch-workspace`).
+
+A primary whose context size or cache state is unknown (no transcript yet, or a harness without one) always gets the dispatch. Each reroute writes a `crow:auto:` line to `crowd-automation.log`, and the Auto-Workspace Created notification names the Manager. The size threshold is `contextCompaction.minContextTokens`. Raising it to the maximum (10,000,000) effectively keeps every dispatch on the primary. Finished `auto-dispatch` Managers can be deleted like any extra Manager.
 
 ### #189 — Manager auto permission mode
 
