@@ -26,17 +26,25 @@ public enum AgentWait {
         public var agentState: String?
         public var lastPromptAt: String?
         public var agentTerminalID: String?
+        /// `get-session`'s `context` object (CROW-1493), read by `crow send`'s
+        /// cold-cache warning (``ColdCacheWarning``).
+        public var context: [String: JSONValue]?
 
-        public init(agentState: String?, lastPromptAt: String? = nil, agentTerminalID: String? = nil) {
+        public init(
+            agentState: String?, lastPromptAt: String? = nil, agentTerminalID: String? = nil,
+            context: [String: JSONValue]? = nil
+        ) {
             self.agentState = agentState
             self.lastPromptAt = lastPromptAt
             self.agentTerminalID = agentTerminalID
+            self.context = context
         }
 
         public init(_ result: [String: JSONValue]) {
             agentState = result["agent_state"]?.stringValue
             lastPromptAt = result["last_prompt_at"]?.stringValue
             agentTerminalID = result["agent_terminal_id"]?.stringValue
+            context = result["context"]?.objectValue
         }
     }
 

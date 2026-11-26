@@ -1431,6 +1431,14 @@ crow send --session <uuid> --terminal <agent-terminal-uuid> --wait-ready --wait-
 # → {"accepted": true, "agent_state": "working", "last_prompt_at": "2026-11-20T15:04:05.120Z", "sent": true}
 ```
 
+When `--terminal` is the session's agent terminal and its `context` (see [Context size and compaction](context-compaction.md#seeing-it)) is both `large` and `cache_expired`, `crow send` still sends, then prints a warning on stderr naming the token count; stdout stays the same JSON (CROW-1499). It reads `get-session` once before the send for this; if that read fails, the send goes ahead without the check.
+
+```bash
+crow send --session <uuid> --terminal <agent-terminal-uuid> "Pick this back up."$'\n'
+# stdout → {"sent": true}
+# stderr → crow: warning: sent into a cold session: its prompt cache had expired (idle 3h 2m), so this message re-writes all 704,312 tokens of context to the cache. See context in crow get-session.
+```
+
 | Arg / Flag              | Required | Description       |
 | ----------------------- | -------- | ----------------- |
 | `--session`             | yes      | Session UUID      |

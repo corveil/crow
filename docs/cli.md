@@ -2014,7 +2014,7 @@ Send text to a terminal.
 crow send --session <session> --terminal <terminal> [--wait-ready] [--wait-ack] [--timeout <timeout>] <text>
 ```
 
---wait-ready waits until the session's agent is idle before pasting, and fails on timeout. --wait-ack waits after the paste until the agent picks the text up (agent_state moves to working, or last_prompt_at changes) and reports "accepted"; it exits non-zero with "accepted": false on timeout. Both need --terminal to be the session's agent terminal (agent_terminal_id in get-session).
+--wait-ready waits until the session's agent is idle before pasting, and fails on timeout. --wait-ack waits after the paste until the agent picks the text up (agent_state moves to working, or last_prompt_at changes) and reports "accepted"; it exits non-zero with "accepted": false on timeout. Both need --terminal to be the session's agent terminal (agent_terminal_id in get-session). Sending to the agent terminal of a session whose context is large and whose prompt cache has expired (context.large and context.cache_expired in get-session) prints a warning on stderr; the text is still sent and stdout is unchanged.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |

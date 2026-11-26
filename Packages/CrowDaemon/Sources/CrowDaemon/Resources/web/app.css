@@ -2244,6 +2244,12 @@ select.text-prompt-input { cursor: pointer; }
 .chat-status:empty { display: none; }
 .chat-status.busy, .chat-status.warn { padding: 4px 16px; }
 .chat-status.warn { color: var(--orange); }
+/* Cold-cache notice above the composer (CROW-1499). */
+.chat-cold {
+  padding: 4px 16px; font-size: 12px; color: var(--orange);
+  border-top: 1px solid var(--border-subtle); background: var(--bg-surface);
+}
+.chat-cold[hidden] { display: none; }
 .chat-jump {
   position: absolute; right: 16px; bottom: 76px;
   background: var(--bg-elev); color: var(--text-primary);

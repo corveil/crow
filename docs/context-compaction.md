@@ -44,6 +44,8 @@ It is read from the transcript the agent already writes, with the same usage rul
 
 With [debug mode](configuration.md#telemetry-cleanup--ui) on (Settings → About, `crow ui set --debug-mode true`; off by default), the sidebar shows the same number on each session row: muted while small, amber once `large`. A large session whose cache has likely expired reads `512k · cold`, in the text and not only in the tooltip, because the web UI is often used from a phone. Hover (or a screen reader) gives the full numbers and how long the cache stays warm.
 
+Before you send into such a session, two clients warn you (CROW-1499): the [Chat view](web-chat-view.md#cold-cache-notice) shows a notice above the composer naming the token count, and [`crow send`](cli-reference.md#crow-send) prints a warning on stderr. Neither blocks the send. The raw terminal can't warn: keystrokes go straight to tmux.
+
 Crow shows token counts, not dollars. The repo has no price table to take prices from, and a wrong price shown in the UI is worse than none.
 
 ## Compacting before the cache expires
