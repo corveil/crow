@@ -500,4 +500,186 @@ struct OpenCodeV2PluginRuntimeTests {
         #expect(names.filter { $0 == "Stop" }.count == 1)
         #expect(names.last == "BridgeUnavailable")
     }
+
+    // MARK: - Automations off for .job/.review (CROW-1526)
+
+    /// What the fake `crow get-session` does.
+    enum KindLookup {
+        /// Prints `{"kind": "<kind>"}` and exits 0.
+        case answers(String)
+        /// Exits 1 with no output (Crow not running).
+        case fails
+        /// Exits 0 with output that isn't JSON.
+        case garbage
+    }
+
+    /// The tool registry the plugin's transform sees and what is left after it.
+    struct AutomationGateResult: Decodable {
+        /// Tool ids right after `setup` returns, before the kind lookup settles.
+        let before: [String]
+        /// Tool ids once the lookup has settled (and any reload has run).
+        let after: [String]
+        let reloads: Int
+        let transforms: Int
+    }
+
+    /// Run the V2 plugin's `setup` against a fake registry holding two
+    /// `automation`-namespace tools and two others, with a fake `crow` whose
+    /// `get-session` behaves as `lookup`. `transformAPI: false` drops
+    /// `ctx.tool.transform` (an OpenCode build without it).
+    private func runAutomationGate(
+        lookup: KindLookup,
+        sessionID: UUID? = UUID(),
+        transformAPI: Bool = true
+    ) throws -> AutomationGateResult {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("crow-oc2-auto-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let log = dir.appendingPathComponent("crow.log").path
+        let crow = dir.appendingPathComponent("crow").path
+        let reply: String
+        switch lookup {
+        case .answers(let kind): reply = "echo '{\"id\" : \"x\", \"kind\" : \"\(kind)\"}'; status=0"
+        case .fails: reply = "status=1"
+        case .garbage: reply = "echo 'not json'; status=0"
+        }
+        try """
+        #!/bin/sh
+        if [ "$1" = "get-session" ]; then
+          echo get-session >> \(OpenCodeLaunchArgs.shellQuote(log))
+          \(reply)
+          echo get-session-done >> \(OpenCodeLaunchArgs.shellQuote(log))
+          exit $status
+        fi
+        while [ $# -gt 0 ]; do
+          if [ "$1" = "--event" ]; then echo "$2" >> \(OpenCodeLaunchArgs.shellQuote(log)); fi
+          shift
+        done
+        cat > /dev/null
+        """.write(toFile: crow, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: crow)
+
+        let plugin = dir.appendingPathComponent("crow-hooks.mjs")
+        try OpenCodeHookConfigWriter.pluginSource(
+            crowPath: crow, sessionID: sessionID, generation: .v2
+        ).write(to: plugin, atomically: true, encoding: .utf8)
+
+        let transform = transformAPI
+            ? "async transform(fn) { TRANSFORMS.push(fn); return { async dispose() {} }; },"
+            : ""
+        let harness = dir.appendingPathComponent("harness.mjs")
+        try """
+        import plugin from \(jsString(plugin.path));
+        const { readFileSync } = await import("node:fs");
+        const TRANSFORMS = [];
+        let RELOADS = 0;
+        const TOOLS = [
+          { id: "automation_create", options: { namespace: "automation", codemode: true } },
+          { id: "automation_list", options: { namespace: "automation", codemode: true } },
+          { id: "read" },
+          { id: "shell", options: {} },
+        ];
+        // Rebuild the registry through every registered transform, the way
+        // OpenCode re-runs them on each tool state change and on reload.
+        function registry() {
+          const tools = new Map(TOOLS.map((t) => [t.id, t]));
+          const editor = { list: () => Array.from(tools.values()), remove: (id) => { tools.delete(id); } };
+          for (const fn of TRANSFORMS) fn(editor);
+          return Array.from(tools.keys());
+        }
+        const lines = () => {
+          try { return readFileSync(\(jsString(log)), "utf8").split("\\n").filter(Boolean); }
+          catch (_) { return []; }
+        };
+        async function until(pred) {
+          for (let i = 0; i < 400 && !pred(); i++) await new Promise((r) => setTimeout(r, 25));
+        }
+        const cleanup = await plugin.setup({
+          location: { directory: \(jsString(dir.path)) },
+          event: { subscribe() { return (async function* () {})(); } },
+          session: { async get() { throw new Error("not found"); } },
+          tool: {
+            async hook() {},
+            \(transform)
+            async reload() { RELOADS++; },
+          },
+        });
+        const before = registry();
+        if (\(sessionID != nil && transformAPI)) {
+          // The fake crow logs `get-session-done` just before it exits; give
+          // the plugin a moment to handle the exit after that.
+          await until(() => RELOADS > 0 || lines().includes("get-session-done"));
+          await new Promise((r) => setTimeout(r, 200));
+        } else {
+          await until(() => lines().includes("BridgeUnavailable"));
+        }
+        if (typeof cleanup === "function") cleanup();
+        console.log(JSON.stringify({ before, after: registry(), reloads: RELOADS, transforms: TRANSFORMS.length }));
+        """.write(to: harness, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: try #require(openCodeTestNodePath))
+        process.arguments = [harness.path]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        let out = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        #expect(process.terminationStatus == 0, "node failed: \(err)")
+        let line = try #require(String(data: out, encoding: .utf8)?
+            .split(separator: "\n").last.map(String.init))
+        return try JSONDecoder().decode(AutomationGateResult.self, from: Data(line.utf8))
+    }
+
+    private let automationTools: Set<String> = ["automation_create", "automation_list"]
+    private let otherTools: Set<String> = ["read", "shell"]
+
+    @Test(arguments: ["job", "review"])
+    func jobAndReviewSessionsLoseTheAutomationTools(kind: String) throws {
+        let result = try runAutomationGate(lookup: .answers(kind))
+        #expect(Set(result.after) == otherTools)
+        #expect(result.reloads == 0)
+    }
+
+    @Test(arguments: ["work", "manager"])
+    func workAndManagerSessionsKeepTheAutomationTools(kind: String) throws {
+        let result = try runAutomationGate(lookup: .answers(kind))
+        #expect(Set(result.after) == automationTools.union(otherTools))
+        #expect(result.reloads == 1)
+    }
+
+    @Test func toolsAreOffBeforeTheKindIsKnown() throws {
+        // The removal is registered before the lookup runs, so even a `.work`
+        // session starts without the tools and only gets them back on reload.
+        // No first turn of a `.job` can see them.
+        let result = try runAutomationGate(lookup: .answers("work"))
+        #expect(Set(result.before) == otherTools)
+    }
+
+    @Test func failedOrUnreadableLookupKeepsTheToolsOff() throws {
+        for lookup in [KindLookup.fails, .garbage, .answers("something-new")] {
+            let result = try runAutomationGate(lookup: lookup)
+            #expect(Set(result.after) == otherTools, "lookup \(lookup)")
+            #expect(result.reloads == 0, "lookup \(lookup)")
+        }
+    }
+
+    @Test func globalFallbackPluginNeverRemovesTheTools() throws {
+        // Hand-started sessions carry no Crow session: nothing to look up.
+        let result = try runAutomationGate(lookup: .answers("job"), sessionID: nil)
+        #expect(result.transforms == 0)
+        #expect(Set(result.after) == automationTools.union(otherTools))
+    }
+
+    @Test func buildWithoutToolTransformStillBridges() throws {
+        // Below 2.4 there are no automation tools; a build without
+        // `ctx.tool.transform` must not break setup.
+        let result = try runAutomationGate(lookup: .answers("job"), transformAPI: false)
+        #expect(result.transforms == 0)
+    }
 }
