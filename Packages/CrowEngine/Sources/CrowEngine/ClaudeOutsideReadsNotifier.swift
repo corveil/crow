@@ -25,11 +25,12 @@ final class ClaudeOutsideReadsNotifier {
     /// The file reads the check needs. Injected so tests can point it at
     /// fixtures instead of the operator's real home.
     struct IO {
-        var homeDirectory: @MainActor () -> String
+        /// Claude's user config dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`).
+        var userClaudeDir: @MainActor () -> String
         var readFile: @MainActor (String) -> Data?
 
         static let live = IO(
-            homeDirectory: { FileManager.default.homeDirectoryForCurrentUser.path },
+            userClaudeDir: { ClaudeOutsideReadsBlock.userClaudeDir() },
             readFile: { ClaudeOutsideReadsBlock.readFileIfPresent($0) })
     }
 
@@ -52,7 +53,7 @@ final class ClaudeOutsideReadsNotifier {
     ) -> ClaudeOutsideReadsBlock.Finding? {
         guard agentKind == .claudeCode, ClaudeOutsideReadsBlock.isAutoModeLaunch(command) else { return nil }
         guard let finding = ClaudeOutsideReadsBlock.check(
-            home: io.homeDirectory(), cwd: cwd, readFile: { self.io.readFile($0) })
+            userClaudeDir: io.userClaudeDir(), cwd: cwd, readFile: { self.io.readFile($0) })
         else {
             warned[sessionID] = nil
             return nil
@@ -73,25 +74,39 @@ extension SessionService {
     /// - Codex: answer the startup screens (CROW-1410).
     /// - Claude in auto mode: warn when `blockReadsOutsideWorkingDirectories` is
     ///   on (CROW-1527).
+    ///
+    /// Looks the terminal up in `appState.terminals`, so the row must already
+    /// be there. `prepareTerminal` runs before its caller stores the row, so it
+    /// uses ``armAgentStartupChecks(terminal:session:command:)`` instead.
     func armAgentStartupChecks(terminalID: UUID, command: String?) {
         codexStartupPrompts.arm(terminalID: terminalID, command: command)
-        checkClaudeOutsideReads(terminalID: terminalID, command: command)
+        // Cheap guard first, so non-auto launches never look anything up.
+        guard ClaudeOutsideReadsBlock.isAutoModeLaunch(command),
+              let terminal = appState.terminals.values.lazy.compactMap({ terminals in
+                  terminals.first(where: { $0.id == terminalID })
+              }).first
+        else { return }
+        checkClaudeOutsideReads(
+            session: appState.sessions.first(where: { $0.id == terminal.sessionID }),
+            cwd: terminal.cwd, command: command)
+    }
+
+    /// The same checks for a row the caller holds but hasn't stored in
+    /// `appState.terminals` yet, as in `prepareTerminal`: a new Manager's row
+    /// is only inserted after it returns.
+    func armAgentStartupChecks(terminal: SessionTerminal, session: Session?, command: String?) {
+        codexStartupPrompts.arm(terminalID: terminal.id, command: command)
+        checkClaudeOutsideReads(session: session, cwd: terminal.cwd, command: command)
     }
 
     /// Report a Claude auto-mode launch whose settings block outside reads,
     /// through the log and ``onClaudeOutsideReadsBlocked``.
-    func checkClaudeOutsideReads(terminalID: UUID, command: String?) {
-        // Cheap guard first, so non-auto launches never look anything up.
-        guard ClaudeOutsideReadsBlock.isAutoModeLaunch(command),
-              let (sessionID, terminal) = appState.terminals.lazy.compactMap({ sessionID, terminals in
-                  terminals.first(where: { $0.id == terminalID }).map { (sessionID, $0) }
-              }).first,
-              let session = appState.sessions.first(where: { $0.id == sessionID })
+    func checkClaudeOutsideReads(session: Session?, cwd: String, command: String?) {
+        guard let session,
+              let finding = claudeOutsideReads.check(
+                sessionID: session.id, agentKind: session.agentKind, command: command, cwd: cwd)
         else { return }
-        guard let finding = claudeOutsideReads.check(
-            sessionID: sessionID, agentKind: session.agentKind, command: command, cwd: terminal.cwd)
-        else { return }
-        CrowLog.info("[ClaudeOutsideReads] session \(sessionID) (\(session.name)): \(finding.message)")
+        CrowLog.info("[ClaudeOutsideReads] session \(session.id) (\(session.name)): \(finding.message)")
         onClaudeOutsideReadsBlocked?(session, finding)
     }
 }

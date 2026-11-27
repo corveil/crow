@@ -869,8 +869,10 @@ public final class SessionService {
                 recordLaunchedGateway(
                     sessionID: session.id, agentKind: agent.kind, launchText: command, cwd: t.cwd)
             }
-            // CROW-1410 / CROW-1527: a pasted Manager launch gets the startup checks.
-            if pasteCommand { armAgentStartupChecks(terminalID: t.id, command: t.command) }
+            // CROW-1410 / CROW-1527: a pasted Manager launch gets the startup
+            // checks. Pass the local row and session: the caller stores the row
+            // in `appState.terminals` only after this returns.
+            if pasteCommand { armAgentStartupChecks(terminal: t, session: session, command: t.command) }
         } catch {
             CrowLog.info("[SessionService] tmux registerTerminal failed (\(error)); terminal \(t.id) will not render")
         }

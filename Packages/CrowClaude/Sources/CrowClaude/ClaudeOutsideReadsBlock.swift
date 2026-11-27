@@ -37,16 +37,31 @@ public enum ClaudeOutsideReadsBlock {
 
     /// The settings files that can set the key, **most specific first**: the
     /// cwd's `.claude/settings.local.json`, then its `.claude/settings.json`,
-    /// then `~/.claude/settings.json`. Claude Code applies them in that order of
-    /// precedence, so the first file that sets the key decides.
-    public static func settingsFiles(home: String, cwd: String) -> [String] {
+    /// then the user-level `settings.json` in `userClaudeDir`. Claude Code
+    /// applies them in that order of precedence, so the first file that sets
+    /// the key decides.
+    public static func settingsFiles(userClaudeDir: String, cwd: String) -> [String] {
         let project = (cwd as NSString).appendingPathComponent(".claude")
         return [
             (project as NSString).appendingPathComponent("settings.local.json"),
             (project as NSString).appendingPathComponent("settings.json"),
-            ((home as NSString).appendingPathComponent(".claude") as NSString)
-                .appendingPathComponent("settings.json"),
+            (userClaudeDir as NSString).appendingPathComponent("settings.json"),
         ]
+    }
+
+    /// Claude's user-level config directory: `$CLAUDE_CONFIG_DIR` when it is
+    /// set and non-blank, otherwise `{home}/.claude`. The same resolution as
+    /// `ChatCommands.Roots.live`, so an operator who moved Claude's config
+    /// isn't silently missed.
+    public static func userClaudeDir(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String {
+        if let dir = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespaces),
+           !dir.isEmpty {
+            return dir
+        }
+        return (home as NSString).appendingPathComponent(".claude")
     }
 
     /// What a check found: the setting is in effect, and `path` is the file
@@ -77,11 +92,11 @@ public enum ClaudeOutsideReadsBlock {
     /// a boolean doesn't count, and the next file down decides. Never throws:
     /// a broken settings file must not stop a launch.
     public static func check(
-        home: String,
+        userClaudeDir: String,
         cwd: String,
         readFile: (String) -> Data? = readFileIfPresent
     ) -> Finding? {
-        for path in settingsFiles(home: home, cwd: cwd) {
+        for path in settingsFiles(userClaudeDir: userClaudeDir, cwd: cwd) {
             guard let data = readFile(path), let value = value(in: data) else { continue }
             return value ? Finding(path: path) : nil
         }
@@ -106,8 +121,10 @@ public enum ClaudeOutsideReadsBlock {
         let permissions: Permissions?
     }
 
-    /// Reads a settings file without following anything else. Nil when it is
-    /// missing or unreadable.
+    /// Reads a settings file's bytes. Nil when it is missing or unreadable.
+    /// Symlinks are followed on purpose: a `~/.claude/settings.json` that
+    /// links into a dotfiles repo is common, and Claude Code reads through it
+    /// the same way. The bytes are only parsed for one boolean.
     public static func readFileIfPresent(_ path: String) -> Data? {
         FileManager.default.contents(atPath: path)
     }

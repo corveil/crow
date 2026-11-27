@@ -28,7 +28,7 @@ struct ClaudeOutsideReadsNotifierTests {
 
     static func notifier(_ files: Files) -> ClaudeOutsideReadsNotifier {
         ClaudeOutsideReadsNotifier(io: .init(
-            homeDirectory: { home },
+            userClaudeDir: { "\(home)/.claude" },
             readFile: { path in
                 files.reads.append(path)
                 return files.contents[path]
@@ -141,6 +141,56 @@ struct ClaudeOutsideReadsNotifierTests {
         #expect(reported.first?.1 == .init(path: Self.localSettings))
     }
 
+    /// Review of #1536: `prepareTerminal` runs the checks before its caller
+    /// (`createManagerTerminal`, `restartManager`) stores the row in
+    /// `appState.terminals`. The check must use the row it was handed, not
+    /// look it up.
+    @Test func prepareTerminalWarnsBeforeTheRowIsStored() throws {
+        let files = Files()
+        files.contents[Self.localSettings] = Self.on
+        let (service, appState) = makeService(files: files)
+        service.terminalRegistrar = { _ in
+            TmuxBinding(socketPath: "/nonexistent/tmux.sock", sessionName: "crow-cockpit", windowIndex: 1)
+        }
+        let manager = Session(name: "Manager 2", kind: .manager, agentKind: .claudeCode)
+        appState.sessions = [manager]
+        var reported: [(UUID, ClaudeOutsideReadsBlock.Finding)] = []
+        service.onClaudeOutsideReadsBlocked = { reported.append(($0.id, $1)) }
+
+        let raw = SessionTerminal(
+            sessionID: manager.id, name: manager.name, cwd: Self.cwd, command: Self.autoLaunch)
+        #expect(appState.terminals[manager.id] == nil)
+        _ = service.prepareTerminal(raw, trackReadiness: false)
+
+        #expect(reported.count == 1)
+        #expect(reported.first?.0 == manager.id)
+        #expect(reported.first?.1 == .init(path: Self.localSettings))
+    }
+
+    @Test func prepareTerminalWithoutAPasteDoesNotWarn() {
+        // A seeded Manager skips the paste here; its launch is checked later,
+        // from the deferred-launch path, once the row is stored.
+        let files = Files()
+        files.contents[Self.localSettings] = Self.on
+        let (service, appState) = makeService(files: files)
+        service.terminalRegistrar = { _ in
+            TmuxBinding(socketPath: "/nonexistent/tmux.sock", sessionName: "crow-cockpit", windowIndex: 1)
+        }
+        let manager = Session(name: "Explore", kind: .manager, agentKind: .claudeCode)
+        appState.sessions = [manager]
+        var reported = 0
+        service.onClaudeOutsideReadsBlocked = { _, _ in reported += 1 }
+
+        _ = service.prepareTerminal(
+            SessionTerminal(sessionID: manager.id, cwd: Self.cwd, command: Self.autoLaunch),
+            trackReadiness: true, pasteCommand: false)
+
+        #expect(reported == 0)
+    }
+
+    /// The terminal-id facade serves launch sites whose row is already stored
+    /// (`launchAgent`, deferred paste, hydrate). An id it can't resolve, or a
+    /// non-Claude session, reports nothing.
     @Test func launchCheckIgnoresUnknownTerminalsAndOtherAgents() {
         let files = Files()
         files.contents[Self.userSettings] = Self.on

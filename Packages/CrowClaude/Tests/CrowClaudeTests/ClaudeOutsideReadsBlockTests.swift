@@ -11,6 +11,7 @@ struct ClaudeOutsideReadsBlockTests {
     struct Fixture {
         let root: URL
         var home: String { root.appendingPathComponent("home").path }
+        var userClaudeDir: String { "\(home)/.claude" }
         var cwd: String { root.appendingPathComponent("worktree").path }
 
         init() throws {
@@ -31,7 +32,7 @@ struct ClaudeOutsideReadsBlockTests {
         }
 
         func check() -> ClaudeOutsideReadsBlock.Finding? {
-            ClaudeOutsideReadsBlock.check(home: home, cwd: cwd)
+            ClaudeOutsideReadsBlock.check(userClaudeDir: userClaudeDir, cwd: cwd)
         }
 
         func cleanUp() { try? FileManager.default.removeItem(at: root) }
@@ -134,11 +135,30 @@ struct ClaudeOutsideReadsBlockTests {
     }
 
     @Test func settingsFilesAreMostSpecificFirst() {
-        #expect(ClaudeOutsideReadsBlock.settingsFiles(home: "/h", cwd: "/w") == [
+        #expect(ClaudeOutsideReadsBlock.settingsFiles(userClaudeDir: "/h/.claude", cwd: "/w") == [
             "/w/.claude/settings.local.json",
             "/w/.claude/settings.json",
             "/h/.claude/settings.json",
         ])
+    }
+
+    @Test func userClaudeDirHonorsClaudeConfigDir() {
+        #expect(ClaudeOutsideReadsBlock.userClaudeDir(environment: [:], home: "/h") == "/h/.claude")
+        #expect(ClaudeOutsideReadsBlock.userClaudeDir(
+            environment: ["CLAUDE_CONFIG_DIR": "/cfg/claude"], home: "/h") == "/cfg/claude")
+        // Blank falls back to the default, as in ChatCommands.Roots.live.
+        #expect(ClaudeOutsideReadsBlock.userClaudeDir(
+            environment: ["CLAUDE_CONFIG_DIR": "  "], home: "/h") == "/h/.claude")
+    }
+
+    @Test func relocatedUserSettingsAreRead() throws {
+        let f = try Fixture(); defer { f.cleanUp() }
+        let relocated = f.root.appendingPathComponent("cfg").path
+        try f.write("\(relocated)/settings.json", Self.on)
+        #expect(ClaudeOutsideReadsBlock.check(userClaudeDir: relocated, cwd: f.cwd)
+            == .init(path: "\(relocated)/settings.json"))
+        // The default location is not consulted instead.
+        #expect(f.check() == nil)
     }
 
     @Test func autoModeLaunchIsKeyedOnTheFlag() {

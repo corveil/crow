@@ -494,7 +494,8 @@ describes what the UI claims, not what Crow can do.
   Claude session launches in auto mode, Crow reads
   `permissions.blockReadsOutsideWorkingDirectories` from
   `{cwd}/.claude/settings.local.json`, `{cwd}/.claude/settings.json` and
-  `~/.claude/settings.json` (first file that sets it wins, as in Claude).
+  `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`; first file
+  that sets it wins, as in Claude).
   If it is `true`, Crow logs a `[ClaudeOutsideReads]` line and pushes a
   `claudeOutsideReadsBlocked` notification naming the file, once per session
   and file. It only reads the files and never changes the setting.
@@ -1271,7 +1272,7 @@ reproduced on 0.167.1 the same way, with two dummy providers (CROW-1425).
 | **Read-only provider notice** (0.167.x only: from 0.168.0 / 0.169.0 the resume exits instead, CROW-1521; `chatwidget/provider_error.rs`, openai/codex#58202). `🔒  Continue in a new chat` / *"This chat uses A, but Codex now uses B, so this chat is read-only."*, or `🔒  Model provider unavailable` / *"This chat uses model provider “crow-corveil”, which is no longer configured."*, over `c continue in new chat · n start fresh · esc other chats` | A resume (`resume --last` or by id) opens a thread recorded under a `model_provider` the launch can't continue. For Crow that means toggling `--codex-upstream` routing: on gives the mismatch title, off gives *unavailable*, because the per-run `crow-corveil` provider is gone. The composer is disabled, so typed text never lands. Letters other than `c` / `n` are dropped | **No key exists** (the provider comes from the thread). The watch presses `n` (*start fresh*), which reproduced on 0.167.1 as a clean composer with the launch's flags (`-a never -s workspace-write` included), the outcome 0.166 gave on its own. Not `c`, which fills the new composer with a draft of the old transcript that a later `crow send` would be appended to. The policy titles (`Model provider blocked by policy`, no `c` shortcut) are answered the same way |
 
 The watch is armed wherever a Codex launch is typed into a pane (grep the
-`armCodexStartupPromptWatch` call sites), keyed on the `check_for_update_on_startup` override
+`armAgentStartupChecks` call sites, CROW-1527), keyed on the `check_for_update_on_startup` override
 being in the command (`CodexStartupNotices.isCodexLaunch`). It polls the visible
 rows once a second for 180s. It answers the migration screen only when the
 bottom three non-blank rows are exactly the two options and the `enter/esc
