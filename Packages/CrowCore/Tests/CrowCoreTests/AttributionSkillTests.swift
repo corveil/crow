@@ -63,9 +63,10 @@ func skillRunsTheAttributionVerb(_ pair: AttributionSkillPair) throws {
     #expect(!body.contains("$(crow attribution --"))
 }
 
-/// The static line stays as the fallback for when the verb fails, in the exact
-/// shape `CrowAttribution` builds.
-@Test(arguments: attributionPostingSkills)
+/// The static line stays as the fallback for when the verb fails (an older
+/// `crow` on PATH exits 64 on `--kind`), in the exact shape `CrowAttribution`
+/// builds. The PR seeds too: a PR must never ship with no Crow line.
+@Test(arguments: attributionPostingSkills + attributionPRSeedSkills)
 func postingSkillKeepsTheStaticFallback(_ pair: AttributionSkillPair) throws {
     let body = try read(pair.skill)
     #expect(body.contains(CrowAttribution.footer(kind: pair.kind, agentDisplayName: placeholder)))

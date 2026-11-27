@@ -509,11 +509,17 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 3. Implement the plan
 4. Commit the changes with a descriptive message
 5. Push the branch to origin
-6. Open a pull request linked to the ticket. Print Crow's footer, then write the PR body to `$TMPDIR/pr-body.md`: `Closes #{number}`, a blank line, then the footer line exactly as printed (leave it out if the command fails):
+6. Open a pull request linked to the ticket. Print Crow's footer, then write the PR body to `$TMPDIR/pr-body.md`: `Closes #{number}`, a blank line, then the footer line exactly as printed:
 
 ```bash
 crow attribution --kind created
 gh pr create --title "<summary>" --body-file "$TMPDIR/pr-body.md" --base {base_branch}
+```
+
+If `crow attribution` fails, or doesn't print one line that starts with `[🐦‍⬛ Created with Crow via ` and ends with `](https://github.com/corveil/crow)`, end the body with this line instead:
+
+```
+[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
 7. Register that PR with the Crow session **once**. `add-link --type pr` is idempotent (skips if a `.pr` link already exists, or if this URL is already linked — do not stack extras; automation uses the first `.pr`):

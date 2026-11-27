@@ -292,11 +292,17 @@ The next wave starts only when this wave's PRs **merge**, so the PR you open is 
 3. Implement the plan
 4. Commit the changes with a descriptive message
 5. Push the branch to origin
-6. Open ONE pull request linked to the ticket. Print Crow's footer, then write the PR body to `$TMPDIR/pr-body.md`: `Closes {closes_ref}`, a blank line, then the footer line exactly as printed (leave it out if the command fails):
+6. Open ONE pull request linked to the ticket. Print Crow's footer, then write the PR body to `$TMPDIR/pr-body.md`: `Closes {closes_ref}`, a blank line, then the footer line exactly as printed:
 
 ```bash
 crow attribution --kind created
 gh pr create --title "<summary>" --body-file "$TMPDIR/pr-body.md" --base {base_branch}
+```
+
+If `crow attribution` fails, or doesn't print one line that starts with `[🐦‍⬛ Created with Crow via ` and ends with `](https://github.com/corveil/crow)`, end the body with this line instead:
+
+```
+[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
 7. Register that PR with the Crow session **once**, then request the human reviewer. `add-link --type pr` is idempotent:
