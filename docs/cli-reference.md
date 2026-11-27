@@ -1704,7 +1704,7 @@ Read and write `AppConfig.notifications` — the same settings the web Settings 
 
 Notifications cascade: one fires only if `globalMute` is off, the matching global category toggle is on, **and** the per-event toggle is on.
 
-The twelve events are `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, and `configReloaded`.
+The thirteen events are `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `claudeOutsideReadsBlocked`, and `configReloaded`.
 
 ### `crow notifications get`
 

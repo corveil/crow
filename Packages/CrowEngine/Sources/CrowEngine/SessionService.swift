@@ -130,6 +130,12 @@ public final class SessionService {
     /// Opens the tmux window for every terminal `prepareTerminal` registers.
     /// Tests replace it to record what each launch path asked for (CROW-1404).
     var terminalRegistrar: TerminalRegistrar = { try SessionService.registerWithTmux($0) }
+    /// Called when a Claude auto-mode launch finds
+    /// `permissions.blockReadsOutsideWorkingDirectories` on (CROW-1527). The
+    /// daemon wires it to the `claudeOutsideReadsBlocked` notification. Nil in
+    /// tests and on hosts with no notification channel; the log line is written
+    /// either way.
+    public var onClaudeOutsideReadsBlocked: (@MainActor (Session, ClaudeOutsideReadsBlock.Finding) -> Void)?
 
     public init(
         store: JSONStore,
@@ -193,6 +199,9 @@ public final class SessionService {
         onNeedsOperator: { [unowned self] terminalID, reason in
             self.markCodexPromptNeedsOperator(terminalID: terminalID, reason: reason)
         })
+
+    /// Warns when a Claude auto-mode launch blocks outside reads (CROW-1527).
+    lazy var claudeOutsideReads = ClaudeOutsideReadsNotifier()
 
     /// Upgrade the well-known primary Manager session from `.work` (how it was
     /// persisted before `SessionKind.manager` existed) to `.manager`. Returns
@@ -860,8 +869,10 @@ public final class SessionService {
                 recordLaunchedGateway(
                     sessionID: session.id, agentKind: agent.kind, launchText: command, cwd: t.cwd)
             }
-            // CROW-1410: a pasted Codex Manager launch gets the startup-prompt watch.
-            if pasteCommand { armCodexStartupPromptWatch(terminalID: t.id, command: t.command) }
+            // CROW-1410 / CROW-1527: a pasted Manager launch gets the startup
+            // checks. Pass the local row and session: the caller stores the row
+            // in `appState.terminals` only after this returns.
+            if pasteCommand { armAgentStartupChecks(terminal: t, session: session, command: t.command) }
         } catch {
             CrowLog.info("[SessionService] tmux registerTerminal failed (\(error)); terminal \(t.id) will not render")
         }

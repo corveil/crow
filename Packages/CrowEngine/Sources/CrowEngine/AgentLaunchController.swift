@@ -108,7 +108,8 @@ final class AgentLaunchController {
         }
         appState.terminalReadiness[terminalID] = .agentLaunched
         // CROW-1410: answer Codex's model-migration screen if it comes up.
-        owner.armCodexStartupPromptWatch(terminalID: terminalID, command: command)
+        // CROW-1527: warn when a Claude auto-mode launch blocks outside reads.
+        owner.armAgentStartupChecks(terminalID: terminalID, command: command)
     }
 
     /// Surface a refused `.work` launch in the pane instead of starting the
@@ -576,7 +577,7 @@ final class AgentLaunchController {
             owner.recordLaunchedGateway(
                 sessionID: sessionID, agentKind: agent.kind,
                 launchText: gatewayPrefix + command, cwd: worktree.worktreePath)
-            owner.armCodexStartupPromptWatch(terminalID: terminalID, command: command)
+            owner.armAgentStartupChecks(terminalID: terminalID, command: command)
             // `agent_state` reads `starting` until this agent's first hook (CROW-1475).
             appState.noteAgentLaunch(sessionID: sessionID)
         } else {

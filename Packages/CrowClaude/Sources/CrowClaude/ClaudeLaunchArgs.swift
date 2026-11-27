@@ -36,6 +36,9 @@ public enum ClaudeLaunchArgs {
     ///     and is **print-mode only** (`claude -p`); Crow launches the interactive
     ///     TUI, so do **not** emit it (CROW-1215). Crow still emits
     ///     `--permission-mode auto` and nothing else.
+    ///     When the operator's settings turn on
+    ///     `blockReadsOutsideWorkingDirectories`, Crow warns at launch
+    ///     (``ClaudeOutsideReadsBlock``, CROW-1527) and still changes nothing.
     public static func argsSuffix(
         remoteControl: Bool,
         sessionName: String?,

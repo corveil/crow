@@ -16,6 +16,7 @@
     autoMergeBlocked: 'Auto-Merge Blocked',
     autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
     autoRebaseStuck: 'Rebase Stuck',
+    claudeOutsideReadsBlocked: 'Claude Outside Reads Blocked',
     configReloaded: 'Config Reloaded',
   };
   // One-line "what fires this" hint per event, so the automation entries aren't
@@ -32,22 +33,25 @@
     autoRebasePushed: 'Crow rebased a PR branch onto its base and force-pushed.',
     autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention.',
     autoRebaseStuck: "An auto-rebase can't proceed — a dirty worktree, or local commits a force-push would destroy.",
+    claudeOutsideReadsBlocked: 'A Claude auto-mode session launched with blockReadsOutsideWorkingDirectories on, so outside-path commands will wait for approval.',
     configReloaded: 'Crow picked up a change to config.json.',
   };
   // Canonical NotificationEvent set + defaults (CrowCore NotificationEvent) —
   // the config only stores events the user has touched, so we render all of them
   // and materialize any missing ones with their default sound (CROW-593). The
-  // trailing seven are Crow's own automation events (CROW-768, #888, #944).
+  // trailing eight are Crow's own automation events (CROW-768, #888, #944,
+  // CROW-1527).
   const EVENT_ORDER = [
     'taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing',
     'autoWorkspaceCreated', 'autoMergeEnabled', 'autoMergeBlocked', 'autoRebasePushed',
-    'autoRebaseConflicts', 'autoRebaseStuck', 'configReloaded',
+    'autoRebaseConflicts', 'autoRebaseStuck', 'claudeOutsideReadsBlocked', 'configReloaded',
   ];
   const EVENT_DEFAULT_SOUND = {
     taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
     changesRequested: 'Funk', checksFailing: 'Sosumi',
     autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass', autoMergeBlocked: 'Basso',
     autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', autoRebaseStuck: 'Basso',
+    claudeOutsideReadsBlocked: 'Funk',
     configReloaded: 'Tink',
   };
   const BUILT_IN_SOUNDS = [

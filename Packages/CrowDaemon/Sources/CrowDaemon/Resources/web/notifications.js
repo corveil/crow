@@ -21,6 +21,7 @@ const DEFAULT_EVENT_SOUND = {
   autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
   autoMergeBlocked: 'Basso',
   autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', autoRebaseStuck: 'Basso',
+  claudeOutsideReadsBlocked: 'Funk',
   configReloaded: 'Tink',
 };
 
@@ -34,6 +35,7 @@ const EVENT_LABEL = {
   autoMergeBlocked: 'Auto-Merge Blocked',
   autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
   autoRebaseStuck: 'Rebase Stuck',
+  claudeOutsideReadsBlocked: 'Claude Outside Reads Blocked',
   configReloaded: 'Config Reloaded',
 };
 const EVENT_DESC = {
@@ -48,6 +50,7 @@ const EVENT_DESC = {
   autoRebasePushed: 'Crow rebased a PR branch onto its base and pushed',
   autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention',
   autoRebaseStuck: "An auto-rebase can't proceed and needs you",
+  claudeOutsideReadsBlocked: 'A Claude auto-mode session will wait for approval on outside-path commands',
   configReloaded: 'Crow reloaded its configuration',
 };
 
@@ -55,7 +58,7 @@ const EVENT_DESC = {
 // rather than the client deriving them from polled state (CROW-768).
 const AUTOMATION_EVENTS = [
   'autoWorkspaceCreated', 'autoMergeEnabled', 'autoMergeBlocked', 'autoRebasePushed',
-  'autoRebaseConflicts', 'autoRebaseStuck', 'configReloaded',
+  'autoRebaseConflicts', 'autoRebaseStuck', 'claudeOutsideReadsBlocked', 'configReloaded',
 ];
 // Every event the notification layer knows about, in the Settings tab's order.
 const ALL_EVENTS = [
@@ -360,6 +363,7 @@ const VOICE_DEFAULTS = {
   autoRebasePushed: { enabled: false, template: '{session} was rebased' },
   autoRebaseConflicts: { enabled: true, template: 'Rebase conflicts on {session}' },
   autoRebaseStuck: { enabled: true, template: 'Rebase stuck on {session}' },
+  claudeOutsideReadsBlocked: { enabled: true, template: '{session} may stall on approvals' },
   configReloaded: { enabled: false, template: 'Config reloaded' },
 };
 // What a burst of 3+ of the same event says instead of reading each one.

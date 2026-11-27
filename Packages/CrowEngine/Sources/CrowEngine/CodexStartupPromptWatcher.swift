@@ -147,12 +147,8 @@ final class CodexStartupPromptWatcher {
 // MARK: - SessionService facade
 
 extension SessionService {
-    /// Arm the Codex startup-prompt watch for `terminalID` when `command` is a
-    /// Codex launch (CROW-1410). Call it wherever a launch command is typed
-    /// into a pane; it is a no-op for every other agent.
-    func armCodexStartupPromptWatch(terminalID: UUID, command: String?) {
-        codexStartupPrompts.arm(terminalID: terminalID, command: command)
-    }
+    // Armed through `armAgentStartupChecks(terminalID:command:)`
+    // (ClaudeOutsideReadsNotifier.swift), which runs every launch-time check.
 
     /// Show a session whose Codex pane is stuck on a prompt Crow won't answer
     /// as waiting on the operator, the same state a permission prompt sets.
