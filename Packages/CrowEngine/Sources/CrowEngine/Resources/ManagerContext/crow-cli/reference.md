@@ -10,7 +10,7 @@ crow new-session --name "feature-name"          → {"session_id":"<uuid>","name
 crow rename-session --session <uuid> "new-name" → {"session_id":"...","name":"..."}
 crow select-session --session <uuid>            → {"session_id":"..."}
 crow list-sessions                              → {"sessions":[...]}
-crow get-session --session <uuid>               → {id, name, status, ticket_url, agent_state, last_prompt_at, agent_terminal_id, ..., agent_conversations:[{id, agent_kind, started_at, last_active_at}], context:{tokens, max_tokens, idle_seconds, cache_ttl_seconds, cache_expired, large, compacted_at, …}|null}
+crow get-session --session <uuid>               → {id, name, status, kind, ticket_url, agent_state, last_prompt_at, agent_terminal_id, ..., agent_conversations:[{id, agent_kind, started_at, last_active_at}], context:{tokens, max_tokens, idle_seconds, cache_ttl_seconds, cache_expired, large, compacted_at, …}|null}
 crow find-session --agent-session <id|prefix|transcript path> → {session_id, name, status, kind, agent_kind, conversation:{…}}  agent conversation id → Crow session
 crow wait --session <uuid> --until idle|working|waiting_permission|starting|exited [--timeout 60] → blocks; errors on exit/timeout
 crow set-status --session <uuid> active|paused|inReview|completed|archived

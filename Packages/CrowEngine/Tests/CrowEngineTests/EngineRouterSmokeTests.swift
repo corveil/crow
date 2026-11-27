@@ -257,6 +257,38 @@ struct EngineRouterSmokeTests {
         #expect(result["customHeaders"] == nil)
     }
 
+    /// CROW-1526: the OpenCode V2 plugin asks `get-session` for the session
+    /// kind at setup and keeps automations only for `work`/`manager`.
+    @Test("get-session reports the session kind")
+    func getSessionReportsKind() async throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
+        let appState = AppState()
+        let store = JSONStore(directory: tmp)
+        let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
+        let sessions = SessionKind.allCases.map { Session(name: "kind-\($0.rawValue)", kind: $0) }
+        appState.sessions.append(contentsOf: sessions)
+
+        let router = makeEngineRouter(EngineContext(
+            appState: appState,
+            store: store,
+            sessionService: service,
+            issueTracker: nil,
+            telemetryPort: nil,
+            devRoot: tmp.path,
+            hostBridge: NoopHostBridge(),
+            loadConfig: { nil },
+            applyConfig: { _ in nil }
+        ))
+
+        for session in sessions {
+            let response = await router.handle(request: JSONRPCRequest(
+                id: 1, method: "get-session",
+                params: ["session_id": .string(session.id.uuidString)]))
+            #expect(response.result?["kind"] == .string(session.kind.rawValue))
+        }
+    }
+
     /// CROW-1476: `get-session` lists the agent conversations a session ran,
     /// and `find-session` maps one of them back to the session.
     @Test("get-session lists agent conversations and find-session maps them back")

@@ -747,7 +747,7 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   while a subagent runs; gated on the experimental `experimental.idle` hook
   with a stable-event fallback; re-checked at **2.4.1**, CROW-1522: the
   `video` kind holds too, automation run children don't, and automations
-  should be off for `.job`/`.review`, wiring pending #1526), and the one still-unpinned empirical timing
+  are off for `.job`/`.review`: the per-project plugin removes the `automation` tools, CROW-1526), and the one still-unpinned empirical timing
   (Cursor async). Codex's async *timing* is **resolved** (CROW-1065): the
   stable `0.148.0` shipped (2026-08-18), and the timing is safe *by
   construction* — `PostToolUse` is the only async event and touches only a

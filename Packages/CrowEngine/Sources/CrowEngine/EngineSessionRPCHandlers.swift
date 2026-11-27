@@ -97,6 +97,10 @@ func makeEngineSessionHandlers(
                     "id": .string(s.id.uuidString),
                     "name": .string(s.name),
                     "status": .string(s.status.rawValue),
+                    // `work` / `review` / `job` / `manager`, as on `list-sessions`
+                    // rows. The OpenCode V2 state plugin reads it at setup to
+                    // turn automations off for `.job`/`.review` (CROW-1526).
+                    "kind": .string(s.kind.rawValue),
                     "agent_kind": .string(s.agentKind.rawValue),
                     "agent_display_name": .string(CrowAttribution.agentDisplayName(for: s.agentKind)),
                     "ticket_url": s.ticketURL.map { .string($0) } ?? .null,

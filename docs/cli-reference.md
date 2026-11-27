@@ -110,7 +110,7 @@ crow list-sessions
 crow get-session --session <uuid>
 ```
 
-Returns full session details: id, name, status, agent, ticket metadata, timestamps, lock state, org-goal/alignment fields, and `is_explore` (true when launched with Start Exploring / `crow:explore`). (Worktrees, terminals and links have their own verbs — `crow list-worktrees`, `crow list-terminals`, `crow list-links`.)
+Returns full session details: id, name, status, `kind` (`work`, `review`, `job` or `manager`), agent, ticket metadata, timestamps, lock state, org-goal/alignment fields, and `is_explore` (true when launched with Start Exploring / `crow:explore`). (Worktrees, terminals and links have their own verbs — `crow list-worktrees`, `crow list-terminals`, `crow list-links`.)
 
 It also reports whether the agent can take input (CROW-1475). `crow list-sessions` carries the same three fields on every row.
 

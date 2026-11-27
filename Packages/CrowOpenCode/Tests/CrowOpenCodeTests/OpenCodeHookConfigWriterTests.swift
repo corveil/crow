@@ -390,4 +390,19 @@ struct OpenCodeHookConfigWriterTests {
         #expect(globalID == "crow-hooks-global")
         #expect(projectID != globalID)
     }
+
+    @Test func v2PluginGatesAutomationsBySessionKind() {
+        // CROW-1526: only `.work` and Managers keep OpenCode automations. The
+        // V2 body asks `crow get-session` and removes the `automation`
+        // namespace otherwise; V1 has no automations to remove.
+        #expect(OpenCodeHookConfigWriter.sessionKindsKeepingAutomations == [.work, .manager])
+        let v2 = OpenCodeHookConfigWriter.pluginSource(
+            crowPath: "/bin/crow", sessionID: UUID(), generation: .v2)
+        #expect(v2.contains(#"const KEEPS_AUTOMATIONS = ["work", "manager"];"#))
+        #expect(v2.contains(#"["get-session", "--session", SESSION]"#))
+        #expect(v2.contains(#"tool.options.namespace === "automation""#))
+        let v1 = OpenCodeHookConfigWriter.pluginSource(
+            crowPath: "/bin/crow", sessionID: UUID(), generation: .v1)
+        #expect(!v1.contains("KEEPS_AUTOMATIONS"))
+    }
 }
