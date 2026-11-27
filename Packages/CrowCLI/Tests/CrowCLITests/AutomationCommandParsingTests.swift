@@ -28,7 +28,7 @@ import Testing
 
 /// The reason these are `@Option ... Bool?` and not `@Flag`: a patch has to tell
 /// "set it to false" apart from "don't touch it", which a flag cannot express.
-/// Six of the thirteen default to `true`, so a `@Flag` design could never turn one
+/// Seven of the fifteen default to `true`, so a `@Flag` design could never turn one
 /// off.
 @Test func automationSetParsesExplicitFalse() throws {
     let cmd = try AutomationSet.parse(["--manager-auto-permission-mode", "false"])
@@ -56,6 +56,7 @@ import Testing
 @Test func automationSetParsesWatcherAndAutoRespondToggles() throws {
     let cmd = try AutomationSet.parse([
         "--attribution-trailers", "false",
+        "--attribution-model", "false",
         "--auto-create-watcher-enabled", "true",
         "--auto-merge-watcher-enabled", "true",
         "--review-in-progress-label", "true",
@@ -64,6 +65,7 @@ import Testing
         "--auto-rebase-and-resolve-conflicts", "true",
     ])
     #expect(cmd.watchers.attributionTrailers == false)
+    #expect(cmd.watchers.attributionModel == false)
     #expect(cmd.watchers.autoCreateWatcherEnabled == true)
     #expect(cmd.watchers.autoMergeWatcherEnabled == true)
     #expect(cmd.watchers.reviewInProgressLabel == true)
@@ -171,6 +173,7 @@ private func setParseError(_ args: [String]) -> String {
         "--coder-view-auto-permission-mode", "true",
         "--jobs-auto-permission-mode", "false",
         "--attribution-trailers", "false",
+        "--attribution-model", "false",
         "--auto-create-watcher-enabled", "true",
         "--auto-merge-watcher-enabled", "true",
         "--review-in-progress-label", "true",
@@ -205,6 +208,7 @@ let automationWireKeys = [
     "coder_view_auto_permission_mode",
     "jobs_auto_permission_mode",
     "attribution_trailers",
+    "attribution_model",
     "auto_create_watcher_enabled",
     "auto_merge_watcher_enabled",
     "review_in_progress_label_enabled",

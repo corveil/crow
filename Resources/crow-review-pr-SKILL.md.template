@@ -234,7 +234,7 @@ Draft the review using this format:
 
 ---
 
-[🐦‍⬛ Reviewed by Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
+[THE FOOTER LINE FROM STEP 5b]
 ```
 
 ### Step 5a: Pre-submit Guardrails (REQUIRED)
@@ -276,26 +276,38 @@ The draft body must carry a `### Tenant effect` section that agrees with the ver
 - **"Yes" to "Can org A's row change org B's outcome?"** — or a cross-tenant finding anywhere in the body — needs a matching **Red** finding or a **Deferred (#N)** entry that names every deferral-bar item you checked. Otherwise ⇒ do not post. Grade it Red.
 - **A cross-tenant Red** follows the verdict rule like any Red: under a policy where Red blocks, the recommendation must be `Request Changes`.
 
-Only after **all three** checks pass, post the review using exactly one of these two flags:
+Only after **all three** checks pass, write the final body (footer included) to a file, e.g. `$TMPDIR/crow-review-body.md`, with your file-writing tool, and post it with exactly one of these two flags:
 
 ```bash
 # If approving:
-gh pr review "$PR" --approve --body "YOUR_REVIEW_HERE"
+gh pr review "$PR" --approve --body-file "$TMPDIR/crow-review-body.md"
 
 # If requesting changes (also the default when uncertain):
-gh pr review "$PR" --request-changes --body "YOUR_REVIEW_HERE"
+gh pr review "$PR" --request-changes --body-file "$TMPDIR/crow-review-body.md"
 ```
+
+Pass the body with `--body-file`, never inline with `--body "…"`: a review quotes code, and the shell would expand any `$(…)`, backtick or `$VAR` in it.
 
 ### Step 5b: Attribution (REQUIRED)
 
-See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The review body passed to
-`gh pr review --body` MUST end with a blank line followed by:
+See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. Print this session's review footer (like every `crow` command, run it with `dangerouslyDisableSandbox: true`):
+
+```bash
+crow attribution --kind review
+```
+
+It prints one line naming the harness and, when Crow knows it, the model, e.g.
+`[🐦‍⬛ Reviewed by Crow via {{CROW_AGENT_DISPLAY_NAME}} · claude-opus-5-5](https://github.com/corveil/crow)`.
+The review body MUST end with a blank line followed by that line, copied verbatim.
+
+If the command fails, or its output is not one line that starts with `[🐦‍⬛ Reviewed by Crow via ` and ends with `](https://github.com/corveil/crow)`, use this line instead:
 
 ```
 [🐦‍⬛ Reviewed by Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
-- Crow filled in the agent name for this session before this skill reached you — paste the line literally; do not re-introduce `${…}` shell parameter expansion of your own (it silently fails inside single-quoted heredocs and the literal text leaks into the review body).
+- Copy the printed line into the body file as text. Never put `$(crow attribution …)` or any other `${…}` / `$(…)` expansion in the body or the `gh` command: it silently fails inside single-quoted heredocs and the literal text leaks into the review body (#447).
+- Don't add, edit or guess a model yourself. If the printed line has none, post it without one.
 - Do not modify the URL — the link target is always `https://github.com/corveil/crow`, never a fork or a derived value from the local git remote.
 - Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
 - This line MUST appear in every review body, regardless of whether you used `--approve` or `--request-changes`.

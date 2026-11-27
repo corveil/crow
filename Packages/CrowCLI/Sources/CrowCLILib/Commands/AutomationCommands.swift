@@ -139,6 +139,11 @@ struct AutomationWatcherArgs: ParsableArguments {
     var attributionTrailers: Bool?
 
     @Option(
+        name: .customLong("attribution-model"),
+        help: "Include the model in Crow footers printed by `crow attribution` (true or false)")
+    var attributionModel: Bool?
+
+    @Option(
         name: .customLong("auto-create-watcher-enabled"),
         help: "Auto-launch a workspace for crow:auto / crow:explore labeled issues (true or false)")
     var autoCreateWatcherEnabled: Bool?
@@ -154,7 +159,7 @@ struct AutomationWatcherArgs: ParsableArguments {
     var reviewInProgressLabel: Bool?
 
     var isEmpty: Bool {
-        attributionTrailers == nil && autoCreateWatcherEnabled == nil
+        attributionTrailers == nil && attributionModel == nil && autoCreateWatcherEnabled == nil
             && autoMergeWatcherEnabled == nil && reviewInProgressLabel == nil
     }
 
@@ -162,6 +167,9 @@ struct AutomationWatcherArgs: ParsableArguments {
         var params: [String: JSONValue] = [:]
         if let attributionTrailers {
             params["attribution_trailers"] = .bool(attributionTrailers)
+        }
+        if let attributionModel {
+            params["attribution_model"] = .bool(attributionModel)
         }
         if let autoCreateWatcherEnabled {
             params["auto_create_watcher_enabled"] = .bool(autoCreateWatcherEnabled)
@@ -262,7 +270,8 @@ public struct AutomationSet: ParsableCommand {
         re-reads config.json rather than holding a snapshot, so no crowd restart \
         is needed. The permission modes and --remote-control-enabled apply to \
         newly launched sessions, and --attribution-trailers to newly created \
-        worktrees; running sessions and existing worktrees are untouched.
+        worktrees; running sessions and existing worktrees are untouched. \
+        --attribution-model applies to the next `crow attribution` call.
 
         --manager-auto-permission-mode is the one exception: it is baked into the \
         Manager terminal's stored command, so it needs `crow restart-manager` (or \

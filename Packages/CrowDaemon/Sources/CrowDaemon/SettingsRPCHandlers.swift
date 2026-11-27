@@ -238,6 +238,7 @@ func makeSettingsHandlers(
                     params, "coder_view_auto_permission_mode")
                 let jobsMode = try SettingsRPC.patchBool(params, "jobs_auto_permission_mode")
                 let trailers = try SettingsRPC.patchBool(params, "attribution_trailers")
+                let attributionModel = try SettingsRPC.patchBool(params, "attribution_model")
                 let autoCreate = try SettingsRPC.patchBool(params, "auto_create_watcher_enabled")
                 let autoMerge = try SettingsRPC.patchBool(params, "auto_merge_watcher_enabled")
                 let reviewInProgress = try SettingsRPC.patchBool(
@@ -257,6 +258,7 @@ func makeSettingsHandlers(
 
                 let booleans = [
                     remoteControl, managerMode, reviewMode, coderViewMode, jobsMode, trailers,
+                    attributionModel,
                     autoCreate, autoMerge, reviewInProgress, changesRequested, failedChecks,
                     autoRebase, autoReRequest,
                 ]
@@ -275,6 +277,7 @@ func makeSettingsHandlers(
                     if let coderViewMode { config.coderViewAutoPermissionMode = coderViewMode }
                     if let jobsMode { config.jobsAutoPermissionMode = jobsMode }
                     if let trailers { config.attributionTrailers = trailers }
+                    if let attributionModel { config.attributionModel = attributionModel }
                     if let autoCreate { config.autoCreateWatcherEnabled = autoCreate }
                     if let autoMerge { config.autoMergeWatcherEnabled = autoMerge }
                     if let reviewInProgress { config.reviewInProgressLabelEnabled = reviewInProgress }

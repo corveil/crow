@@ -214,6 +214,7 @@ struct SettingsRPCSupportTests {
         #expect(json["review_auto_permission_mode"] == .bool(true))
         #expect(json["jobs_auto_permission_mode"] == .bool(true))
         #expect(json["attribution_trailers"] == .bool(true))
+        #expect(json["attribution_model"] == .bool(true))
         #expect(json["remote_control_enabled"] == .bool(false))
         #expect(json["coder_view_auto_permission_mode"] == .bool(false))
         #expect(json["auto_create_watcher_enabled"] == .bool(false))

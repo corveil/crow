@@ -53,6 +53,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// that overrides Claude Code's `attribution.commit` to include the crow
     /// session UUID alongside the standard `Co-Authored-By: Claude` trailer.
     public var attributionTrailers: Bool
+    /// When true, `crow attribution` adds the session's model id to Crow
+    /// footers (`… via Claude Code · claude-opus-5-5`). Defaults to true; set
+    /// false to keep the harness-only footer (CROW-1533).
+    public var attributionModel: Bool
     /// When true, the IssueTracker watches for PRs labeled `crow:merge`
     /// and enables GitHub native auto-merge (squash) — but only on PRs
     /// authored by Crow (Crow-Session trailer matching a known session).
@@ -212,6 +216,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
         contextCompaction: ContextCompactionSettings = ContextCompactionSettings(),
         attributionTrailers: Bool = true,
+        attributionModel: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
         autoCreateWatcherEnabled: Bool = false,
         reviewInProgressLabelEnabled: Bool = false,
@@ -246,6 +251,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.autoRespond = autoRespond
         self.contextCompaction = contextCompaction
         self.attributionTrailers = attributionTrailers
+        self.attributionModel = attributionModel
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
         self.reviewInProgressLabelEnabled = reviewInProgressLabelEnabled
@@ -284,6 +290,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         contextCompaction = try container.decodeIfPresent(
             ContextCompactionSettings.self, forKey: .contextCompaction) ?? ContextCompactionSettings()
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
+        attributionModel = try container.decodeIfPresent(Bool.self, forKey: .attributionModel) ?? true
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
         autoCreateWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCreateWatcherEnabled) ?? false
         reviewInProgressLabelEnabled = try container.decodeIfPresent(Bool.self, forKey: .reviewInProgressLabelEnabled) ?? false
@@ -347,7 +354,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, chatView, debugMode, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, contextCompaction, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, mcpOAuthGrants, logSync, corveilConnection, webDefaultSkin
+        case workspaces, defaults, notifications, sidebar, switcher, chatView, debugMode, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, contextCompaction, attributionTrailers, attributionModel, autoMergeWatcherEnabled, autoCreateWatcherEnabled, reviewInProgressLabelEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, mcpOAuthGrants, logSync, corveilConnection, webDefaultSkin
     }
 
     /// Resolve the agent that should drive a newly-created session of the

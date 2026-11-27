@@ -21,6 +21,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow agents`](#crow-agents) | Show and change which coding agent Crow launches |
 | [`crow agents list`](#crow-agents-list) | Show known agents, the configured default, and the agent each role resolves to |
 | [`crow agents set`](#crow-agents-set) | Change the default agent or a per-role override |
+| [`crow attribution`](#crow-attribution) | Print the Crow footer line for a review or an authored artifact |
 | [`crow automation`](#crow-automation) | View or change the automation settings |
 | [`crow automation get`](#crow-automation-get) | Show the current automation settings |
 | [`crow automation set`](#crow-automation-set) | Change the automation settings |
@@ -306,6 +307,36 @@ An agent kind that is not currently available is rejected and nothing is written
 
 ---
 
+## `crow attribution`
+
+Print the Crow footer line for a review or an authored artifact.
+
+```
+crow attribution --kind <kind> [--session <session>] [--no-model]
+```
+
+Prints one line, for example:
+
+```
+[🐦‍⬛ Reviewed by Crow via Claude Code · claude-opus-5-5](https://github.com/corveil/crow)
+```
+
+--kind review prints the review footer; --kind created prints the footer for issues, PR descriptions and other artifacts Crow wrote.
+
+The model is the session's context.model (see `crow get-session`), read when you run this. Claude Code and Codex sessions report one; other harnesses don't. --session defaults to $CROW_SESSION_ID.
+
+The model is left out when `crow automation set --attribution-model false` is set, when --no-model is passed, when the session is unset or unknown, when the harness reports no model, or when the model id is anything but 1-64 characters of A-Z, a-z, 0-9, '.', '_' and '-'. The footer is still printed and the exit status is 0.
+
+Prints plain text, not JSON.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--kind` | `<kind>` | yes | Which footer to print: review or created. Values: `review`, `created`. |
+| `--session` | `<session>` | no | Session UUID (default: $CROW_SESSION_ID) |
+| `--no-model` | — | no | Leave the model out of this footer |
+
+---
+
 ## `crow automation`
 
 View or change the automation settings.
@@ -343,12 +374,12 @@ config_readable is false when config.json exists but could not be decoded — th
 Change the automation settings.
 
 ```
-crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--review-in-progress-label <review-in-progress-label>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>] [--auto-re-request-review <auto-re-request-review>] [--auto-compact <auto-compact>] [--auto-compact-min-context-tokens <auto-compact-min-context-tokens>] [--auto-compact-idle-minutes <auto-compact-idle-minutes>]
+crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--attribution-model <attribution-model>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--review-in-progress-label <review-in-progress-label>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>] [--auto-re-request-review <auto-re-request-review>] [--auto-compact <auto-compact>] [--auto-compact-min-context-tokens <auto-compact-min-context-tokens>] [--auto-compact-idle-minutes <auto-compact-idle-minutes>]
 ```
 
 Only the flags you pass change; at least one is required.
 
-Everything here is live within about one board poll (~60s) — the daemon re-reads config.json rather than holding a snapshot, so no crowd restart is needed. The permission modes and --remote-control-enabled apply to newly launched sessions, and --attribution-trailers to newly created worktrees; running sessions and existing worktrees are untouched.
+Everything here is live within about one board poll (~60s) — the daemon re-reads config.json rather than holding a snapshot, so no crowd restart is needed. The permission modes and --remote-control-enabled apply to newly launched sessions, and --attribution-trailers to newly created worktrees; running sessions and existing worktrees are untouched. --attribution-model applies to the next `crow attribution` call.
 
 --manager-auto-permission-mode is the one exception: it is baked into the Manager terminal's stored command, so it needs `crow restart-manager` (or an app relaunch) to take effect. A change to it returns "manager_restart_required": true.
 
@@ -364,6 +395,7 @@ The tab's three board-filter lists (excluded review repos, ignored review labels
 | `--coder-view-auto-permission-mode` | `<coder-view-auto-permission-mode>` | no | Launch new work coder views in auto permission mode (true or false) |
 | `--jobs-auto-permission-mode` | `<jobs-auto-permission-mode>` | no | Run scheduled jobs in auto permission mode (true or false) |
 | `--attribution-trailers` | `<attribution-trailers>` | no | Add a Crow-Session trailer to commits in new worktrees (true or false) |
+| `--attribution-model` | `<attribution-model>` | no | Include the model in Crow footers printed by `crow attribution` (true or false) |
 | `--auto-create-watcher-enabled` | `<auto-create-watcher-enabled>` | no | Auto-launch a workspace for crow:auto / crow:explore labeled issues (true or false) |
 | `--auto-merge-watcher-enabled` | `<auto-merge-watcher-enabled>` | no | Auto-merge Crow-authored PRs labeled crow:merge (true or false) |
 | `--review-in-progress-label` | `<review-in-progress-label>` | no | Label PRs crow:reviewing while a Crow review is in progress (true or false) |

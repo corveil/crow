@@ -50,6 +50,7 @@ public struct CrowCommand: ParsableCommand {
             UI.self,
             Terminal.self,
             Automation.self,
+            Attribution.self,
             Notifications.self,
             Skin.self,
             Defaults.self,

@@ -454,6 +454,7 @@ crow automation set [--remote-control-enabled true|false]
                     [--coder-view-auto-permission-mode true|false]
                     [--jobs-auto-permission-mode true|false]
                     [--attribution-trailers true|false]
+                    [--attribution-model true|false]                    → model in `crow attribution` footers (default true)
                     [--auto-create-watcher-enabled true|false]
                     [--auto-merge-watcher-enabled true|false]
                     [--review-in-progress-label true|false]            → crow:reviewing while a review runs
@@ -467,13 +468,23 @@ crow automation set [--remote-control-enabled true|false]
                                                                         → {"automation":{...},"restart_required":false,"manager_restart_required":bool}
 ```
 
-Booleans take an explicit `true`/`false` — a bare flag can't express "leave alone", and six of these default to **on** (`manager`/`review`/`jobs` auto permission mode, `attribution-trailers`, `respond-to-changes-requested`, `auto-re-request-review`). `--jobs-auto-permission-mode` lives here even though the web UI puts it under the Jobs tab, so all five permission modes read and write as one group.
+Booleans take an explicit `true`/`false` — a bare flag can't express "leave alone", and seven of these default to **on** (`manager`/`review`/`jobs` auto permission mode, `attribution-trailers`, `attribution-model`, `respond-to-changes-requested`, `auto-re-request-review`). `--jobs-auto-permission-mode` lives here even though the web UI puts it under the Jobs tab, so all five permission modes read and write as one group.
 
 `--auto-re-request-review` (CROW-921) is the one auto-respond toggle that types nothing into a terminal: when a changes-requested PR's fix has landed and no review request is pending, the daemon runs `gh pr edit --add-reviewer` itself. That's deliberate — the PRs it rescues are exactly the ones no prompt can reach.
 
 Everything applies within ~1 board poll (no `crowd` restart) — permission modes and `--remote-control-enabled` to newly launched sessions, `--attribution-trailers` to newly created worktrees. `--manager-auto-permission-mode` is the exception: it's baked into the Manager terminal's stored command, so a change returns `manager_restart_required: true` and needs `crow restart-manager`.
 
 `--auto-compact` (CROW-1493, off by default) types `/compact` into a Claude Code session whose `context.tokens` (see `get-session`) is at least the threshold, once it has been idle `--auto-compact-idle-minutes` since its last model call and while its prompt cache is still warm. It never sends into a session whose `agent_state` isn't `idle` or whose composer holds unsent text. Compaction keeps a summary, not the conversation, so the agent loses detail; see `docs/context-compaction.md`.
+
+### Attribution footers
+
+```
+crow attribution --kind review|created [--session <uuid>] [--no-model]
+                                                                        → one plain-text line, e.g.
+                                                                          [🐦‍⬛ Reviewed by Crow via Claude Code · claude-opus-5-5](https://github.com/corveil/crow)
+```
+
+Prints the Crow footer for a review (`review`) or an issue / PR description (`created`), naming the session's harness and its current `context.model` (CROW-1533). `--session` defaults to `$CROW_SESSION_ID`. Paste the output verbatim as the body's last line; never inline it as `$(crow attribution …)`. The model is left out (exit 0 regardless) when `--attribution-model false` is set, `--no-model` is passed, the session is unknown, the harness reports no model (only Claude Code and Codex do), or the id isn't `^[A-Za-z0-9._-]{1,64}$`.
 
 The Automation tab's three board-filter lists are `AppConfig.defaults` fields, so **`crow defaults set` writes them** (above) — one writer, one set of list semantics. `crow automation get` echoes them read-only under `defaults`, including the derived `effective_exclude_review_repos` (the global list unioned with every workspace's own, which is what the review board actually filters on), so the tab still reads as a whole from one call.
 

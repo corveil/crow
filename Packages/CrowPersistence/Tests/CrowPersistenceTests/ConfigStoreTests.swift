@@ -373,7 +373,7 @@ import Testing
 /// different config subtrees (top-level, `autoRespond`, `defaults`) and have all
 /// of them survive a real save/load.
 ///
-/// The top-level booleans are the ones worth pinning: six of them default to
+/// The top-level booleans are the ones worth pinning: seven of them default to
 /// `true`, so a serialization bug that dropped a key would silently re-arm the
 /// automation the user just turned off, rather than failing loudly.
 @Test func configStoreAutomationMutationRoundTrips() throws {
@@ -388,6 +388,7 @@ import Testing
     config.coderViewAutoPermissionMode = true
     config.jobsAutoPermissionMode = false
     config.attributionTrailers = false
+    config.attributionModel = false
     config.autoCreateWatcherEnabled = true
     config.autoMergeWatcherEnabled = true
     config.autoRespond.respondToChangesRequested = false
@@ -407,6 +408,7 @@ import Testing
     #expect(loaded.coderViewAutoPermissionMode == true)
     #expect(loaded.jobsAutoPermissionMode == false)
     #expect(loaded.attributionTrailers == false)
+    #expect(loaded.attributionModel == false)
     #expect(loaded.autoCreateWatcherEnabled == true)
     #expect(loaded.autoMergeWatcherEnabled == true)
     #expect(loaded.autoRespond.respondToChangesRequested == false)

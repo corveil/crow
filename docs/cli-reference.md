@@ -1203,7 +1203,7 @@ Settings → Automation: which sessions launch in auto permission mode, whether 
 
 The tab also renders three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos). Those are `AppConfig.defaults` fields and are written by [`crow defaults set`](#crow-defaults-get--set) — one writer, one set of list semantics. `crow automation get` echoes them read-only so the tab still reads as a whole from one call.
 
-Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these toggles default to on**, so a bare-flag design could never turn one off.
+Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **seven of these toggles default to on**, so a bare-flag design could never turn one off.
 
 ### `crow automation get | set`
 
@@ -1230,6 +1230,7 @@ crow automation set --manager-auto-permission-mode false && crow restart-manager
 | Flag                            | Default | Description                                                              |
 | ------------------------------- | ------- | ------------------------------------------------------------------------ |
 | `--attribution-trailers`        | `true`  | Write a per-worktree hook adding a `Crow-Session: <uuid>` commit trailer  |
+| `--attribution-model`           | `true`  | Name the model in Crow footers printed by [`crow attribution`](#crow-attribution) |
 | `--auto-create-watcher-enabled` | `false` | Auto-launch a workspace for issues assigned to you labeled `crow:auto` or `crow:explore` |
 | `--auto-merge-watcher-enabled`  | `false` | Auto-merge Crow-authored PRs labeled `crow:merge`                         |
 | `--review-in-progress-label`    | `false` | Label PRs `crow:reviewing` while a Crow review is in progress             |
@@ -1268,6 +1269,7 @@ Returns:
     "coder_view_auto_permission_mode": false,
     "jobs_auto_permission_mode": true,
     "attribution_trailers": true,
+    "attribution_model": true,
     "auto_create_watcher_enabled": false,
     "auto_merge_watcher_enabled": true,
     "auto_respond": {
@@ -1301,6 +1303,37 @@ Notes:
 - **The whole `defaults` block in the response is read-only here.** Write those three lists with [`crow defaults set`](#crow-defaults-get--set); `automation-set` ignores `add_*` / `remove_*` / `clear_*` params even if a hand-rolled RPC call sends them.
 - **`defaults.effective_exclude_review_repos` is additionally derived** — the global exclude list unioned with every workspace's own `excludeReviewRepos`, which is what the review board actually filters on. It is the only way to see the per-workspace half from the CLI, and explains why `crow defaults set --clear-exclude-review-repos` may not unhide a repo.
 - **`config_readable: false`** means `config.json` exists but could not be decoded: the values shown are defaults, not what is on disk. A `set` against such a file is refused rather than overwriting it.
+- **`--attribution-model`** takes effect on the next [`crow attribution`](#crow-attribution) call; footers already posted keep what they say.
+
+### `crow attribution`
+
+Print the finished Crow footer line for a review or an authored artifact, naming the model as well as the harness (CROW-1533). Skills call this when they post, then paste its output verbatim at the end of the body.
+
+```bash
+crow attribution --kind review
+# [🐦‍⬛ Reviewed by Crow via Claude Code · claude-opus-5-5](https://github.com/corveil/crow)
+
+crow attribution --kind created --session <uuid>
+# [🐦‍⬛ Created with Crow via OpenAI Codex · gpt-5.5-codex](https://github.com/corveil/crow)
+
+crow attribution --kind review --no-model
+# [🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/corveil/crow)
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--kind review\|created` | required | `review` for PR reviews; `created` for issues, PR descriptions and other artifacts Crow wrote |
+| `--session <uuid>` | `$CROW_SESSION_ID` | Whose harness and model to name |
+| `--no-model` | off | Leave the model out of this one footer |
+
+Notes:
+
+- **Prints plain text, not JSON**, like `crow version`: the line goes straight into a body.
+- **The model is read when you run it**, from the session's `context.model` (see [`crow get-session`](#crow-get-session)). It isn't baked into the skill at install time like the agent name, because it can change mid-session (`/model`, Codex config). Claude Code and Codex sessions report a model; other harnesses don't yet.
+- **The model is left out**, and the footer still printed with exit status 0, when `attributionModel` is `false` (`crow automation set --attribution-model false`, or Settings → Automation), when `--no-model` is passed, when the session is unset, unknown or malformed, when the daemon can't be reached or the setting can't be read, when the harness reports no model, or when the model id fails validation.
+- **The model id is untrusted.** It comes from the API response, which a third-party gateway controls. It is printed only if it matches `^[A-Za-z0-9._-]{1,64}$`, which rules out shell metacharacters, Markdown or HTML, and ARNs or deployment paths that would leak an account id, region or internal name.
+- **The harness name comes from the session's `agent_kind`**, so `--session` names that session's harness. Without a session it falls back to `$CROW_AGENT_DISPLAY_NAME` / `$CROW_AGENT_KIND`. The verb never reads gateway headers or the session's gateway fields.
+- **The footer is informational.** No CI check, merge rule or approval keys off it.
 
 ---
 

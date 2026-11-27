@@ -82,6 +82,8 @@
     body.appendChild(S.group('Attribution'));
     body.appendChild(S.toggleField('Add Crow-Session trailer to commits', S.cfg, 'attributionTrailers',
       'Writes a per-worktree settings.local.json adding a Crow-Session: <uuid> trailer. New worktrees only.'));
+    body.appendChild(S.toggleField('Include the model in Crow footers', S.cfg, 'attributionModel',
+      'Review and ticket footers name the model as well as the harness (via Claude Code · claude-opus-5-5). Claude Code and Codex sessions only.'));
 
     body.appendChild(S.group('Auto-launch workspaces'));
     body.appendChild(S.toggleField('Auto-launch workspaces for crow:auto / crow:explore labeled issues', S.cfg, 'autoCreateWatcherEnabled',
