@@ -111,8 +111,7 @@ rules above. If there is no usable title, ask the user for one and stop until pr
 
 The body is the text the user provided (or empty). It MUST end with the Crow
 attribution footer (see **Step 4b** and `.claude/skills/crow-attribution/FOOTER.md`):
-a blank line, then the literal attribution line shown in **Step 4** below.
-Crow has already filled in the agent name for this session — copy the line
+a blank line, then the line `crow attribution --kind created` prints, copied
 as-is into the body.
 Do NOT add any other footer — no "Generated with Claude Code" line and no co-author
 trailer. The Crow attribution is the only footer. (The ticket standard's
@@ -155,8 +154,10 @@ the resolved account, call `jira_get_user_profile {email}`.)
 
 ### Step 4: Create the issue (assigned + labeled `crow:auto`)
 
-In both commands below, `BODY` is the user-provided body followed by the required
-attribution footer from **Step 4b** (a blank line, then the canonical link).
+First print the footer and write the body file (**Step 4b**). `$TMPDIR/crow-ticket-body.md`
+holds the user-provided body, a blank line, then the footer line. Write it with your
+file-writing tool, and pass it by file, never inline: the shell would expand any
+`$(…)`, backtick or `$VAR` in an inline body.
 
 **Exception:** an epic issue, and a sub-ticket in wave 2 or later, is filed
 **without** `--label "crow:auto"` (see **Epics and `crow:auto`** under **Ticket
@@ -166,45 +167,51 @@ standard**).
 ```bash
 gh issue create --repo OWNER/REPO \
   --title "TITLE" \
-  --body "BODY
-
-[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)" \
+  --body-file "$TMPDIR/crow-ticket-body.md" \
   --assignee "{login}" \
   --label "crow:auto"
 ```
-- If the user-provided body is empty, the body is just the attribution footer — never
-  pass `--body ""`, or `gh` would open an interactive editor.
+- If the user-provided body is empty, the body file holds just the attribution footer —
+  never pass an empty body, or `gh` would open an interactive editor.
 
 **GitLab (non-default host):**
 ```bash
 GITLAB_HOST={host} glab issue create --repo {org/repo} \
   --title "TITLE" \
-  --description "BODY
-
-[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)" \
+  --description "$(cat "$TMPDIR/crow-ticket-body.md")" \
   --assignee "{username}" \
   --label "crow:auto" \
   --yes
 ```
 
 **Jira (`jira` MCP):** call `jira_create_issue` with `project_key` =
-`jiraProjectKey`, `issue_type` `Task`, `summary` = `TITLE`, `description` = `BODY`
-(including the attribution footer), `assignee` = the email from Step 3, and
+`jiraProjectKey`, `issue_type` `Task`, `summary` = `TITLE`, `description` = the body
+file's contents (including the attribution footer), `assignee` = the email from Step 3, and
 `additional_fields` `{"labels":["crow:auto"]}` — so the work item is created already
 assigned, the core fix in CROW-522. There is no missing-label fallback to run (Step 5
 is GitHub/GitLab-only); Jira accepts arbitrary labels.
 
 ### Step 4b: Attribution (REQUIRED)
 
-See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The body passed to
-`gh issue create --body` / `glab issue create --description` MUST end with a blank line
-followed by:
+See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. Print this session's footer
+(like every `crow` command, run it with `dangerouslyDisableSandbox: true`):
+
+```bash
+crow attribution --kind created
+```
+
+It prints one line naming the harness and, when Crow knows it, the model, e.g.
+`[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}} · claude-opus-5-5](https://github.com/corveil/crow)`.
+The body MUST end with a blank line followed by that line, copied verbatim.
+
+If the command fails, or its output is not one line that starts with `[🐦‍⬛ Created with Crow via ` and ends with `](https://github.com/corveil/crow)`, use this line instead:
 
 ```
 [🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
-- Crow filled in the agent name for this session before this skill reached you — paste the line literally; do not re-introduce `${…}` shell parameter expansion of your own (it silently fails inside single-quoted heredocs and the literal text leaks into the issue body).
+- Copy the printed line into the body file as text. Never put `$(crow attribution …)` or any other `${…}` / `$(…)` expansion in the body: it silently fails inside single-quoted heredocs and the literal text leaks into the issue body (#447).
+- Don't add, edit or guess a model yourself. If the printed line has none, file it without one.
 - Do not modify the URL — the link target is always `https://github.com/corveil/crow`, never a fork or a derived value from the local git remote.
 - Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
 - This line MUST appear in every issue body — GitHub, GitLab, or Jira — and whether or not the user supplied any body text.

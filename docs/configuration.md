@@ -436,6 +436,7 @@ The settings behind **Settings → Automation**, editable there or from the CLI 
 | `coderViewAutoPermissionMode`                | `false` | Newly launched work coder views                                   |
 | `jobsAutoPermissionMode`                     | `true`  | The next scheduled job run (Settings renders it on the Jobs tab) |
 | `attributionTrailers`                        | `true`  | Newly created worktrees (installs the commit-trailer hook)       |
+| `attributionModel`                           | `true`  | The next `crow attribution` call (adds `· <model>` to Crow footers) |
 | `autoCreateWatcherEnabled`                   | `false` | The `crow:auto` / `crow:explore` issue watcher                    |
 | `autoMergeWatcherEnabled`                    | `false` | The `crow:merge` PR watcher                                       |
 | `reviewInProgressLabelEnabled`               | `false` | The `crow:reviewing` label while a Crow review is in progress     |
@@ -449,7 +450,7 @@ The settings behind **Settings → Automation**, editable there or from the CLI 
 
 **Live — no `crowd` restart.** The daemon re-reads `config.json` rather than holding a snapshot: `applyConfigToAppState` runs each board tick, the watcher gates are closures that reload config on every call, and `AutoRespondCoordinator` takes a settings closure. So a change is picked up within about a minute. The "applies to" column is about *scope*, not latency — a permission-mode change reaches the next session you launch, not the ones already running.
 
-Six of the booleans default to **on**, which is why `crow automation set` takes explicit `true`/`false` values rather than bare flags: a bare-flag design could never turn one off.
+Seven of the booleans default to **on**, which is why `crow automation set` takes explicit `true`/`false` values rather than bare flags: a bare-flag design could never turn one off.
 
 **Hand-editing note.** `autoRebaseAndResolveConflicts` replaced a pre-CROW-551 top-level `autoRebaseWatcherEnabled`. That legacy key is still honored on read as a one-way opt-in (a stored `true` forces the new field on) but is dropped on the next write, so an opt-out through Settings or the CLI sticks. If you are editing the file by hand, delete the legacy key rather than setting it to `false`.
 

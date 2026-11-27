@@ -364,7 +364,7 @@ Provenance: Corveil FollowUp `05d9dcd9-e6a3-4450-a3be-34665e204be7` · meeting `
 [🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
-Crow filled in the agent name on that attribution line when it installed this skill. Copy it as it is.
+Use the line `crow attribution --kind created` prints as the attribution line (run it with `dangerouslyDisableSandbox: true`). It adds the model when Crow knows it, e.g. `… via {{CROW_AGENT_DISPLAY_NAME}} · claude-opus-5-5](…)`. If the command fails, copy the line above as it is: Crow filled in the agent name when it installed this skill. Never edit or guess the model.
 
 ## Examples
 

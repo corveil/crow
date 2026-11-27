@@ -292,10 +292,17 @@ The next wave starts only when this wave's PRs **merge**, so the PR you open is 
 3. Implement the plan
 4. Commit the changes with a descriptive message
 5. Push the branch to origin
-6. Open ONE pull request linked to the ticket:
+6. Open ONE pull request linked to the ticket. Print Crow's footer, then write the PR body to `$TMPDIR/pr-body.md`: `Closes {closes_ref}`, a blank line, then the footer line exactly as printed:
 
 ```bash
-gh pr create --title "<summary>" --body "Closes {closes_ref}" --base {base_branch}
+crow attribution --kind created
+gh pr create --title "<summary>" --body-file "$TMPDIR/pr-body.md" --base {base_branch}
+```
+
+If `crow attribution` fails, or doesn't print one line that starts with `[🐦‍⬛ Created with Crow via ` and ends with `](https://github.com/corveil/crow)`, end the body with this line instead:
+
+```
+[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
 7. Register that PR with the Crow session **once**, then request the human reviewer. `add-link --type pr` is idempotent:
@@ -339,7 +346,7 @@ and `{gate_step}`:
 >
 > If it returns a `warning`, the label won't lead to a merge (watcher off, or the repo forbids auto-merge) — say so in your final message.
 
-GitLab tickets take the same substitutions as `/crow-workspace` (`glab mr create … --description "Closes #{number}" --target-branch {base_branch}`, "merge request"), and `glab mr update <iid> --reviewer {reviewer}` in step 7.
+GitLab tickets take the same substitutions as `/crow-workspace` (`glab mr create … --description "$(cat "$TMPDIR/pr-body.md")" --target-branch {base_branch}`, "merge request"), and `glab mr update <iid> --reviewer {reviewer}` in step 7.
 
 ## Ticket comment
 

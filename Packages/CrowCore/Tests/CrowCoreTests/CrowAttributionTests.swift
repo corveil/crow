@@ -151,3 +151,57 @@ private func normalizedFooterText(_ text: String) -> String {
         "skills/crow-attribution/FOOTER.md at \(footerURL.path) must match CrowAttribution.sharedFooterInstructions"
     )
 }
+
+// MARK: - Model-attributed footers (CROW-1533)
+
+@Test func crowAttributionFooterNamesTheModel() {
+    #expect(CrowAttribution.footer(kind: .review, agentDisplayName: "Claude Code", model: "claude-opus-5-5") ==
+            "[🐦‍⬛ Reviewed by Crow via Claude Code · claude-opus-5-5](https://github.com/corveil/crow)")
+    #expect(CrowAttribution.footer(kind: .created, agentDisplayName: "OpenAI Codex", model: "gpt-5.5-codex") ==
+            "[🐦‍⬛ Created with Crow via OpenAI Codex · gpt-5.5-codex](https://github.com/corveil/crow)")
+}
+
+@Test func crowAttributionFooterWithoutModelMatchesTodaysFooter() {
+    #expect(CrowAttribution.footer(kind: .review, agentDisplayName: "Cursor") ==
+            CrowAttribution.reviewMarkdownLink(agentDisplayName: "Cursor"))
+    #expect(CrowAttribution.footer(kind: .created) == CrowAttribution.ticketMarkdownLink)
+}
+
+/// The model id is untrusted (a gateway controls the API response): anything
+/// outside `^[A-Za-z0-9._-]{1,64}$` is dropped whole, and the footer is printed
+/// without it.
+@Test(arguments: [
+    "x$(id)",
+    "`id`",
+    "a](https://evil.example)",
+    "arn:aws:bedrock:us-east-1:123456789012:inference-profile/x",
+    String(repeating: "a", count: 65),
+    "",
+    "claude opus",
+    "claude-opus\n[evil](https://evil.example)",
+    "<img src=x>",
+    "models/gemini-pro",
+    "clаude", // Cyrillic а
+])
+func crowAttributionRejectsUnsafeModel(_ model: String) {
+    #expect(CrowAttribution.sanitizedModel(model) == nil)
+    #expect(CrowAttribution.footer(kind: .review, agentDisplayName: "Claude Code", model: model) ==
+            "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/corveil/crow)")
+    #expect(CrowAttribution.footer(kind: .created, agentDisplayName: "Claude Code", model: model) ==
+            "[🐦‍⬛ Created with Crow via Claude Code](https://github.com/corveil/crow)")
+}
+
+@Test(arguments: [
+    "claude-opus-5-5",
+    "gpt-5.5-codex",
+    "o4_mini",
+    "A",
+    String(repeating: "a", count: 64),
+])
+func crowAttributionAcceptsPlainModelIDs(_ model: String) {
+    #expect(CrowAttribution.sanitizedModel(model) == model)
+}
+
+@Test func crowAttributionNilModelIsOmitted() {
+    #expect(CrowAttribution.sanitizedModel(nil) == nil)
+}

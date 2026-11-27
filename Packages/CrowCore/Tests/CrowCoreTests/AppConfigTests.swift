@@ -75,6 +75,7 @@ import Testing
     #expect(config.remoteControlEnabled == false)
     #expect(config.managerAutoPermissionMode == true)
     #expect(config.attributionTrailers == true)
+    #expect(config.attributionModel == true)
     #expect(config.autoMergeWatcherEnabled == false)
     #expect(config.autoCreateWatcherEnabled == false)
     #expect(config.reviewInProgressLabelEnabled == false)
@@ -1546,4 +1547,23 @@ import Testing
     #expect(String(decoding: data, as: UTF8.self).contains(#""brandmarkColor":"pink""#))
     let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
     #expect(decoded.sidebar.brandmarkColor == .pink)
+}
+
+@Test func appConfigAttributionModelRoundTrip() throws {
+    var config = AppConfig()
+    config.attributionModel = false
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+    #expect(decoded.attributionModel == false)
+
+    config.attributionModel = true
+    let decoded2 = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+    #expect(decoded2.attributionModel == true)
+}
+
+/// CROW-1533: configs written before the flag existed get the model in footers.
+@Test func appConfigAttributionModelDefaultsTrueWhenKeyMissing() throws {
+    let json = #"{"workspaces": [], "attributionTrailers": false}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.attributionModel == true)
+    #expect(config.attributionTrailers == false)
 }

@@ -55,7 +55,7 @@ import CrowPersistence
         #expect(automation["config_readable"] == .bool(true))
     }
 
-    /// `loadConfig` returns nil for both "missing" and "malformed". Six of these
+    /// `loadConfig` returns nil for both "missing" and "malformed". Seven of these
     /// booleans default to `true`, so reporting a fiction as fact would tell a
     /// caller automation is armed when the daemon can't read the file at all.
     @Test @MainActor func getReportsAnUndecodableConfigAsUnreadable() async throws {
@@ -92,7 +92,7 @@ import CrowPersistence
         #expect(onDisk.autoRespond.respondToChangesRequested == true)
     }
 
-    /// Setting `false` must be a real write, not read as "absent" — six of these
+    /// Setting `false` must be a real write, not read as "absent" — seven of these
     /// default to `true`, so this is the only way to turn them off.
     @Test @MainActor func settingFalseIsAWriteNotANoOp() async throws {
         let devRoot = tempDevRoot()
@@ -100,12 +100,14 @@ import CrowPersistence
 
         _ = await call("automation-set", [
             "attribution_trailers": .bool(false),
+            "attribution_model": .bool(false),
             "respond_to_changes_requested": .bool(false),
             "jobs_auto_permission_mode": .bool(false),
         ], devRoot: devRoot)
 
         let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
         #expect(onDisk.attributionTrailers == false)
+        #expect(onDisk.attributionModel == false)
         #expect(onDisk.autoRespond.respondToChangesRequested == false)
         #expect(onDisk.jobsAutoPermissionMode == false)
     }
@@ -235,7 +237,7 @@ import CrowPersistence
     /// while silently dropping the field on the wire.
     ///
     /// This is the exact dictionary `AutomationSet.params` produces with every
-    /// flag passed — thirteen booleans, no lists — kept in step with
+    /// flag passed — fifteen booleans, two integers, no lists — kept in step with
     /// `AutomationCommandParsingTests.automationSetEmitsTheExpectedWireKeys`,
     /// which asserts the CLI emits precisely these keys and no others.
     @Test @MainActor func setAcceptsEveryWireKeyTheCLIEmits() async throws {
@@ -254,6 +256,7 @@ import CrowPersistence
             "coder_view_auto_permission_mode": .bool(true),
             "jobs_auto_permission_mode": .bool(false),
             "attribution_trailers": .bool(false),
+            "attribution_model": .bool(false),
             "auto_create_watcher_enabled": .bool(true),
             "auto_merge_watcher_enabled": .bool(true),
             "review_in_progress_label_enabled": .bool(true),
@@ -277,6 +280,7 @@ import CrowPersistence
         #expect(onDisk.coderViewAutoPermissionMode == true)
         #expect(onDisk.jobsAutoPermissionMode == false)
         #expect(onDisk.attributionTrailers == false)
+        #expect(onDisk.attributionModel == false)
         #expect(onDisk.autoCreateWatcherEnabled == true)
         #expect(onDisk.autoMergeWatcherEnabled == true)
         #expect(onDisk.reviewInProgressLabelEnabled == true)

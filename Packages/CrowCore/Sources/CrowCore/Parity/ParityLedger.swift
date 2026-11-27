@@ -952,6 +952,8 @@ public enum ParityLedger {
         .field("reviewAutoPermissionMode", read: "automation get", write: "automation set"),
         .field("coderViewAutoPermissionMode", read: "automation get", write: "automation set"),
         .field("attributionTrailers", read: "automation get", write: "automation set"),
+        // Model id in Crow footers (CROW-1533); `crow attribution` reads it.
+        .field("attributionModel", read: "automation get", write: "automation set"),
         .field("autoMergeWatcherEnabled", read: "automation get", write: "automation set"),
         .field("autoCreateWatcherEnabled", read: "automation get", write: "automation set"),
         .field("reviewInProgressLabelEnabled", read: "automation get", write: "automation set"),

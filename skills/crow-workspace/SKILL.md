@@ -509,10 +509,17 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 3. Implement the plan
 4. Commit the changes with a descriptive message
 5. Push the branch to origin
-6. Open a pull request linked to the ticket:
+6. Open a pull request linked to the ticket. Print Crow's footer, then write the PR body to `$TMPDIR/pr-body.md`: `Closes #{number}`, a blank line, then the footer line exactly as printed:
 
 ```bash
-gh pr create --title "<summary>" --body "Closes #{number}" --base {base_branch}
+crow attribution --kind created
+gh pr create --title "<summary>" --body-file "$TMPDIR/pr-body.md" --base {base_branch}
+```
+
+If `crow attribution` fails, or doesn't print one line that starts with `[🐦‍⬛ Created with Crow via ` and ends with `](https://github.com/corveil/crow)`, end the body with this line instead:
+
+```
+[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
 7. Register that PR with the Crow session **once**. `add-link --type pr` is idempotent (skips if a `.pr` link already exists, or if this URL is already linked — do not stack extras; automation uses the first `.pr`):
@@ -589,11 +596,11 @@ Instructions, and note that this explore session is **not** checked out on that
 branch — inspect it with `gh pr diff` / `gh pr view` rather than committing onto
 it.
 
-On step 6, substitute the real ticket number into `{number}` in the PR body (same substitution as `{base_branch}`) so the body reads e.g. `Closes #654` — the closing keyword with the real number is what makes GitHub link the PR to the issue and auto-close it on merge into the default branch. When no ticket number is available, drop the `--body` and fall back to `gh pr create --fill`.
+On step 6, substitute the real ticket number into `{number}` in the PR body (same substitution as `{base_branch}`) so the body reads e.g. `Closes #654` — the closing keyword with the real number is what makes GitHub link the PR to the issue and auto-close it on merge into the default branch. When no ticket number is available, drop the body file and fall back to `gh pr create --fill`.
 
 After a successful `gh pr create`, always run step 7 (`gh pr view --json url,number` then `crow add-link --session "$CROW_SESSION_ID" … --type pr`). Crow does **not** learn about the PR from GitHub's `Closes #N` keyword; the issue-tracker poller only attaches a `.pr` when a registered worktree branch matches. The coder must register the URL once. `add-link --type pr` is idempotent.
 
-For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the description and fall back to `glab mr create --fill`. On step 7 use `glab mr view --output json` (or the MR URL printed by `glab mr create`) with the same `crow add-link --type pr` call.
+For GitLab tickets, substitute `glab mr create --title "<summary>" --description "$(cat "$TMPDIR/pr-body.md")" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the description and fall back to `glab mr create --fill`. On step 7 use `glab mr view --output json` (or the MR URL printed by `glab mr create`) with the same `crow add-link --type pr` call.
 
 ### Embedding pre-fetched content
 

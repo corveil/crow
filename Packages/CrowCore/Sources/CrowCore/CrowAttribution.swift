@@ -82,6 +82,61 @@ public enum CrowAttribution {
         "[🐦‍⬛ Created with Crow via \(agentDisplayName)](\(repoURL))"
     }
 
+    // MARK: - Model-attributed footers (CROW-1533)
+
+    /// Which footer `crow attribution --kind` prints.
+    public enum FooterKind: String, CaseIterable, Sendable {
+        /// `Reviewed by Crow via …` — PR reviews.
+        case review
+        /// `Created with Crow via …` — issues, PR descriptions, other authored artifacts.
+        case created
+    }
+
+    /// Separator between the agent name and the model id in a footer.
+    public static let modelSeparator = " · "
+
+    /// The longest model id a footer will print.
+    public static let maxModelLength = 64
+
+    /// Return `raw` if it is safe to print in a footer, or nil.
+    ///
+    /// The model id comes from the harness transcript, which records what the
+    /// API (or a third-party gateway in front of it) answered, so treat it as
+    /// untrusted. Allow only `^[A-Za-z0-9._-]{1,64}$`. That rejects shell
+    /// metacharacters (`$(…)`, backticks), Markdown link and HTML syntax
+    /// (`]`, `(`, `<`), whitespace and newlines, and ARNs or deployment paths
+    /// (`:`, `/`) that would leak an AWS account id, region or internal name.
+    /// Nothing is trimmed or repaired: a value that fails is dropped whole.
+    public static func sanitizedModel(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty, raw.unicodeScalars.count <= maxModelLength else { return nil }
+        let allowed = raw.unicodeScalars.allSatisfy { scalar in
+            switch scalar {
+            case "A"..."Z", "a"..."z", "0"..."9", ".", "_", "-": true
+            default: false
+            }
+        }
+        return allowed ? raw : nil
+    }
+
+    /// The finished footer line: `[🐦‍⬛ Reviewed by Crow via <agent> · <model>](…)`.
+    ///
+    /// `model` passes through ``sanitizedModel(_:)`` here, so a caller can't
+    /// print an unchecked value by forgetting to validate it. A nil or
+    /// rejected model gives the footer without a model part, byte-identical
+    /// to ``reviewMarkdownLink(agentDisplayName:)`` /
+    /// ``ticketMarkdownLink(agentDisplayName:)``.
+    public static func footer(
+        kind: FooterKind,
+        agentDisplayName: String = defaultAgentDisplayName,
+        model: String? = nil
+    ) -> String {
+        let label = sanitizedModel(model).map { agentDisplayName + modelSeparator + $0 } ?? agentDisplayName
+        switch kind {
+        case .review: return reviewMarkdownLink(agentDisplayName: label)
+        case .created: return ticketMarkdownLink(agentDisplayName: label)
+        }
+    }
+
     /// Default review footer (Claude Code) — backward-compatible alias.
     public static var reviewMarkdownLink: String { reviewMarkdownLink() }
 
@@ -122,6 +177,9 @@ public enum CrowAttribution {
 
     /// Shared attribution rules copied into `.claude/skills/crow-attribution/FOOTER.md`.
     ///
+    /// It tells skills to run `crow attribution` (CROW-1533) and keeps the static
+    /// lines as the fallback.
+    ///
     /// Crow runs this body through `expandSkillBody` before writing it to disk, so
     /// the prose must read sensibly **after** every `{{CROW_AGENT_DISPLAY_NAME}}` /
     /// `$CROW_AGENT_DISPLAY_NAME` / `via Claude Code` occurrence has been rewritten
@@ -130,26 +188,43 @@ public enum CrowAttribution {
     public static let sharedFooterInstructions: String = """
     # Crow Attribution Footers
 
-    This file is what your skill sees on disk. The footer lines below already contain
-    the literal agent name for this session (`Claude Code`, `Cursor`, `OpenAI Codex`, …) —
-    Crow substituted it in when scaffolding. Copy each line verbatim into the body you
-    pass to `gh`/`glab` (or your commit). No shell parameter expansion is needed and the
-    line survives every quoting form (single-quoted heredocs, JSON files, Swift literals).
+    Get the footer line from Crow when you post, and copy it verbatim as the last line of
+    the body you pass to `gh`/`glab`:
 
-    **Do not** reintroduce `${CROW_AGENT_DISPLAY_NAME:-…}` or any other shell
-    expression in attribution footers. The shell silently fails to expand it inside
-    single-quoted heredocs and the literal text leaks into the artifact (#447).
+    ```bash
+    crow attribution --kind review     # PR reviews
+    crow attribution --kind created    # issues, PR descriptions, other artifacts you wrote
+    ```
+
+    It prints one line naming this session's harness and, when Crow knows it, the model
+    the session is running: `[🐦‍⬛ Reviewed by Crow via <agent> · <model>](https://github.com/corveil/crow)`.
+    The model is read when you run the command, because it can change mid-session. Like
+    every `crow` command, run it with `dangerouslyDisableSandbox: true`.
+
+    The model is left out, and the command still prints the footer and exits 0, when the
+    operator turned it off (`crow automation set --attribution-model false`, or Settings →
+    Automation), when you pass `--no-model`, when the session is unknown, when the harness
+    reports no model (only Claude Code and Codex do), or when the model id isn't plain
+    letters, digits, `.`, `_` and `-`. Don't add, edit or guess a model yourself.
+
+    If the command fails, use the static line from the table below. Your skill shows it
+    with the agent name already filled in: Crow substituted it when scaffolding.
+
+    Copy the line into the body as text, and pass the body by file (`--body-file`) where
+    the CLI allows it. **Do not** put `$(crow attribution …)`, `${CROW_AGENT_DISPLAY_NAME:-…}`
+    or any other shell expression in a footer or body. The shell silently fails to expand
+    it inside single-quoted heredocs and the literal text leaks into the artifact (#447).
 
     The link target is always `https://github.com/corveil/crow` — never a fork or a value from the local git remote.
 
-    | Artifact | Footer |
+    | Artifact | Footer (static fallback) |
     |----------|--------|
     | Created (issues, PR descriptions, etc.) | `[🐦‍⬛ Created with Crow via <agent>](https://github.com/corveil/crow)` |
     | Reviewed | `[🐦‍⬛ Reviewed by Crow via <agent>](https://github.com/corveil/crow)` |
     | Committed (hand-authored commit message) | Trailer block at the end of the message: `Crow-Session: <session-uuid>` and `Co-Authored-By: Claude <noreply@anthropic.com>` on their own lines, separated from the body by a blank line. `setup.sh` installs a `prepare-commit-msg` hook (CROW-518) that idempotently fills them in if missing, but include them explicitly when writing the message — the hook is the safety net. |
 
-    `<agent>` above is just a placeholder for *this document* — in the real footer lines
-    your skill receives, the agent name is already filled in. Do not change the URL or
-    wrap the line in extra formatting.
+    `<agent>` and `<model>` above are placeholders for *this document*. Do not change the
+    URL or wrap the line in extra formatting. The footer is informational: nothing gates
+    on it.
     """
 }
