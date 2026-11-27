@@ -706,8 +706,8 @@ final class SessionSurfaceController {
             )
             var updated = terminal
             updated.tmuxBinding = binding
-            // CROW-1410: a rebuilt Codex Manager gets the startup-prompt watch.
-            owner.armCodexStartupPromptWatch(terminalID: terminal.id, command: terminal.command)
+            // CROW-1410 / CROW-1527: a rebuilt Manager gets the startup checks.
+            owner.armAgentStartupChecks(terminalID: terminal.id, command: terminal.command)
             return updated
         } catch {
             CrowLog.info("[SessionService] tmux re-register failed on hydrate (\(error)) for \(terminal.id); terminal will not render this run")

@@ -8,8 +8,9 @@ import Foundation
 ///    (e.g., tool execution, streaming responses) are intentionally unmapped — they fire
 ///    too frequently and don't need the user's immediate attention.
 ///  - **Automation events** — the moments Crow acts on your behalf (auto-workspace,
-///    auto-merge, auto-rebase, config reload). These never arrive as hook events; the
-///    daemon pushes them to clients at the point the watcher acts (CROW-768).
+///    auto-merge, auto-rebase, config reload), plus a launch-time warning Crow raises
+///    itself (`claudeOutsideReadsBlocked`, CROW-1527). These never arrive as hook
+///    events; the daemon pushes them to clients at the point it acts (CROW-768).
 public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifiable {
     case taskComplete
     case agentWaiting
@@ -34,6 +35,12 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
     /// cap, so without a notification this state repeats in the log forever and
     /// surfaces nowhere. Fires at most once per (PR, reason).
     case autoRebaseStuck
+    /// A Claude auto-mode session launched with
+    /// `permissions.blockReadsOutsideWorkingDirectories` on (CROW-1527). Since
+    /// Claude Code 2.1.327 its outside-path Bash commands wait on an approval
+    /// dialog, which an unattended session never answers. Fires once per
+    /// session and settings file; Crow only reports the setting, never changes it.
+    case claudeOutsideReadsBlocked
     case configReloaded
 
     public var id: String { rawValue }
@@ -51,6 +58,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .autoRebasePushed: "Branch Rebased"
         case .autoRebaseConflicts: "Rebase Conflicts"
         case .autoRebaseStuck: "Rebase Stuck"
+        case .claudeOutsideReadsBlocked: "Claude Outside Reads Blocked"
         case .configReloaded: "Config Reloaded"
         }
     }
@@ -68,6 +76,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .autoRebasePushed: "Crow rebased a PR branch onto its base and pushed"
         case .autoRebaseConflicts: "An auto-rebase hit conflicts that need attention"
         case .autoRebaseStuck: "An auto-rebase can't proceed and needs you"
+        case .claudeOutsideReadsBlocked: "A Claude auto-mode session will wait for approval on outside-path commands"
         case .configReloaded: "Crow reloaded its configuration"
         }
     }
@@ -89,6 +98,9 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         // `autoRebaseStuck` is that same family — Crow is still retrying, but
         // only a human changes the outcome (#944).
         case .autoRebaseConflicts, .autoMergeBlocked, .autoRebaseStuck: "Basso"
+        // The "may need you later" sound, same as `agentWaiting`: the stall it
+        // warns about is an approval dialog.
+        case .claudeOutsideReadsBlocked: "Funk"
         case .configReloaded: "Tink"
         }
     }
@@ -120,6 +132,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .autoRebasePushed: "{session} was rebased"
         case .autoRebaseConflicts: "Rebase conflicts on {session}"
         case .autoRebaseStuck: "Rebase stuck on {session}"
+        case .claudeOutsideReadsBlocked: "{session} may stall on approvals"
         case .configReloaded: "Config reloaded"
         }
     }
@@ -130,7 +143,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
     public var isAutomationEvent: Bool {
         switch self {
         case .autoWorkspaceCreated, .autoMergeEnabled, .autoMergeBlocked, .autoRebasePushed,
-             .autoRebaseConflicts, .autoRebaseStuck, .configReloaded:
+             .autoRebaseConflicts, .autoRebaseStuck, .claudeOutsideReadsBlocked, .configReloaded:
             true
         case .taskComplete, .agentWaiting, .reviewRequested, .changesRequested, .checksFailing:
             false

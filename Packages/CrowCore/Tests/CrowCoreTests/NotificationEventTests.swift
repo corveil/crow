@@ -3,9 +3,9 @@ import Testing
 @testable import CrowCore
 
 @Test func notificationEventAllCasesCount() {
-    // 5 agent/PR events + 7 automation events (CROW-768, plus autoMergeBlocked
-    // in #888 and autoRebaseStuck in #944).
-    #expect(NotificationEvent.allCases.count == 12)
+    // 5 agent/PR events + 8 automation events (CROW-768, plus autoMergeBlocked
+    // in #888, autoRebaseStuck in #944 and claudeOutsideReadsBlocked in CROW-1527).
+    #expect(NotificationEvent.allCases.count == 13)
 }
 
 @Test func autoMergeBlockedIsAnAutomationEvent() {
@@ -92,7 +92,7 @@ import Testing
 @Test func automationEventsArePresentAndClassified() {
     let automation: [NotificationEvent] = [
         .autoWorkspaceCreated, .autoMergeEnabled, .autoMergeBlocked, .autoRebasePushed,
-        .autoRebaseConflicts, .autoRebaseStuck, .configReloaded,
+        .autoRebaseConflicts, .autoRebaseStuck, .claudeOutsideReadsBlocked, .configReloaded,
     ]
     for event in automation {
         #expect(NotificationEvent.allCases.contains(event))
@@ -121,4 +121,11 @@ import Testing
     // that needs a human, so it must not sound like "rebased".
     #expect(NotificationEvent.autoRebaseStuck.defaultSound
             != NotificationEvent.autoRebasePushed.defaultSound)
+}
+
+@Test func claudeOutsideReadsBlockedIsAnAutomationEvent() {
+    // Pushed by the daemon at launch (CROW-1527); no hook or poll carries it.
+    #expect(NotificationEvent.claudeOutsideReadsBlocked.isAutomationEvent)
+    #expect(NotificationEvent.claudeOutsideReadsBlocked.defaultVoiceEnabled)
+    #expect(NotificationEvent.from(eventName: "claudeOutsideReadsBlocked") == nil)
 }

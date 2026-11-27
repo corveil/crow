@@ -1,3 +1,4 @@
+import CrowClaude
 import CrowCore
 import CrowEngine
 import CrowPersistence
@@ -137,6 +138,16 @@ extension CrowDaemon {
         // Name a session for a notification title, as the native manager did.
         func sessionName(_ id: UUID) -> String {
             appState.sessions.first(where: { $0.id == id })?.name ?? "session"
+        }
+
+        // CROW-1527: a Claude auto-mode launch whose settings block outside
+        // reads. `SessionService` runs the check at launch, logs it and
+        // de-duplicates it; this pushes the notification. Crow only reports
+        // the setting.
+        sessionService.onClaudeOutsideReadsBlocked = { session, finding in
+            notify(.claudeOutsideReadsBlocked, key: session.id.uuidString,
+                   title: "Claude may stall on approvals — \(session.name)",
+                   body: finding.message)
         }
 
         // crow:auto — run /crow-workspace for a newly-labeled assigned issue
